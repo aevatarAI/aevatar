@@ -537,21 +537,8 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
-    public async Task WorkflowExecutionMaterializationPort_And_Codecs_ShouldCoverLifecycleBranches()
+    public void WorkflowMaterializationLeases_And_Codecs_ShouldCoverLifecycleBranches()
     {
-        var activation = new RecordingMaterializationActivationService();
-        var release = new RecordingMaterializationReleaseService();
-        var port = new WorkflowExecutionMaterializationPort(
-            new Aevatar.Workflow.Projection.Configuration.WorkflowExecutionProjectionOptions { Enabled = true },
-            activation,
-            release);
-
-        (await port.ActivateAsync("")).Should().BeFalse();
-        (await port.ActivateAsync("actor-2")).Should().BeTrue();
-
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution-materialization");
-
         var materializationLease = new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-2",
@@ -793,28 +780,4 @@ public sealed class WorkflowProjectionMaterializationTests
         }
     }
 
-    private sealed class RecordingMaterializationActivationService
-        : IProjectionScopeActivationService<WorkflowExecutionMaterializationRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<WorkflowExecutionMaterializationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            }));
-        }
-    }
-
-    private sealed class RecordingMaterializationReleaseService
-        : IProjectionScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease>
-    {
-        public Task ReleaseIfIdleAsync(WorkflowExecutionMaterializationRuntimeLease lease, CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
 }

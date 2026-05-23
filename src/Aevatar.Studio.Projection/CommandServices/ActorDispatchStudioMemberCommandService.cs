@@ -14,7 +14,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// Dispatches StudioMember command events to the per-member
 /// <see cref="StudioMemberGAgent"/> actor. Uses the canonical actor-id
 /// convention (<c>studio-member:{scopeId}:{memberId}</c>) and ensures the
-/// actor + projection scope are activated before dispatch via
+/// target actor exists before dispatch via
 /// <see cref="IStudioActorBootstrap"/>.
 /// </summary>
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
@@ -191,6 +191,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     {
         const string TeamDirectRoute = "aevatar.studio.projection.studio-team";
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   team fanout provisions only the receiving actor.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
 
         var envelope = new EventEnvelope
@@ -236,6 +240,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(request.ScopeId);
         var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(request.MemberId);
         var actorId = StudioMemberConventions.BuildBindingRunActorId(normalizedBindingRunId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   binding-run command ACK does not imply readmodel materialization.
         var actor = await _bootstrap.EnsureAsync<StudioMemberBindingRunGAgent>(actorId, ct);
         await _bootstrap.EnsureAsync<StudioMemberGAgent>(
             StudioMemberConventions.BuildActorId(normalizedScopeId, normalizedMemberId),
@@ -373,6 +381,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     private async Task DispatchAsync(string scopeId, string memberId, IMessage payload, CancellationToken ct)
     {
         var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   member commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(actorId, ct);
 
         var envelope = new EventEnvelope

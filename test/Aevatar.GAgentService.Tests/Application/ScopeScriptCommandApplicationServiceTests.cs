@@ -66,7 +66,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             .GetParameters()
             .Select(x => x.ParameterType)
             .Should()
-            .NotContain(typeof(IScriptAuthorityReadModelActivationPort));
+            .NotContain(type => type.Name == "IScriptAuthorityReadModelActivationPort");
     }
 
     [Fact]

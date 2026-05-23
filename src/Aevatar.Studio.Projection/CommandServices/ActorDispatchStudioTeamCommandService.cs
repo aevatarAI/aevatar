@@ -11,8 +11,8 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// Dispatches StudioTeam command events to the per-team
 /// <see cref="StudioTeamGAgent"/> actor (ADR-0017). Mirrors
 /// <c>ActorDispatchStudioMemberCommandService</c> in shape — the actor-id is
-/// canonical (<c>studio-team:{scopeId}:{teamId}</c>) and the projection scope
-/// is activated before dispatch via <see cref="IStudioActorBootstrap"/>.
+/// canonical (<c>studio-team:{scopeId}:{teamId}</c>) and bootstrap only
+/// provisions the target actor before dispatch.
 /// </summary>
 internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommandPort
 {
@@ -168,6 +168,10 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
     private async Task DispatchAsync(string scopeId, string teamId, IMessage payload, CancellationToken ct)
     {
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   team commands return after accepted dispatch, not readmodel materialization.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
 
         var envelope = new EventEnvelope

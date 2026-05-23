@@ -95,7 +95,7 @@ public static class InspectorApplication
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             context => new StudioMaterializationRuntimeLease(context));
-        services.TryAddSingleton<StudioProjectionPort>();
+        services.TryAddSingleton<StudioCurrentStateProjectionPort>();
         services.TryAddSingleton<IStudioActorBootstrap, InspectorStudioActorBootstrap>();
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<GAgentRegistryCurrentStateDocument>,

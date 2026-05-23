@@ -69,10 +69,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptExecutionProjectionPort>();
         services.TryAddSingleton<IScriptExecutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptExecutionProjectionPort>());
-        services.TryAddSingleton<ScriptExecutionReadModelPort>();
-        services.TryAddSingleton<IScriptExecutionReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptExecutionReadModelPort>());
-        services.TryAddSingleton<ScriptAuthorityProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
         services.AddProjectionMaterializationRuntimeCore<
@@ -100,17 +96,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptEvolutionProjectionPort>();
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPort>());
-        services.TryAddSingleton<ScriptEvolutionReadModelPort>();
-        services.TryAddSingleton<IScriptEvolutionReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptEvolutionReadModelPort>());
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort>(sp =>
             sp.GetRequiredService<ScriptReadModelQueryReader>());
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
-        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort>(sp =>
-            sp.GetRequiredService<ScriptAuthorityProjectionPort>());
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
