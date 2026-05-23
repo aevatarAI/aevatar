@@ -4,6 +4,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -37,6 +38,155 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.CompletionStatus.Should().Be(expected);
         snapshot.LastOutput.Should().Be("done");
         snapshot.LastError.Should().Be("err");
+    }
+
+    [Fact]
+    public void WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+        {
+            Item = BuildCatalogDocument("alpha", updatedAt),
+            Items =
+            [
+                BuildCatalogDocument("beta", updatedAt.AddMinutes(1), sortOrder: 2),
+                BuildCatalogDocument("alpha", updatedAt, sortOrder: 1),
+            ],
+        };
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>
+        {
+            Item = new WorkflowCapabilitiesCurrentStateDocument
+            {
+                Id = "workflow-capabilities",
+                ActorId = "workflow-capabilities",
+                StateVersion = 3,
+                LastEventId = "startup-materialization",
+                UpdatedAt = updatedAt.AddMinutes(2),
+                SchemaVersion = "capabilities.v1",
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapabilityReadModel
+                    {
+                        Name = "assign",
+                        Aliases = ["assign"],
+                        Category = "data",
+                        Description = "Assigns a value.",
+                        RuntimeModule = "AssignModule",
+                        Parameters =
+                        [
+                            new WorkflowPrimitiveParameterCapabilityReadModel
+                            {
+                                Name = "target",
+                                Type = "string",
+                                Required = true,
+                                Description = "Target variable.",
+                                DefaultValue = "result",
+                                Enum = ["result"],
+                            },
+                        ],
+                    },
+                ],
+                Connectors =
+                [
+                    new WorkflowConnectorCapabilityReadModel
+                    {
+                        Name = "aevatar_cli",
+                        Type = "cli",
+                        Enabled = true,
+                        TimeoutMs = 1000,
+                        Retry = 1,
+                        AllowedInputKeys = ["prompt"],
+                        AllowedOperations = ["run"],
+                        FixedArguments = ["--json"],
+                    },
+                ],
+            },
+        };
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            capabilitiesReader,
+            new WorkflowCatalogReadModelMapper());
+
+        var catalog = port.ListWorkflowCatalog();
+        var detail = port.GetWorkflowDetail("alpha");
+        var capabilities = port.GetCapabilities();
+
+        catalog.Select(x => x.Name).Should().Equal("alpha", "beta");
+        catalog[0].AuthorityStateVersion.Should().Be(11);
+        catalog[0].ProjectionWatermark.Should().Be(updatedAt);
+        detail.Should().NotBeNull();
+        detail!.Definition.Steps.Should().ContainSingle(step => step.Id == "start");
+        detail.Definition.Roles.Should().ContainSingle(role => role.Id == "operator");
+        detail.Definition.Roles[0].EventModules.Should().Equal("audit", "trace");
+        detail.Definition.Steps[0].Children.Should().ContainSingle(child => child.Id == "child");
+        detail.Edges.Should().ContainSingle(edge => edge.From == "start" && edge.To == "child" && edge.Label == "child");
+        capabilities.Workflows.Should().HaveCount(2);
+        capabilities.AuthorityStateVersion.Should().Be(12);
+        capabilities.ProjectionWatermark.Should().Be(updatedAt.AddMinutes(2));
+        capabilities.Primitives.Should().ContainSingle(primitive =>
+            primitive.Name == "assign" &&
+            primitive.Parameters.Single().Default == "result");
+        capabilities.Connectors.Should().ContainSingle(connector =>
+            connector.Name == "aevatar_cli" &&
+            connector.FixedArguments.Single() == "--json");
+        catalogReader.QueryCalls.Should().Be(2);
+        catalogReader.GetCalls.Should().Be(1);
+        capabilitiesReader.GetCalls.Should().Be(1);
+        capabilitiesReader.QueryCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public void WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
+    {
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>();
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>();
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            capabilitiesReader,
+            new WorkflowCatalogReadModelMapper());
+
+        port.GetWorkflowDetail("   ").Should().BeNull();
+        port.GetWorkflowDetail("missing").Should().BeNull();
+        var capabilities = port.GetCapabilities();
+
+        capabilities.SchemaVersion.Should().Be("capabilities.v1");
+        capabilities.AuthorityStateVersion.Should().Be(0);
+        capabilities.ProjectionWatermark.Should().Be(default);
+        capabilities.Workflows.Should().BeEmpty();
+        catalogReader.GetCalls.Should().Be(1);
+        catalogReader.QueryCalls.Should().Be(1);
+        capabilitiesReader.GetCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("custom", "home", "deterministic", "your-workflows", 0, "Saved")]
+    [InlineData("custom", "cwd", "deterministic", "your-workflows", 0, "Workspace")]
+    [InlineData("counter-addition", "turing", "deterministic", "advanced-patterns", 901, "Advanced")]
+    [InlineData("minsky-inc-dec-jz", "turing", "deterministic", "advanced-patterns", 902, "Advanced")]
+    [InlineData("machine", "turing", "deterministic", "advanced-patterns", 999, "Advanced")]
+    [InlineData("transform", "builtin", "deterministic", "primitive-examples", 1, "Mini")]
+    [InlineData("llm_call", "builtin", "llm", "ai-workflows", 8, "Starter")]
+    [InlineData("human_input_basic_auto_resume", "builtin", "llm", "ai-workflows", 39, "Interactive")]
+    [InlineData("connector_cli_demo", "builtin", "llm", "integration-workflows", 50, "Integration")]
+    [InlineData("demo_template", "builtin", "deterministic", "advanced-patterns", 17, "Advanced")]
+    [InlineData("48_custom", "app", "deterministic", "advanced-patterns", 48, "Advanced")]
+    [InlineData("49_custom", "demo", "deterministic", "advanced-patterns", 49, "Advanced")]
+    [InlineData("custom", "repo", "llm", "starter-workflows", 100, "Starter")]
+    [InlineData("custom", "external", "deterministic", "starter-workflows", 200, "Workflow")]
+    [InlineData("", "builtin", "deterministic", "starter-workflows", 200, "Built-in")]
+    public void WorkflowCatalogClassificationPolicy_ShouldClassifyCatalogGroups(
+        string workflowName,
+        string sourceKind,
+        string category,
+        string expectedGroup,
+        int expectedSortOrder,
+        string expectedSourceLabel)
+    {
+        var classification = WorkflowCatalogClassificationPolicy.Classify(workflowName, sourceKind, category);
+
+        classification.Group.Should().Be(expectedGroup);
+        classification.SortOrder.Should().Be(expectedSortOrder);
+        classification.SourceLabel.Should().Be(expectedSourceLabel);
     }
 
     [Fact]
@@ -376,6 +526,79 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
         RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
         RecordingProjectionGraphStore GraphStore);
+
+    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(
+        string workflowName,
+        DateTimeOffset updatedAt,
+        int sortOrder = 1) =>
+        new()
+        {
+            Id = workflowName,
+            ActorId = $"workflow-definition:{workflowName}",
+            WorkflowName = workflowName,
+            WorkflowYaml = $"name: {workflowName}",
+            Description = "Workflow description",
+            Category = "deterministic",
+            Group = "starter-workflows",
+            GroupLabel = "Starter Workflows",
+            SortOrder = sortOrder,
+            Source = "repo",
+            SourceLabel = "Starter",
+            ShowInLibrary = true,
+            StateVersion = 10 + sortOrder,
+            LastEventId = $"evt-{sortOrder}",
+            UpdatedAt = updatedAt,
+            Primitives = ["assign"],
+            Roles =
+            [
+                new WorkflowCatalogRoleReadModel
+                {
+                    Id = "operator",
+                    Name = "Operator",
+                    SystemPrompt = "Operate.",
+                    Provider = "openai",
+                    Model = "gpt-test",
+                    Temperature = 0.1f,
+                    MaxTokens = 512,
+                    MaxToolRounds = 2,
+                    MaxHistoryMessages = 3,
+                    EventModules = ["audit", "trace"],
+                    EventRoutes = "route:*",
+                    Connectors = ["aevatar_cli"],
+                },
+            ],
+            Steps =
+            [
+                new WorkflowCatalogStepReadModel
+                {
+                    Id = "start",
+                    Type = "assign",
+                    TargetRole = "operator",
+                    Parameters = { ["target"] = "result" },
+                    Branches = { ["done"] = "child" },
+                    Children =
+                    [
+                        new WorkflowCatalogChildStepReadModel
+                        {
+                            Id = "child",
+                            Type = "assign",
+                            TargetRole = "operator",
+                        },
+                    ],
+                },
+            ],
+            Edges =
+            [
+                new WorkflowCatalogEdgeReadModel
+                {
+                    From = "start",
+                    To = "child",
+                    Label = "child",
+                },
+            ],
+            RequiredConnectors = ["aevatar_cli"],
+            WorkflowCalls = ["child_workflow"],
+        };
 
     private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
         where TReadModel : class, IProjectionReadModel

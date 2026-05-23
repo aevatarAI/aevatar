@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
@@ -56,12 +57,36 @@ public sealed class WorkflowDefinitionFileLoader
                 }
 
                 var yaml = File.ReadAllText(file);
-                registry.Register(name, yaml);
+                if (registry is WorkflowDefinitionCatalog concreteCatalog)
+                    concreteCatalog.Register(name, yaml, ResolveSourceKind(directory));
+                else
+                    registry.Register(name, yaml);
                 loaded++;
             }
         }
 
         logger.LogInformation("Loaded {Count} workflow definition(s) from file sources.", loaded);
         return loaded;
+    }
+
+    private static string ResolveSourceKind(string directory)
+    {
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.Workflows)), StringComparison.OrdinalIgnoreCase))
+            return "home";
+
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.RepoRootWorkflows)), StringComparison.OrdinalIgnoreCase))
+            return "repo";
+
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "workflows"))), StringComparison.OrdinalIgnoreCase))
+            return "cwd";
+
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "workflows"))), StringComparison.OrdinalIgnoreCase))
+            return "app";
+
+        if (normalized.EndsWith($"{Path.DirectorySeparatorChar}turing-completeness", StringComparison.OrdinalIgnoreCase))
+            return "turing";
+
+        return "file";
     }
 }

@@ -93,6 +93,14 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+        TryAddElasticsearchDocumentStore<WorkflowCatalogCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.Id);
+        TryAddElasticsearchDocumentStore<WorkflowCapabilitiesCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.Id);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
@@ -109,6 +117,14 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowCatalogCurrentStateDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowCapabilitiesCurrentStateDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
     }
 
     private static bool HasAllWorkflowDocumentReaders(
@@ -117,7 +133,9 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     {
         return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowCapabilitiesCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
