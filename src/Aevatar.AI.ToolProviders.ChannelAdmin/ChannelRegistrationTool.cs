@@ -15,7 +15,6 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 public sealed class ChannelRegistrationTool : IAgentTool
 {
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
-    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=ChannelAdmin rebuild_projection, new=retired action with no dispatch
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual readmodel rematerialization path, new=startup-owned projection refresh
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
@@ -94,17 +93,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         using var document = JsonDocument.Parse(argumentsJson);
         var root = document.RootElement;
-        var action = GetStr(root, "action") ?? "list";
+        var action = NormalizeOptional(GetStr(root, "action")) ?? "list";
 
         return action switch
         {
             "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => RetiredActionError("rebuild_projection is retired. Channel registration projection refresh is internal startup maintenance only."),
             "delete" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => DeleteAsync(queryPort, commandFacade, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
-            _ => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
+            _ => SerializeError($"Unsupported channel registration action '{action}'."),
         };
     }
 

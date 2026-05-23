@@ -157,8 +157,6 @@ channel_registration_public_rebuild_report="$(
 
   if (text ~ /Refactor \(iter56\/cluster-933-channel-registration-rebuild-narrow\)/)
     next;
-  if (file == "src/Aevatar.AI.ToolProviders.ChannelAdmin/ChannelRegistrationTool.cs" && text ~ /RetiredActionError/)
-    next;
 
   print $0;
 }'

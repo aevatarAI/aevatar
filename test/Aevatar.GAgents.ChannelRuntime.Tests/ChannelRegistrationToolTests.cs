@@ -128,31 +128,6 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RebuildProjection_ReturnsRetiredAction_AndDoesNotDispatch()
-    {
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","registration_id":"reg-1","force":true}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
-        doc.RootElement.GetProperty("error").GetString().Should().Contain("internal startup maintenance");
-        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
-        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
-            Arg.Any<string>(),
-            Arg.Any<EventEnvelope>(),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task ExecuteAsync_RegisterLarkViaNyx_RejectsMissingScopeContext()
     {
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();
@@ -167,6 +142,24 @@ public sealed class ChannelRegistrationToolTests
 
         json.Should().Contain("scope_id is required");
         await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxLarkProvisioningRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RebuildProjection_ReturnsUnsupportedAction()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var result = await tool.ExecuteAsync("""{"action":"rebuild_projection"}""");
+
+        result.Should().Contain("Unsupported channel registration action");
+        result.Should().Contain("rebuild_projection");
+        result.Should().NotContain("retired_action");
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
