@@ -5,8 +5,10 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using ProtobufStringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.CQRS.Core.Tests;
 
@@ -170,6 +172,35 @@ public class CommandDispatchPipelineTests
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be("receipt-1");
     }
+
+    [Fact]
+    public async Task OutcomeDispatchService_ShouldSubscribeBeforeDispatch_AndReturnActorOutcome()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var channel = new StreamActorOutcomeChannel<ProtobufStringValue>(new InMemoryStreamProvider());
+        var dispatcher = new OutcomePublishingTargetDispatcher(channel);
+        var pipeline = new DefaultCommandDispatchPipeline<SeededCommand, FakeCommandTarget, string, FakeError>(
+            new SeededCommandResolver(target),
+            new DefaultCommandContextPolicy(),
+            new SeededCommandEnvelopeFactory(),
+            dispatcher,
+            new SeededCommandReceiptFactory("receipt-1"));
+        var service = new DefaultCommandOutcomeDispatchService<SeededCommand, FakeCommandTarget, string, FakeError, ProtobufStringValue>(
+            pipeline,
+            channel);
+
+        var result = await service.DispatchAndAwaitOutcomeAsync(new SeededCommand(
+            "hello",
+            "cmd-1",
+            "corr-1",
+            null));
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be("receipt-1");
+        result.Outcome.Should().NotBeNull();
+        result.Outcome!.Value.Should().Be("outcome:cmd-1");
+        dispatcher.DispatchedCommandIds.Should().ContainSingle().Which.Should().Be("cmd-1");
+    }
 }
 
 public class ActorCommandTargetDispatcherTests
@@ -229,11 +260,14 @@ public class CqrsCoreServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEventFrameMapper<int, string>, IntToStringFrameMapper>();
+        services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
 
         services.AddCqrsCore();
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ICommandContextPolicy>().Should().BeOfType<DefaultCommandContextPolicy>();
+        provider.GetRequiredService<IActorOutcomeChannel<ProtobufStringValue>>()
+            .Should().BeOfType<StreamActorOutcomeChannel<ProtobufStringValue>>();
         provider.GetRequiredService<IEventOutputStream<int, string>>().Should().BeOfType<DefaultEventOutputStream<int, string>>();
         provider.GetRequiredService<ICommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>()
             .Should().BeOfType<NoOpCommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>();
@@ -355,6 +389,21 @@ internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCo
     }
 }
 
+internal sealed class OutcomePublishingTargetDispatcher(IActorOutcomeChannel<ProtobufStringValue> channel)
+    : ICommandTargetDispatcher<FakeCommandTarget>
+{
+    public List<string> DispatchedCommandIds { get; } = [];
+
+    public async Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        _ = target;
+        ct.ThrowIfCancellationRequested();
+        var commandId = envelope.Id;
+        DispatchedCommandIds.Add(commandId);
+        await channel.PublishAsync(commandId, new ProtobufStringValue { Value = $"outcome:{commandId}" }, ct);
+    }
+}
+
 internal sealed class RecordingReceiptFactory : ICommandReceiptFactory<FakeCommandTarget, string>
 {
     private readonly string _receipt;
@@ -395,14 +444,14 @@ internal sealed class SeededCommandResolver(FakeCommandTarget target)
     }
 }
 
-internal sealed class SeededCommandEnvelopeFactory(EventEnvelope envelope) : ICommandEnvelopeFactory<SeededCommand>
+internal sealed class SeededCommandEnvelopeFactory(EventEnvelope? envelope = null) : ICommandEnvelopeFactory<SeededCommand>
 {
     public List<(SeededCommand Command, CommandContext Context)> Calls { get; } = [];
 
     public EventEnvelope CreateEnvelope(SeededCommand command, CommandContext context)
     {
         Calls.Add((command, context));
-        return envelope;
+        return envelope ?? new EventEnvelope { Id = context.CommandId };
     }
 }
 
@@ -424,7 +473,7 @@ internal sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
         throw new NotSupportedException();
 
-    public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+    public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
         throw new NotSupportedException();
 
     public Task DestroyAsync(string id, CancellationToken ct = default) =>
@@ -479,7 +528,7 @@ internal sealed class FakeAgent : IAgent
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
     public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
-    public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+    public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }

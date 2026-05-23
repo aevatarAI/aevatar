@@ -85,142 +85,39 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandleCreateConversationAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IChatRoutePolicyQueryPort queryPort,
-        [FromServices] ChatRouteResolver resolver,
+        [FromServices] NyxIdChatLifecycleFacade lifecycleFacade,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
-        // Implement (issue #694):
-        //   Behavior: direct NyxIdChat creation consults chat routing before choosing the conversation actor.
-        //   Why this shape: the existing create/register path stays intact while the transient decision is consumed at ingress.
-        var callerScope = OwnerScope.ForNyxIdNative(scopeId);
-        var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
-        var decision = resolver.Resolve(snapshot, new ChatRouteInput
+        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+        var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ct);
+        return receipt.Status switch
         {
-            SourceKind = ChatSourceKind.Direct,
-            CallerScope = ToChatRouteCallerScope(callerScope),
-            Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = string.Empty,
-            ToolMode = ToolMode.None,
-        });
-
-        if (decision.Action.Reject is not null)
-            return ChatRouteRejected(decision.Action.Reject);
-
-        // Conversation creation is fail-fast on registry persistence.
-        // NyxId chat depends on the registry being available; there is no
-        // degraded mode where a conversation can run without being registered.
-        var forwardedActorId = decision.Action.ForwardToGagent?.ActorId;
-        var actorId = !string.IsNullOrWhiteSpace(forwardedActorId)
-            ? forwardedActorId.Trim()
-            : NyxIdChatServiceDefaults.GenerateActorId();
-        // We only own the actor's lifecycle when we created it in this request.
-        // A forwarded ChatRoute decision reuses an actor that an earlier request
-        // (possibly under a different scope) created; destroying it on a
-        // registry rollback would delete unrelated traffic's target actor.
-        var createdLocally = string.IsNullOrWhiteSpace(forwardedActorId);
-        if (createdLocally)
-            await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-        try
-        {
-            var receipt = await registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
-                ct);
-            if (!receipt.IsAdmissionVisible)
-            {
-                await TryRollbackConversationCreationAsync(
-                    http,
-                    scopeId,
-                    actorId,
-                    registryCommandPort,
-                    actorRuntime,
-                    destroyActor: createdLocally);
-                return Results.Json(
-                    new { error = "Conversation registration is not admission-visible" },
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-        }
-        catch
-        {
-            await TryRollbackConversationCreationAsync(
-                http,
-                scopeId,
-                actorId,
-                registryCommandPort,
-                actorRuntime,
-                destroyActor: createdLocally);
-            throw;
-        }
-
-        return Results.Ok(new { actorId });
+            NyxIdChatConversationCreateStatus.Accepted => Results.Ok(new { actorId = receipt.ActorId }),
+            NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject),
+            NyxIdChatConversationCreateStatus.RegistrationUnavailable => Results.Json(
+                new { error = "Conversation registration is not admission-visible" },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(
+                new { error = "Conversation creation failed" },
+                statusCode: StatusCodes.Status500InternalServerError),
+        };
     }
 
-    private static ChatRouteCallerScope ToChatRouteCallerScope(OwnerScope scope) => new()
-    {
-        NyxUserId = scope.NyxUserId,
-        Platform = scope.Platform,
-        RegistrationScopeId = scope.RegistrationScopeId,
-        SenderId = scope.SenderId,
-    };
-
-    private static IResult ChatRouteRejected(Reject reject) =>
+    private static IResult ChatRouteRejected(Reject? reject) =>
         Results.Json(
             new
             {
                 error = "chat_route_rejected",
-                detail = string.IsNullOrWhiteSpace(reject.Reason)
+                detail = string.IsNullOrWhiteSpace(reject?.Reason)
                     ? "The chat route policy rejected this request."
                     : reject.Reason,
             },
             statusCode: StatusCodes.Status403Forbidden);
-
-    private static async Task TryRollbackConversationCreationAsync(
-        HttpContext http,
-        string scopeId,
-        string actorId,
-        IGAgentActorRegistryCommandPort registryCommandPort,
-        IActorRuntime actorRuntime,
-        bool destroyActor)
-    {
-        var logger = http.RequestServices?.GetService<ILoggerFactory>()
-            ?.CreateLogger("Aevatar.NyxId.Chat.CreateConversation");
-
-        try
-        {
-            await registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(
-                ex,
-                "Failed to unregister NyxId chat conversation during create rollback: scope={ScopeId}, actor={ActorId}",
-                scopeId,
-                actorId);
-            return;
-        }
-
-        // Only destroy the actor when this request actually created it.
-        // ChatRoute ForwardToGAgent reuses an existing target and must not be
-        // torn down by a rollback in this request.
-        if (!destroyActor)
-            return;
-
-        try
-        {
-            await actorRuntime.DestroyAsync(actorId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to destroy NyxId chat actor {ActorId} during create rollback", actorId);
-        }
-    }
 
     private static async Task<IResult> HandleListConversationsAsync(
         HttpContext http,
@@ -250,61 +147,27 @@ public static partial class NyxIdChatEndpoints
         HttpContext http,
         string scopeId,
         string actorId,
-        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
-        [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IChatHistoryStore chatHistoryStore,
+        [FromServices] NyxIdChatLifecycleFacade lifecycleFacade,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
-        var admissionError = await AuthorizeConversationAsync(
-            admissionPort,
-            scopeId,
-            actorId,
-            ScopeResourceOperation.Delete,
-            ct);
-        if (admissionError != null)
-            return admissionError;
-
-        await registryCommandPort.UnregisterActorAsync(
-            new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
-            ct);
-        try
+        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+        var receipt = await lifecycleFacade.DeleteConversationAsync(scopeId, actorId, ct);
+        return receipt.Status switch
         {
-            await chatHistoryStore.DeleteConversationAsync(scopeId, actorId, ct);
-        }
-        catch
-        {
-            await TryRestoreConversationRegistrationAsync(http, scopeId, actorId, registryCommandPort);
-            throw;
-        }
-
-        return Results.Ok();
-    }
-
-    private static async Task TryRestoreConversationRegistrationAsync(
-        HttpContext http,
-        string scopeId,
-        string actorId,
-        IGAgentActorRegistryCommandPort registryCommandPort)
-    {
-        try
-        {
-            await registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(scopeId, NyxIdChatServiceDefaults.GAgentTypeName, actorId),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            http.RequestServices.GetService<ILoggerFactory>()
-                ?.CreateLogger("Aevatar.NyxId.Chat.DeleteConversation")
-                .LogError(
-                    ex,
-                    "Failed to restore NyxId chat conversation registration after history deletion failure: scope={ScopeId}, actor={ActorId}",
-                    scopeId,
-                actorId);
-        }
+            NyxIdChatConversationDeleteStatus.Accepted => Results.Ok(),
+            NyxIdChatConversationDeleteStatus.NotFound => Results.NotFound(new { error = "Conversation not found" }),
+            NyxIdChatConversationDeleteStatus.AccessDenied => Results.Json(
+                new { error = "Conversation access denied" },
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Json(
+                new { error = "Conversation admission unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
     }
 
     private static async Task<IResult?> AuthorizeConversationAsync(

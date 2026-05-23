@@ -30,6 +30,16 @@ public static class ProjectionScopeStatusRuntimeRegistration
             });
         services.TryAddSingleton<Func<ProjectionScopeStatusMaterializationContext, ProjectionScopeStatusRuntimeLease>>(
             static _ => static context => new ProjectionScopeStatusRuntimeLease(context));
+        services.TryAddSingleton<IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>>(sp =>
+            new ProjectionScopeAttachExistingLeaseLookup<
+                ProjectionScopeStatusRuntimeLease,
+                ProjectionScopeStatusMaterializationContext>(
+                sp.GetRequiredService<IActorRuntime>(),
+                request => new ProjectionScopeStatusMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                },
+                (_, context) => new ProjectionScopeStatusRuntimeLease(context)));
         services.TryAddSingleton<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeActivationService<
                 ProjectionScopeStatusRuntimeLease,

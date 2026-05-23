@@ -50,6 +50,25 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string accessToken,
         CancellationToken ct,
         string? preferredRoute = null,
+        string? defaultModel = null) =>
+        await EnsureParticipantsJoinedAsync(
+            scopeId,
+            roomId,
+            actor.Id,
+            participantStore,
+            accessToken,
+            ct,
+            preferredRoute,
+            defaultModel);
+
+    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
+        string scopeId,
+        string roomId,
+        string actorId,
+        IStreamingProxyParticipantStore participantStore,
+        string accessToken,
+        CancellationToken ct,
+        string? preferredRoute = null,
         string? defaultModel = null)
     {
         var participants = await ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
@@ -66,13 +85,11 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             if (existingIds.Contains(participant.ParticipantId))
                 continue;
 
-            await DispatchAsync(actor, new GroupChatParticipantJoinedEvent
+            await DispatchAsync(actorId, new GroupChatParticipantJoinedEvent
             {
                 AgentId = participant.ParticipantId,
                 DisplayName = participant.DisplayName,
             }, ct);
-
-            await participantStore.AddAsync(roomId, participant.ParticipantId, participant.DisplayName, ct);
         }
 
         return participants;
@@ -81,6 +98,25 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     public async Task<int> GenerateRepliesAsync(
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
         IActor actor,
+        string prompt,
+        string sessionId,
+        string accessToken,
+        CancellationToken ct,
+        IStreamingProxyParticipantStore? participantStore = null,
+        string? roomId = null) =>
+        await GenerateRepliesAsync(
+            participants,
+            actor.Id,
+            prompt,
+            sessionId,
+            accessToken,
+            ct,
+            participantStore,
+            roomId);
+
+    public async Task<int> GenerateRepliesAsync(
+        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
+        string actorId,
         string prompt,
         string sessionId,
         string accessToken,
@@ -138,12 +174,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                     if (IsUnavailableResponse(response))
                     {
                         failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
+                        await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
                         _logger.LogWarning(
                             "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
                             participant.DisplayName,
@@ -159,19 +190,14 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                     if (string.IsNullOrWhiteSpace(content))
                     {
                         failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
+                        await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
                         continue;
                     }
 
                     transcript.Add((participant.DisplayName, content));
                     successfulReplies++;
                     totalSuccessfulReplies++;
-                    await DispatchAsync(actor, new GroupChatMessageEvent
+                    await DispatchAsync(actorId, new GroupChatMessageEvent
                     {
                         AgentId = participant.ParticipantId,
                         AgentName = participant.DisplayName,
@@ -186,12 +212,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                 catch (Exception ex)
                 {
                     failedParticipants.Add(participant.ParticipantId);
-                    await MarkParticipantLeftAsync(
-                        actor,
-                        participantStore,
-                        roomId,
-                        participant.ParticipantId,
-                        ct);
+                    await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
                     _logger.LogWarning(ex,
                         "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
                         participant.DisplayName,
@@ -938,22 +959,14 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
     }
 
     private async Task MarkParticipantLeftAsync(
-        IActor actor,
-        IStreamingProxyParticipantStore? participantStore,
-        string? roomId,
+        string actorId,
         string participantId,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(participantId))
             return;
 
-        if (participantStore is not null &&
-            !string.IsNullOrWhiteSpace(roomId))
-        {
-            await participantStore.RemoveParticipantAsync(roomId, participantId, ct);
-        }
-
-        await DispatchAsync(actor, new GroupChatParticipantLeftEvent
+        await DispatchAsync(actorId, new GroupChatParticipantLeftEvent
         {
             AgentId = participantId,
         }, ct);
@@ -1004,7 +1017,7 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         yield return $"**{trimmed}**";
     }
 
-    private async Task DispatchAsync(IActor actor, IMessage payload, CancellationToken ct)
+    private async Task DispatchAsync(string actorId, IMessage payload, CancellationToken ct)
     {
         var envelope = new EventEnvelope
         {
@@ -1013,11 +1026,11 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
             Payload = Any.Pack(payload),
             Route = new EnvelopeRoute
             {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
+                Direct = new DirectRoute { TargetActorId = actorId },
             },
         };
 
-        await DispatchRoomEnvelopeAsync(actor.Id, envelope, ct);
+        await DispatchRoomEnvelopeAsync(actorId, envelope, ct);
     }
 
     private Task DispatchRoomEnvelopeAsync(
