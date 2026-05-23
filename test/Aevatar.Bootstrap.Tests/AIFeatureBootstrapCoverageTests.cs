@@ -15,6 +15,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -143,6 +144,8 @@ public class AIFeatureBootstrapCoverageTests
         var config = new ConfigurationBuilder().Build();
         services.AddLogging();
         services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -650,5 +653,17 @@ public class AIFeatureBootstrapCoverageTests
     {
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class EmptyVoicePresenceCapabilityReader
+        : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>
+    {
+        public Task<VoicePresenceCapabilityReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<VoicePresenceCapabilityReadModel?>(null);
+
+        public Task<ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>.Empty);
     }
 }

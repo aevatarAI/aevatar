@@ -55,6 +55,24 @@ public class VoicePresenceSessionResolverTests
     }
 
     [Fact]
+    public async Task UnavailableVoicePresenceTransportAttachmentPort_should_throw_on_attach_and_allow_detach()
+    {
+        var port = new UnavailableVoicePresenceTransportAttachmentPort();
+        var handle = new VoicePresenceSessionLeaseHandle(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            7,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.LocalOnly);
+
+        await Should.ThrowAsync<VoiceRemoteAudioTransportUnavailableException>(
+            () => port.AttachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None));
+        await port.DetachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None);
+    }
+
+    [Fact]
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_accepted_handle()
     {
         var dispatchPort = new RecordingDispatchPort();

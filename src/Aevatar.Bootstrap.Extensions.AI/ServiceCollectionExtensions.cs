@@ -21,8 +21,6 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
-using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
@@ -154,28 +152,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoicePresenceSessionResolver, ActorOwnedVoicePresenceSessionResolver>();
         services.AddVoicePresenceCapabilityProjection();
-        TryAddVoicePresenceCapabilityReadModelStore(services);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
-    }
-
-    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
-    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
-    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
-    private static void TryAddVoicePresenceCapabilityReadModelStore(IServiceCollection services)
-    {
-        if (services.Any(static x =>
-                x.ServiceType == typeof(IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>)))
-        {
-            return;
-        }
-
-        services.AddInMemoryDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
-            static readModel => readModel.Id,
-            static key => key,
-            static readModel => readModel.UpdatedAt);
     }
 
     private static List<VoicePresenceModuleRegistration> BuildVoicePresenceModuleRegistrations(
