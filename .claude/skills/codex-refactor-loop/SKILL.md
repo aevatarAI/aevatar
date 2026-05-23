@@ -996,11 +996,14 @@ maintainer 只加 1 label:`auto-loop-triage`
    - 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
    - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
 
-2. **Controller per-wakeup process pending events**(已有 `.controller-pending-events.log` sweep,扩展)
-   - 读 events log 找 `^.* new-triage-issue <issue> <author>` lines
-   - 对每个新 triage issue 派 triage codex(`prompts/triage-external-issue.md`)
-   - 派完后 update offset 防重复处理
+2. **Controller per-wakeup process pending events**(强制,per Auric 2026-05-23 "为什么没自动扫到")
+   - 每次 wakeup **第一动作之一**:`bash tools/refactor-loop/sweep_pending_triage.sh`
+   - script 输出 0 或多行 `DISPATCH_TRIAGE:<issue>:<author>`,对每行立即派 triage codex(spawn-codex.sh)
+   - **不允许** wakeup 不跑此 sweep — 否则 daemon emit event 但 controller 看不见,等同 daemon 失效
+   - script 自维护 `.refactor-loop/.triage-events-processed-offset`,自动防重复
    - triage codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
+
+**事故记录**:2026-05-23 #560 maintainer 加 `auto-loop-triage` label,daemon 06:49Z emit event 到 pending-events log,但 controller 后续 wakeup 没 sweep pending-events,等 maintainer 直接问"为什么没自动扫到"才发现。bug:SKILL 写了规则但 controller 缺执行 step。已加 `sweep_pending_triage.sh` 作为强制 wakeup step。
 
 Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
 1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
