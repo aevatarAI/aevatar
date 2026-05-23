@@ -8,6 +8,9 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCommandPort
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly ICommandDispatchService<UpsertScriptDefinitionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly IScriptBehaviorCompiler _compiler;
@@ -63,7 +66,8 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
                 sourceText,
                 sourceHash,
                 actorId,
-                scopeId),
+                scopeId,
+                snapshot.ScriptPackage?.Clone() ?? new ScriptPackageSpec()),
             ct);
         if (!result.Succeeded || result.Receipt == null)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script definition dispatch failed.");
@@ -80,9 +84,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
         string sourceText,
         string sourceHash)
     {
-        var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(sourceText ?? string.Empty);
-        var scriptPackage = ScriptPackageModel.ToPackageSpec(parsedPackage);
-        var entrySourceText = ScriptPackageModel.GetEntrySourceText(scriptPackage);
+        var scriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(sourceText ?? string.Empty);
         var packageHash = string.IsNullOrWhiteSpace(sourceHash)
             ? ScriptPackageModel.ComputePackageHash(scriptPackage)
             : sourceHash;
@@ -113,7 +115,6 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
             return new ScriptDefinitionSnapshot(
                 scriptId ?? string.Empty,
                 scriptRevision ?? string.Empty,
-                entrySourceText,
                 packageHash,
                 scriptPackage,
                 compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,

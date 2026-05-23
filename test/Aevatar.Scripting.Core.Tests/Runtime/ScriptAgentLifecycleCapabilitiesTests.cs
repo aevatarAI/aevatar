@@ -174,8 +174,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             {
                 ScriptId = "script-1",
                 Revision = "rev-2",
-                SourceText = ScriptSources.UppercaseBehavior,
                 SourceHash = ScriptSources.UppercaseBehaviorHash,
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
                 StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
                 ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             }));

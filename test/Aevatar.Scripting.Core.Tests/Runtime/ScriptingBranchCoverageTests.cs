@@ -120,7 +120,6 @@ public sealed class ScriptDefinitionBindingSpecConversionsTests
         {
             ScriptId = "script-3",
             Revision = "rev-3",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,

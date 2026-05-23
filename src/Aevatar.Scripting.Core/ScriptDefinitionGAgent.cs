@@ -15,6 +15,9 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private const string SchemaStatusPending = "pending";
     private const string SchemaStatusDeclared = "declared";
     private const string SchemaStatusValidated = "validated";
@@ -43,11 +46,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 $"Script definition actor `{Id}` is already bound to scope `{State.ScopeId}` and cannot switch to `{evt.ScopeId}`.");
         }
 
-        var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(evt.SourceText ?? string.Empty);
-        var scriptPackage = evt.ScriptPackage?.Clone();
-        if (scriptPackage == null || scriptPackage.CsharpSources.Count == 0)
-            scriptPackage = ScriptPackageModel.ToPackageSpec(parsedPackage);
-        var sourceText = ScriptPackageModel.GetEntrySourceText(scriptPackage);
+        var scriptPackage = RequireScriptPackage(evt.ScriptPackage);
         var packageHash = string.IsNullOrWhiteSpace(evt.SourceHash)
             ? ScriptPackageModel.ComputePackageHash(scriptPackage)
             : evt.SourceHash;
@@ -84,7 +83,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             {
                 ScriptId = evt.ScriptId ?? string.Empty,
                 ScriptRevision = evt.ScriptRevision ?? string.Empty,
-                SourceText = sourceText,
                 SourceHash = packageHash,
                 ReadModelSchema = readModelSchema,
                 ReadModelSchemaHash = readModelSchemaHash,
@@ -173,7 +171,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         var next = state.Clone();
         next.ScriptId = evt.ScriptId ?? string.Empty;
         next.Revision = evt.ScriptRevision ?? string.Empty;
-        next.SourceText = evt.SourceText ?? string.Empty;
         next.SourceHash = evt.SourceHash ?? string.Empty;
         next.ReadModelSchema = evt.ReadModelSchema?.Clone() ?? Any.Pack(new Empty());
         next.ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty;
@@ -201,6 +198,14 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = evt.ScriptRevision ?? string.Empty;
         return next;
+    }
+
+    private static ScriptPackageSpec RequireScriptPackage(ScriptPackageSpec? scriptPackage)
+    {
+        if ((scriptPackage?.CsharpSources.Count ?? 0) == 0)
+            throw new InvalidOperationException("ScriptPackage must contain at least one C# source.");
+
+        return scriptPackage!.Clone();
     }
 
     private static ScriptDefinitionState ApplySchemaDeclared(

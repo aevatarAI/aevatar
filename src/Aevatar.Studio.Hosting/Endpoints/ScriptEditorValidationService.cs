@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
@@ -43,10 +44,10 @@ internal sealed class ScriptEditorValidationService
                     normalizedScriptId,
                     normalizedRevision,
                     AppScriptPackagePayloads.ResolvePackage(package, source))
-                : ScriptBehaviorCompilationRequest.FromPersistedSource(
+                : new ScriptBehaviorCompilationRequest(
                     normalizedScriptId,
                     normalizedRevision,
-                    source ?? string.Empty);
+                    ScriptPackageSpecExtensions.CreateSingleSource(source ?? string.Empty));
             var normalizedPackage = request.Package.Normalize();
             var primarySourcePath = normalizedPackage.CSharpSources.FirstOrDefault()?.NormalizedPath ?? "Behavior.cs";
             var diagnostics = new List<ScriptEditorValidationDiagnostic>();

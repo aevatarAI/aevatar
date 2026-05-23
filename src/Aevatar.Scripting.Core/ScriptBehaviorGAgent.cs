@@ -14,6 +14,9 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly IScriptBehaviorDispatcher _dispatcher;
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
@@ -87,7 +90,6 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
             ScriptId = evt.ScriptId ?? string.Empty,
             Revision = evt.Revision ?? string.Empty,
-            SourceText = evt.SourceText ?? string.Empty,
             SourceHash = evt.SourceHash ?? string.Empty,
             StateTypeUrl = evt.StateTypeUrl ?? string.Empty,
             ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty,
@@ -160,11 +162,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 ScriptId: State.ScriptId ?? string.Empty,
                 Revision: State.Revision ?? string.Empty,
                 ScopeId: scopeId,
-                SourceText: State.SourceText ?? string.Empty,
                 SourceHash: State.SourceHash ?? string.Empty,
-                ScriptPackage: ScriptPackageModel.ResolveDeclaredPackage(
-                    State.ScriptPackage,
-                    State.SourceText ?? string.Empty),
+                ScriptPackage: RequireBoundPackage(State.ScriptPackage),
                 StateTypeUrl: State.StateTypeUrl ?? string.Empty,
                 ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
                 CurrentStateRoot: State.StateRoot?.Clone(),
@@ -192,7 +191,6 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         next.ScriptId = evt.ScriptId ?? string.Empty;
         next.Revision = evt.Revision ?? string.Empty;
-        next.SourceText = evt.SourceText ?? string.Empty;
         next.SourceHash = evt.SourceHash ?? string.Empty;
         next.StateTypeUrl = evt.StateTypeUrl ?? string.Empty;
         next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
@@ -215,9 +213,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         var next = state.Clone();
         var payload = evt.DomainEventPayload?.Clone() ?? Any.Pack(new Empty());
-        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
-            state.ScriptPackage,
-            state.SourceText ?? string.Empty);
+        var scriptPackage = RequireBoundPackage(state.ScriptPackage);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
             string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
@@ -293,14 +289,14 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             throw new InvalidOperationException("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(evt.Revision))
             throw new InvalidOperationException("Revision is required.");
-        if ((evt.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(evt.SourceText))
+        if ((evt.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
             throw new InvalidOperationException("ScriptPackage must contain at least one C# source.");
     }
 
     private void EnsureBound()
     {
         if (string.IsNullOrWhiteSpace(State.DefinitionActorId) ||
-            ((State.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(State.SourceText)))
+            (State.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
         {
             throw new InvalidOperationException($"Script behavior actor `{Id}` is not bound.");
         }
@@ -314,9 +310,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             State.ScriptId ?? string.Empty,
             State.Revision ?? string.Empty,
-            ScriptPackageModel.ResolveDeclaredPackage(
-                State.ScriptPackage,
-                State.SourceText ?? string.Empty),
+            RequireBoundPackage(State.ScriptPackage),
             State.SourceHash ?? string.Empty));
 
         _cachedMaterializationPlan = _materializationCompiler.Compile(
@@ -325,6 +319,14 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             State.ReadModelSchemaVersion ?? string.Empty);
 
         return _cachedMaterializationPlan;
+    }
+
+    private static ScriptPackageSpec RequireBoundPackage(ScriptPackageSpec? scriptPackage)
+    {
+        if ((scriptPackage?.CsharpSources.Count ?? 0) == 0)
+            throw new InvalidOperationException("ScriptPackage must contain at least one C# source.");
+
+        return scriptPackage!.Clone();
     }
 
     private static string ResolveRunId(EventEnvelope envelope)

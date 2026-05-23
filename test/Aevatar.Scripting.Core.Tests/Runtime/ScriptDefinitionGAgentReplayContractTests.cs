@@ -27,13 +27,13 @@ public class ScriptDefinitionGAgentReplayContractTests
         {
             ScriptId = "script-1",
             ScriptRevision = "rev-1",
-            SourceText = DefinitionBehaviorSource,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(DefinitionBehaviorSource),
             SourceHash = "hash-1",
         });
 
         agent.State.ScriptId.Should().Be("script-1");
         agent.State.Revision.Should().Be("rev-1");
-        agent.State.SourceText.Should().Contain("DefinitionReplayBehavior");
+        agent.State.ScriptPackage.GetPrimaryCSharpSource().Should().Contain("DefinitionReplayBehavior");
         agent.State.SourceHash.Should().Be("hash-1");
         agent.State.StateTypeUrl.Should().Be(Any.Pack(new ScriptProfileState()).TypeUrl);
         agent.State.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
@@ -67,7 +67,7 @@ public class ScriptDefinitionGAgentReplayContractTests
         {
             ScriptId = "script-unsupported",
             ScriptRevision = "rev-unsupported-1",
-            SourceText = DefinitionBehaviorSource,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(DefinitionBehaviorSource),
             SourceHash = "hash-unsupported-1",
         });
 
@@ -95,7 +95,7 @@ public class ScriptDefinitionGAgentReplayContractTests
         {
             ScriptId = "script-dispose",
             ScriptRevision = "rev-1",
-            SourceText = DefinitionBehaviorSource,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(DefinitionBehaviorSource),
             SourceHash = "hash-dispose",
         });
 
@@ -113,7 +113,6 @@ public class ScriptDefinitionGAgentReplayContractTests
         {
             ScriptId = "script-computed-hash",
             ScriptRevision = "rev-hash",
-            SourceText = string.Empty,
             ScriptPackage = package,
             SourceHash = string.Empty,
         });
@@ -121,7 +120,7 @@ public class ScriptDefinitionGAgentReplayContractTests
         agent.State.ScriptId.Should().Be("script-computed-hash");
         agent.State.Revision.Should().Be("rev-hash");
         agent.State.SourceHash.Should().Be(expectedHash);
-        agent.State.SourceText.Should().Contain("DefinitionReplayBehavior");
+        agent.State.ScriptPackage.GetPrimaryCSharpSource().Should().Contain("DefinitionReplayBehavior");
     }
 
     [Fact]
@@ -133,7 +132,7 @@ public class ScriptDefinitionGAgentReplayContractTests
         {
             ScriptId = "script-invalid",
             ScriptRevision = "rev-invalid",
-            SourceText = "public sealed class BrokenBehavior :",
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class BrokenBehavior :"),
             SourceHash = "hash-invalid",
         });
 

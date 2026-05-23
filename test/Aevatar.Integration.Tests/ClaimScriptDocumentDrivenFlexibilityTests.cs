@@ -2,6 +2,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -64,13 +65,13 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             {
                 ScriptId = script.ScriptId,
                 ScriptRevision = script.Revision,
-                SourceText = script.Source,
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(script.Source),
                 SourceHash = script.SourceHash,
             });
 
             definition.State.ScriptId.Should().Be(script.ScriptId);
             definition.State.Revision.Should().Be(script.Revision);
-            definition.State.SourceText.Should().Be(script.Source);
+            definition.State.ScriptPackage.GetPrimaryCSharpSource().Should().Be(script.Source);
             definition.State.SourceHash.Should().Be(script.SourceHash);
         }
     }
