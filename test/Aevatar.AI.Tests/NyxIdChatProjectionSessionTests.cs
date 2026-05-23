@@ -28,7 +28,7 @@ public sealed class NyxIdChatProjectionSessionTests
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
         runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
-        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, runtime);
+        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingChatProjectionAsync("chat-actor-1", "session-1", sink, CancellationToken.None);
@@ -78,7 +78,7 @@ public sealed class NyxIdChatProjectionSessionTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingChatProjectionAsync(
@@ -106,7 +106,7 @@ public sealed class NyxIdChatProjectionSessionTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
 
         var attachment = await port.AttachExistingChatProjectionAsync(
             "chat-actor-1",
@@ -255,6 +255,18 @@ public sealed class NyxIdChatProjectionSessionTests
             return Task.CompletedTask;
         }
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease, NyxIdChatSessionProjectionContext>(
+            runtime,
+            request => new NyxIdChatSessionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new NyxIdChatSessionRuntimeLease(context));
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

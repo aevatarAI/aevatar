@@ -458,7 +458,7 @@ public class StreamingProxyCoverageTests
             new RecordingRoomSessionActivationService(),
             new RecordingRoomSessionReleaseService(),
             hub,
-            runtime);
+            CreateRoomSessionAttachExistingLookup(runtime));
         await using var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
 
         var attachment = await port.AttachExistingChatProjectionAsync("room-a", "session-123", sink, CancellationToken.None);
@@ -479,7 +479,7 @@ public class StreamingProxyCoverageTests
             new RecordingRoomSessionActivationService(),
             new RecordingRoomSessionReleaseService(),
             hub,
-            new StubActorRuntime());
+            CreateRoomSessionAttachExistingLookup(new StubActorRuntime()));
         await using var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
 
         var attachment = await port.AttachExistingChatProjectionAsync("room-a", "session-123", sink, CancellationToken.None);
@@ -2147,6 +2147,18 @@ public class StreamingProxyCoverageTests
             return Task.CompletedTask;
         }
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease> CreateRoomSessionAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease, StreamingProxyRoomSessionProjectionContext>(
+            runtime,
+            request => new StreamingProxyRoomSessionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new StreamingProxyRoomSessionRuntimeLease(context));
 
     private sealed class NoopAsyncDisposable : IAsyncDisposable
     {

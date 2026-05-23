@@ -25,7 +25,7 @@ public sealed class ScriptEvolutionProjectionPortTests
             activationService,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingCompletedEventSink();
 
         var attachment = await port.AttachExistingActorProjectionAsync("session-1", "proposal-1", sink);
@@ -51,7 +51,7 @@ public sealed class ScriptEvolutionProjectionPortTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
 
         var attachment = await port.AttachExistingActorProjectionAsync(
             "session-1",
@@ -126,6 +126,18 @@ public sealed class ScriptEvolutionProjectionPortTests
             return Task.CompletedTask;
         }
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<ScriptEvolutionRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext>(
+            runtime,
+            request => new ScriptEvolutionSessionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new ScriptEvolutionRuntimeLease(context));
 
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>
     {

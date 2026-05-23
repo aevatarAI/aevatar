@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Projection.Configuration;
@@ -12,21 +11,21 @@ public sealed class ScriptEvolutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IScriptEvolutionProjectionLease, ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>,
       IScriptEvolutionProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<ScriptEvolutionRuntimeLease> _attachExistingLeaseLookup;
 
     public ScriptEvolutionProjectionPort(
         ScriptEvolutionProjectionOptions options,
         IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptEvolutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent> sessionEventHub,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<ScriptEvolutionRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options?.Enabled ?? false,
             activationService,
             releaseService,
             sessionEventHub)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
     public Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
@@ -63,20 +62,19 @@ public sealed class ScriptEvolutionProjectionPort
             return null;
         }
 
-        var scopeKey = new ProjectionRuntimeScopeKey(
-            sessionActorId,
-            ScriptProjectionKinds.EvolutionSession,
-            ProjectionRuntimeMode.SessionObservation,
-            proposalId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
-            return null;
-
-        var lease = new ScriptEvolutionRuntimeLease(new ScriptEvolutionSessionProjectionContext
+        // Refactor (iter51/issue-898-projection-attach-existing-side-read):
+        //   Old pattern: Feature projection ports duplicated IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()) for attach-existing checks (post-#884 #884 fixed 3 ports but more remained).
+        //   New principle: All attach-existing lease lookups go through typed IProjectionScopeAttachExistingLeaseLookup<TLease>; CI guard prevents recurrence.
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(new ProjectionScopeStartRequest
         {
             RootActorId = sessionActorId,
             ProjectionKind = ScriptProjectionKinds.EvolutionSession,
+            Mode = ProjectionRuntimeMode.SessionObservation,
             SessionId = proposalId,
-        });
+        }, ct).ConfigureAwait(false);
+        if (lease == null)
+            return null;
+
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null
