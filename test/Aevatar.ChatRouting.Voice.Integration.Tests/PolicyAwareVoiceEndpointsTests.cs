@@ -251,6 +251,26 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
+    public async Task PolicyAwareVoice_TypedResolutionUnsupported_ShouldMapTo503WithoutSocketAccept()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var resolver = RecordingVoiceSessionResolver.Unsupported();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await InvokeEndpointWithTimeoutAsync(app, context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("remote_audio_transport_unavailable");
+        wsFeature.AcceptCalls.Should().Be(0);
+        resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
+    }
+
+    [Fact]
     public async Task PolicyAwareVoice_WhenTransportAlreadyAttached_ShouldReturnConflictBeforeUpgrade()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
@@ -266,6 +286,27 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         wsFeature.AcceptCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_TypedResolutionTransportAlreadyAttached_ShouldMapAttachTo409WithoutSocketAccept()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var resolver = RecordingVoiceSessionResolver.PreflightFailed(
+            VoicePresencePreflightFailureKind.TransportAlreadyAttached);
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await InvokeEndpointWithTimeoutAsync(app, context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        (await ReadBodyAsync(context)).Should().Be("Voice transport already attached.");
+        wsFeature.AcceptCalls.Should().Be(0);
+        resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
     }
 
     [Fact]
@@ -306,6 +347,84 @@ public sealed class PolicyAwareVoiceEndpointsTests
         wsFeature.AcceptCalls.Should().Be(1);
         attached.Should().Be(1);
         detached.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedPendingAttach_ShouldAcceptAttachAndReleaseAfterCloseWaitTimeout()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var attached = 0;
+        var detached = 0;
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: (_, _) =>
+            {
+                attached++;
+                return Task.CompletedTask;
+            },
+            detachTransportAsync: (_, _) =>
+            {
+                detached++;
+                return Task.CompletedTask;
+            },
+            pcmSampleRateHz: 24000);
+        var resolver = RecordingVoiceSessionResolver.PendingAttach(session);
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            catalog,
+            resolver,
+            options => options.WebSocketCloseWaitTimeout = TimeSpan.FromMilliseconds(1));
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await InvokeEndpointWithTimeoutAsync(app, context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        attached.Should().Be(1);
+        detached.Should().Be(1);
+        resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedAttached_ShouldAcceptAndDetachWhenSocketCloses()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var attached = 0;
+        var detached = 0;
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => true,
+            attachTransportAsync: (_, _) =>
+            {
+                attached++;
+                return Task.CompletedTask;
+            },
+            detachTransportAsync: (_, _) =>
+            {
+                detached++;
+                return Task.CompletedTask;
+            },
+            pcmSampleRateHz: 24000);
+        var resolver = RecordingVoiceSessionResolver.Attached(session);
+        var socket = new FakeWebSocket(WebSocketState.CloseReceived);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await InvokeEndpointWithTimeoutAsync(app, context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        attached.Should().Be(1);
+        detached.Should().Be(1);
+        resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
     }
 
     private static ChatRouteAction ForwardToGAgent(string actorId, string voiceModuleName = "") =>
@@ -411,6 +530,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .SelectMany(static dataSource => dataSource.Endpoints)
             .OfType<RouteEndpoint>()
             .Single(endpoint => endpoint.RoutePattern.RawText == pattern);
+
+    private static Task InvokeEndpointWithTimeoutAsync(WebApplication app, DefaultHttpContext context) =>
+        GetEndpoint(app, "/ws/voice").RequestDelegate!(context).WaitAsync(TimeSpan.FromSeconds(5));
 
     private static VoicePresenceSession CreateInitializedSession() =>
         new(
