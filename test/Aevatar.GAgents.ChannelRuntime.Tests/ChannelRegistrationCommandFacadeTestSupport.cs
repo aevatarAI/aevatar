@@ -17,7 +17,6 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
 
         return new ChannelRegistrationCommandFacade(
             CreateDispatchService<ChannelBotRegisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
-            CreateDispatchService<ChannelBotRebuildProjectionCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
             CreateDispatchService<ChannelBotUnregisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
     }
 

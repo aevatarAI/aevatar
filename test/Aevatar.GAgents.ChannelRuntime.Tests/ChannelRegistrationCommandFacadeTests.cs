@@ -10,7 +10,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelRegistrationCommandFacadeTests
 {
     [Fact]
-    public async Task RebuildProjectionAsync_WhenStoreActorIsMissing_ShouldCreateActorBeforeDispatch()
+    public async Task RegisterLocalMirrorAsync_WhenStoreActorIsMissing_ShouldCreateActorBeforeDispatch()
     {
         EventEnvelope? capturedEnvelope = null;
         var createdActor = Substitute.For<IActor>();
@@ -30,13 +30,19 @@ public sealed class ChannelRegistrationCommandFacadeTests
             .Returns(Task.CompletedTask);
         var facade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, dispatchPort);
 
-        var receipt = await facade.RebuildProjectionAsync("manual-debug");
+        var receipt = await facade.RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
+        {
+            RequestedId = "reg-1",
+            Platform = "lark",
+            ScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+        });
 
         receipt.ActorId.Should().Be(ChannelBotRegistrationGAgent.WellKnownId);
         receipt.CommandId.Should().NotBeNullOrWhiteSpace();
         receipt.CorrelationId.Should().Be(receipt.CommandId);
         capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+        capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>().RequestedId.Should().Be("reg-1");
         await actorRuntime.Received(1).CreateAsync<ChannelBotRegistrationGAgent>(
             ChannelBotRegistrationGAgent.WellKnownId,
             Arg.Any<CancellationToken>());
@@ -47,7 +53,7 @@ public sealed class ChannelRegistrationCommandFacadeTests
     }
 
     [Fact]
-    public async Task RebuildProjectionAsync_WhenStoreActorCannotBeCreated_ShouldFailWithoutDispatch()
+    public async Task UnregisterAsync_WhenStoreActorCannotBeCreated_ShouldFailWithoutDispatch()
     {
         var actorRuntime = Substitute.For<IActorRuntime>();
         var dispatchPort = Substitute.For<IActorDispatchPort>();
@@ -60,7 +66,7 @@ public sealed class ChannelRegistrationCommandFacadeTests
             .Returns(Task.FromResult<IActor>(null!));
         var facade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, dispatchPort);
 
-        var act = () => facade.RebuildProjectionAsync("manual-debug");
+        var act = () => facade.UnregisterAsync("reg-1");
 
         await act.Should()
             .ThrowAsync<InvalidOperationException>()

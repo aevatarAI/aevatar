@@ -4,23 +4,12 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Channel.Runtime;
 
-public static class ChannelBotRegistrationStoreCommands
+internal static class ChannelBotRegistrationStoreCommands
 {
-    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
-    //   Old pattern: rebuild_projection could dispatch live ChannelBotRepairScopeIdCommand writes.
-    //   New principle: command helpers expose register/unregister/rebuild only; ChannelBotScopeIdRepairedEvent remains replay-only.
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=register/unregister/rebuild command helper, new=rebuild-only startup helper
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh dispatch, new=startup-owned actor inbox dispatch
     private const string PublisherActorId = "channel-runtime.registration-store";
-
-    public static Task DispatchRegisterAsync(
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
-        ChannelBotRegisterCommand command,
-        CancellationToken ct = default) =>
-        DispatchAsync(
-            actorRuntime,
-            dispatchPort,
-            command,
-            ct);
 
     public static Task DispatchRebuildProjectionAsync(
         IActorRuntime actorRuntime,
@@ -33,20 +22,6 @@ public static class ChannelBotRegistrationStoreCommands
             new ChannelBotRebuildProjectionCommand
             {
                 Reason = reason ?? string.Empty,
-            },
-            ct);
-
-    public static Task DispatchUnregisterAsync(
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
-        string registrationId,
-        CancellationToken ct = default) =>
-        DispatchAsync(
-            actorRuntime,
-            dispatchPort,
-            new ChannelBotUnregisterCommand
-            {
-                RegistrationId = registrationId ?? string.Empty,
             },
             ct);
 

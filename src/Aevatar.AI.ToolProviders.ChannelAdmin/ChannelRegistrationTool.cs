@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.ToolProviders.ChannelAdmin;
@@ -15,6 +14,8 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual readmodel rematerialization path, new=startup-owned projection refresh
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
@@ -30,8 +31,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     public string Description =>
         "Manage Aevatar ChannelRuntime registrations for the supported Nyx-backed Lark relay flow. " +
-        "Actions: list, register_lark_via_nyx, rebuild_projection, delete. " +
-        "Use register_lark_via_nyx for provisioning and rebuild_projection to re-materialize the local registration read model from authoritative actor state. " +
+        "Actions: list, register_lark_via_nyx, delete. " +
+        "Use register_lark_via_nyx for provisioning. " +
         "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials. " +
         "Do not ask the user for scope_id; it is resolved from the current NyxID request context and should only be supplied explicitly for diagnostics.";
 
@@ -41,7 +42,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register_lark_via_nyx", "rebuild_projection", "delete"],
+              "enum": ["list", "register_lark_via_nyx", "delete"],
               "description": "Action to perform (default: list)."
             },
             "nyx_provider_slug": {
@@ -72,10 +73,6 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Human-readable label for the Nyx channel bot (optional)"
             },
-            "reason": {
-              "type": "string",
-              "description": "Optional operator reason for rebuild_projection"
-            },
             "registration_id": {
               "type": "string",
               "description": "Registration ID for delete"
@@ -96,17 +93,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         using var document = JsonDocument.Parse(argumentsJson);
         var root = document.RootElement;
-        var action = GetStr(root, "action") ?? "list";
+        var action = NormalizeOptional(GetStr(root, "action")) ?? "list";
 
         return action switch
         {
             "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => RebuildProjectionAsync(commandFacade, root, ct)),
             "delete" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => DeleteAsync(queryPort, commandFacade, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
-            _ => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
+            _ => SerializeError($"Unsupported channel registration action '{action}'."),
         };
     }
 
@@ -263,26 +259,6 @@ public sealed class ChannelRegistrationTool : IAgentTool
             webhookUrl: result.WebhookUrl ?? string.Empty,
             error: result.Error ?? string.Empty,
             note: result.Note ?? string.Empty);
-    }
-
-    private async Task<string> RebuildProjectionAsync(
-        ChannelRegistrationCommandFacade commandFacade,
-        JsonElement args,
-        CancellationToken ct)
-    {
-        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-        //   Old pattern: tool resolved raw runtime/dispatch and called static command helper.
-        //   New principle: tool is an adapter; rebuild goes through typed channel registration command facade.
-        await commandFacade.RebuildProjectionAsync(
-            GetStr(args, "reason")?.Trim() ?? "tool_manual_rebuild",
-            ct);
-
-        return JsonSerializer.Serialize(new
-        {
-            status = "accepted",
-            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
-        });
     }
 
     private async Task<string> DeleteAsync(
