@@ -5,6 +5,8 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 //   new=split query/command port + CQRS Core dispatch
 public interface IConnectorCatalogCommandPort
 {
+    Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
+
     Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
         StoredConnectorCatalog catalog,
         long? expectedVersion = null,
@@ -19,3 +21,8 @@ public interface IConnectorCatalogCommandPort
         long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record ImportedConnectorCatalog(
+    string SourceFilePath,
+    bool SourceFileExists,
+    StoredConnectorCatalog Catalog);

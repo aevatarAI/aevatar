@@ -5,6 +5,8 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 //   new=split query/command port + CQRS Core dispatch
 public interface IRoleCatalogCommandPort
 {
+    Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
+
     Task<StoredRoleCatalog> SaveRoleCatalogAsync(
         StoredRoleCatalog catalog,
         long? expectedVersion = null,
@@ -19,3 +21,8 @@ public interface IRoleCatalogCommandPort
         long? expectedVersion = null,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record ImportedRoleCatalog(
+    string SourceFilePath,
+    bool SourceFileExists,
+    StoredRoleCatalog Catalog);

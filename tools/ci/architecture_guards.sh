@@ -311,6 +311,25 @@ bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
 bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
 
+studio_catalog_query_ports=(
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IRoleCatalogQueryPort.cs"
+)
+
+for query_port in "${studio_catalog_query_ports[@]}"; do
+  if [ ! -f "${query_port}" ]; then
+    echo "Studio catalog query port is missing: ${query_port}"
+    exit 1
+  fi
+done
+
+if rg -n "Task(<[^>]+>)?[[:space:]]+(Import|Save|Delete|Create|Update|Ensure|Dispatch|Send)[A-Za-z0-9_]*Async[[:space:]]*\(" \
+  "${studio_catalog_query_ports[@]}"
+then
+  echo "Studio catalog query ports must remain read-only. Move mutating methods to catalog command ports."
+  exit 1
+fi
+
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do
   secret_store_scan_roots+=("${host_dir}")

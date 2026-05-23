@@ -59,7 +59,7 @@ public sealed class RoleCatalogService
 
     public async Task<ImportRoleCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var imported = await _queryPort.ImportLocalCatalogAsync(cancellationToken);
+        var imported = await _commandPort.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
     }
 

@@ -66,7 +66,7 @@ public sealed class ConnectorService
 
     public async Task<ImportConnectorCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var imported = await _queryPort.ImportLocalCatalogAsync(cancellationToken);
+        var imported = await _commandPort.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
     }
 

@@ -7,12 +7,5 @@ public interface IConnectorCatalogQueryPort
 {
     Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default);
 
-    Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
-
     Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default);
 }
-
-public sealed record ImportedConnectorCatalog(
-    string SourceFilePath,
-    bool SourceFileExists,
-    StoredConnectorCatalog Catalog);
