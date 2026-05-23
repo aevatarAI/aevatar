@@ -15,6 +15,13 @@ enum VoicePresenceRuntimeStatus {
   VOICE_PRESENCE_RUNTIME_STATUS_AUDIO_DRAINING = 4;
 }
 
+enum VoiceRemoteAudioSupport {
+  VOICE_REMOTE_AUDIO_SUPPORT_UNSPECIFIED = 0;
+  VOICE_REMOTE_AUDIO_SUPPORT_LOCAL_ONLY = 1;
+  VOICE_REMOTE_AUDIO_SUPPORT_SUPPORTED = 2;
+  VOICE_REMOTE_AUDIO_SUPPORT_UNAVAILABLE = 3;
+}
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -60,6 +67,9 @@ message VoiceProviderResponseBinding {
   int32 response_id = 2;
 }
 
+// Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+//   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+//   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
 message VoicePresenceRuntimeState {
   VoicePresenceRuntimeStatus status = 1;
   int32 current_response_id = 2;
@@ -72,6 +82,12 @@ message VoicePresenceRuntimeState {
   string active_provider_response_id = 9;
   string remote_session_id = 10;
   repeated VoicePendingEventInjection pending_injections = 11;
+  bool initialized = 12;
+  bool transport_attached = 13;
+  int32 pcm_sample_rate_hz = 14;
+  string active_session_id = 15;
+  google.protobuf.Timestamp lease_expires_at = 16;
+  VoiceRemoteAudioSupport remote_audio_support = 17;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -84,6 +100,20 @@ message VoiceRemoteSessionOpenRequested {
 }
 
 message VoiceRemoteSessionCloseRequested {
+  string session_id = 1;
+  string reason = 2;
+}
+
+// Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+//   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+//   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+message VoicePresenceSessionLeaseRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message VoicePresenceSessionLeaseReleased {
   string session_id = 1;
   string reason = 2;
 }
@@ -188,5 +218,25 @@ message VoiceModuleSignal {
     VoiceRemoteSessionOpenRequested remote_session_open_requested = 4;
     VoiceRemoteSessionCloseRequested remote_session_close_requested = 5;
     VoiceRemoteControlInputReceived remote_control_input_received = 7;
+    VoicePresenceSessionLeaseRequested session_lease_requested = 8;
+    VoicePresenceSessionLeaseReleased session_lease_released = 9;
   }
+}
+
+// Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+//   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+//   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+message VoicePresenceCapabilityReadModel {
+  string id = 1;
+  string actor_id = 2;
+  string module_name = 3;
+  int64 state_version = 4;
+  string last_event_id = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  bool initialized = 7;
+  bool transport_attached = 8;
+  int32 pcm_sample_rate_hz = 9;
+  string active_session_id = 10;
+  google.protobuf.Timestamp lease_expires_at = 11;
+  VoiceRemoteAudioSupport remote_audio_support = 12;
 }

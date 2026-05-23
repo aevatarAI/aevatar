@@ -149,6 +149,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested:
+                await HandleSessionLeaseRequestedAsync(signal.SessionLeaseRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.SessionLeaseReleased:
+                await HandleSessionLeaseReleasedAsync(signal.SessionLeaseReleased, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.None:
             default:
                 break;
@@ -157,6 +163,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     // ── ILifecycleAwareEventModule ────────────────────────────
 
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     public async Task InitializeAsync(CancellationToken ct)
     {
         if (IsInitialized)
@@ -168,6 +177,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             await _provider.UpdateSessionAsync(effectiveSessionConfig, ct);
 
         IsInitialized = true;
+        _runtimeState.Initialized = true;
+        _runtimeState.PcmSampleRateHz = PcmSampleRateHz;
+        _runtimeState.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
         await FlushPendingEventInjectionsAsync(ct);
     }
 
@@ -184,6 +196,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         await _provider.DisposeAsync();
         _runtimeState = CreateInitialRuntimeState();
+        _runtimeState.Initialized = false;
+        _runtimeState.TransportAttached = false;
+        _runtimeState.ActiveSessionId = string.Empty;
         RestoreStateMachineFromRuntimeState();
         _selfEventDispatcher = null;
     }
@@ -211,6 +226,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     /// Audio flows directly between transport and provider (no grain inbox).
     /// Control events are dispatched to the grain inbox via <paramref name="selfEventDispatcher"/>.
     /// </summary>
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     public void AttachTransport(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher)
@@ -224,6 +242,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _userTransport = userTransport;
         _selfEventDispatcher = selfEventDispatcher;
         _relayCts = new CancellationTokenSource();
+        _runtimeState.TransportAttached = true;
 
         _provider.OnEvent = OnProviderEventAsync;
         _userToProviderRelay = RunUserToProviderRelayAsync(_relayCts.Token);
@@ -233,6 +252,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     /// <summary>
     /// Detaches the current transport and stops the relay loops.
     /// </summary>
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     public async Task DetachTransportAsync(IVoiceTransport? expectedTransport = null)
     {
         if (expectedTransport != null && !ReferenceEquals(expectedTransport, _userTransport))
@@ -246,6 +268,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             _userTransport = null;
         }
 
+        _runtimeState.TransportAttached = false;
         _selfEventDispatcher = null;
     }
 
@@ -653,6 +676,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
 
         _runtimeState.RemoteSessionId = request.SessionId;
+        _runtimeState.ActiveSessionId = request.SessionId;
+        _runtimeState.TransportAttached = _userTransport != null;
         await PersistRuntimeStateAsync(ctx, ct);
         _provider.OnEvent = OnProviderEventAsync;
     }
@@ -705,6 +730,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return false;
 
         _runtimeState.RemoteSessionId = string.Empty;
+        _runtimeState.ActiveSessionId = string.Empty;
+        _runtimeState.TransportAttached = false;
         _runtimeState.ProviderResponseBindings.Clear();
         _runtimeState.CancelledProviderResponseIds.Clear();
         _runtimeState.ActiveProviderResponseId = string.Empty;
@@ -723,6 +750,56 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             ctx,
             ct);
         return true;
+    }
+
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+    internal async Task HandleSessionLeaseRequestedAsync(
+        VoicePresenceSessionLeaseRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        HydrateRuntimeStateFromActor(ctx);
+        if (request == null || string.IsNullOrWhiteSpace(request.SessionId))
+            return;
+
+        var currentSessionId = _runtimeState.ActiveSessionId;
+        if (!string.IsNullOrWhiteSpace(currentSessionId) &&
+            !string.Equals(currentSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _runtimeState.Initialized = IsInitialized;
+        _runtimeState.TransportAttached = _userTransport != null;
+        _runtimeState.PcmSampleRateHz = PcmSampleRateHz;
+        _runtimeState.ActiveSessionId = request.SessionId;
+        _runtimeState.LeaseExpiresAt = request.ExpiresAt?.Clone();
+        _runtimeState.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
+        await PersistRuntimeStateAsync(ctx, ct);
+    }
+
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+    internal async Task HandleSessionLeaseReleasedAsync(
+        VoicePresenceSessionLeaseReleased request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        HydrateRuntimeStateFromActor(ctx);
+        if (request == null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !string.Equals(_runtimeState.ActiveSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _runtimeState.ActiveSessionId = string.Empty;
+        _runtimeState.LeaseExpiresAt = null;
+        _runtimeState.TransportAttached = _userTransport != null;
+        await PersistRuntimeStateAsync(ctx, ct);
     }
 
     private Task PublishRemoteOutputAsync(
@@ -1088,6 +1165,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _runtimeState.LastDrainAckResponseId = StateMachine.LastDrainAckResponseId;
         _runtimeState.LastDrainAckPlayoutSequence = StateMachine.LastDrainAckPlayoutSequence;
         _runtimeState.NextResponseId = Math.Max(_runtimeState.NextResponseId, StateMachine.CurrentResponseId + 1);
+        _runtimeState.Initialized = IsInitialized;
+        _runtimeState.TransportAttached = _userTransport != null;
+        _runtimeState.PcmSampleRateHz = PcmSampleRateHz;
+        if (_runtimeState.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
+            _runtimeState.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
     }
 
     private void RestoreStateMachineFromRuntimeState()
@@ -1110,6 +1192,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             normalized.LastDrainAckPlayoutSequence = DefaultLastDrainAckPlayoutSequence;
         if (normalized.NextResponseId <= normalized.CurrentResponseId)
             normalized.NextResponseId = normalized.CurrentResponseId + 1;
+        if (normalized.PcmSampleRateHz <= 0)
+            normalized.PcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
+        if (normalized.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified)
+            normalized.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
 
         return normalized;
     }

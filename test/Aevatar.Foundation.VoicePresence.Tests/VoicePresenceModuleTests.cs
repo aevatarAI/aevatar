@@ -472,6 +472,47 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Session_lease_signals_should_persist_actor_owned_capability_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            SessionLeaseRequested = new VoicePresenceSessionLeaseRequested
+            {
+                SessionId = "lease-1",
+                OwnerId = "host-1",
+                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            },
+        }), ctx, CancellationToken.None);
+
+        var leasedState = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        leasedState.ActiveSessionId.ShouldBe("lease-1");
+        leasedState.Initialized.ShouldBeTrue();
+        leasedState.TransportAttached.ShouldBeFalse();
+        leasedState.PcmSampleRateHz.ShouldBe(24000);
+        leasedState.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            SessionLeaseReleased = new VoicePresenceSessionLeaseReleased
+            {
+                SessionId = "lease-1",
+                Reason = "test-release",
+            },
+        }), ctx, CancellationToken.None);
+
+        var releasedState = roleAgent.PersistedStates.Last().State;
+        releasedState.ActiveSessionId.ShouldBeEmpty();
+        releasedState.LeaseExpiresAt.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Fresh_module_should_hydrate_provider_response_binding_from_role_gagent_voice_sub_state()
     {
         var module = CreateModule(new RecordingVoiceProvider());

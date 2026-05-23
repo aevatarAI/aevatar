@@ -1,10 +1,10 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
-using Aevatar.Foundation.VoicePresence.Modules;
-using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Foundation.VoicePresence.Projection;
+using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
 namespace Aevatar.Foundation.VoicePresence.Tests;
@@ -12,185 +12,243 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class VoicePresenceSessionResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_should_return_voice_session_for_agent_with_single_voice_module()
+    public async Task ResolveAsync_should_return_null_when_capability_readmodel_is_missing()
     {
-        var module = CreateModule("voice_presence", 16000);
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [module])));
-        var dispatchPort = new RecordingDispatchPort();
-        using var services = BuildServices(runtime, dispatchPort);
-        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(),
+            new RecordingLeasePort(),
+            new RecordingAttachmentPort());
 
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
 
-        session.ShouldNotBeNull();
-        session.Module.ShouldBeSameAs(module);
-        session.PcmSampleRateHz.ShouldBe(16000);
-
-        var controlFrame = new VoiceControlFrame
-        {
-            DrainAcknowledged = new VoiceDrainAcknowledged
-            {
-                ResponseId = 1,
-                PlayoutSequence = 3,
-            },
-        };
-        await session.SelfEventDispatcher(controlFrame, CancellationToken.None);
-
-        dispatchPort.Dispatches.Count.ShouldBe(1);
-        dispatchPort.Dispatches[0].ActorId.ShouldBe("agent-1");
-        dispatchPort.Dispatches[0].Envelope.Route.GetTopologyAudience().ShouldBe(TopologyAudience.Self);
-        dispatchPort.Dispatches[0].Envelope.Payload.ShouldNotBeNull();
-        dispatchPort.Dispatches[0].Envelope.Payload.Is(VoiceModuleSignal.Descriptor).ShouldBeTrue();
-        var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
-        signal.ModuleName.ShouldBe("voice_presence");
-        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.ControlFrame);
+        session.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ResolveAsync_should_prefer_default_voice_module_when_multiple_are_attached()
+    public async Task ResolveAsync_should_create_session_from_capability_snapshot_and_typed_lease()
     {
-        var defaultModule = CreateModule("voice_presence", 24000);
-        var alternateModule = CreateModule("voice_presence_openai", 16000);
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [alternateModule, defaultModule])));
-        using var services = BuildServices(runtime, new RecordingDispatchPort());
-        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
-
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
-
-        session.ShouldNotBeNull();
-        session.Module.ShouldBeSameAs(defaultModule);
-        session.PcmSampleRateHz.ShouldBe(24000);
-    }
-
-    [Fact]
-    public async Task ResolveAsync_should_return_requested_voice_module_when_alias_is_provided()
-    {
-        var defaultModule = CreateModule("voice_presence", 24000);
-        var alternateModule = CreateModule("voice_presence_openai", 16000);
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [defaultModule, alternateModule])));
-        using var services = BuildServices(runtime, new RecordingDispatchPort());
-        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+        var capability = CreateCapability("agent-1", "voice_presence_openai", initialized: true);
+        var queryPort = new FakeCapabilityQueryPort(capability);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(queryPort, leasePort, attachmentPort);
 
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_openai"));
 
         session.ShouldNotBeNull();
-        session.Module.ShouldBeSameAs(alternateModule);
+        session.Module.ShouldBeNull();
+        session.SelfEventDispatcher.ShouldBeNull();
         session.PcmSampleRateHz.ShouldBe(16000);
+        session.IsInitialized.ShouldBeTrue();
+        leasePort.AcquireRequests.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
+
+        var transport = new PassiveVoiceTransport();
+        await session.AttachTransportAsync(transport);
+        await session.DetachTransportAsync(transport);
+
+        attachmentPort.AttachedHandles.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
+        attachmentPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe(session.LeaseHandle!.SessionId);
+        leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.SessionId.ShouldBe(session.LeaseHandle.SessionId);
     }
 
     [Fact]
-    public async Task ResolveAsync_should_return_null_when_requested_alias_does_not_exist()
+    public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_observed_handle()
     {
-        var defaultModule = CreateModule("voice_presence", 24000);
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [defaultModule])));
-        using var services = BuildServices(runtime, new RecordingDispatchPort());
-        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+        var dispatchPort = new RecordingDispatchPort();
+        var queryPort = new FakeCapabilityQueryPort(
+            CreateCapability("agent-1", "voice_presence", initialized: true, activeSessionId: "lease-1"));
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, queryPort);
 
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_minicpm"));
+        var handle = await leasePort.AcquireAsync(new VoicePresenceSessionLeaseRequest(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            DateTimeOffset.UtcNow.AddMinutes(5)));
 
-        session.ShouldBeNull();
+        handle.SessionId.ShouldBe("lease-1");
+        dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
+        var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested);
+        signal.SessionLeaseRequested.SessionId.ShouldBe("lease-1");
     }
 
     [Fact]
-    public async Task ResolveAsync_should_return_null_when_actor_has_no_voice_module()
+    public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_release_signal()
     {
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [])));
-        using var services = BuildServices(runtime, new RecordingDispatchPort());
-        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+        var dispatchPort = new RecordingDispatchPort();
+        var queryPort = new FakeCapabilityQueryPort(
+            CreateCapability("agent-1", "voice_presence", initialized: true, activeSessionId: "lease-1"));
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, queryPort);
+        var handle = new VoicePresenceSessionLeaseHandle(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            10,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.LocalOnly);
 
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+        await leasePort.ReleaseAsync(handle, "test-release");
 
-        session.ShouldBeNull();
+        var signal = dispatchPort.Dispatches.ShouldHaveSingleItem().Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseReleased);
+        signal.SessionLeaseReleased.SessionId.ShouldBe("lease-1");
+        signal.SessionLeaseReleased.Reason.ShouldBe("test-release");
     }
 
-    private static VoicePresenceModule CreateModule(string name, int sampleRateHz) =>
+    [Fact]
+    public async Task VoicePresenceCapabilityQueryPort_should_read_actor_scoped_capability_readmodel()
+    {
+        var readModel = new VoicePresenceCapabilityReadModel
+        {
+            Id = "agent-1:voice_presence",
+            ActorId = "agent-1",
+            ModuleName = "voice_presence",
+            StateVersion = 7,
+            LastEventId = "event-7",
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Initialized = true,
+            PcmSampleRateHz = 24000,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+        };
+        var queryPort = new VoicePresenceCapabilityQueryPort(new FakeCapabilityReader(readModel));
+
+        var snapshot = await queryPort.GetAsync("agent-1", null);
+
+        snapshot.ShouldNotBeNull();
+        snapshot.ActorId.ShouldBe("agent-1");
+        snapshot.ModuleName.ShouldBe("voice_presence");
+        snapshot.StateVersion.ShouldBe(7);
+        snapshot.Initialized.ShouldBeTrue();
+        snapshot.PcmSampleRateHz.ShouldBe(24000);
+    }
+
+    [Fact]
+    public void ActorOwnedResolver_source_should_not_inspect_runtime_object_shape()
+    {
+        var repoRoot = FindRepoRoot();
+        var oldResolverPath = Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence/Hosting/InProcessActorVoicePresenceSessionResolver.cs");
+        File.Exists(oldResolverPath).ShouldBeFalse();
+
+        var resolverPath = Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence/Hosting/ActorOwnedVoicePresenceSessionResolver.cs");
+        var source = File.ReadAllText(resolverPath);
+        source.ShouldNotContain("IActorRuntime");
+        source.ShouldNotContain("actorRuntime.GetAsync");
+        source.ShouldNotContain(".Agent");
+        source.ShouldNotContain("actor.Agent");
+        source.ShouldNotContain("IEventModuleContainer");
+        source.ShouldNotContain("GetModules()");
+    }
+
+    private static VoicePresenceCapabilitySnapshot CreateCapability(
+        string actorId,
+        string moduleName,
+        bool initialized,
+        string? activeSessionId = null) =>
         new(
-            new RecordingVoiceProvider(),
-            new VoiceProviderConfig
-            {
-                ProviderName = "openai",
-                ApiKey = "sk-test",
-                Model = "gpt-realtime",
-            },
-            new VoiceSessionConfig
-            {
-                Voice = "alloy",
-                SampleRateHz = sampleRateHz,
-            },
-            new VoicePresenceModuleOptions
-            {
-                Name = name,
-            });
+            actorId,
+            moduleName,
+            5,
+            "event-5",
+            DateTimeOffset.UtcNow,
+            initialized,
+            false,
+            16000,
+            activeSessionId,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.LocalOnly);
 
-    private static ServiceProvider BuildServices(IActorRuntime runtime, IActorDispatchPort dispatchPort)
+    private static string FindRepoRoot()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton(runtime);
-        services.AddSingleton(dispatchPort);
-        return services.BuildServiceProvider();
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+                return current.FullName;
+
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException("Repository root not found.");
     }
 
-    private sealed class StubActorRuntime(IActor? actor) : IActorRuntime
+    private sealed class FakeCapabilityQueryPort(params VoicePresenceCapabilitySnapshot[] snapshots)
+        : IVoicePresenceCapabilityQueryPort
     {
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(actor is { Id: var actorId } && string.Equals(actorId, id, StringComparison.Ordinal)
-                ? actor
-                : null);
-
-        public Task<bool> ExistsAsync(string id) =>
-            Task.FromResult(actor is { Id: var actorId } && string.Equals(actorId, id, StringComparison.Ordinal));
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task<VoicePresenceCapabilitySnapshot?> GetAsync(
+            string actorId,
+            string? moduleName,
+            CancellationToken ct = default)
+        {
+            var resolvedModuleName = string.IsNullOrWhiteSpace(moduleName)
+                ? "voice_presence"
+                : moduleName.Trim();
+            return Task.FromResult(snapshots.FirstOrDefault(snapshot =>
+                string.Equals(snapshot.ActorId, actorId, StringComparison.Ordinal) &&
+                string.Equals(snapshot.ModuleName, resolvedModuleName, StringComparison.OrdinalIgnoreCase)));
+        }
     }
 
-    private sealed class StubActor(string id, IAgent agent) : IActor
+    private sealed class RecordingLeasePort : IVoicePresenceSessionLeasePort
     {
-        public string Id => id;
+        public List<VoicePresenceSessionLeaseRequest> AcquireRequests { get; } = [];
 
-        public IAgent Agent => agent;
+        public List<(VoicePresenceSessionLeaseHandle Handle, string Reason)> ReleaseRequests { get; } = [];
 
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<VoicePresenceSessionLeaseHandle> AcquireAsync(
+            VoicePresenceSessionLeaseRequest request,
+            CancellationToken ct = default)
+        {
+            AcquireRequests.Add(request);
+            return Task.FromResult(new VoicePresenceSessionLeaseHandle(
+                request.ActorId,
+                request.ModuleName,
+                request.SessionId,
+                request.OwnerId,
+                6,
+                request.ExpiresAtUtc,
+                VoiceRemoteAudioSupport.LocalOnly));
+        }
 
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task ReleaseAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            string reason,
+            CancellationToken ct = default)
+        {
+            ReleaseRequests.Add((handle, reason));
+            return Task.CompletedTask;
+        }
     }
 
-    private sealed class TestAgent(
-        string id,
-        IReadOnlyList<IEventModule<IEventHandlerContext>> modules)
-        : IAgent, IEventModuleContainer<IEventHandlerContext>
+    private sealed class RecordingAttachmentPort : IVoicePresenceTransportAttachmentPort
     {
-        public string Id => id;
+        public List<VoicePresenceSessionLeaseHandle> AttachedHandles { get; } = [];
 
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public List<VoicePresenceSessionLeaseHandle> DetachedHandles { get; } = [];
 
-        public Task<string> GetDescriptionAsync() => Task.FromResult($"test-agent:{id}");
+        public Task AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            CancellationToken ct = default)
+        {
+            AttachedHandles.Add(handle);
+            return Task.CompletedTask;
+        }
 
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public IReadOnlyList<IEventModule<IEventHandlerContext>> GetModules() => modules;
+        public Task DetachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport? expectedTransport,
+            CancellationToken ct = default)
+        {
+            DetachedHandles.Add(handle);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
@@ -204,21 +262,26 @@ public class VoicePresenceSessionResolverTests
         }
     }
 
-    private sealed class RecordingVoiceProvider : IRealtimeVoiceProvider
+    private sealed class FakeCapabilityReader(VoicePresenceCapabilityReadModel? readModel)
+        : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>
     {
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
+        public Task<VoicePresenceCapabilityReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(readModel?.Id == key ? readModel : null);
 
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct) => Task.CompletedTask;
+        public Task<ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>.Empty);
+    }
+
+    private sealed class PassiveVoiceTransport : IVoiceTransport
+    {
+        public IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(CancellationToken ct) =>
+            AsyncEnumerable.Empty<VoiceTransportFrame>();
 
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
 
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) => Task.CompletedTask;
-
-        public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) => Task.CompletedTask;
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct) => Task.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
