@@ -37,8 +37,6 @@ public sealed record NyxIdChatLifecycleCommandReceipt(
     string ActorId,
     string CommandId,
     string CorrelationId,
-    NyxIdChatConversationCreateStatus CreateStatus,
-    NyxIdChatConversationDeleteStatus DeleteStatus,
     Reject? Reject = null);
 
 public enum NyxIdChatLifecycleCommandStartError
@@ -52,11 +50,11 @@ public enum NyxIdChatLifecycleCommandStartError
 
 public sealed class NyxIdChatLifecycleFacade
 {
-    private readonly ICommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> _createDispatchService;
+    private readonly ICommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome> _createDispatchService;
     private readonly ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> _deleteDispatchService;
 
     public NyxIdChatLifecycleFacade(
-        ICommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> createDispatchService,
+        ICommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome> createDispatchService,
         ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> deleteDispatchService)
     {
         _createDispatchService = createDispatchService ?? throw new ArgumentNullException(nameof(createDispatchService));
@@ -67,17 +65,17 @@ public sealed class NyxIdChatLifecycleFacade
         string scopeId,
         CancellationToken ct = default)
     {
-        var result = await _createDispatchService.DispatchAsync(
+        var result = await _createDispatchService.DispatchAndAwaitOutcomeAsync(
             new NyxIdChatConversationCreateCommand
             {
                 ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
             },
             ct);
 
-        if (result.Succeeded && result.Receipt is not null)
+        if (result.Succeeded && result.Receipt is not null && result.Outcome is not null)
         {
             return new NyxIdChatConversationCreateReceipt(
-                result.Receipt.CreateStatus,
+                MapCreateOutcome(result.Outcome.Status),
                 result.Receipt.ActorId,
                 result.Receipt.Reject);
         }
@@ -91,6 +89,16 @@ public sealed class NyxIdChatLifecycleFacade
             _ => new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.RegistrationUnavailable, null, null),
         };
     }
+
+    private static NyxIdChatConversationCreateStatus MapCreateOutcome(
+        NyxIdChatConversationCreationOutcomeStatus status) =>
+        status switch
+        {
+            NyxIdChatConversationCreationOutcomeStatus.Accepted => NyxIdChatConversationCreateStatus.Accepted,
+            NyxIdChatConversationCreationOutcomeStatus.RegistrationUnavailable =>
+                NyxIdChatConversationCreateStatus.RegistrationUnavailable,
+            _ => NyxIdChatConversationCreateStatus.RegistrationUnavailable,
+        };
 
     public async Task<NyxIdChatConversationDeleteReceipt> DeleteConversationAsync(
         string scopeId,
@@ -106,7 +114,7 @@ public sealed class NyxIdChatLifecycleFacade
             ct);
 
         if (result.Succeeded && result.Receipt is not null)
-            return new NyxIdChatConversationDeleteReceipt(result.Receipt.DeleteStatus);
+            return new NyxIdChatConversationDeleteReceipt(NyxIdChatConversationDeleteStatus.Accepted);
 
         return result.Error switch
         {
@@ -337,8 +345,6 @@ internal sealed class NyxIdChatCreateLifecycleCommandReceiptFactory
             target.Actor.Id,
             context.CommandId,
             context.CorrelationId,
-            target.Status,
-            NyxIdChatConversationDeleteStatus.Accepted,
             target.Reject);
     }
 }
@@ -356,8 +362,6 @@ internal sealed class NyxIdChatDeleteLifecycleCommandReceiptFactory
         return new NyxIdChatLifecycleCommandReceipt(
             target.Actor.Id,
             context.CommandId,
-            context.CorrelationId,
-            NyxIdChatConversationCreateStatus.Accepted,
-            target.Status);
+            context.CorrelationId);
     }
 }

@@ -6,6 +6,7 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -131,6 +132,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                     ActorId = Id,
                     CommandId = commandId,
                     CorrelationId = correlationId,
+                });
+                await PublishCreationOutcomeAsync(new NyxIdChatConversationCreationOutcome
+                {
+                    ScopeId = command.ScopeId,
+                    ActorId = Id,
+                    CommandId = commandId,
+                    CorrelationId = correlationId,
+                    Status = NyxIdChatConversationCreationOutcomeStatus.Accepted,
                 });
                 return;
             }
@@ -351,5 +360,26 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             DestroyActor = destroyActor,
             Reason = reason,
         });
+        await PublishCreationOutcomeAsync(new NyxIdChatConversationCreationOutcome
+        {
+            ScopeId = scopeId,
+            ActorId = actorId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            Status = NyxIdChatConversationCreationOutcomeStatus.RegistrationUnavailable,
+            Reason = reason,
+            DestroyedActor = destroyActor,
+        });
+    }
+
+    private Task PublishCreationOutcomeAsync(NyxIdChatConversationCreationOutcome outcome)
+    {
+        if (string.IsNullOrWhiteSpace(outcome.CommandId))
+            return Task.CompletedTask;
+
+        var outcomeChannel = Services.GetService<IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>>();
+        return outcomeChannel is null
+            ? Task.CompletedTask
+            : outcomeChannel.PublishAsync(outcome.CommandId, outcome, CancellationToken.None);
     }
 }

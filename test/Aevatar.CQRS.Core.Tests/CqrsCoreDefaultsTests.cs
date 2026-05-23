@@ -170,6 +170,34 @@ public class CommandDispatchPipelineTests
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be("receipt-1");
     }
+
+    [Fact]
+    public async Task OutcomeDispatchService_ShouldSubscribeBeforeDispatch_AndReturnActorOutcome()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var channel = new InMemoryActorOutcomeChannel<string>();
+        var dispatcher = new OutcomePublishingTargetDispatcher(channel);
+        var pipeline = new DefaultCommandDispatchPipeline<SeededCommand, FakeCommandTarget, string, FakeError>(
+            new SeededCommandResolver(target),
+            new DefaultCommandContextPolicy(),
+            new SeededCommandEnvelopeFactory(),
+            dispatcher,
+            new SeededCommandReceiptFactory("receipt-1"));
+        var service = new DefaultCommandOutcomeDispatchService<SeededCommand, FakeCommandTarget, string, FakeError, string>(
+            pipeline,
+            channel);
+
+        var result = await service.DispatchAndAwaitOutcomeAsync(new SeededCommand(
+            "hello",
+            "cmd-1",
+            "corr-1",
+            null));
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be("receipt-1");
+        result.Outcome.Should().Be("outcome:cmd-1");
+        dispatcher.DispatchedCommandIds.Should().ContainSingle().Which.Should().Be("cmd-1");
+    }
 }
 
 public class ActorCommandTargetDispatcherTests
@@ -355,6 +383,21 @@ internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCo
     }
 }
 
+internal sealed class OutcomePublishingTargetDispatcher(IActorOutcomeChannel<string> channel)
+    : ICommandTargetDispatcher<FakeCommandTarget>
+{
+    public List<string> DispatchedCommandIds { get; } = [];
+
+    public async Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        _ = target;
+        ct.ThrowIfCancellationRequested();
+        var commandId = envelope.Id;
+        DispatchedCommandIds.Add(commandId);
+        await channel.PublishAsync(commandId, $"outcome:{commandId}", ct);
+    }
+}
+
 internal sealed class RecordingReceiptFactory : ICommandReceiptFactory<FakeCommandTarget, string>
 {
     private readonly string _receipt;
@@ -395,14 +438,14 @@ internal sealed class SeededCommandResolver(FakeCommandTarget target)
     }
 }
 
-internal sealed class SeededCommandEnvelopeFactory(EventEnvelope envelope) : ICommandEnvelopeFactory<SeededCommand>
+internal sealed class SeededCommandEnvelopeFactory(EventEnvelope? envelope = null) : ICommandEnvelopeFactory<SeededCommand>
 {
     public List<(SeededCommand Command, CommandContext Context)> Calls { get; } = [];
 
     public EventEnvelope CreateEnvelope(SeededCommand command, CommandContext context)
     {
         Calls.Add((command, context));
-        return envelope;
+        return envelope ?? new EventEnvelope { Id = context.CommandId };
     }
 }
 

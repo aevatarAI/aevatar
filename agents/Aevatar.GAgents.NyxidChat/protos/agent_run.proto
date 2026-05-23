@@ -152,6 +152,22 @@ message NyxIdChatConversationDeleteCommand {
   string actor_id = 2;
 }
 
+enum NyxIdChatConversationCreationOutcomeStatus {
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_UNSPECIFIED = 0;
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_ACCEPTED = 1;
+  NYX_ID_CHAT_CONVERSATION_CREATION_OUTCOME_STATUS_REGISTRATION_UNAVAILABLE = 2;
+}
+
+message NyxIdChatConversationCreationOutcome {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+  NyxIdChatConversationCreationOutcomeStatus status = 5;
+  string reason = 6;
+  bool destroyed_actor = 7;
+}
+
 message NyxIdChatConversationCreationStartedEvent {
   string scope_id = 1;
   string actor_id = 2;

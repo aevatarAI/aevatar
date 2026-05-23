@@ -6,3 +6,10 @@ public interface ICommandDispatchService<in TCommand, TReceipt, TError>
         TCommand command,
         CancellationToken ct = default);
 }
+
+public interface ICommandOutcomeDispatchService<in TCommand, TReceipt, TError, TOutcome>
+{
+    Task<CommandOutcomeDispatchResult<TReceipt, TError, TOutcome>> DispatchAndAwaitOutcomeAsync(
+        TCommand command,
+        CancellationToken ct = default);
+}
