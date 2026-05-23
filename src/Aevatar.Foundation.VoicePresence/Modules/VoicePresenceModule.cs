@@ -257,11 +257,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             string.IsNullOrWhiteSpace(sessionId) ? Guid.NewGuid().ToString("N") : sessionId,
             ownerId ?? string.Empty,
             Guid.NewGuid().ToString("N"),
+            leaseExpiresAt?.Clone(),
             userTransport,
             selfEventDispatcher);
         _transportLease = lease;
 
-        _provider.OnEvent = OnProviderEventAsync;
+        _provider.OnEvent = (evt, token) => OnProviderEventAsync(evt, lease, token);
         lease.RelayTask = RunUserToProviderRelayAsync(lease, lease.Cancellation.Token);
 
         if (!string.IsNullOrWhiteSpace(sessionId))
@@ -271,7 +272,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 SessionId = lease.SessionId,
                 OwnerId = lease.OwnerId,
                 TransportLeaseId = lease.TransportLeaseId,
-                LeaseExpiresAt = leaseExpiresAt?.Clone(),
+                LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
             });
         }
     }
@@ -296,7 +297,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             await lease.DispatchAsync(new VoiceTransportDetachRequested
             {
                 SessionId = lease.SessionId,
+                OwnerId = lease.OwnerId,
                 TransportLeaseId = lease.TransportLeaseId,
+                LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
                 Reason = "host_transport_detached",
             }, CancellationToken.None);
         }
@@ -312,7 +315,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             {
                 if (frame.IsAudio)
                 {
-                    if (!frame.AudioPcm16.IsEmpty)
+                    if (!frame.AudioPcm16.IsEmpty && IsActorAcceptedCurrentTransportLease(lease))
                         await _provider.SendAudioAsync(frame.AudioPcm16, ct);
                 }
                 else if (frame.Control != null)
@@ -320,7 +323,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                     await lease.DispatchAsync(new VoiceTransportControlFrameReceived
                     {
                         SessionId = lease.SessionId,
+                        OwnerId = lease.OwnerId,
                         TransportLeaseId = lease.TransportLeaseId,
+                        LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
                         ControlFrame = frame.Control.Clone(),
                     }, ct);
                 }
@@ -335,23 +340,26 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             await lease.DispatchAsync(new VoiceTransportRelayStopped
             {
                 SessionId = lease.SessionId,
+                OwnerId = lease.OwnerId,
                 TransportLeaseId = lease.TransportLeaseId,
+                LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
                 Reason = $"error:{ex.Message}",
             }, CancellationToken.None);
         }
     }
 
-    private async Task OnProviderEventAsync(VoiceProviderEvent evt, CancellationToken ct)
+    private Task OnProviderEventAsync(VoiceProviderEvent evt, CancellationToken ct) =>
+        OnProviderEventAsync(evt, _transportLease, ct);
+
+    private async Task OnProviderEventAsync(VoiceProviderEvent evt, VoiceTransportLease? callbackLease, CancellationToken ct)
     {
-        var lease = _transportLease;
         if (evt.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived &&
-            lease != null &&
-            IsCurrentTransportLease(lease) &&
-            lease.IsActorAccepted)
+            callbackLease != null &&
+            IsActorAcceptedCurrentTransportLease(callbackLease))
         {
             try
             {
-                await lease.Transport.SendAudioAsync(evt.AudioReceived.Pcm16.Memory, ct);
+                await callbackLease.Transport.SendAudioAsync(evt.AudioReceived.Pcm16.Memory, ct);
             }
             catch (Exception ex)
             {
@@ -359,12 +367,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             }
         }
 
-        if (lease != null)
+        if (callbackLease != null)
         {
-            await lease.DispatchAsync(new VoiceProviderEventReceived
+            await callbackLease.DispatchAsync(new VoiceProviderEventReceived
             {
-                SessionId = lease.SessionId,
-                TransportLeaseId = lease.TransportLeaseId,
+                SessionId = callbackLease.SessionId,
+                OwnerId = callbackLease.OwnerId,
+                TransportLeaseId = callbackLease.TransportLeaseId,
+                LeaseExpiresAt = callbackLease.LeaseExpiresAt?.Clone(),
                 ProviderEvent = evt.Clone(),
             }, ct);
             return;
@@ -376,8 +386,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }, ct);
     }
 
-    private bool IsCurrentTransportLease(VoiceTransportLease lease) =>
-        ReferenceEquals(_transportLease, lease);
+    private bool IsActorAcceptedCurrentTransportLease(VoiceTransportLease lease) =>
+        ReferenceEquals(_transportLease, lease) &&
+        lease.IsActorAccepted &&
+        !IsLeaseExpired(lease.LeaseExpiresAt);
 
     private async Task DisposeTransportLeaseAsync()
     {
@@ -396,12 +408,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             string sessionId,
             string ownerId,
             string transportLeaseId,
+            Timestamp? leaseExpiresAt,
             IVoiceTransport transport,
             Func<IMessage, CancellationToken, Task> selfEventDispatcher)
         {
             SessionId = sessionId;
             OwnerId = ownerId;
             TransportLeaseId = transportLeaseId;
+            LeaseExpiresAt = leaseExpiresAt?.Clone();
             Transport = transport;
             SelfEventDispatcher = selfEventDispatcher;
         }
@@ -409,6 +423,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         public string SessionId { get; }
         public string OwnerId { get; }
         public string TransportLeaseId { get; }
+        public Timestamp? LeaseExpiresAt { get; }
         public IVoiceTransport Transport { get; }
         public Func<IMessage, CancellationToken, Task> SelfEventDispatcher { get; }
         public CancellationTokenSource Cancellation { get; } = new();
@@ -741,9 +756,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         var state = HydrateRuntimeStateFromActor(ctx);
         EnsureVolatileSelfSignalDispatcher(ctx);
-        if ((!string.IsNullOrWhiteSpace(request.SessionId) ||
-             !string.IsNullOrWhiteSpace(request.TransportLeaseId)) &&
-            !IsAcceptedTransportSignal(state, request.SessionId, request.TransportLeaseId))
+        if (!IsAcceptedProviderCallbackSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
         {
             return;
         }
@@ -766,9 +784,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
         }
 
-        if (state.LeaseExpiresAt != null &&
-            request.LeaseExpiresAt != null &&
-            state.LeaseExpiresAt.ToDateTimeOffset() != request.LeaseExpiresAt.ToDateTimeOffset())
+        if (!MatchesLeaseOwner(state, request.OwnerId) ||
+            !MatchesLeaseExpiry(state, request.LeaseExpiresAt) ||
+            IsLeaseExpired(state.LeaseExpiresAt))
         {
             return;
         }
@@ -780,6 +798,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
 
         state.TransportAttached = true;
+        state.ActiveLeaseOwnerId = request.OwnerId;
         state.ActiveTransportLeaseId = request.TransportLeaseId;
         state.Initialized = IsInitialized;
         state.PcmSampleRateHz = PcmSampleRateHz;
@@ -804,11 +823,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         var state = HydrateRuntimeStateFromActor(ctx);
         EnsureVolatileSelfSignalDispatcher(ctx);
-        if (!IsAcceptedTransportSignal(state, request.SessionId, request.TransportLeaseId))
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
             return;
 
-        state.TransportAttached = false;
-        state.ActiveTransportLeaseId = string.Empty;
+        ClearTransportLeaseState(state);
         var lease = _transportLease;
         if (lease != null &&
             string.Equals(lease.SessionId, request.SessionId, StringComparison.Ordinal) &&
@@ -827,7 +850,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         var state = HydrateRuntimeStateFromActor(ctx);
         EnsureVolatileSelfSignalDispatcher(ctx);
-        if (!IsAcceptedTransportSignal(state, request.SessionId, request.TransportLeaseId) ||
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt) ||
             request.ControlFrame == null)
         {
             return;
@@ -843,11 +871,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         var state = HydrateRuntimeStateFromActor(ctx);
         EnsureVolatileSelfSignalDispatcher(ctx);
-        if (!IsAcceptedTransportSignal(state, request.SessionId, request.TransportLeaseId))
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
             return;
 
-        state.TransportAttached = false;
-        state.ActiveTransportLeaseId = string.Empty;
+        ClearTransportLeaseState(state);
         var lease = _transportLease;
         if (lease != null &&
             string.Equals(lease.SessionId, request.SessionId, StringComparison.Ordinal) &&
@@ -859,20 +891,75 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    private static bool IsAcceptedTransportSignal(
+    private bool IsAcceptedTransportSignal(
         VoicePresenceRuntimeState state,
         string sessionId,
-        string transportLeaseId)
+        string transportLeaseId,
+        string? ownerId = null,
+        Timestamp? leaseExpiresAt = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) ||
             string.IsNullOrWhiteSpace(transportLeaseId) ||
-            !state.TransportAttached)
+            !state.TransportAttached ||
+            IsLeaseExpired(state.LeaseExpiresAt))
         {
             return false;
         }
 
         return string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal) &&
-               string.Equals(state.ActiveTransportLeaseId, transportLeaseId, StringComparison.Ordinal);
+               string.Equals(state.ActiveTransportLeaseId, transportLeaseId, StringComparison.Ordinal) &&
+               MatchesLeaseOwner(state, ownerId) &&
+               MatchesLeaseExpiry(state, leaseExpiresAt);
+    }
+
+    private bool IsAcceptedProviderCallbackSignal(
+        VoicePresenceRuntimeState state,
+        string sessionId,
+        string transportLeaseId,
+        string? ownerId,
+        Timestamp? leaseExpiresAt)
+    {
+        if (!string.IsNullOrWhiteSpace(transportLeaseId))
+        {
+            return IsAcceptedTransportSignal(state, sessionId, transportLeaseId, ownerId, leaseExpiresAt);
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(state.RemoteSessionId))
+        {
+            return false;
+        }
+
+        return string.Equals(state.RemoteSessionId, sessionId, StringComparison.Ordinal) &&
+               string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal);
+    }
+
+    private bool MatchesLeaseOwner(VoicePresenceRuntimeState state, string? ownerId)
+    {
+        if (string.IsNullOrWhiteSpace(state.ActiveLeaseOwnerId))
+            return string.IsNullOrWhiteSpace(ownerId);
+
+        return !string.IsNullOrWhiteSpace(ownerId) &&
+               string.Equals(state.ActiveLeaseOwnerId, ownerId, StringComparison.Ordinal);
+    }
+
+    private bool MatchesLeaseExpiry(VoicePresenceRuntimeState state, Timestamp? leaseExpiresAt)
+    {
+        if (state.LeaseExpiresAt == null)
+            return leaseExpiresAt == null;
+
+        return leaseExpiresAt != null &&
+               state.LeaseExpiresAt.ToDateTimeOffset() == leaseExpiresAt.ToDateTimeOffset();
+    }
+
+    private bool IsLeaseExpired(Timestamp? leaseExpiresAt) =>
+        leaseExpiresAt != null &&
+        leaseExpiresAt.ToDateTimeOffset() <= _options.TimeProvider.GetUtcNow();
+
+    private static void ClearTransportLeaseState(VoicePresenceRuntimeState state)
+    {
+        state.TransportAttached = false;
+        state.ActiveTransportLeaseId = string.Empty;
     }
 
     private async Task HandleRemoteSessionOpenRequestedAsync(
@@ -923,10 +1010,20 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         state.RemoteSessionId = request.SessionId;
         state.ActiveSessionId = request.SessionId;
-        state.TransportAttached = false;
-        state.ActiveTransportLeaseId = string.Empty;
+        state.ActiveLeaseOwnerId = string.Empty;
+        ClearTransportLeaseState(state);
         await PersistRuntimeStateAsync(ctx, state, ct);
-        _provider.OnEvent = OnProviderEventAsync;
+        var remoteSessionId = request.SessionId;
+        _provider.OnEvent = (evt, token) => OnProviderEventAsync(evt, remoteSessionId, token);
+    }
+
+    private async Task OnProviderEventAsync(VoiceProviderEvent evt, string remoteSessionId, CancellationToken ct)
+    {
+        await DispatchSelfEventAsync(new VoiceProviderEventReceived
+        {
+            SessionId = remoteSessionId,
+            ProviderEvent = evt.Clone(),
+        }, ct);
     }
 
     private async Task HandleRemoteSessionCloseRequestedAsync(
@@ -982,8 +1079,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         state.RemoteSessionId = string.Empty;
         state.ActiveSessionId = string.Empty;
-        state.TransportAttached = false;
-        state.ActiveTransportLeaseId = string.Empty;
+        state.ActiveLeaseOwnerId = string.Empty;
+        ClearTransportLeaseState(state);
         state.ProviderResponseBindings.Clear();
         state.CancelledProviderResponseIds.Clear();
         state.ActiveProviderResponseId = string.Empty;
@@ -1026,6 +1123,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         state.Initialized = IsInitialized;
         state.PcmSampleRateHz = PcmSampleRateHz;
         state.ActiveSessionId = request.SessionId;
+        state.ActiveLeaseOwnerId = request.OwnerId;
         state.LeaseExpiresAt = request.ExpiresAt?.Clone();
         state.RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly;
         await PersistRuntimeStateAsync(ctx, state, ct);
@@ -1049,8 +1147,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         state.ActiveSessionId = string.Empty;
         state.LeaseExpiresAt = null;
-        state.TransportAttached = false;
-        state.ActiveTransportLeaseId = string.Empty;
+        state.ActiveLeaseOwnerId = string.Empty;
+        ClearTransportLeaseState(state);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 

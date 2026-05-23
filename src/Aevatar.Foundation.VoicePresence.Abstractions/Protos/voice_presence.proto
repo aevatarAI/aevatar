@@ -89,6 +89,7 @@ message VoicePresenceRuntimeState {
   google.protobuf.Timestamp lease_expires_at = 16;
   VoiceRemoteAudioSupport remote_audio_support = 17;
   string active_transport_lease_id = 18;
+  string active_lease_owner_id = 19;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -205,24 +206,32 @@ message VoiceTransportDetachRequested {
   string session_id = 1;
   string transport_lease_id = 2;
   string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
 }
 
 message VoiceTransportControlFrameReceived {
   string session_id = 1;
   string transport_lease_id = 2;
   VoiceControlFrame control_frame = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
 }
 
 message VoiceTransportRelayStopped {
   string session_id = 1;
   string transport_lease_id = 2;
   string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
 }
 
 message VoiceProviderEventReceived {
   string session_id = 1;
   string transport_lease_id = 2;
   VoiceProviderEvent provider_event = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
 }
 
 message VoiceRemoteSessionClosed {

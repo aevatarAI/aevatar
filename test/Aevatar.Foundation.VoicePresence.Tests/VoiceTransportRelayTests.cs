@@ -13,7 +13,7 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class VoiceTransportRelayTests
 {
     [Fact]
-    public async Task User_audio_should_relay_directly_to_provider()
+    public async Task User_audio_should_not_relay_to_provider_before_attach_acceptance()
     {
         var provider = new RecordingProvider();
         var module = CreateModule(provider);
@@ -33,9 +33,7 @@ public class VoiceTransportRelayTests
 
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
-        provider.AudioFrames.Count.ShouldBe(2);
-        provider.AudioFrames[0].ShouldBe([10, 20, 30]);
-        provider.AudioFrames[1].ShouldBe([40, 50]);
+        provider.AudioFrames.ShouldBeEmpty();
         dispatched.ShouldBeEmpty();
     }
 
@@ -70,6 +68,8 @@ public class VoiceTransportRelayTests
         roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
         {
             ActiveSessionId = "lease-1",
+            ActiveLeaseOwnerId = "host-1",
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
             TransportAttached = true,
             ActiveTransportLeaseId = transportLeaseId,
             Status = VoicePresenceRuntimeStatus.AudioDraining,
@@ -85,7 +85,9 @@ public class VoiceTransportRelayTests
 
             if (message is VoiceTransportControlFrameReceived control)
             {
+                control.OwnerId = "host-1";
                 control.TransportLeaseId = transportLeaseId;
+                control.LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone();
                 return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
                 {
                     ModuleName = "voice_presence",
@@ -202,7 +204,7 @@ public class VoiceTransportRelayTests
         module.AttachTransport(transport, (_, _) => Task.CompletedTask);
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
-        provider.AudioFrames.Count.ShouldBe(1);
+        provider.AudioFrames.ShouldBeEmpty();
     }
 
     [Fact]
