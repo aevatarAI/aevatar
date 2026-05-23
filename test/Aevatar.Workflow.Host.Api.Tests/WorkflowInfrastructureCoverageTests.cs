@@ -5,10 +5,14 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration;
 using Aevatar.Hosting;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Workflows;
@@ -306,6 +310,107 @@ public sealed class WorkflowInfrastructureCoverageTests
         }
     }
 
+    [Fact]
+    public async Task WorkflowCapabilitiesStartupMaterializer_ShouldMaterializePrimitiveAndConnectorReadModels()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), "wf-capabilities-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+        try
+        {
+            await File.WriteAllTextAsync(
+                AevatarPaths.ConnectorsJson,
+                """
+                {
+                  "connectors": [
+                    {
+                      "name": "http_news",
+                      "type": " HTTP ",
+                      "enabled": true,
+                      "timeoutMs": 5000,
+                      "retry": 2,
+                      "http": {
+                        "allowedInputKeys": [" query ", "query", "", "limit"],
+                        "allowedMethods": ["POST", "get", "GET"]
+                      }
+                    },
+                    {
+                      "name": "cli_runner",
+                      "type": "cli",
+                      "enabled": true,
+                      "cli": {
+                        "allowedInputKeys": ["prompt"],
+                        "allowedOperations": ["run", "RUN"],
+                        "fixedArguments": [" --json ", "--json", ""]
+                      }
+                    },
+                    {
+                      "name": "mcp_tools",
+                      "type": "mcp",
+                      "enabled": true,
+                      "mcp": {
+                        "allowedInputKeys": ["topic"],
+                        "allowedTools": ["search", ""],
+                        "defaultTool": "search"
+                      }
+                    },
+                    {
+                      "name": "custom_sink",
+                      "type": "custom",
+                      "enabled": true
+                    }
+                  ]
+                }
+                """);
+            var writer = new RecordingCapabilitiesWriteDispatcher();
+            var materializer = new WorkflowCapabilitiesStartupMaterializer(
+                writer,
+                [new CustomModulePack()]);
+
+            await materializer.MaterializeAsync(CancellationToken.None);
+
+            writer.LastWritten.Should().NotBeNull();
+            var document = writer.LastWritten!;
+            document.Id.Should().Be(WorkflowCapabilitiesStartupMaterializer.DocumentId);
+            document.Primitives.Should().Contain(primitive =>
+                primitive.Name == "custom_assign" &&
+                primitive.Aliases.Contains("custom_assign") &&
+                primitive.RuntimeModule == nameof(CustomAssignModule));
+            document.Connectors.Select(connector => connector.Name)
+                .Should().Equal("cli_runner", "custom_sink", "http_news", "mcp_tools");
+            document.Connectors.Single(connector => connector.Name == "http_news")
+                .AllowedInputKeys.Should().Equal("limit", "query");
+            document.Connectors.Single(connector => connector.Name == "http_news")
+                .AllowedOperations.Should().Equal("get", "POST");
+            document.Connectors.Single(connector => connector.Name == "cli_runner")
+                .FixedArguments.Should().Equal("--json");
+            document.Connectors.Single(connector => connector.Name == "mcp_tools")
+                .AllowedOperations.Should().Equal("search");
+            document.Connectors.Single(connector => connector.Name == "custom_sink")
+                .AllowedOperations.Should().BeEmpty();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            TryDeleteDirectory(tempHome);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowCapabilitiesStartupMaterializer_ShouldHonorCancellation()
+    {
+        var writer = new RecordingCapabilitiesWriteDispatcher();
+        var materializer = new WorkflowCapabilitiesStartupMaterializer(writer, []);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = async () => await materializer.MaterializeAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        writer.LastWritten.Should().BeNull();
+    }
+
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
     {
         public Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
@@ -380,6 +485,26 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class CustomModulePack : IWorkflowModulePack
+    {
+        public string Name => "custom";
+        public IReadOnlyList<WorkflowModuleRegistration> Modules =>
+        [
+            WorkflowModuleRegistration.Create<CustomAssignModule>("custom_assign", "   "),
+        ];
+        public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders => [];
+        public IReadOnlyList<IWorkflowModuleConfigurator> Configurators => [];
+    }
+
+    private sealed class CustomAssignModule : IEventModule<IWorkflowExecutionContext>
+    {
+        public string Name => "custom_assign";
+        public int Priority => 0;
+        public bool CanHandle(EventEnvelope envelope) => false;
+        public Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private static WorkflowRunReport BuildReport()

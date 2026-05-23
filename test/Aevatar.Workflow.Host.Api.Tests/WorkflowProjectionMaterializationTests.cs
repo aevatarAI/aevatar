@@ -141,6 +141,78 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldProjectGraphAndDependencyBranches()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:complex",
+            ProjectionKind = "workflow-binding",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                8,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "complex",
+                    WorkflowYaml = BuildComplexDefinitionYaml("complex"),
+                },
+                new WorkflowState
+                {
+                    WorkflowName = " complex ",
+                    WorkflowYaml = BuildComplexDefinitionYaml("complex"),
+                    Compiled = true,
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                9,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "blank",
+                    WorkflowYaml = "",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "   ",
+                    WorkflowYaml = BuildComplexDefinitionYaml("blank"),
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                10,
+                new WorkflowCompletedEvent(),
+                new WorkflowState
+                {
+                    WorkflowName = "ignored",
+                    WorkflowYaml = BuildComplexDefinitionYaml("ignored"),
+                }));
+
+        store.UpsertCount.Should().Be(1);
+        var document = store.Stored["complex"];
+        document.Source.Should().Be("builtin");
+        document.Category.Should().Be("llm");
+        document.RequiresLlmProvider.Should().BeFalse();
+        document.Primitives.Should().Contain(["conditional", "connector_call", "foreach", "llm_call", "workflow_call"]);
+        document.RequiredConnectors.Should().Equal("aevatar_cli", "mcp_tools");
+        document.WorkflowCalls.Should().Equal("child_workflow");
+        document.Roles.Should().ContainSingle(role => role.Id == "operator");
+        document.Roles[0].EventModules.Should().Equal("audit", "trace");
+        document.Steps.Should().Contain(step => step.Id == "child_llm" && step.TargetRole == "operator");
+        document.Steps.Should().Contain(step =>
+            step.Id == "fanout" &&
+            step.Children.Single().Id == "child_llm");
+        document.Edges.Should().Contain(edge => edge.From == "decide" && edge.To == "call_connector" && edge.Label == "true");
+        document.Edges.Should().Contain(edge => edge.From == "call_connector" && edge.To == "call_child");
+        document.Edges.Should().Contain(edge => edge.From == "fanout" && edge.To == "child_llm" && edge.Label == "child");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
@@ -576,6 +648,55 @@ public sealed class WorkflowProjectionMaterializationTests
             parameters:
               target: result
               value: "ok"
+        """;
+
+    private static string BuildComplexDefinitionYaml(string name) =>
+        $"""
+        name: {name}
+        description: Complex runtime.
+        roles:
+          - id: operator
+            name: Operator
+            system_prompt: "Operate."
+            provider: openai
+            model: gpt-test
+            temperature: 0.2
+            max_tokens: 128
+            max_tool_rounds: 2
+            max_history_messages: 3
+            event_modules: "audit, trace, audit"
+            event_routes: "route:*"
+            connectors:
+              - aevatar_cli
+        steps:
+          - id: decide
+            type: conditional
+            parameters:
+              condition: "ready"
+            branches:
+              true:
+                next: call_connector
+              false:
+                next: fanout
+          - id: call_connector
+            type: connector_call
+            target_role: operator
+            parameters:
+              connector: mcp_tools
+              operation: search
+            next: call_child
+          - id: call_child
+            type: workflow_call
+            workflow: child_workflow
+            next: fanout
+          - id: fanout
+            type: foreach
+            sub_step_type: llm_call
+            children:
+              - id: child_llm
+                type: llm_call
+                target_role: operator
+                prompt: "Summarize."
         """;
 
     private static WorkflowRunState BuildState(
