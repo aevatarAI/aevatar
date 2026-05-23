@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Serialization;
@@ -36,8 +37,7 @@ public class ClaimReplayTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "claim-recompile-script",
             revision,
-            persistedDefinitionSource,
-            ScriptingCommandEnvelopeTestKit.ComputeSourceHash(persistedDefinitionSource),
+            ScriptPackageSpecExtensions.CreateSingleSource(persistedDefinitionSource),
             definitionActorId,
             CancellationToken.None);
 

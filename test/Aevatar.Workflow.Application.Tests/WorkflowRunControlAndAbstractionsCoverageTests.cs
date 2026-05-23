@@ -590,7 +590,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var projectionPort = new FakeProjectionPort
         {
-            EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort
@@ -621,7 +620,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var ex = await act.Should().ThrowAsync<AggregateException>();
         ex.Which.Message.Should().Contain("rollback also failed");
         ex.Which.InnerExceptions.Should().HaveCount(2);
-        projectionPort.EnsureCalls.Should().Be(0);
         projectionPort.AttachExistingCalls.Should().ContainSingle()
             .Which.Should().Be(("actor-1", "cmd-1"));
     }
@@ -720,25 +718,11 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled { get; set; } = true;
-        public FakeProjectionLease? EnsureLease { get; set; }
         public FakeProjectionLease ExistingLease { get; set; } = new("actor-1", "cmd-1");
         public Exception? AttachException { get; set; }
         public Exception? ReleaseException { get; set; }
-        public int EnsureCalls { get; private set; }
         public List<(string RootActorId, string CommandId)> AttachExistingCalls { get; } = [];
         public List<string> Events { get; } = [];
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = commandId;
-            ct.ThrowIfCancellationRequested();
-            EnsureCalls++;
-            return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
-        }
 
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,

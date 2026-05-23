@@ -25,14 +25,9 @@ public interface INyxIdChatSessionProjectionLease
 public interface INyxIdChatSessionProjectionPort
     : IEventSinkProjectionLifecyclePort<INyxIdChatSessionProjectionLease, AGUIEvent>
 {
-    Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
-        string actorId,
-        string sessionId,
-        CancellationToken ct = default);
-
-    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
-    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
-    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
         string actorId,
         string sessionId,
@@ -97,23 +92,9 @@ public sealed class NyxIdChatSessionProjectionPort
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    public Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
-        string actorId,
-        string sessionId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = sessionId,
-            },
-            ct);
-
-    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
-    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
-    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     public async Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
         string actorId,
         string sessionId,

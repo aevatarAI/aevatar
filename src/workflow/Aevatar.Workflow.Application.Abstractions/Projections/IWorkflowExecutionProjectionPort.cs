@@ -6,14 +6,9 @@ namespace Aevatar.Workflow.Application.Abstractions.Projections;
 public interface IWorkflowExecutionProjectionPort
     : IEventSinkProjectionLifecyclePort<IWorkflowExecutionProjectionLease, WorkflowRunEventEnvelope>
 {
-    Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-        string rootActorId,
-        string commandId,
-        CancellationToken ct = default);
-
-    // Refactor (iter35/cluster-039-observation-binder-attach-only):
-    //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
-    //   New principle: Command observation binders request attach only for an existing projection-owned session; cold sessions return unavailable without command-side ensure/activate.
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
         string rootActorId,
         string commandId,

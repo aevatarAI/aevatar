@@ -11,7 +11,6 @@ public sealed partial record ScriptBehaviorDispatchRequest(
     string ScriptId,
     string Revision,
     string ScopeId,
-    string SourceText,
     string SourceHash,
     ScriptPackageSpec ScriptPackage,
     string StateTypeUrl,
@@ -23,6 +22,9 @@ public sealed partial record ScriptBehaviorDispatchRequest(
 
 public sealed partial record ScriptBehaviorDispatchRequest
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     public string ReadModelSchemaVersion { get; init; } = string.Empty;
 
     public string ReadModelSchemaHash { get; init; } = string.Empty;
@@ -38,7 +40,6 @@ public sealed partial record ScriptBehaviorDispatchRequest
         string DefinitionActorId,
         string ScriptId,
         string Revision,
-        string SourceText,
         string SourceHash,
         ScriptPackageSpec ScriptPackage,
         string StateTypeUrl,
@@ -53,7 +54,6 @@ public sealed partial record ScriptBehaviorDispatchRequest
             ScriptId,
             Revision,
             ScopeId: string.Empty,
-            SourceText,
             SourceHash,
             ScriptPackage,
             StateTypeUrl,
@@ -65,65 +65,4 @@ public sealed partial record ScriptBehaviorDispatchRequest
     {
     }
 
-    public ScriptBehaviorDispatchRequest(
-        string ActorId,
-        string DefinitionActorId,
-        string ScriptId,
-        string Revision,
-        string SourceText,
-        string SourceHash,
-        string StateTypeUrl,
-        string ReadModelTypeUrl,
-        Any? CurrentStateRoot,
-        long CurrentStateVersion,
-        EventEnvelope Envelope,
-        IScriptBehaviorRuntimeCapabilities Capabilities)
-        : this(
-            ActorId,
-            DefinitionActorId,
-            ScriptId,
-            Revision,
-            ScopeId: string.Empty,
-            SourceText,
-            SourceHash,
-            StateTypeUrl,
-            ReadModelTypeUrl,
-            CurrentStateRoot,
-            CurrentStateVersion,
-            Envelope,
-            Capabilities)
-    {
-    }
-
-    public ScriptBehaviorDispatchRequest(
-        string ActorId,
-        string DefinitionActorId,
-        string ScriptId,
-        string Revision,
-        string ScopeId,
-        string SourceText,
-        string SourceHash,
-        string StateTypeUrl,
-        string ReadModelTypeUrl,
-        Any? CurrentStateRoot,
-        long CurrentStateVersion,
-        EventEnvelope Envelope,
-        IScriptBehaviorRuntimeCapabilities Capabilities)
-        : this(
-            ActorId,
-            DefinitionActorId,
-            ScriptId,
-            Revision,
-            ScopeId,
-            SourceText,
-            SourceHash,
-            ScriptPackageSpecExtensions.CreateSingleSource(SourceText),
-            StateTypeUrl,
-            ReadModelTypeUrl,
-            CurrentStateRoot,
-            CurrentStateVersion,
-            Envelope,
-            Capabilities)
-    {
-    }
 }

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions;
@@ -11,9 +12,11 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Infrastructure.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Collections.Concurrent;
 
 namespace Aevatar.Integration.Tests;
@@ -30,12 +33,27 @@ internal static class ScriptEvolutionIntegrationTestKit
         services.AddAevatarRuntime();
         configure?.Invoke(services);
         services.AddScriptCapability();
-        services.AddSingleton<IScriptEvolutionApplicationService>(sp =>
+        services.AddAuthorityActivatingScriptEvolutionApplicationService();
+        return services.BuildServiceProvider();
+    }
+
+    public static IServiceCollection AddAuthorityActivatingScriptEvolutionApplicationService(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionApplicationService>(sp =>
             new AuthorityActivatingScriptEvolutionApplicationService(
                 new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
                 sp.GetRequiredService<IScriptAuthorityReadModelActivationPort>(),
-                sp.GetRequiredService<IScriptingActorAddressResolver>()));
-        return services.BuildServiceProvider();
+                sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
+                sp.GetRequiredService<IScriptingActorAddressResolver>())));
+        services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionProposalPort>(sp =>
+            new AuthorityActivatingScriptEvolutionProposalPort(
+                sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>(),
+                sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
+                sp.GetRequiredService<IScriptingActorAddressResolver>())));
+        return services;
     }
 
     public static async Task<string> UpsertDefinitionAsync(
@@ -71,8 +89,7 @@ internal static class ScriptEvolutionIntegrationTestKit
             .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                sourceText,
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sourceText),
+                ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
                 resolvedDefinitionActorId,
                 ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot);
@@ -433,6 +450,7 @@ internal static class ScriptEvolutionIntegrationTestKit
     private sealed class AuthorityActivatingScriptEvolutionApplicationService(
         IScriptEvolutionApplicationService inner,
         IScriptAuthorityReadModelActivationPort activationPort,
+        IScriptEvolutionProjectionPort evolutionProjectionPort,
         IScriptingActorAddressResolver addressResolver)
         : IScriptEvolutionApplicationService
     {
@@ -442,11 +460,77 @@ internal static class ScriptEvolutionIntegrationTestKit
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            await activationPort.ActivateAsync(addressResolver.GetCatalogActorId(request.ScopeId), ct);
+            var normalizedScopeId = request.ScopeId?.Trim() ?? string.Empty;
+            var normalizedProposalId = string.IsNullOrWhiteSpace(request.ProposalId)
+                ? Guid.NewGuid().ToString("N")
+                : request.ProposalId.Trim();
+            if (!string.IsNullOrWhiteSpace(normalizedScopeId) &&
+                !normalizedProposalId.StartsWith($"{normalizedScopeId}:", StringComparison.Ordinal))
+            {
+                normalizedProposalId = $"{normalizedScopeId}:{normalizedProposalId}";
+            }
+            var normalizedRequest = request with
+            {
+                ScopeId = normalizedScopeId,
+                ProposalId = normalizedProposalId,
+            };
+
+            await activationPort.ActivateAsync(addressResolver.GetCatalogActorId(normalizedScopeId), ct);
             await activationPort.ActivateAsync(
-                addressResolver.GetDefinitionActorId(request.ScriptId, request.ScopeId),
+                addressResolver.GetDefinitionActorId(request.ScriptId, normalizedScopeId),
                 ct);
-            return await inner.ProposeAsync(request, ct);
+            var sessionActorId = addressResolver.GetEvolutionSessionActorId(
+                normalizedProposalId,
+                normalizedScopeId);
+            var lease = await evolutionProjectionPort.EnsureActorProjectionAsync(
+                sessionActorId,
+                normalizedProposalId,
+                ct);
+            if (lease == null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to ensure script evolution projection. actor_id={sessionActorId}, proposal_id={normalizedProposalId}");
+            }
+
+            return await inner.ProposeAsync(normalizedRequest, ct);
+        }
+    }
+
+    private sealed class AuthorityActivatingScriptEvolutionProposalPort(
+        IScriptEvolutionProposalPort inner,
+        IScriptEvolutionProjectionPort evolutionProjectionPort,
+        IScriptingActorAddressResolver addressResolver)
+        : IScriptEvolutionProposalPort
+    {
+        public async Task<ScriptPromotionDecision> ProposeAsync(
+            ScriptEvolutionProposal proposal,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(proposal);
+
+            var normalizedProposalId = string.IsNullOrWhiteSpace(proposal.ProposalId)
+                ? Guid.NewGuid().ToString("N")
+                : proposal.ProposalId;
+            var normalizedScopeId = proposal.ScopeId?.Trim() ?? string.Empty;
+            var normalizedProposal = proposal with
+            {
+                ProposalId = normalizedProposalId,
+                ScopeId = normalizedScopeId,
+            };
+            var sessionActorId = addressResolver.GetEvolutionSessionActorId(
+                normalizedProposalId,
+                normalizedScopeId);
+            var lease = await evolutionProjectionPort.EnsureActorProjectionAsync(
+                sessionActorId,
+                normalizedProposalId,
+                ct);
+            if (lease == null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to ensure script evolution projection. actor_id={sessionActorId}, proposal_id={normalizedProposalId}");
+            }
+
+            return await inner.ProposeAsync(normalizedProposal, ct);
         }
     }
 }

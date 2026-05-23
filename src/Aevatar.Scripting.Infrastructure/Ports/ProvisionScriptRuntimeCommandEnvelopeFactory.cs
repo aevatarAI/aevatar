@@ -8,6 +8,9 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
     : ICommandEnvelopeFactory<ProvisionScriptRuntimeCommand>
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     public EventEnvelope CreateEnvelope(
         ProvisionScriptRuntimeCommand command,
         CommandContext context)
@@ -23,7 +26,6 @@ public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
                 DefinitionActorId = command.DefinitionActorId ?? string.Empty,
                 ScriptId = command.DefinitionSnapshot.ScriptId,
                 Revision = command.DefinitionSnapshot.Revision,
-                SourceText = command.DefinitionSnapshot.SourceText,
                 SourceHash = command.DefinitionSnapshot.SourceHash,
                 StateTypeUrl = command.DefinitionSnapshot.StateTypeUrl,
                 ReadModelTypeUrl = command.DefinitionSnapshot.ReadModelTypeUrl,

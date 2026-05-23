@@ -39,7 +39,6 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
                 DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
                 Revision: "rev-1",
-                SourceText: "source",
                 SourceHash: "hash-1",
                 ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
