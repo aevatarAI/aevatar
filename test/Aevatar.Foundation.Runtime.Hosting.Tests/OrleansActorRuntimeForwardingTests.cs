@@ -395,12 +395,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = deliveryMode;
             throw new NotSupportedException();
@@ -408,23 +408,27 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = periodMs;
             _ = deliveryMode;
             throw new NotSupportedException();
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             _ = expectedGeneration;
+            _ = expectedSlotEpoch;
             return Task.CompletedTask;
         }
 

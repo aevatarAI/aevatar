@@ -155,6 +155,7 @@ internal sealed class SubWorkflowOrchestrator
                     RuntimeCallbackBackend.Dedicated => (int)WorkflowRuntimeCallbackBackendState.Dedicated,
                     _ => (int)WorkflowRuntimeCallbackBackendState.InMemory,
                 },
+                TimeoutCallbackSlotEpoch = timeoutLease.SlotEpoch,
                 TimeoutMs = timeoutMs,
             }, ct);
 
@@ -624,6 +625,7 @@ internal sealed class SubWorkflowOrchestrator
                     ActorId = evt.TimeoutCallbackActorId?.Trim() ?? string.Empty,
                     CallbackId = evt.TimeoutCallbackId?.Trim() ?? string.Empty,
                     Generation = evt.TimeoutCallbackGeneration,
+                    SlotEpoch = evt.TimeoutCallbackSlotEpoch,
                     Backend = evt.TimeoutCallbackBackend == (int)WorkflowRuntimeCallbackBackendState.Dedicated
                         ? WorkflowRuntimeCallbackBackendState.Dedicated
                         : WorkflowRuntimeCallbackBackendState.InMemory,

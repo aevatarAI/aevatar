@@ -5,6 +5,8 @@ public sealed class WorkflowCapabilitiesDocument
     public string SchemaVersion { get; set; } = "capabilities.v1";
 
     public DateTimeOffset GeneratedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public long AuthorityStateVersion { get; set; }
+    public DateTimeOffset ProjectionWatermark { get; set; }
 
     public List<WorkflowPrimitiveCapability> Primitives { get; set; } = [];
 
@@ -83,6 +85,8 @@ public sealed class WorkflowCapabilityWorkflow
     public List<string> WorkflowCalls { get; set; } = [];
 
     public List<WorkflowCapabilityWorkflowStep> Steps { get; set; } = [];
+    public long AuthorityStateVersion { get; set; }
+    public DateTimeOffset ProjectionWatermark { get; set; }
 }
 
 public sealed class WorkflowCapabilityWorkflowStep

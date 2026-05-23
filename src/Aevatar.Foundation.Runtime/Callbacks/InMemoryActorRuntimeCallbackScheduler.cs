@@ -273,7 +273,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             try
             {
                 await Task.Delay(dueTime, ct);
-                    await owner.OnCallbackFiredAsync(new CallbackKey(ActorId, CallbackId), this, ct);
+                await owner.OnCallbackFiredAsync(new CallbackKey(ActorId, CallbackId), this, ct);
 
                 if (!IsPeriodic)
                     return;
