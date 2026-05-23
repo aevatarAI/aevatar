@@ -709,7 +709,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 request,
                 null,
-                BuildMemberApiPath(memberResolution.ScopeId, memberResolution.MemberId),
+                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId),
                 invocationPort,
                 catalogReader,
                 artifactStore,
@@ -806,7 +806,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 request,
                 null,
-                BuildTeamApiPath(teamResolution.ScopeId, teamResolution.TeamId),
+                BuildScopeServiceRunBasePath(teamResolution.ScopeId, teamResolution.PublishedServiceId, teamResolution.EntryMemberId),
                 invocationPort,
                 catalogReader,
                 artifactStore,
@@ -1888,10 +1888,12 @@ public static class ScopeServiceEndpoints
                     AppId = string.Empty,
                 },
             }, ct);
-            var locationPath = string.IsNullOrWhiteSpace(acceptedResourcePath)
-                ? $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}"
-                : acceptedResourcePath;
-            return Results.Accepted(locationPath, receipt);
+            receipt.StatusUrl = BuildScopeServiceRunStatusUrl(
+                scopeId,
+                serviceId,
+                receipt,
+                acceptedResourcePath);
+            return Results.Accepted(receipt.StatusUrl, receipt);
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
         {
@@ -1938,6 +1940,29 @@ public static class ScopeServiceEndpoints
 
         return (ServiceJsonPayloads.PackBase64(typeUrl, request.PayloadBase64), requestedRevisionId);
     }
+
+    private static string BuildScopeServiceRunStatusUrl(
+        string scopeId,
+        string serviceId,
+        ServiceInvocationAcceptedReceipt receipt,
+        string? acceptedResourcePath)
+    {
+        var basePath = string.IsNullOrWhiteSpace(acceptedResourcePath)
+            ? BuildScopeServiceRunBasePath(scopeId, serviceId)
+            : acceptedResourcePath.TrimEnd('/');
+        return $"{basePath}/runs/{Uri.EscapeDataString(ResolveAcceptedRunId(receipt))}";
+    }
+
+    private static string BuildScopeServiceRunBasePath(
+        string scopeId,
+        string serviceId,
+        string? memberId = null) =>
+        string.IsNullOrWhiteSpace(memberId)
+            ? $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}"
+            : $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
+
+    private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
     private static async Task<IResult> HandleResumeRunAsync(
         HttpContext http,
@@ -2421,12 +2446,6 @@ public static class ScopeServiceEndpoints
 
     private static string BuildScopeServiceStreamInvokePath(string scopeId, string serviceId, string endpointId) =>
         $"{BuildScopeServiceInvokePath(scopeId, serviceId, endpointId)}:stream";
-
-    private static string BuildMemberApiPath(string scopeId, string memberId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
-
-    private static string BuildTeamApiPath(string scopeId, string teamId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
 
     private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted) =>
         ServiceEndpointContractMath.BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted);

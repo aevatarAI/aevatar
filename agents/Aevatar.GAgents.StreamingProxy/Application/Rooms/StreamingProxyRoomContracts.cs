@@ -101,7 +101,7 @@ public enum StreamingProxyRoomPostMessageStatus
 
 public enum StreamingProxyRoomJoinStatus
 {
-    Joined = 0,
+    Accepted = 0,
     RoomNotFound = 1,
 }
 

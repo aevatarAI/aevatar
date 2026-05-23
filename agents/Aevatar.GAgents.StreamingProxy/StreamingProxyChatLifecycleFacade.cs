@@ -22,7 +22,7 @@ public sealed record StreamingProxyJoinLifecycleReceipt(
 
 public enum StreamingProxyJoinLifecycleStatus
 {
-    Joined = 0,
+    Accepted = 0,
     RoomNotFound = 1,
 }
 
@@ -141,7 +141,7 @@ internal sealed class StreamingProxyChatLifecycleFacade
 
         var normalizedAgentId = result.AgentId ?? agentId.Trim();
         return new StreamingProxyJoinLifecycleReceipt(
-            StreamingProxyJoinLifecycleStatus.Joined,
+            StreamingProxyJoinLifecycleStatus.Accepted,
             normalizedAgentId);
     }
 

@@ -296,7 +296,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             CancellationToken.None);
 
         result.Should().Be(new StreamingProxyRoomJoinResult(
-            StreamingProxyRoomJoinStatus.Joined,
+            StreamingProxyRoomJoinStatus.Accepted,
             "agent-1",
             "Alice"));
         dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
