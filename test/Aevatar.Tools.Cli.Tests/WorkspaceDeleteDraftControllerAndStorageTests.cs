@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.RegularExpressions;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -652,14 +651,12 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
     private static AppScopedWorkflowService CreateScopeWorkflowService(RecordingStudioWorkspacePorts workspacePorts) =>
         new(
-            new StubHttpClientFactory(new HttpClient(new ThrowingHttpMessageHandler())),
             new StubWorkflowYamlDocumentService(),
             workspaceQueryPort: workspacePorts,
             workspaceCommandPort: workspacePorts);
 
     private static AppScopedWorkflowService CreateScopeWorkflowService(ThrowingScopedWorkspaceCommandPort commandPort) =>
         new(
-            new StubHttpClientFactory(new HttpClient(new ThrowingHttpMessageHandler())),
             new StubWorkflowYamlDocumentService(),
             workspaceQueryPort: new RecordingStudioWorkspacePorts([
                 new ScopedDraft(
@@ -692,24 +689,6 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
         public string Serialize(WorkflowDocument document) =>
             $"name: {document.Name}\nsteps: []\n";
-    }
-
-    private sealed class StubHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpClient _client;
-
-        public StubHttpClientFactory(HttpClient client)
-        {
-            _client = client;
-        }
-
-        public HttpClient CreateClient(string name) => _client;
-    }
-
-    private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("HTTP client should not be used in this test.");
     }
 
     private sealed class ThrowingScopedWorkspaceCommandPort : IStudioWorkspaceCommandPort
