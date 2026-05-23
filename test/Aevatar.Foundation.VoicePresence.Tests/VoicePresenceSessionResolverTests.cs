@@ -346,7 +346,7 @@ public class VoicePresenceSessionResolverTests
     public async Task VoicePresenceCapabilityReadModelProjector_should_upsert_committed_runtime_state()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var updatedAt = DateTimeOffset.UtcNow;
+        var updatedAt = new DateTimeOffset(2026, 5, 23, 4, 0, 52, 288, TimeSpan.Zero);
         var projector = new VoicePresenceCapabilityReadModelProjector(
             dispatcher,
             new FixedProjectionClock(updatedAt));
@@ -363,7 +363,8 @@ public class VoicePresenceSessionResolverTests
                 },
             },
             version: 9,
-            eventId: "evt-9");
+            eventId: "evt-9",
+            observedAt: updatedAt);
 
         await projector.ProjectAsync(
             new VoicePresenceCapabilityMaterializationContext
@@ -605,11 +606,14 @@ public class VoicePresenceSessionResolverTests
     private static EventEnvelope WrapCommitted(
         IMessage payload,
         long version = 1,
-        string eventId = "evt-1") =>
-        new()
+        string eventId = "evt-1",
+        DateTimeOffset? observedAt = null)
+    {
+        var timestamp = Timestamp.FromDateTimeOffset(observedAt ?? DateTimeOffset.UtcNow);
+        return new EventEnvelope
         {
             Id = eventId,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = timestamp.Clone(),
             Route = EnvelopeRouteSemantics.CreateObserverPublication("agent-1"),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
@@ -617,11 +621,13 @@ public class VoicePresenceSessionResolverTests
                 {
                     EventId = eventId,
                     Version = version,
+                    Timestamp = timestamp.Clone(),
                     EventData = Any.Pack(payload),
                 },
                 StateRoot = Any.Pack(new VoicePresenceRuntimeState()),
             }),
         };
+    }
 
     private sealed class FakeCapabilityReader(VoicePresenceCapabilityReadModel? readModel)
         : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>
