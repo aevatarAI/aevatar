@@ -71,6 +71,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         result.PrimaryActorId.Should().Be("workflow-definition-1:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
     }
 
@@ -202,6 +203,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         result.PrimaryActorId.Should().Be("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -244,6 +246,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.BindCalls[0].inlineWorkflowYamls.Should().ContainKey("child");
         workflowPort.BindCalls[0].inlineWorkflowYamls["child"].Should().Be("name: child");
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -283,6 +286,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         result.PrimaryActorId.Should().Be("workflow-definition-1:deployment-actor:r1");
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -450,6 +454,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     {
         public List<string?> CreateDefinitionCalls { get; } = [];
         public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> BindCalls { get; } = [];
+        public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> ExplicitBindCalls { get; } = [];
 
         public Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
             WorkflowDefinitionBinding definition,
@@ -457,6 +462,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
             CancellationToken ct = default)
         {
             CreateDefinitionCalls.Add(preferredActorId);
+            RecordBind(
+                preferredActorId ?? definition.DefinitionActorId,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                BindCalls);
             return Task.FromResult(new WorkflowDefinitionProvisioningReceipt(
                 preferredActorId ?? definition.DefinitionActorId,
                 CreatedNow: true));
@@ -478,12 +489,27 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string? scopeId = null,
             CancellationToken ct = default)
         {
-            BindCalls.Add((actorId, workflowName, workflowYaml, inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal) ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+            RecordBind(actorId, workflowYaml, workflowName, inlineWorkflowYamls, ExplicitBindCalls);
             return Task.CompletedTask;
         }
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             Task.FromResult(WorkflowYamlParseResult.Success("workflow"));
+
+        private static void RecordBind(
+            string actorId,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> target)
+        {
+            target.Add((
+                actorId,
+                workflowName,
+                workflowYaml,
+                inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)
+                ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+        }
     }
 
     private sealed class RecordingActor : IActor

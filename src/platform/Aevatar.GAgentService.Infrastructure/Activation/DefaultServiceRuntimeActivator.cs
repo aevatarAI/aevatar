@@ -117,13 +117,6 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             preferredActorId,
             ct);
 
-        await _workflowDefinitionProvisioningPort.BindWorkflowDefinitionAsync(
-            receipt.ActorId,
-            plan.WorkflowYaml,
-            plan.WorkflowName,
-            plan.InlineWorkflowYamls,
-            ct: ct);
-
         return new ServiceRuntimeActivationResult(deploymentId, receipt.ActorId, "active");
     }
 
