@@ -36,11 +36,9 @@ public sealed class ScopeScriptApplicationServicesTests
                 new ScriptingCommandAcceptedReceipt(expectedDefinitionActorId, "definition-command-1", "definition-correlation-1")),
         };
         var catalogCommandPort = new FakeScriptCatalogCommandPort();
-        var authorityReadModelActivationPort = new RecordingScriptAuthorityReadModelActivationPort();
         var service = new ScopeScriptCommandApplicationService(
             definitionCommandPort,
             catalogCommandPort,
-            authorityReadModelActivationPort,
             Options.Create(options));
 
         var result = await service.UpsertAsync(
@@ -60,7 +58,6 @@ public sealed class ScopeScriptApplicationServicesTests
         result.DefinitionActorId.Should().Be(expectedDefinitionActorId);
         result.DefinitionCommand.CommandId.Should().Be("definition-command-1");
         result.CatalogCommand.CommandId.Should().Be("catalog-command-1");
-        authorityReadModelActivationPort.Calls.Should().Equal(expectedDefinitionActorId, expectedCatalogActorId);
 
         definitionCommandPort.LastRequest.Should().BeEquivalentTo(
             new FakeScriptDefinitionCommandPort.Request(
@@ -424,18 +421,6 @@ public sealed class ScopeScriptApplicationServicesTests
             string SourceHash,
             string? DefinitionActorId,
             string? ScopeId);
-    }
-
-    private sealed class RecordingScriptAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
-    {
-        public List<string> Calls { get; } = [];
-
-        public Task ActivateAsync(string actorId, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            Calls.Add(actorId);
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class FakeScriptCatalogCommandPort : IScriptCatalogCommandPort
