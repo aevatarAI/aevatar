@@ -9,6 +9,9 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
+// Refactor (iter39/cluster-039-public-chatasync-adapter):
+//   Old pattern: ChatRuntime 暴露 public ChatAsync 方法作为 non-streaming adapter,callers 可以选 non-streaming conversation API。
+//   New principle: Public runtime surface 仅暴露 ChatStreamAsync;explicit offline aggregation 放到 narrowly named offline/test adapter(明确不能与 realtime chat 混淆)。Provider contract stream-only。
 public sealed class ChatRuntimeStreamingBufferTests
 {
     [Fact]
@@ -434,7 +437,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldAggregateStreamAdapterWithoutCallingProvider()
+    public async Task ExplicitTestAggregation_WhenAgentMiddlewareTerminates_ShouldConsumeStreamWithoutCallingProvider()
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
@@ -449,7 +452,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 }),
             ]);
 
-        var result = await runtime.ChatAsync("hello");
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
 
         result.Should().Be("short-circuit");
         provider.StreamCallCount.Should().Be(0);
@@ -488,15 +491,27 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatAsync_WhenProviderStreamsContent_ShouldAggregateWithoutCallingProviderChatAsync()
+    public async Task ExplicitTestAggregation_WhenProviderStreamsContent_ShouldAggregateStreamContent()
     {
         var provider = new StreamingProvider(["stream-", "answer"]);
         var runtime = CreateRuntime(provider);
 
-        var result = await runtime.ChatAsync("hello");
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
 
         result.Should().Be("stream-answer");
         provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void ChatRuntimePublicSurface_ShouldNotExposeNonStreamingChatAsync()
+    {
+        var chatAsyncMethods = typeof(ChatRuntime)
+            .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Where(method => method.Name == "ChatAsync")
+            .Select(method => method.ToString())
+            .ToArray();
+
+        chatAsyncMethods.Should().BeEmpty();
     }
 
     [Fact]
