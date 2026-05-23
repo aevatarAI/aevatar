@@ -8,7 +8,11 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Presentation.AGUI;
@@ -772,22 +776,75 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public void ToCamelCaseAndStripEventSuffix_ShouldTransformWords()
+    public async Task HandleListGAgentTypesAsync_ShouldReadRegisteredStaticServiceRevisionFacts()
     {
-        InvokeToCamelCase("").Should().BeEmpty();
-        InvokeToCamelCase("TextEvent").Should().Be("textEvent");
+        var staticActorTypeName = "Tests.RegisteredStaticGAgent, Tests.Assembly";
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services =
+            [
+                CreateServiceCatalogSnapshot("svc-a"),
+            ],
+        };
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader
+        {
+            Revisions =
+            {
+                [ServiceKeys.Build(CreateServiceIdentity("svc-a"))] = new ServiceRevisionCatalogSnapshot(
+                    ServiceKeys.Build(CreateServiceIdentity("svc-a")),
+                    [
+                        new ServiceRevisionSnapshot(
+                            "rev-static",
+                            ServiceImplementationKind.Static.ToString(),
+                            ServiceRevisionStatus.Published.ToString(),
+                            "hash-a",
+                            string.Empty,
+                            [
+                                new ServiceEndpointSnapshot(
+                                    "chat",
+                                    "Chat",
+                                    ServiceEndpointKind.Chat.ToString(),
+                                    "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                                    string.Empty,
+                                    "Registered chat endpoint."),
+                            ],
+                            DateTimeOffset.UtcNow,
+                            DateTimeOffset.UtcNow,
+                            DateTimeOffset.UtcNow,
+                            null,
+                            new ServiceRevisionImplementationSnapshot(
+                                Static: new ServiceRevisionStaticSnapshot(staticActorTypeName, "preferred-actor"))),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+        };
 
-        InvokeStripEventSuffix("ToolResultEvent").Should().Be("ToolResult");
-        InvokeStripEventSuffix("NoSuffix").Should().Be("NoSuffix");
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        body.Should().Contain("RegisteredStaticGAgent");
+        body.Should().Contain(staticActorTypeName);
+        body.Should().Contain("Tests.Assembly");
+        body.Should().Contain("chat");
+        revisionReader.RequestedIdentities.Should().ContainSingle(identity =>
+            identity.ServiceId == "svc-a" &&
+            identity.TenantId == "scope-a");
     }
 
     [Fact]
-    public void HandleListGAgentTypesAsync_ShouldReturnOkResult()
+    public async Task HandleListGAgentTypesAsync_ShouldNotDiscoverLoadedClrAgentClasses()
     {
-        var result = InvokeHandleListGAgentTypesAsync();
-        result.Should().NotBeNull();
-        result.Should().BeAssignableTo<IStatusCodeHttpResult>();
-        ((IStatusCodeHttpResult)result).StatusCode.Should().Be((int)HttpStatusCode.OK);
+        var catalogReader = new FakeServiceCatalogQueryReader();
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader();
+
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        body.Should().NotContain(nameof(FakeAgent));
+        body.Should().Be("[]");
+        revisionReader.RequestedIdentities.Should().BeEmpty();
     }
 
     [Fact]
@@ -801,6 +858,19 @@ public sealed class ScopeGAgentEndpointsTests
         source.Should().NotContain("TryMapEnvelopeToAguiEvent");
         source.Should().NotContain("BuildToolApprovalStruct");
         source.Should().NotContain("ScopeGAgentAguiEventMapper.TryMap");
+    }
+
+    [Fact]
+    public void ScopeGAgentEndpointsSource_ShouldNotUseReflectionAsGAgentTypeCatalog()
+    {
+        var source = File.ReadAllText(GetScopeGAgentEndpointsSourcePath());
+
+        source.Should().NotContain("AppDomain.CurrentDomain.GetAssemblies()");
+        source.Should().NotContain("FindOpenGenericBaseType");
+        source.Should().NotContain("DerivesFromOpenGeneric");
+        source.Should().NotContain("EventHandlerAttribute");
+        source.Should().NotContain("TryGetProtoTypeUrl");
+        source.Should().Contain("IServiceRevisionCatalogQueryReader");
     }
 
     private static string? InvokeExtractBearerToken(HttpContext context)
@@ -817,22 +887,6 @@ public sealed class ScopeGAgentEndpointsTests
             "IsNyxIdAuthenticationRequired",
             BindingFlags.NonPublic | BindingFlags.Static);
         return (bool)method!.Invoke(null, new object[] { ex })!;
-    }
-
-    private static string InvokeToCamelCase(string value)
-    {
-        var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            "ToCamelCase",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        return (string)method!.Invoke(null, new object[] { value })!;
-    }
-
-    private static string InvokeStripEventSuffix(string value)
-    {
-        var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            "StripEventSuffix",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        return (string)method!.Invoke(null, new object[] { value })!;
     }
 
     private static async Task<IResult> InvokeHandleListActorsAsync(
@@ -855,12 +909,19 @@ public sealed class ScopeGAgentEndpointsTests
         })!;
     }
 
-    private static IResult InvokeHandleListGAgentTypesAsync()
+    private static async Task<IResult> InvokeHandleListGAgentTypesAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader)
     {
         var method = typeof(ScopeGAgentEndpoints).GetMethod(
             "HandleListGAgentTypesAsync",
             BindingFlags.NonPublic | BindingFlags.Static);
-        return (IResult)method!.Invoke(null, [])!;
+        return await (Task<IResult>)method!.Invoke(null, new object[]
+        {
+            catalogReader,
+            revisionCatalogReader,
+            CancellationToken.None,
+        })!;
     }
 
     private static async Task<IResult> InvokeHandleAddActorAsync(
@@ -963,6 +1024,35 @@ public sealed class ScopeGAgentEndpointsTests
             ], "test")),
         };
     }
+
+    private static ServiceCatalogSnapshot CreateServiceCatalogSnapshot(string serviceId)
+    {
+        var identity = CreateServiceIdentity(serviceId);
+        return new ServiceCatalogSnapshot(
+            ServiceKeys.Build(identity),
+            identity.TenantId,
+            identity.AppId,
+            identity.Namespace,
+            identity.ServiceId,
+            DisplayName: serviceId,
+            DefaultServingRevisionId: string.Empty,
+            ActiveServingRevisionId: string.Empty,
+            DeploymentId: string.Empty,
+            PrimaryActorId: string.Empty,
+            DeploymentStatus: string.Empty,
+            Endpoints: [],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+    }
+
+    private static ServiceIdentity CreateServiceIdentity(string serviceId) =>
+        new()
+        {
+            TenantId = "scope-a",
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = serviceId,
+        };
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {
@@ -1214,6 +1304,47 @@ public sealed class ScopeGAgentEndpointsTests
             ScopeResourceTarget target,
             CancellationToken cancellationToken = default)
             => Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+    }
+
+    private sealed class FakeServiceCatalogQueryReader : IServiceCatalogQueryReader
+    {
+        public IReadOnlyList<ServiceCatalogSnapshot> Services { get; set; } = [];
+
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(Services.FirstOrDefault(x =>
+                string.Equals(x.ServiceKey, ServiceKeys.Build(identity), StringComparison.Ordinal)));
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(
+            int take = 1000,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Services.Take(take).ToList());
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Services
+                .Where(x =>
+                    string.Equals(x.TenantId, tenantId, StringComparison.Ordinal) &&
+                    string.Equals(x.AppId, appId, StringComparison.Ordinal) &&
+                    string.Equals(x.Namespace, @namespace, StringComparison.Ordinal))
+                .Take(take)
+                .ToList());
+    }
+
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
+    {
+        public Dictionary<string, ServiceRevisionCatalogSnapshot> Revisions { get; } = new(StringComparer.Ordinal);
+
+        public List<ServiceIdentity> RequestedIdentities { get; } = [];
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            RequestedIdentities.Add(identity.Clone());
+            return Task.FromResult(Revisions.GetValueOrDefault(ServiceKeys.Build(identity)));
+        }
     }
 
     private sealed class FakeActorRuntime : IActorRuntime
