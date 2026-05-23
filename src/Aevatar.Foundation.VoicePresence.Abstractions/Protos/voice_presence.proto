@@ -88,6 +88,7 @@ message VoicePresenceRuntimeState {
   string active_session_id = 15;
   google.protobuf.Timestamp lease_expires_at = 16;
   VoiceRemoteAudioSupport remote_audio_support = 17;
+  string active_transport_lease_id = 18;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -190,6 +191,40 @@ message VoiceRemoteControlInputReceived {
   VoiceControlFrame control_frame = 2;
 }
 
+// Refactor (iter44/issue-866-voice-presence-process-runtime-state):
+//   Old pattern: VoicePresenceModule kept _runtimeState/_userTransport/relay tasks/dispatcher as module fields that participated in active session, transport attach, and provider response decisions outside actor turn.
+//   New principle: RoleGAgent voice runtime state is the only authority for active session / transport attached / lease expiry / provider binding; transport handles are byte-only volatile leases; provider/transport callbacks enqueue typed self-signals only.
+message VoiceTransportAttachRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  google.protobuf.Timestamp lease_expires_at = 4;
+}
+
+message VoiceTransportDetachRequested {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+}
+
+message VoiceTransportControlFrameReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  VoiceControlFrame control_frame = 3;
+}
+
+message VoiceTransportRelayStopped {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+}
+
+message VoiceProviderEventReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  VoiceProviderEvent provider_event = 3;
+}
+
 message VoiceRemoteSessionClosed {
   string reason = 1;
 }
@@ -220,6 +255,11 @@ message VoiceModuleSignal {
     VoiceRemoteControlInputReceived remote_control_input_received = 7;
     VoicePresenceSessionLeaseRequested session_lease_requested = 8;
     VoicePresenceSessionLeaseReleased session_lease_released = 9;
+    VoiceTransportAttachRequested transport_attach_requested = 10;
+    VoiceTransportDetachRequested transport_detach_requested = 11;
+    VoiceTransportControlFrameReceived transport_control_frame_received = 12;
+    VoiceTransportRelayStopped transport_relay_stopped = 13;
+    VoiceProviderEventReceived provider_event_received = 14;
   }
 }
 

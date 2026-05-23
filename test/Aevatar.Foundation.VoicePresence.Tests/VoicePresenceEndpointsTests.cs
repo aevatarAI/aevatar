@@ -152,7 +152,7 @@ public class VoicePresenceEndpointsTests
 
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
         socket.CloseCalls.ShouldBe(1);
     }
 
@@ -176,7 +176,7 @@ public class VoicePresenceEndpointsTests
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status409Conflict);
         (await ReadBodyAsync(context)).ShouldContain("Voice transport already attached.");
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
         existingTransport.Disposed.ShouldBeFalse();
         socket.CloseCalls.ShouldBe(0);
     }

@@ -45,17 +45,19 @@ public class VoiceTransportRelayTests
         var provider = new RecordingProvider();
         var module = CreateModule(provider);
         await module.InitializeAsync(CancellationToken.None);
-        var ctx = new StubEventHandlerContext();
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(roleAgent);
 
         module.StateMachine.AllocateNextResponseId();
         module.StateMachine.OnResponseDone(module.StateMachine.CurrentResponseId);
+        var responseId = module.StateMachine.CurrentResponseId;
         module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
 
         var drainAck = new VoiceControlFrame
         {
             DrainAcknowledged = new VoiceDrainAcknowledged
             {
-                ResponseId = module.StateMachine.CurrentResponseId,
+                ResponseId = responseId,
                 PlayoutSequence = 42,
             },
         };
@@ -64,23 +66,56 @@ public class VoiceTransportRelayTests
             VoiceTransportFrame.ControlFrame(drainAck),
         ]);
 
+        const string transportLeaseId = "transport-1";
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-1",
+            TransportAttached = true,
+            ActiveTransportLeaseId = transportLeaseId,
+            Status = VoicePresenceRuntimeStatus.AudioDraining,
+            CurrentResponseId = drainAck.DrainAcknowledged.ResponseId,
+            NextResponseId = drainAck.DrainAcknowledged.ResponseId + 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
         module.AttachTransport(transport, (message, ct) =>
-            module.HandleAsync(CreateEnvelope(message), ctx, ct));
+        {
+            if (message is VoiceTransportAttachRequested)
+                return Task.CompletedTask;
+
+            if (message is VoiceTransportControlFrameReceived control)
+            {
+                control.TransportLeaseId = transportLeaseId;
+                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                {
+                    ModuleName = "voice_presence",
+                    TransportControlFrameReceived = control,
+                }), ctx, ct);
+            }
+
+            return module.HandleAsync(CreateEnvelope(message), ctx, ct);
+        }, "lease-1", "host-1", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)));
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
-        module.StateMachine.IsSafeToInject.ShouldBeTrue();
+        var persistedState = roleAgent.State.VoicePresence["voice_presence"];
+        persistedState.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        persistedState.LastDrainAckResponseId.ShouldBe(responseId);
     }
 
     [Fact]
-    public async Task Provider_audio_should_relay_directly_to_user_transport()
+    public async Task Provider_audio_should_not_relay_until_transport_attach_is_actor_accepted()
     {
         var provider = new RecordingProvider();
         var module = CreateModule(provider);
         await module.InitializeAsync(CancellationToken.None);
 
         var transport = new FakeVoiceTransport([]);
-        module.AttachTransport(transport, (_, _) => Task.CompletedTask);
+        var dispatchedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        module.AttachTransport(transport, (_, _) =>
+        {
+            dispatchedSignal.TrySetResult();
+            return Task.CompletedTask;
+        });
 
         var audioEvent = new VoiceProviderEvent
         {
@@ -91,10 +126,9 @@ public class VoiceTransportRelayTests
             },
         };
 
-        await provider.SimulateEventAndWait(audioEvent, transport.AudioSentSignal);
+        await provider.SimulateEventAndWait(audioEvent, dispatchedSignal);
 
-        transport.SentAudio.Count.ShouldBe(1);
-        transport.SentAudio[0].ToArray().ShouldBe([1, 2, 3]);
+        transport.SentAudio.ShouldBeEmpty();
     }
 
     [Fact]
@@ -119,8 +153,8 @@ public class VoiceTransportRelayTests
             dispatchedSignal);
 
         dispatched.Count.ShouldBe(1);
-        dispatched[0].ShouldBeOfType<VoiceProviderEvent>()
-            .EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.SpeechStarted);
+        dispatched[0].ShouldBeOfType<VoiceProviderEventReceived>()
+            .ProviderEvent.EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.SpeechStarted);
         transport.SentAudio.ShouldBeEmpty();
     }
 
@@ -133,10 +167,10 @@ public class VoiceTransportRelayTests
 
         var transport = new FakeVoiceTransport([]);
         module.AttachTransport(transport, (_, _) => Task.CompletedTask);
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
 
         await module.DetachTransportAsync();
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
     }
 
     [Fact]
@@ -184,7 +218,7 @@ public class VoiceTransportRelayTests
         await module.DisposeAsync();
 
         module.IsInitialized.ShouldBeFalse();
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
         provider.Disposed.ShouldBeTrue();
     }
@@ -301,13 +335,13 @@ public class VoiceTransportRelayTests
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
     }
 
-    private sealed class StubEventHandlerContext : Aevatar.Foundation.Abstractions.EventModules.IEventHandlerContext
+    private sealed class StubEventHandlerContext(Aevatar.Foundation.Abstractions.IAgent? agent = null) : Aevatar.Foundation.Abstractions.EventModules.IEventHandlerContext
     {
         public EventEnvelope InboundEnvelope { get; } = new();
         public string AgentId => "voice-agent";
         public IServiceProvider Services { get; } = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
-        public Aevatar.Foundation.Abstractions.IAgent Agent { get; } = new StubAgent();
+        public Aevatar.Foundation.Abstractions.IAgent Agent { get; } = agent ?? new StubAgent();
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -369,5 +403,46 @@ public class VoiceTransportRelayTests
             Task.FromResult<IReadOnlyList<System.Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleAgent(string id) : Aevatar.Foundation.Abstractions.IAgent, IVoicePresenceRuntimeStateOwner
+    {
+        public string Id => id;
+
+        public RecordingRoleState State { get; } = new();
+
+        public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+        {
+            if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+            {
+                runtimeState = stored.Clone();
+                return true;
+            }
+
+            runtimeState = new VoicePresenceRuntimeState();
+            return false;
+        }
+
+        public Task PersistVoicePresenceRuntimeStateAsync(
+            string moduleName,
+            VoicePresenceRuntimeState runtimeState,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            State.VoicePresence[moduleName] = runtimeState.Clone();
+            return Task.CompletedTask;
+        }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult(id);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleState
+    {
+        public Dictionary<string, VoicePresenceRuntimeState> VoicePresence { get; } = [];
     }
 }
