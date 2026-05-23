@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.AddCqrsCore();
         services.TryAddSingleton<StreamingProxyNyxParticipantCoordinator>();
         services.TryAddSingleton<IStreamingProxyRoomCommandService, StreamingProxyRoomCommandService>();
+        services.TryAddSingleton<StreamingProxyChatLifecycleFacade>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 
