@@ -11,14 +11,10 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePort
 {
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IVoicePresenceCapabilityQueryPort _capabilityQueryPort;
 
-    public VoicePresenceSessionLeasePort(
-        IActorDispatchPort dispatchPort,
-        IVoicePresenceCapabilityQueryPort capabilityQueryPort)
+    public VoicePresenceSessionLeasePort(IActorDispatchPort dispatchPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _capabilityQueryPort = capabilityQueryPort ?? throw new ArgumentNullException(nameof(capabilityQueryPort));
     }
 
     public async Task<VoicePresenceSessionLeaseHandle> AcquireAsync(
@@ -45,20 +41,14 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                 }),
             ct);
 
-        var observed = await _capabilityQueryPort.GetAsync(request.ActorId, request.ModuleName, ct);
-        if (observed?.ActiveSessionId != request.SessionId)
-        {
-            throw new InvalidOperationException("Voice session lease was not observed in the capability read model.");
-        }
-
         return new VoicePresenceSessionLeaseHandle(
-            observed.ActorId,
-            observed.ModuleName,
+            request.ActorId,
+            request.ModuleName,
             request.SessionId,
             request.OwnerId,
-            observed.StateVersion,
-            observed.LeaseExpiresAt ?? expiresAtUtc,
-            observed.RemoteAudioSupport);
+            request.ObservedStateVersion,
+            expiresAtUtc,
+            request.ObservedRemoteAudioSupport);
     }
 
     public Task ReleaseAsync(

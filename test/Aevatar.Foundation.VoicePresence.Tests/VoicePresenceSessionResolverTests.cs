@@ -1,9 +1,12 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Projection;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
@@ -52,21 +55,24 @@ public class VoicePresenceSessionResolverTests
     }
 
     [Fact]
-    public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_observed_handle()
+    public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_accepted_handle()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var queryPort = new FakeCapabilityQueryPort(
-            CreateCapability("agent-1", "voice_presence", initialized: true, activeSessionId: "lease-1"));
-        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, queryPort);
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
 
         var handle = await leasePort.AcquireAsync(new VoicePresenceSessionLeaseRequest(
             "agent-1",
             "voice_presence",
             "lease-1",
             "host-1",
-            DateTimeOffset.UtcNow.AddMinutes(5)));
+            expiresAt,
+            7,
+            VoiceRemoteAudioSupport.LocalOnly));
 
         handle.SessionId.ShouldBe("lease-1");
+        handle.StateVersion.ShouldBe(7);
+        handle.ExpiresAtUtc.ShouldBe(expiresAt.ToUniversalTime());
         dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
         var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
         signal.ModuleName.ShouldBe("voice_presence");
@@ -78,9 +84,7 @@ public class VoicePresenceSessionResolverTests
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_release_signal()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var queryPort = new FakeCapabilityQueryPort(
-            CreateCapability("agent-1", "voice_presence", initialized: true, activeSessionId: "lease-1"));
-        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, queryPort);
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
         var handle = new VoicePresenceSessionLeaseHandle(
             "agent-1",
             "voice_presence",
@@ -123,6 +127,139 @@ public class VoicePresenceSessionResolverTests
         snapshot.StateVersion.ShouldBe(7);
         snapshot.Initialized.ShouldBeTrue();
         snapshot.PcmSampleRateHz.ShouldBe(24000);
+    }
+
+    [Fact]
+    public void VoicePresenceCapabilityReadModelMapper_should_apply_runtime_state_defaults()
+    {
+        var updatedAt = DateTimeOffset.Now;
+        var readModel = VoicePresenceCapabilityReadModelMapper.FromRuntimeState(
+            " agent-1 ",
+            " voice_presence_openai ",
+            new VoicePresenceRuntimeState
+            {
+                Initialized = true,
+                LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(3)),
+            },
+            8,
+            null!,
+            updatedAt);
+
+        readModel.Id.ShouldBe("agent-1:voice_presence_openai");
+        readModel.ActorId.ShouldBe("agent-1");
+        readModel.ModuleName.ShouldBe("voice_presence_openai");
+        readModel.StateVersion.ShouldBe(8);
+        readModel.LastEventId.ShouldBeEmpty();
+        readModel.UpdatedAt.ToDateTimeOffset().ShouldBe(updatedAt.ToUniversalTime());
+        readModel.PcmSampleRateHz.ShouldBe(24000);
+        readModel.ActiveSessionId.ShouldBeEmpty();
+        readModel.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+    }
+
+    [Fact]
+    public void VoicePresenceCapabilityReadModelMapper_should_apply_snapshot_defaults()
+    {
+        var snapshot = VoicePresenceCapabilityReadModelMapper.ToSnapshot(new VoicePresenceCapabilityReadModel
+        {
+            ActorId = "agent-1",
+            ModuleName = "voice_presence",
+            StateVersion = 3,
+            LastEventId = "event-3",
+            ActiveSessionId = " ",
+        });
+
+        snapshot.UpdatedAt.ShouldBe(DateTimeOffset.MinValue);
+        snapshot.PcmSampleRateHz.ShouldBe(24000);
+        snapshot.ActiveSessionId.ShouldBeNull();
+        snapshot.LeaseExpiresAt.ShouldBeNull();
+        snapshot.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+    }
+
+    [Fact]
+    public async Task VoicePresenceCapabilityReadModelProjector_should_upsert_committed_runtime_state()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var updatedAt = DateTimeOffset.UtcNow;
+        var projector = new VoicePresenceCapabilityReadModelProjector(
+            dispatcher,
+            new FixedProjectionClock(updatedAt));
+        var envelope = WrapCommitted(
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = "voice_presence",
+                State = new VoicePresenceRuntimeState
+                {
+                    Initialized = true,
+                    PcmSampleRateHz = 16000,
+                    ActiveSessionId = "lease-1",
+                    RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+                },
+            },
+            version: 9,
+            eventId: "evt-9");
+
+        await projector.ProjectAsync(
+            new VoicePresenceCapabilityMaterializationContext
+            {
+                RootActorId = "agent-1",
+                ProjectionKind = VoicePresenceProjectionKinds.CapabilityMaterialization,
+            },
+            envelope);
+
+        var document = dispatcher.Upserts.ShouldHaveSingleItem();
+        document.Id.ShouldBe("agent-1:voice_presence");
+        document.StateVersion.ShouldBe(9);
+        document.LastEventId.ShouldBe("evt-9");
+        document.UpdatedAt.ToDateTimeOffset().ToUnixTimeMilliseconds()
+            .ShouldBe(updatedAt.ToUnixTimeMilliseconds());
+        document.Initialized.ShouldBeTrue();
+        document.PcmSampleRateHz.ShouldBe(16000);
+        document.ActiveSessionId.ShouldBe("lease-1");
+        document.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.Supported);
+    }
+
+    [Fact]
+    public async Task VoicePresenceCapabilityReadModelProjector_should_ignore_unrelated_committed_events()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new VoicePresenceCapabilityReadModelProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        await projector.ProjectAsync(
+            new VoicePresenceCapabilityMaterializationContext
+            {
+                RootActorId = "agent-1",
+                ProjectionKind = VoicePresenceProjectionKinds.CapabilityMaterialization,
+            },
+            WrapCommitted(new VoiceAudioReceived()));
+
+        dispatcher.Upserts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void VoicePresenceCommittedStateProjectionActivationPlanProvider_should_plan_capability_materialization()
+    {
+        var provider = new VoicePresenceCommittedStateProjectionActivationPlanProvider();
+        var envelope = WrapCommitted(new VoicePresenceRuntimeStateChangedEvent
+        {
+            ModuleName = "voice_presence",
+            State = new VoicePresenceRuntimeState(),
+        });
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+
+        var plan = provider.GetPlans(new Aevatar.Foundation.Core.EventSourcing.CommittedStatePublicationContext
+        {
+            ActorId = "agent-1",
+            ActorType = typeof(object),
+            Published = published,
+            SourceEnvelope = envelope,
+        }).ShouldHaveSingleItem();
+
+        plan.LeaseType.ShouldBe(typeof(VoicePresenceCapabilityMaterializationRuntimeLease));
+        plan.StartRequest.RootActorId.ShouldBe("agent-1");
+        plan.StartRequest.ProjectionKind.ShouldBe(VoicePresenceProjectionKinds.CapabilityMaterialization);
+        plan.StartRequest.Mode.ShouldBe(ProjectionRuntimeMode.DurableMaterialization);
     }
 
     [Fact]
@@ -261,6 +398,48 @@ public class VoicePresenceSessionResolverTests
             return Task.CompletedTask;
         }
     }
+
+    private sealed class RecordingWriteDispatcher : IProjectionWriteDispatcher<VoicePresenceCapabilityReadModel>
+    {
+        public List<VoicePresenceCapabilityReadModel> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            VoicePresenceCapabilityReadModel readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private static EventEnvelope WrapCommitted(
+        IMessage payload,
+        long version = 1,
+        string eventId = "evt-1") =>
+        new()
+        {
+            Id = eventId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("agent-1"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                    EventData = Any.Pack(payload),
+                },
+                StateRoot = Any.Pack(new VoicePresenceRuntimeState()),
+            }),
+        };
 
     private sealed class FakeCapabilityReader(VoicePresenceCapabilityReadModel? readModel)
         : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>

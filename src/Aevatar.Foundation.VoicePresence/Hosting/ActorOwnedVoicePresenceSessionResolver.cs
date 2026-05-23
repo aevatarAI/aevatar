@@ -43,7 +43,9 @@ public sealed class ActorOwnedVoicePresenceSessionResolver : IVoicePresenceSessi
             capability.ModuleName,
             Guid.NewGuid().ToString("N"),
             HostOwnerId,
-            _timeProvider.GetUtcNow().Add(DefaultLeaseTtl));
+            _timeProvider.GetUtcNow().Add(DefaultLeaseTtl),
+            capability.StateVersion,
+            capability.RemoteAudioSupport);
 
         var leaseHandle = await _leasePort.AcquireAsync(leaseRequest, ct);
         return new VoicePresenceSession(

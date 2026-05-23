@@ -153,6 +153,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoicePresenceSessionResolver, ActorOwnedVoicePresenceSessionResolver>();
+        services.AddVoicePresenceCapabilityProjection();
         TryAddVoicePresenceCapabilityReadModelStore(services);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
