@@ -166,6 +166,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] IStreamingProxyRoomCredentialHandleStore credentialHandles,
         [FromServices] ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -201,7 +202,7 @@ public static class StreamingProxyEndpoints
             // Set up SSE response
             await writer.StartAsync(ct);
 
-            var accessToken = ExtractBearerToken(http);
+            var credentialHandleId = credentialHandles.Create(ExtractBearerToken(http));
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
             var result = await interactionService.ExecuteAsync(
@@ -210,7 +211,7 @@ public static class StreamingProxyEndpoints
                     scopeId,
                     prompt,
                     sessionId,
-                    accessToken,
+                    credentialHandleId,
                     preferredRoute,
                     defaultModel),
                 async (frame, token) =>

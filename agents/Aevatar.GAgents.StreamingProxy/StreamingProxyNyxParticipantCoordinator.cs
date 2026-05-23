@@ -657,7 +657,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
             [LLMRequestMetadataKeys.NyxIdRoutePreference] = participant.RoutePreference,
         };
 
@@ -673,6 +672,11 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
                 ChatMessage.User(userPrompt),
             ],
             Metadata = metadata,
+            CallerContext = new LLMRequestCallerContext(
+                ScopeId: string.Empty,
+                OwnerSubject: participant.ParticipantId,
+                ResponseId: sessionId,
+                Credentials: new LLMRequestCallerCredentials(accessToken)),
             Model = participant.Model,
             Temperature = 0.7,
             MaxTokens = 220,

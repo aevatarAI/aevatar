@@ -33,7 +33,9 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddCqrsCore();
+        services.AddMemoryCache();
         services.TryAddSingleton<StreamingProxyNyxParticipantCoordinator>();
+        services.TryAddSingleton<IStreamingProxyRoomCredentialHandleStore, StreamingProxyRoomCredentialHandleStore>();
         services.TryAddSingleton<IStreamingProxyRoomCommandService, StreamingProxyRoomCommandService>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();

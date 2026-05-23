@@ -17,7 +17,7 @@ public sealed record StreamingProxyRoomChatCommand(
     string ScopeId,
     string Prompt,
     string SessionId,
-    string? AccessToken,
+    string? CredentialHandleId,
     string? PreferredRoute,
     string? DefaultModel)
     : ICommandContextSeed
@@ -255,7 +255,7 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             Prompt = command.Prompt,
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
-            AccessToken = command.AccessToken ?? string.Empty,
+            CredentialHandleId = command.CredentialHandleId ?? string.Empty,
             PreferredRoute = command.PreferredRoute ?? string.Empty,
             DefaultModel = command.DefaultModel ?? string.Empty,
         };

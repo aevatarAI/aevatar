@@ -58,7 +58,7 @@ message StreamingProxyRoomChatRequested {
   string scope_id = 1;
   string prompt = 2;
   string session_id = 3;
-  string access_token = 4;
+  string credential_handle_id = 4;
   string preferred_route = 5;
   string default_model = 6;
 }
