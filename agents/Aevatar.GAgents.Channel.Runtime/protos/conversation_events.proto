@@ -139,6 +139,13 @@ enum ConversationReplyLifecyclePhase {
   CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATION_FAILED = 13;
 }
 
+enum LarkCardOperationPhase {
+  LARK_CARD_OPERATION_PHASE_UNSPECIFIED = 0;
+  LARK_CARD_OPERATION_PHASE_CREATE = 1;
+  LARK_CARD_OPERATION_PHASE_STREAM = 2;
+  LARK_CARD_OPERATION_PHASE_FINALIZE = 3;
+}
+
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
@@ -156,6 +163,12 @@ message ConversationReplyLifecycleState {
   string streaming_element_id = 11;
   string terminal_reason = 12;
   int64 updated_at_unix_ms = 13;
+  LarkCardOperationPhase lark_card_in_flight_operation = 14;
+  int64 lark_card_in_flight_sequence = 15;
+  int64 lark_card_operation_generation = 16;
+  string pending_accumulated_text = 17;
+  string pending_finalize_text = 18;
+  string pending_finalize_command_id = 19;
 }
 
 // Refactor (iter20/cluster-004):
@@ -226,6 +239,74 @@ message LlmReplyCardStreamChunkEvent {
   // actor state/event store/read models.
   string reply_token = 6;
   int64 reply_token_expires_at_unix_ms = 7;
+}
+
+// Refactor (iter47/issue-878-actor-turn-inline-timeouts):
+//   Old pattern: ConversationGAgent created CancellationTokenSource around CardKit calls inside actor turn and continued business branches synchronously.
+//   New principle: Card operations are typed continuation events (correlationId+sequence+card id); stateless executor runs CardKit outside actor turn; self-timeout events handle deadlines; actor turn reconciles stale keys serially per correlation.
+message LarkCardCreateContinuationEvent {
+  string correlation_id = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyCardStreamChunkEvent chunk = 4;
+  bool success = 5;
+  string card_id = 6;
+  string card_message_id = 7;
+  bool is_rate_limited = 8;
+  bool is_table_limit_exceeded = 9;
+  bool is_card_unavailable = 10;
+  bool is_post_send_failure = 11;
+  string error_code = 12;
+  string error_summary = 13;
+  int64 completed_at_unix_ms = 14;
+}
+
+message LarkCardStreamContinuationEvent {
+  string correlation_id = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  string card_id = 4;
+  string streaming_element_id = 5;
+  LlmReplyCardStreamChunkEvent chunk = 6;
+  bool success = 7;
+  bool is_rate_limited = 8;
+  bool is_table_limit_exceeded = 9;
+  bool is_card_unavailable = 10;
+  string error_code = 11;
+  string error_summary = 12;
+  int64 completed_at_unix_ms = 13;
+}
+
+message LarkCardFinalizeContinuationEvent {
+  string correlation_id = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  string card_id = 4;
+  string card_message_id = 5;
+  string command_id = 6;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 7;
+  string final_text = 8;
+  string last_flushed_text = 9;
+  bool success = 10;
+  bool final_text_written = 11;
+  string error_code = 12;
+  string error_summary = 13;
+  int64 completed_at_unix_ms = 14;
+}
+
+message LarkCardOperationTimeoutFiredEvent {
+  string correlation_id = 1;
+  LarkCardOperationPhase operation = 2;
+  int64 sequence = 3;
+  int64 operation_generation = 4;
+  string card_id = 5;
+  string card_message_id = 6;
+  string command_id = 7;
+  LlmReplyCardStreamChunkEvent chunk = 8;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
+  string final_text = 10;
+  string last_flushed_text = 11;
+  int64 fired_at_unix_ms = 12;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

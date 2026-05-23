@@ -1,4 +1,8 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -6,6 +10,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
+    // Refactor (iter47/issue-878-actor-turn-inline-timeouts):
+    //   Old pattern: ConversationGAgent created CancellationTokenSource around CardKit calls inside actor turn and continued business branches synchronously.
+    //   New principle: Card operations are typed continuation events (correlationId+sequence+card id); stateless executor runs CardKit outside actor turn; self-timeout events handle deadlines; actor turn reconciles stale keys serially per correlation.
     // Refactor (iter20/cluster-004):
     //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
     //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
@@ -39,6 +46,11 @@ public sealed partial class ConversationGAgent
         AcceptInterimChunk,
         Finalize,
     }
+
+    private sealed record LarkCardOperationInFlight(
+        LarkCardOperationPhase Operation,
+        long Sequence,
+        long Generation);
 
     /// <summary>
     /// Actor-scoped streaming state for one CardKit-driven turn, backed by
@@ -80,7 +92,12 @@ public sealed partial class ConversationGAgent
         string LastFlushedText,
         long Sequence,
         string StreamingElementId,
-        string? TerminalReason)
+        string? TerminalReason,
+        LarkCardOperationInFlight? InFlight,
+        long OperationGeneration,
+        string? PendingAccumulatedText,
+        string? PendingFinalizeText,
+        string? PendingFinalizeCommandId)
     {
         public const string DefaultStreamingElementId = "streaming_main";
 
@@ -92,7 +109,12 @@ public sealed partial class ConversationGAgent
             LastFlushedText: string.Empty,
             Sequence: 0,
             StreamingElementId: DefaultStreamingElementId,
-            TerminalReason: null);
+            TerminalReason: null,
+            InFlight: null,
+            OperationGeneration: 0,
+            PendingAccumulatedText: null,
+            PendingFinalizeText: null,
+            PendingFinalizeCommandId: null);
 
         /// <summary>Phase permits accepting a new chunk (initial or interim).</summary>
         public bool AllowsInterimEdit =>
@@ -152,7 +174,17 @@ public sealed partial class ConversationGAgent
             lifecycle.LastFlushedText ?? string.Empty,
             lifecycle.Sequence,
             NormalizeOptional(lifecycle.StreamingElementId) ?? LarkCardStreamingState.DefaultStreamingElementId,
-            NormalizeOptional(lifecycle.TerminalReason));
+            NormalizeOptional(lifecycle.TerminalReason),
+            lifecycle.LarkCardInFlightOperation == LarkCardOperationPhase.Unspecified
+                ? null
+                : new LarkCardOperationInFlight(
+                    lifecycle.LarkCardInFlightOperation,
+                    lifecycle.LarkCardInFlightSequence,
+                    lifecycle.LarkCardOperationGeneration),
+            lifecycle.LarkCardOperationGeneration,
+            NormalizeOptional(lifecycle.PendingAccumulatedText),
+            NormalizeOptional(lifecycle.PendingFinalizeText),
+            NormalizeOptional(lifecycle.PendingFinalizeCommandId));
     }
 
     private static bool ShouldSkipLarkCardStreamingForUnavailable(
@@ -187,6 +219,10 @@ public sealed partial class ConversationGAgent
         var updated = carried with
         {
             Phase = next,
+            InFlight = IsTerminalLarkCardStreamingPhase(next) ? null : carried.InFlight,
+            PendingAccumulatedText = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingAccumulatedText,
+            PendingFinalizeText = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingFinalizeText,
+            PendingFinalizeCommandId = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingFinalizeCommandId,
             TerminalReason = IsTerminalLarkCardStreamingPhase(next)
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
@@ -239,10 +275,417 @@ public sealed partial class ConversationGAgent
             StreamingElementId = state.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId,
             TerminalReason = state.TerminalReason ?? string.Empty,
             UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            LarkCardInFlightOperation = state.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified,
+            LarkCardInFlightSequence = state.InFlight?.Sequence ?? 0,
+            LarkCardOperationGeneration = state.OperationGeneration,
+            PendingAccumulatedText = state.PendingAccumulatedText ?? string.Empty,
+            PendingFinalizeText = state.PendingFinalizeText ?? string.Empty,
+            PendingFinalizeCommandId = state.PendingFinalizeCommandId ?? string.Empty,
         };
 
     private IConversationCardTurnRunner ResolveCardRunner() =>
         Services.GetService<IConversationCardTurnRunner>() ?? new NullConversationCardTurnRunner();
+
+    private long NextLarkCardOperationGeneration(LarkCardStreamingState state) =>
+        Math.Max(state.OperationGeneration, state.InFlight?.Generation ?? 0) + 1;
+
+    private static string BuildLarkCardOperationTimeoutCallbackId(
+        string correlationId,
+        LarkCardOperationPhase operation,
+        long generation) =>
+        $"conversation-lark-card:{correlationId}:{operation}:{generation}";
+
+    private static EventEnvelope CreateLarkCardContinuationEnvelope(string actorId, IMessage evt, string correlationId) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateDirect(actorId, actorId),
+            Propagation = new EnvelopePropagation { CorrelationId = correlationId },
+        };
+
+    private async Task DispatchLarkCardContinuationAsync(IMessage evt, string correlationId, CancellationToken ct)
+    {
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (dispatchPort is null)
+        {
+            Logger.LogWarning(
+                "IActorDispatchPort unavailable; cannot dispatch Lark card continuation. correlation={CorrelationId}",
+                correlationId);
+            return;
+        }
+
+        await dispatchPort.DispatchAsync(Id, CreateLarkCardContinuationEnvelope(Id, evt, correlationId), ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task ScheduleLarkCardOperationTimeoutAsync(
+        string correlationId,
+        LarkCardOperationPhase operation,
+        long sequence,
+        long generation,
+        string? cardId,
+        string? cardMessageId,
+        string? commandId,
+        LlmReplyCardStreamChunkEvent? chunk,
+        ChatActivity? activity,
+        string? finalText,
+        string? lastFlushedText,
+        CancellationToken ct)
+    {
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildLarkCardOperationTimeoutCallbackId(correlationId, operation, generation),
+            StreamingFailureUpdateTimeout,
+            new LarkCardOperationTimeoutFiredEvent
+            {
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                CardId = cardId ?? string.Empty,
+                CardMessageId = cardMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                Chunk = chunk?.Clone(),
+                Activity = activity?.Clone(),
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private void StartLarkCardCreateOperation(
+        LlmReplyCardStreamChunkEvent evt,
+        string correlationId,
+        string streamingElementId,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var runner = ResolveCardRunner();
+        _ = Task.Run(() => ExecuteLarkCardCreateOperationAsync(
+            runner,
+            evt.Clone(),
+            correlationId,
+            streamingElementId,
+            sequence,
+            generation,
+            runtimeContext));
+    }
+
+    private async Task ExecuteLarkCardCreateOperationAsync(
+        IConversationCardTurnRunner runner,
+        LlmReplyCardStreamChunkEvent chunk,
+        string correlationId,
+        string streamingElementId,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        LarkCardCreateContinuationEvent continuation;
+        try
+        {
+            var result = await runner.RunCardCreateAsync(
+                    chunk,
+                    streamingElementId,
+                    runtimeContext,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            continuation = ToCreateContinuation(correlationId, sequence, generation, chunk, result);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Card create executor threw. correlation={CorrelationId}", correlationId);
+            continuation = new LarkCardCreateContinuationEvent
+            {
+                CorrelationId = correlationId,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = chunk,
+                Success = false,
+                ErrorCode = $"create_threw:{ex.GetType().Name}",
+                ErrorSummary = ex.Message,
+                CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+        }
+
+        await DispatchLarkCardContinuationAsync(continuation, correlationId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private void StartLarkCardStreamOperation(
+        LlmReplyCardStreamChunkEvent evt,
+        string correlationId,
+        LarkCardStreamingState state,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var runner = ResolveCardRunner();
+        _ = Task.Run(() => ExecuteLarkCardStreamOperationAsync(
+            runner,
+            evt.Clone(),
+            correlationId,
+            state.CardId ?? string.Empty,
+            state.StreamingElementId,
+            sequence,
+            generation,
+            runtimeContext));
+    }
+
+    private async Task ExecuteLarkCardStreamOperationAsync(
+        IConversationCardTurnRunner runner,
+        LlmReplyCardStreamChunkEvent chunk,
+        string correlationId,
+        string cardId,
+        string streamingElementId,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        LarkCardStreamContinuationEvent continuation;
+        try
+        {
+            var result = await runner.RunCardStreamAsync(
+                    chunk,
+                    cardId,
+                    streamingElementId,
+                    sequence,
+                    runtimeContext,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            continuation = ToStreamContinuation(correlationId, sequence, generation, cardId, streamingElementId, chunk, result);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Card stream executor threw. correlation={CorrelationId}, seq={Sequence}", correlationId, sequence);
+            continuation = new LarkCardStreamContinuationEvent
+            {
+                CorrelationId = correlationId,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                CardId = cardId,
+                StreamingElementId = streamingElementId,
+                Chunk = chunk,
+                Success = false,
+                ErrorCode = $"stream_threw:{ex.GetType().Name}",
+                ErrorSummary = ex.Message,
+                CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+        }
+
+        await DispatchLarkCardContinuationAsync(continuation, correlationId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private void StartLarkCardFinalizeOperation(
+        ChatActivity activityForToken,
+        string correlationId,
+        string commandId,
+        LarkCardStreamingState state,
+        string finalText,
+        bool finalDiffers,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var runner = ResolveCardRunner();
+        _ = Task.Run(() => ExecuteLarkCardFinalizeOperationAsync(
+            runner,
+            activityForToken.Clone(),
+            correlationId,
+            commandId,
+            state.CardId ?? string.Empty,
+            state.CardMessageId ?? string.Empty,
+            state.StreamingElementId,
+            finalText,
+            state.LastFlushedText,
+            finalDiffers,
+            sequence,
+            generation,
+            runtimeContext));
+    }
+
+    private async Task ExecuteLarkCardFinalizeOperationAsync(
+        IConversationCardTurnRunner runner,
+        ChatActivity activityForToken,
+        string correlationId,
+        string commandId,
+        string cardId,
+        string cardMessageId,
+        string streamingElementId,
+        string finalText,
+        string lastFlushedText,
+        bool finalDiffers,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        LarkCardFinalizeContinuationEvent continuation;
+        try
+        {
+            var result = await runner.RunCardFinalizeAsync(
+                    activityForToken,
+                    cardId,
+                    streamingElementId,
+                    finalText,
+                    finalDiffers,
+                    sequence,
+                    runtimeContext,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            continuation = ToFinalizeContinuation(
+                correlationId,
+                sequence,
+                generation,
+                cardId,
+                cardMessageId,
+                commandId,
+                activityForToken,
+                finalText,
+                lastFlushedText,
+                result);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Card finalize executor threw. correlation={CorrelationId}", correlationId);
+            continuation = new LarkCardFinalizeContinuationEvent
+            {
+                CorrelationId = correlationId,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                CommandId = commandId,
+                Activity = activityForToken,
+                FinalText = finalText,
+                LastFlushedText = lastFlushedText,
+                Success = false,
+                FinalTextWritten = false,
+                ErrorCode = $"finalize_threw:{ex.GetType().Name}",
+                ErrorSummary = ex.Message,
+                CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+        }
+
+        await DispatchLarkCardContinuationAsync(continuation, correlationId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private static LarkCardCreateContinuationEvent ToCreateContinuation(
+        string correlationId,
+        long sequence,
+        long generation,
+        LlmReplyCardStreamChunkEvent chunk,
+        ConversationCardCreateResult result) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            Chunk = chunk,
+            Success = result.Success,
+            CardId = result.CardId ?? string.Empty,
+            CardMessageId = result.CardMessageId ?? string.Empty,
+            IsRateLimited = result.IsRateLimited,
+            IsTableLimitExceeded = result.IsTableLimitExceeded,
+            IsCardUnavailable = result.IsCardUnavailable,
+            IsPostSendFailure = result.IsPostSendFailure,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorSummary = result.ErrorSummary ?? string.Empty,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+    private static LarkCardStreamContinuationEvent ToStreamContinuation(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        string streamingElementId,
+        LlmReplyCardStreamChunkEvent chunk,
+        ConversationCardStreamResult result) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            CardId = cardId,
+            StreamingElementId = streamingElementId,
+            Chunk = chunk,
+            Success = result.Success,
+            IsRateLimited = result.IsRateLimited,
+            IsTableLimitExceeded = result.IsTableLimitExceeded,
+            IsCardUnavailable = result.IsCardUnavailable,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorSummary = result.ErrorSummary ?? string.Empty,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+    private static LarkCardFinalizeContinuationEvent ToFinalizeContinuation(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        string cardMessageId,
+        string commandId,
+        ChatActivity activity,
+        string finalText,
+        string lastFlushedText,
+        ConversationCardFinalizeResult result) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            CardId = cardId,
+            CardMessageId = cardMessageId,
+            CommandId = commandId,
+            Activity = activity,
+            FinalText = finalText,
+            LastFlushedText = lastFlushedText,
+            Success = result.Success,
+            FinalTextWritten = result.FinalTextWritten,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorSummary = result.ErrorSummary ?? string.Empty,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+    private static bool MatchesLarkCardInFlight(
+        LarkCardStreamingState state,
+        LarkCardOperationPhase operation,
+        long sequence,
+        long generation,
+        string? cardId = null)
+    {
+        if (state.InFlight is not { } inFlight)
+            return false;
+        if (inFlight.Operation != operation ||
+            inFlight.Sequence != sequence ||
+            inFlight.Generation != generation)
+            return false;
+        if (!string.IsNullOrWhiteSpace(cardId) &&
+            !string.Equals(state.CardId, cardId, StringComparison.Ordinal))
+            return false;
+        return true;
+    }
+
+    private Task<LarkCardStreamingState> PersistLarkCardCoalescedStateAsync(
+        string correlationId,
+        LarkCardStreamingState state,
+        string? accumulatedText = null,
+        string? finalizeText = null,
+        string? finalizeCommandId = null) =>
+        TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                PendingAccumulatedText = NormalizeOptional(accumulatedText) ?? s.PendingAccumulatedText,
+                PendingFinalizeText = NormalizeOptional(finalizeText) ?? s.PendingFinalizeText,
+                PendingFinalizeCommandId = NormalizeOptional(finalizeCommandId) ?? s.PendingFinalizeCommandId,
+            });
 
     /// <summary>
     /// Drives one CardKit-mode streaming chunk. Returns true when the card handler owns the
@@ -272,173 +715,70 @@ public sealed partial class ConversationGAgent
             evt.Activity,
             evt.ReplyToken,
             evt.ReplyTokenExpiresAtUnixMs);
-        var runner = ResolveCardRunner();
-
         if (state.Phase is LarkCardStreamingPhase.Idle)
         {
-            await TransitionLarkCardStreamingPhaseAsync(correlationId, state, LarkCardStreamingPhase.Creating);
-            var creating = GetOrInitLarkCardStreamingState(correlationId);
-            ConversationCardCreateResult createResult;
-            try
-            {
-                // Bound the CardKit create round-trip so a stuck NyxID/Lark upstream can't
-                // pin the actor turn forever. Mirrors the text-edit streaming path's
-                // per-call cap (StreamingFailureUpdateTimeout); on timeout, the catch
-                // below routes the turn to the text-edit fallback path.
-                using var createCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-                createResult = await runner.RunCardCreateAsync(
-                    evt,
-                    creating.StreamingElementId,
-                    runtimeContext,
-                    createCts.Token);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Card create threw; falling back to text-edit. correlation={CorrelationId}", evt.CorrelationId);
-                await TransitionLarkCardStreamingPhaseAsync(
-                    correlationId,
-                    creating,
-                    LarkCardStreamingPhase.CreationFailed,
-                    terminalReason: $"create_threw:{ex.GetType().Name}");
-                return false;
-            }
-
-            if (!createResult.Success)
-            {
-                if (createResult.IsPostSendFailure)
-                {
-                    // Card was already sent to the chat — falling back to text-edit would
-                    // produce a duplicate visible reply. Terminate the turn at Terminated and
-                    // persist a partial-card record using the orphan card_message_id so the
-                    // event store has a terminal entry. The runner has already attempted a
-                    // best-effort streaming-mode close on the orphan card.
-                    Logger.LogWarning(
-                        "Card post-send failure (create+send succeeded, first stream failed); terminating turn without text-edit fallback. correlation={CorrelationId}, code={ErrorCode}, cardId={CardId}",
-                        evt.CorrelationId,
-                        createResult.ErrorCode,
-                        createResult.CardId);
-                    var terminated = await TransitionLarkCardStreamingPhaseAsync(
-                        correlationId,
-                        creating,
-                        LarkCardStreamingPhase.Terminated,
-                        terminalReason: $"create_post_send_failed:{createResult.ErrorCode}",
-                        fieldUpdate: s => s with
-                        {
-                            CardId = createResult.CardId,
-                            CardMessageId = createResult.CardMessageId,
-                            OriginalCardId = createResult.CardId,
-                        });
-                    await PersistCardStreamedCompletionAsync(
-                        correlationId,
-                        BuildLlmReplyCommandId(evt.CorrelationId),
-                        evt.Activity,
-                        terminated.CardMessageId ?? string.Empty,
-                        terminated.LastFlushedText);
-                    return true;
-                }
-
-                Logger.LogInformation(
-                    "Card create failed; falling back to text-edit for the rest of this turn. correlation={CorrelationId}, code={ErrorCode}, rateLimited={RateLimited}, tableLimit={TableLimit}, cardUnavailable={CardUnavailable}",
-                    evt.CorrelationId,
-                    createResult.ErrorCode,
-                    createResult.IsRateLimited,
-                    createResult.IsTableLimitExceeded,
-                    createResult.IsCardUnavailable);
-                await TransitionLarkCardStreamingPhaseAsync(
-                    correlationId,
-                    creating,
-                    LarkCardStreamingPhase.CreationFailed,
-                    terminalReason: $"create_failed:{createResult.ErrorCode}");
-                return false;
-            }
-
+            var generation = NextLarkCardOperationGeneration(state);
             await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
-                creating,
-                LarkCardStreamingPhase.Streaming,
+                state,
+                LarkCardStreamingPhase.Creating,
                 fieldUpdate: s => s with
                 {
-                    CardId = createResult.CardId,
-                    CardMessageId = createResult.CardMessageId,
-                    OriginalCardId = createResult.CardId,
-                    LastFlushedText = evt.AccumulatedText,
-                    Sequence = 1,
+                    InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Create, 1, generation),
+                    OperationGeneration = generation,
+                    PendingAccumulatedText = evt.AccumulatedText,
                 });
+            await ScheduleLarkCardOperationTimeoutAsync(
+                correlationId,
+                LarkCardOperationPhase.Create,
+                1,
+                generation,
+                cardId: null,
+                cardMessageId: null,
+                commandId: BuildLlmReplyCommandId(evt.CorrelationId),
+                chunk: evt,
+                activity: null,
+                finalText: null,
+                lastFlushedText: null,
+                CancellationToken.None);
+            StartLarkCardCreateOperation(evt, correlationId, state.StreamingElementId, 1, generation, runtimeContext);
+            return true;
+        }
+
+        if (state.InFlight is not null)
+        {
+            await PersistLarkCardCoalescedStateAsync(correlationId, state, evt.AccumulatedText);
             return true;
         }
 
         // Streaming: interim element-content update. Sequence pre-incremented; on success
         // record the new sequence + last-flushed text so finalize knows whether to write.
         var nextSequence = state.Sequence + 1;
-        ConversationCardStreamResult streamResult;
-        try
-        {
-            // Per-frame cap so a hung CardKit update can't pin the actor turn forever.
-            // On timeout the frame is dropped and the next chunk will retry the slot.
-            using var streamCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-            streamResult = await runner.RunCardStreamAsync(
-                evt,
-                state.CardId ?? string.Empty,
-                state.StreamingElementId,
-                nextSequence,
-                runtimeContext,
-                streamCts.Token);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Card stream threw; dropping frame. correlation={CorrelationId}, seq={Sequence}", evt.CorrelationId, nextSequence);
-            return true;
-        }
-
-        if (!streamResult.Success)
-        {
-            if (streamResult.IsRateLimited)
-            {
-                // Recoverable: skip the frame, keep sequence unchanged so the next chunk
-                // re-uses this slot.
-                Logger.LogDebug(
-                    "Card stream rate-limited; dropping frame. correlation={CorrelationId}, seq={Sequence}",
-                    evt.CorrelationId, nextSequence);
-                return true;
-            }
-            if (streamResult.IsTableLimitExceeded || streamResult.IsCardUnavailable)
-            {
-                Logger.LogWarning(
-                    "Card stream terminal failure; ending turn. correlation={CorrelationId}, code={ErrorCode}",
-                    evt.CorrelationId, streamResult.ErrorCode);
-                var terminated = await TransitionLarkCardStreamingPhaseAsync(
-                    correlationId,
-                    state,
-                    LarkCardStreamingPhase.Terminated,
-                    terminalReason: $"stream_failed:{streamResult.ErrorCode}");
-                // Persist the partial-card terminal record so the event store records the
-                // turn even though LlmReplyReady has not arrived yet. Without this the
-                // ProcessedCommandIds guard in HandleLlmReplyReadyAsync would still see no
-                // matching entry, fall through to the legacy reply path, and post a
-                // duplicate text reply on top of the visible card.
-                await PersistCardStreamedCompletionAsync(
-                    correlationId,
-                    BuildLlmReplyCommandId(evt.CorrelationId),
-                    evt.Activity,
-                    terminated.CardMessageId ?? string.Empty,
-                    terminated.LastFlushedText);
-                return true;
-            }
-            Logger.LogInformation(
-                "Card stream non-terminal failure; continuing. correlation={CorrelationId}, code={ErrorCode}",
-                evt.CorrelationId, streamResult.ErrorCode);
-            return true;
-        }
-
+        var streamGeneration = NextLarkCardOperationGeneration(state);
         await TransitionLarkCardStreamingPhaseAsync(
             correlationId,
             state,
             LarkCardStreamingPhase.Streaming,
             fieldUpdate: s => s with
             {
-                LastFlushedText = evt.AccumulatedText,
-                Sequence = nextSequence,
+                InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Stream, nextSequence, streamGeneration),
+                OperationGeneration = streamGeneration,
+                PendingAccumulatedText = evt.AccumulatedText,
             });
+        await ScheduleLarkCardOperationTimeoutAsync(
+            correlationId,
+            LarkCardOperationPhase.Stream,
+            nextSequence,
+            streamGeneration,
+            state.CardId,
+            state.CardMessageId,
+            BuildLlmReplyCommandId(evt.CorrelationId),
+            evt,
+            activity: null,
+            finalText: null,
+            lastFlushedText: state.LastFlushedText,
+            CancellationToken.None);
+        StartLarkCardStreamOperation(evt, correlationId, state, nextSequence, streamGeneration, runtimeContext);
         return true;
     }
 
@@ -480,10 +820,16 @@ public sealed partial class ConversationGAgent
             return true;
         }
 
-        // Phase is Streaming or Creating. Creating during finalize is unexpected (card.create
-        // is synchronous within a single chunk's handler); treat it as Streaming with no
-        // prior interim text. Anything else falls through to text-edit, but the explicit
-        // guards above mean we only reach this point with phase=Streaming/Creating.
+        if (state.InFlight is not null)
+        {
+            await PersistLarkCardCoalescedStateAsync(
+                correlationId,
+                state,
+                finalizeText: evt.Outbound?.Text ?? string.Empty,
+                finalizeCommandId: commandId);
+            return true;
+        }
+
         var finalText = evt.Outbound?.Text ?? string.Empty;
         var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
             && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
@@ -493,77 +839,427 @@ public sealed partial class ConversationGAgent
             evt.Activity,
             evt.ReplyToken,
             evt.ReplyTokenExpiresAtUnixMs);
-        var runner = ResolveCardRunner();
         var nextSequence = state.Sequence + 1;
         var activityForToken = referenceActivity ?? evt.Activity ?? new ChatActivity();
 
-        ConversationCardFinalizeResult finalizeResult;
-        try
+        var generation = NextLarkCardOperationGeneration(state);
+        await TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            LarkCardStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Finalize, nextSequence, generation),
+                OperationGeneration = generation,
+                PendingFinalizeText = finalText,
+                PendingFinalizeCommandId = commandId,
+            });
+        await ScheduleLarkCardOperationTimeoutAsync(
+            correlationId,
+            LarkCardOperationPhase.Finalize,
+            nextSequence,
+            generation,
+            state.CardId,
+            state.CardMessageId,
+            commandId,
+            chunk: null,
+            activity: activityForToken,
+            finalText,
+            state.LastFlushedText,
+            CancellationToken.None);
+        StartLarkCardFinalizeOperation(
+            activityForToken,
+            correlationId,
+            commandId,
+            state,
+            finalText,
+            finalDiffers,
+            nextSequence,
+            generation,
+            runtimeContext);
+        return true;
+    }
+
+    [EventHandler]
+    public async Task HandleLarkCardCreateContinuationAsync(LarkCardCreateContinuationEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(state, LarkCardOperationPhase.Create, evt.Sequence, evt.OperationGeneration))
+            return;
+
+        if (!evt.Success)
         {
-            // Per-call cap so a hung CardKit finalize can't pin the actor turn forever.
-            // On timeout the catch below persists the last-flushed partial and transitions
-            // to Terminated, matching the existing finalize-throw recovery.
-            using var finalizeCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-            finalizeResult = await runner.RunCardFinalizeAsync(
-                activityForToken,
-                state.CardId ?? string.Empty,
-                state.StreamingElementId,
-                finalText,
-                finalDiffers,
-                nextSequence,
-                runtimeContext,
-                finalizeCts.Token);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Card finalize threw; persisting last flushed partial. correlation={CorrelationId}", evt.CorrelationId);
+            if (evt.IsPostSendFailure)
+            {
+                Logger.LogWarning(
+                    "Card post-send failure; terminating turn without text-edit fallback. correlation={CorrelationId}, code={ErrorCode}, cardId={CardId}",
+                    evt.CorrelationId,
+                    evt.ErrorCode,
+                    evt.CardId);
+                var terminated = await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.Terminated,
+                    terminalReason: $"create_post_send_failed:{evt.ErrorCode}",
+                    fieldUpdate: s => s with
+                    {
+                        CardId = NormalizeOptional(evt.CardId),
+                        CardMessageId = NormalizeOptional(evt.CardMessageId),
+                        OriginalCardId = NormalizeOptional(evt.CardId),
+                        InFlight = null,
+                    });
+                await PersistCardStreamedCompletionAsync(
+                    correlationId,
+                    BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
+                    evt.Chunk?.Activity,
+                    terminated.CardMessageId ?? string.Empty,
+                    terminated.LastFlushedText);
+                return;
+            }
+
+            Logger.LogInformation(
+                "Card create failed; falling back to text-edit for the rest of this turn. correlation={CorrelationId}, code={ErrorCode}, rateLimited={RateLimited}, tableLimit={TableLimit}, cardUnavailable={CardUnavailable}",
+                evt.CorrelationId,
+                evt.ErrorCode,
+                evt.IsRateLimited,
+                evt.IsTableLimitExceeded,
+                evt.IsCardUnavailable);
             await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
-                LarkCardStreamingPhase.Terminated,
-                terminalReason: $"finalize_threw:{ex.GetType().Name}");
-            await PersistCardStreamedCompletionAsync(
-                correlationId,
-                commandId,
-                evt.Activity,
-                state.CardMessageId ?? string.Empty,
-                state.LastFlushedText);
-            return true;
+                LarkCardStreamingPhase.CreationFailed,
+                terminalReason: $"create_failed:{evt.ErrorCode}",
+                fieldUpdate: s => s with { InFlight = null });
+            if (evt.Chunk is not null)
+                await HandleNyxRelayStreamingChunkCoreAsync(ToTextStreamChunk(evt.Chunk));
+            return;
         }
 
-        // visibleText must match what the user actually sees on the card. Two failure modes:
-        //   * Final stream write failed                  → card shows LastFlushedText
-        //   * Final stream succeeded but close-streaming failed → card shows finalText, just
-        //     with a still-blinking cursor. Persist finalText so the durable record agrees
-        //     with the visible state.
-        var visibleText = finalizeResult.FinalTextWritten ? finalText : state.LastFlushedText;
-        if (finalizeResult.Success)
+        var accumulatedText = state.PendingAccumulatedText ?? evt.Chunk?.AccumulatedText ?? string.Empty;
+        var streaming = await TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            LarkCardStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                CardId = NormalizeOptional(evt.CardId),
+                CardMessageId = NormalizeOptional(evt.CardMessageId),
+                OriginalCardId = NormalizeOptional(evt.CardId),
+                LastFlushedText = accumulatedText,
+                Sequence = evt.Sequence,
+                InFlight = null,
+                PendingAccumulatedText = null,
+            });
+        await ContinueLarkCardCoalescedWorkAsync(correlationId, streaming, evt.Chunk);
+    }
+
+    [EventHandler]
+    public async Task HandleLarkCardStreamContinuationAsync(LarkCardStreamContinuationEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(
+                state,
+                LarkCardOperationPhase.Stream,
+                evt.Sequence,
+                evt.OperationGeneration,
+                evt.CardId))
+            return;
+
+        if (!evt.Success)
+        {
+            if (evt.IsRateLimited)
+            {
+                Logger.LogDebug(
+                    "Card stream rate-limited; dropping frame. correlation={CorrelationId}, seq={Sequence}",
+                    evt.CorrelationId,
+                    evt.Sequence);
+                var recovered = await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.Streaming,
+                    fieldUpdate: s => s with
+                    {
+                        InFlight = null,
+                        PendingAccumulatedText = null,
+                    });
+                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, evt.Chunk);
+                return;
+            }
+
+            if (evt.IsTableLimitExceeded || evt.IsCardUnavailable)
+            {
+                Logger.LogWarning(
+                    "Card stream terminal failure; ending turn. correlation={CorrelationId}, code={ErrorCode}",
+                    evt.CorrelationId,
+                    evt.ErrorCode);
+                var terminated = await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.Terminated,
+                    terminalReason: $"stream_failed:{evt.ErrorCode}",
+                    fieldUpdate: s => s with { InFlight = null });
+                await PersistCardStreamedCompletionAsync(
+                    correlationId,
+                    BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
+                    evt.Chunk?.Activity,
+                    terminated.CardMessageId ?? string.Empty,
+                    terminated.LastFlushedText);
+                return;
+            }
+
+            Logger.LogInformation(
+                "Card stream non-terminal failure; continuing. correlation={CorrelationId}, code={ErrorCode}",
+                evt.CorrelationId,
+                evt.ErrorCode);
+            var continued = await TransitionLarkCardStreamingPhaseAsync(
+                correlationId,
+                state,
+                LarkCardStreamingPhase.Streaming,
+                fieldUpdate: s => s with
+                {
+                    InFlight = null,
+                    PendingAccumulatedText = null,
+                });
+            await ContinueLarkCardCoalescedWorkAsync(correlationId, continued, evt.Chunk);
+            return;
+        }
+
+        var flushedText = state.PendingAccumulatedText ?? evt.Chunk?.AccumulatedText ?? state.LastFlushedText;
+        var updated = await TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            LarkCardStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                LastFlushedText = flushedText,
+                Sequence = evt.Sequence,
+                InFlight = null,
+                PendingAccumulatedText = null,
+            });
+        await ContinueLarkCardCoalescedWorkAsync(correlationId, updated, evt.Chunk);
+    }
+
+    [EventHandler]
+    public async Task HandleLarkCardFinalizeContinuationAsync(LarkCardFinalizeContinuationEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(
+                state,
+                LarkCardOperationPhase.Finalize,
+                evt.Sequence,
+                evt.OperationGeneration,
+                evt.CardId))
+            return;
+
+        var finalText = state.PendingFinalizeText ?? evt.FinalText ?? string.Empty;
+        var commandId = state.PendingFinalizeCommandId ?? evt.CommandId ?? BuildLlmReplyCommandId(correlationId);
+        var visibleText = evt.FinalTextWritten ? finalText : state.LastFlushedText;
+        if (evt.Success)
         {
             await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
                 LarkCardStreamingPhase.Completed,
-                terminalReason: "completed");
+                terminalReason: "completed",
+                fieldUpdate: s => s with { InFlight = null });
         }
         else
         {
             Logger.LogWarning(
                 "Card finalize failed; persisting partial. correlation={CorrelationId}, code={ErrorCode}",
-                evt.CorrelationId, finalizeResult.ErrorCode);
+                evt.CorrelationId,
+                evt.ErrorCode);
             await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
                 LarkCardStreamingPhase.Terminated,
-                terminalReason: $"finalize_failed:{finalizeResult.ErrorCode}");
+                terminalReason: $"finalize_failed:{evt.ErrorCode}",
+                fieldUpdate: s => s with { InFlight = null });
         }
 
         await PersistCardStreamedCompletionAsync(
             correlationId,
             commandId,
             evt.Activity,
-            state.CardMessageId ?? string.Empty,
+            state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
             visibleText);
-        return true;
+    }
+
+    [EventHandler]
+    public async Task HandleLarkCardOperationTimeoutFiredAsync(LarkCardOperationTimeoutFiredEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(state, evt.Operation, evt.Sequence, evt.OperationGeneration, evt.CardId))
+            return;
+
+        switch (evt.Operation)
+        {
+            case LarkCardOperationPhase.Create:
+                await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.CreationFailed,
+                    terminalReason: "create_timeout",
+                    fieldUpdate: s => s with { InFlight = null });
+                if (evt.Chunk is not null)
+                    await HandleNyxRelayStreamingChunkCoreAsync(ToTextStreamChunk(evt.Chunk));
+                return;
+            case LarkCardOperationPhase.Stream:
+            {
+                var recovered = await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.Streaming,
+                    terminalReason: "stream_timeout",
+                    fieldUpdate: s => s with
+                    {
+                        InFlight = null,
+                        PendingAccumulatedText = null,
+                    });
+                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, evt.Chunk);
+                return;
+            }
+            case LarkCardOperationPhase.Finalize:
+                await TransitionLarkCardStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    LarkCardStreamingPhase.Terminated,
+                    terminalReason: "finalize_timeout",
+                    fieldUpdate: s => s with { InFlight = null });
+                await PersistCardStreamedCompletionAsync(
+                    correlationId,
+                    NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+                    evt.Activity,
+                    state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
+                    state.LastFlushedText);
+                return;
+        }
+    }
+
+    private static LlmReplyStreamChunkEvent ToTextStreamChunk(LlmReplyCardStreamChunkEvent evt) =>
+        new()
+        {
+            CorrelationId = evt.CorrelationId,
+            RegistrationId = evt.RegistrationId,
+            Activity = evt.Activity?.Clone(),
+            AccumulatedText = evt.AccumulatedText,
+            ChunkAtUnixMs = evt.ChunkAtUnixMs,
+            ReplyToken = evt.ReplyToken,
+            ReplyTokenExpiresAtUnixMs = evt.ReplyTokenExpiresAtUnixMs,
+        };
+
+    private async Task ContinueLarkCardCoalescedWorkAsync(
+        string correlationId,
+        LarkCardStreamingState state,
+        LlmReplyCardStreamChunkEvent? sourceChunk)
+    {
+        if (state.Phase is not LarkCardStreamingPhase.Streaming || state.InFlight is not null)
+            return;
+
+        if (state.PendingFinalizeText is not null)
+        {
+            var finalText = state.PendingFinalizeText;
+            var commandId = state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+            var activity = sourceChunk?.Activity ?? new ChatActivity();
+            var runtimeContext = BuildNyxRelayRuntimeContext(
+                correlationId,
+                activity,
+                sourceChunk?.ReplyToken ?? string.Empty,
+                sourceChunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+            var nextSequence = state.Sequence + 1;
+            var generation = NextLarkCardOperationGeneration(state);
+            var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
+                && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
+            await TransitionLarkCardStreamingPhaseAsync(
+                correlationId,
+                state,
+                LarkCardStreamingPhase.Streaming,
+                fieldUpdate: s => s with
+                {
+                    InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Finalize, nextSequence, generation),
+                    OperationGeneration = generation,
+                });
+            await ScheduleLarkCardOperationTimeoutAsync(
+                correlationId,
+                LarkCardOperationPhase.Finalize,
+                nextSequence,
+                generation,
+                state.CardId,
+                state.CardMessageId,
+                commandId,
+                chunk: null,
+                activity,
+                finalText,
+                state.LastFlushedText,
+                CancellationToken.None);
+            StartLarkCardFinalizeOperation(
+                activity,
+                correlationId,
+                commandId,
+                state,
+                finalText,
+                finalDiffers,
+                nextSequence,
+                generation,
+                runtimeContext);
+            return;
+        }
+
+        if (state.PendingAccumulatedText is null || sourceChunk is null)
+            return;
+
+        var nextChunk = sourceChunk.Clone();
+        nextChunk.AccumulatedText = state.PendingAccumulatedText;
+        var streamContext = BuildNyxRelayRuntimeContext(
+            nextChunk.CorrelationId,
+            nextChunk.Activity,
+            nextChunk.ReplyToken,
+            nextChunk.ReplyTokenExpiresAtUnixMs);
+        var streamSequence = state.Sequence + 1;
+        var streamGeneration = NextLarkCardOperationGeneration(state);
+        await TransitionLarkCardStreamingPhaseAsync(
+            correlationId,
+            state,
+            LarkCardStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Stream, streamSequence, streamGeneration),
+                OperationGeneration = streamGeneration,
+            });
+        await ScheduleLarkCardOperationTimeoutAsync(
+            correlationId,
+            LarkCardOperationPhase.Stream,
+            streamSequence,
+            streamGeneration,
+            state.CardId,
+            state.CardMessageId,
+            BuildLlmReplyCommandId(nextChunk.CorrelationId),
+            nextChunk,
+            activity: null,
+            finalText: null,
+            lastFlushedText: state.LastFlushedText,
+            CancellationToken.None);
+        StartLarkCardStreamOperation(nextChunk, correlationId, state, streamSequence, streamGeneration, streamContext);
     }
 
     /// <summary>
