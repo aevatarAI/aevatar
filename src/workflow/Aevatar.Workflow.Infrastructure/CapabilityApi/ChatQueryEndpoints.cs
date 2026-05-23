@@ -61,11 +61,13 @@ public static class ChatQueryEndpoints
         return Results.Ok(agents);
     }
 
-    internal static IResult ListPrimitives(IWorkflowExecutionQueryApplicationService queryService)
+    internal static async Task<IResult> ListPrimitives(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default)
     {
-        var capabilities = queryService.GetCapabilities();
-        var exampleWorkflowsByPrimitive = queryService
-            .ListWorkflowCatalog()
+        var capabilities = await queryService.GetCapabilitiesAsync(ct);
+        var catalog = await queryService.ListWorkflowCatalogAsync(ct);
+        var exampleWorkflowsByPrimitive = catalog
             .Where(static item => item.IsPrimitiveExample)
             .SelectMany(item => item.Primitives.Select(primitive => new { Primitive = primitive, Workflow = item.Name }))
             .GroupBy(static item => item.Primitive, StringComparer.OrdinalIgnoreCase)
@@ -89,17 +91,22 @@ public static class ChatQueryEndpoints
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
         Results.Ok(queryService.ListWorkflows());
 
-    internal static IResult ListWorkflowCatalog(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.ListWorkflowCatalog());
+    internal static async Task<IResult> ListWorkflowCatalog(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default) =>
+        Results.Ok(await queryService.ListWorkflowCatalogAsync(ct));
 
-    internal static IResult GetCapabilities(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.GetCapabilities());
+    internal static async Task<IResult> GetCapabilities(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default) =>
+        Results.Ok(await queryService.GetCapabilitiesAsync(ct));
 
-    internal static IResult GetWorkflowDetail(
+    internal static async Task<IResult> GetWorkflowDetail(
         string workflowName,
-        IWorkflowExecutionQueryApplicationService queryService)
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default)
     {
-        var detail = queryService.GetWorkflowDetail(workflowName);
+        var detail = await queryService.GetWorkflowDetailAsync(workflowName, ct);
         return detail == null ? Results.NotFound() : Results.Ok(detail);
     }
 

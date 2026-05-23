@@ -5379,11 +5379,14 @@ public sealed class ScopeServiceEndpointsTests
 
         public IReadOnlyList<string> ListWorkflows() => [];
 
-        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => [];
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
 
-        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) => null;
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
 
-        public WorkflowCapabilitiesDocument GetCapabilities() => new();
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowCapabilitiesDocument());
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {

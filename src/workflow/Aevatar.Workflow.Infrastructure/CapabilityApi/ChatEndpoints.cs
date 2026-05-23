@@ -49,7 +49,7 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var capabilities = TryResolveCapabilities(serviceProvider, logger);
+            var capabilities = await TryResolveCapabilitiesAsync(serviceProvider, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
@@ -539,7 +539,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            var capabilities = TryResolveCapabilities(http.RequestServices, logger);
+            var capabilities = await TryResolveCapabilitiesAsync(http.RequestServices, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
@@ -577,7 +577,10 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static WorkflowCapabilitiesDocument? TryResolveCapabilities(IServiceProvider? serviceProvider, ILogger? logger)
+    private static async Task<WorkflowCapabilitiesDocument?> TryResolveCapabilitiesAsync(
+        IServiceProvider? serviceProvider,
+        ILogger? logger,
+        CancellationToken ct)
     {
         if (serviceProvider == null)
             return null;
@@ -586,7 +589,9 @@ public static class WorkflowCapabilityEndpoints
         {
             var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
                                as IWorkflowExecutionQueryApplicationService;
-            return queryService?.GetCapabilities();
+            return queryService == null
+                ? null
+                : await queryService.GetCapabilitiesAsync(ct);
         }
         catch (Exception ex)
         {
