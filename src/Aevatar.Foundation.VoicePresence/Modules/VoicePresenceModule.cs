@@ -19,10 +19,11 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 /// with <see cref="IRealtimeVoiceProvider"/>. Audio bytes may use a local volatile
 /// lease, while control/session/provider facts are dispatched as typed actor signals.
 /// </summary>
+// Refactor (iter56/cluster-927-voice-actor-signal-pcm): old=IAudioFastPath bypass, new=typed actor self-signal PCM
 // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
 //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell;违反 Actor 单线程事实源 + 中间层状态约束。
 //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state);transport handles 仅作 volatile process-local lease(non-fact source);provider callbacks 走 typed self-signals(self-message 到 actor inbox);**删除** disabled remote voice fallback shell。无新 actor type / 新 envelope kind。
-public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath, IRouteBypassModule
+public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
     private const int DefaultLastDrainAckResponseId = -1;
@@ -168,6 +169,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
                 await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived:
+                await HandleTransportAudioFrameReceivedAsync(signal.TransportAudioFrameReceived, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.None:
             default:
                 break;
@@ -202,28 +206,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         RestoreStateMachineFromRuntimeState(CreateInitialRuntimeState());
     }
 
-    // ── IAudioFastPath (Phase 1 legacy, still usable for non-transport callers) ──
-
-    public bool CanHandleAudio(VoiceAudioFastPathFrame frame) =>
-        string.IsNullOrWhiteSpace(_options.LinkId) || string.Equals(_options.LinkId, frame.LinkId, StringComparison.Ordinal);
-
-    public Task HandleAudioAsync(VoiceAudioFastPathFrame frame, CancellationToken ct)
-    {
-        if (!CanHandleAudio(frame))
-        {
-            throw new InvalidOperationException(
-                $"VoicePresenceModule cannot handle audio for link '{frame.LinkId}'.");
-        }
-
-        return _provider.SendAudioAsync(frame.Pcm16, ct);
-    }
-
     // ── Phase 3: Transport attachment + bidirectional relay ──
 
     /// <summary>
-    /// Attaches a user-side voice transport and starts bidirectional audio relay.
-    /// Audio flows directly between transport and provider (no grain inbox).
-    /// Control events are dispatched to the grain inbox via <paramref name="selfEventDispatcher"/>.
+    /// Attaches a user-side voice transport and starts typed self-signal relay.
     /// </summary>
     // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
     //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
@@ -240,7 +226,56 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             leaseExpiresAt: null);
     }
 
+    public Task AttachTransportAsync(
+        IVoiceTransport userTransport,
+        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
+        string? sessionId,
+        string? ownerId,
+        Timestamp? leaseExpiresAt,
+        CancellationToken ct = default) =>
+        AttachTransportAndObserveDispatchAsync(userTransport, selfEventDispatcher, sessionId, ownerId, leaseExpiresAt, ct);
+
     public void AttachTransport(
+        IVoiceTransport userTransport,
+        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
+        string? sessionId,
+        string? ownerId,
+        Timestamp? leaseExpiresAt)
+    {
+        var lease = AttachTransportCore(userTransport, selfEventDispatcher, sessionId, ownerId, leaseExpiresAt);
+        DispatchAttachRequestedFireAndForget(lease, sessionId);
+        StartTransportRelay(lease);
+    }
+
+    private async Task AttachTransportAndObserveDispatchAsync(
+        IVoiceTransport userTransport,
+        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
+        string? sessionId,
+        string? ownerId,
+        Timestamp? leaseExpiresAt,
+        CancellationToken ct)
+    {
+        var lease = AttachTransportCore(userTransport, selfEventDispatcher, sessionId, ownerId, leaseExpiresAt);
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            StartTransportRelay(lease);
+            return;
+        }
+
+        try
+        {
+            await lease.DispatchAsync(BuildAttachRequested(lease), ct);
+        }
+        catch
+        {
+            await DisposeTransportLeaseAsync();
+            throw;
+        }
+
+        StartTransportRelay(lease);
+    }
+
+    private VoiceTransportLease AttachTransportCore(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         string? sessionId,
@@ -263,18 +298,30 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _transportLease = lease;
 
         _provider.OnEvent = (evt, token) => OnProviderEventAsync(evt, lease, token);
-        lease.RelayTask = RunUserToProviderRelayAsync(lease, lease.Cancellation.Token);
+        return lease;
+    }
 
-        if (!string.IsNullOrWhiteSpace(sessionId))
+    private void StartTransportRelay(VoiceTransportLease lease)
+    {
+        if (lease.RelayTask != null)
+            return;
+
+        lease.RelayTask = RunUserToProviderRelayAsync(lease, lease.Cancellation.Token);
+    }
+
+    private static VoiceTransportAttachRequested BuildAttachRequested(VoiceTransportLease lease) =>
+        new()
         {
-            lease.DispatchFireAndForget(new VoiceTransportAttachRequested
-            {
-                SessionId = lease.SessionId,
-                OwnerId = lease.OwnerId,
-                TransportLeaseId = lease.TransportLeaseId,
-                LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
-            });
-        }
+            SessionId = lease.SessionId,
+            OwnerId = lease.OwnerId,
+            TransportLeaseId = lease.TransportLeaseId,
+            LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
+        };
+
+    private static void DispatchAttachRequestedFireAndForget(VoiceTransportLease lease, string? requestedSessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedSessionId))
+            lease.DispatchFireAndForget(BuildAttachRequested(lease));
     }
 
     /// <summary>
@@ -315,8 +362,18 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             {
                 if (frame.IsAudio)
                 {
-                    if (!frame.AudioPcm16.IsEmpty && IsActorAcceptedCurrentTransportLease(lease))
-                        await _provider.SendAudioAsync(frame.AudioPcm16, ct);
+                    if (!frame.AudioPcm16.IsEmpty)
+                    {
+                        await lease.DispatchAsync(new VoiceTransportAudioFrameReceived
+                        {
+                            SessionId = lease.SessionId,
+                            OwnerId = lease.OwnerId,
+                            TransportLeaseId = lease.TransportLeaseId,
+                            LeaseExpiresAt = lease.LeaseExpiresAt?.Clone(),
+                            Pcm16 = ByteString.CopyFrom(frame.AudioPcm16.Span),
+                            SampleRateHz = PcmSampleRateHz,
+                        }, ct);
+                    }
                 }
                 else if (frame.Control != null)
                 {
@@ -353,20 +410,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     private async Task OnProviderEventAsync(VoiceProviderEvent evt, VoiceTransportLease? callbackLease, CancellationToken ct)
     {
-        if (evt.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived &&
-            callbackLease != null &&
-            IsActorAcceptedCurrentTransportLease(callbackLease))
-        {
-            try
-            {
-                await callbackLease.Transport.SendAudioAsync(evt.AudioReceived.Pcm16.Memory, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to send audio to user transport.");
-            }
-        }
-
         if (callbackLease != null)
         {
             await callbackLease.DispatchAsync(new VoiceProviderEventReceived
@@ -766,7 +809,58 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
         }
 
+        if (request.ProviderEvent == null)
+            return;
+
+        if (request.ProviderEvent.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived)
+            await SendProviderAudioToCurrentTransportAsync(request, ct);
+
         await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
+    }
+
+    private async Task HandleTransportAudioFrameReceivedAsync(
+        VoiceTransportAudioFrameReceived request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        EnsureVolatileSelfSignalDispatcher(ctx);
+        if (request.Pcm16.IsEmpty ||
+            !IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
+        {
+            return;
+        }
+
+        await _provider.SendAudioAsync(request.Pcm16.Memory, ct);
+    }
+
+    private async Task SendProviderAudioToCurrentTransportAsync(
+        VoiceProviderEventReceived request,
+        CancellationToken ct)
+    {
+        var lease = _transportLease;
+        if (lease == null ||
+            !string.Equals(lease.SessionId, request.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(lease.TransportLeaseId, request.TransportLeaseId, StringComparison.Ordinal) ||
+            !string.Equals(lease.OwnerId, request.OwnerId, StringComparison.Ordinal) ||
+            !IsActorAcceptedCurrentTransportLease(lease))
+        {
+            return;
+        }
+
+        try
+        {
+            await lease.Transport.SendAudioAsync(request.ProviderEvent.AudioReceived.Pcm16.Memory, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send audio to user transport.");
+        }
     }
 
     private async Task HandleTransportAttachRequestedAsync(

@@ -66,10 +66,6 @@ internal static class VoicePresenceSessionDispatch
             case VoiceRemoteSessionCloseRequested closeRequested:
                 signal.RemoteSessionCloseRequested = closeRequested.Clone();
                 break;
-            // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
-            //   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
-            //   New principle: direct host envelopes carry setup/control only.
-            //   Raw audio chunks must never be wrapped as VoiceModuleSignal payloads.
             case VoiceRemoteControlInputReceived controlInput:
                 signal.RemoteControlInputReceived = controlInput.Clone();
                 break;
@@ -93,6 +89,9 @@ internal static class VoicePresenceSessionDispatch
                 break;
             case VoiceProviderEventReceived providerReceived:
                 signal.ProviderEventReceived = providerReceived.Clone();
+                break;
+            case VoiceTransportAudioFrameReceived audioReceived:
+                signal.TransportAudioFrameReceived = audioReceived.Clone();
                 break;
             default:
                 throw new InvalidOperationException(
