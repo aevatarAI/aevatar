@@ -1288,9 +1288,9 @@ public class StreamingProxyCoverageTests
 
         response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        response.Location.Should().Be("/api/scopes/scope-a/streaming-proxy/rooms/room-a/stream");
+        response.Location.Should().Be("/api/scopes/scope-a/streaming-proxy/rooms/room-a/messages:stream");
         response.Body.Should().Contain("\"status\":\"accepted\"");
-        response.Body.Should().Contain("\"statusUrl\":\"/api/scopes/scope-a/streaming-proxy/rooms/room-a/stream\"");
+        response.Body.Should().Contain("\"statusUrl\":\"/api/scopes/scope-a/streaming-proxy/rooms/room-a/messages:stream\"");
         roomCommandService.PostMessageCommands.Should().ContainSingle(x => x.RoomId == "room-a");
     }
 

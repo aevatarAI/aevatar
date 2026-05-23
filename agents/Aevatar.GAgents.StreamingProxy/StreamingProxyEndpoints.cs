@@ -286,7 +286,7 @@ public static class StreamingProxyEndpoints
         // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
         //   Message dispatch only enters the room actor inbox; committed message/projection visibility arrives later.
         //   The room stream is the observation resource for clients that need applied message state.
-        var streamUrl = $"/api/scopes/{Uri.EscapeDataString(scopeId)}/streaming-proxy/rooms/{Uri.EscapeDataString(roomId)}/stream";
+        var streamUrl = $"/api/scopes/{Uri.EscapeDataString(scopeId)}/streaming-proxy/rooms/{Uri.EscapeDataString(roomId)}/messages:stream";
         return Results.Accepted(streamUrl, new
         {
             status = "accepted",

@@ -2692,6 +2692,11 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/services/orders/runs/run-1");
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
+        receipt.Should().NotBeNull();
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/services/orders/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -2716,6 +2721,11 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/services/default/runs/run-1");
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
+        receipt.Should().NotBeNull();
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/services/default/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -2740,7 +2750,10 @@ public sealed class ScopeServiceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a");
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
+        receipt.Should().NotBeNull();
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
         {
@@ -2770,7 +2783,10 @@ public sealed class ScopeServiceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/teams/team-a");
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
+        receipt.Should().NotBeNull();
+        receipt!.StatusUrl.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-1");
         host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
@@ -5187,6 +5203,7 @@ public sealed class ScopeServiceEndpointsTests
                 TargetActorId = "actor-1",
                 CommandId = "cmd-1",
                 CorrelationId = "corr-1",
+                RunId = "run-1",
             });
         }
     }
