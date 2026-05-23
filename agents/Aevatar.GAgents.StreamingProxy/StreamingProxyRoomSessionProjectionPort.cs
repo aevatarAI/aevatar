@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
@@ -12,20 +11,20 @@ public sealed class StreamingProxyRoomSessionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IStreamingProxyRoomSessionProjectionLease, StreamingProxyRoomSessionRuntimeLease, StreamingProxyRoomSessionEnvelope>,
       IStreamingProxyRoomSessionProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease> _attachExistingLeaseLookup;
 
     public StreamingProxyRoomSessionProjectionPort(
         IProjectionScopeActivationService<StreamingProxyRoomSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<StreamingProxyRoomSessionRuntimeLease> releaseService,
         IProjectionSessionEventHub<StreamingProxyRoomSessionEnvelope> sessionEventHub,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease> attachExistingLeaseLookup)
         : base(
             static () => true,
             activationService,
             releaseService,
             sessionEventHub)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
     // Refactor (iter45/issue-867-session-projection-ensure-surface):
@@ -79,20 +78,19 @@ public sealed class StreamingProxyRoomSessionProjectionPort
             return null;
         }
 
-        var scopeKey = new ProjectionRuntimeScopeKey(
-            actorId,
-            projectionKind,
-            ProjectionRuntimeMode.SessionObservation,
-            sessionId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
-            return null;
-
-        var lease = new StreamingProxyRoomSessionRuntimeLease(new StreamingProxyRoomSessionProjectionContext
+        // Refactor (iter51/issue-898-projection-attach-existing-side-read):
+        //   Old pattern: Feature projection ports duplicated IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()) for attach-existing checks (post-#884 #884 fixed 3 ports but more remained).
+        //   New principle: All attach-existing lease lookups go through typed IProjectionScopeAttachExistingLeaseLookup<TLease>; CI guard prevents recurrence.
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(new ProjectionScopeStartRequest
         {
             RootActorId = actorId,
             ProjectionKind = projectionKind,
+            Mode = ProjectionRuntimeMode.SessionObservation,
             SessionId = sessionId,
-        });
+        }, ct).ConfigureAwait(false);
+        if (lease == null)
+            return null;
+
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null

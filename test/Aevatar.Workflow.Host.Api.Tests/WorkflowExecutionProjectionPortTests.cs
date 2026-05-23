@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -34,7 +35,7 @@ public sealed class WorkflowExecutionProjectionPortTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
@@ -69,7 +70,7 @@ public sealed class WorkflowExecutionProjectionPortTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingRunEventSink();
 
         var attachment = await port.AttachExistingActorProjectionAsync("actor-1", "cmd-1", sink);
@@ -94,7 +95,7 @@ public sealed class WorkflowExecutionProjectionPortTests
             new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
 
         var attachment = await port.AttachExistingActorProjectionAsync(
             "actor-1",
@@ -116,7 +117,7 @@ public sealed class WorkflowExecutionProjectionPortTests
             new RecordingActivationService(),
             release,
             new RecordingRunEventHub(),
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup(new RecordingActorRuntime()));
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
@@ -192,6 +193,18 @@ public sealed class WorkflowExecutionProjectionPortTests
             return Task.CompletedTask;
         }
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
+            runtime,
+            request => new WorkflowExecutionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new WorkflowExecutionRuntimeLease(context));
 
     private sealed class RecordingRunEventHub : IProjectionSessionEventHub<WorkflowRunEventEnvelope>
     {

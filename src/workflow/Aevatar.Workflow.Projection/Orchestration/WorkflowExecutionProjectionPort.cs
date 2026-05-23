@@ -3,7 +3,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
@@ -12,23 +11,26 @@ public sealed class WorkflowExecutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease> _attachExistingLeaseLookup;
 
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
         IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<WorkflowRunEventEnvelope> sessionEventHub,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
             sessionEventHub)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
+    // Refactor (iter51/issue-898-projection-attach-existing-side-read):
+    //   Old pattern: Feature projection ports duplicated IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()) for attach-existing checks (post-#884 #884 fixed 3 ports but more remained).
+    //   New principle: All attach-existing lease lookups go through typed IProjectionScopeAttachExistingLeaseLookup<TLease>; CI guard prevents recurrence.
     // Refactor (iter45/issue-867-session-projection-ensure-surface):
     //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
     //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
@@ -48,20 +50,16 @@ public sealed class WorkflowExecutionProjectionPort
             return null;
         }
 
-        var scopeKey = new ProjectionRuntimeScopeKey(
-            rootActorId,
-            WorkflowProjectionKinds.ExecutionSession,
-            ProjectionRuntimeMode.SessionObservation,
-            commandId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
-            return null;
-
-        var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(new ProjectionScopeStartRequest
         {
             RootActorId = rootActorId,
             ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
+            Mode = ProjectionRuntimeMode.SessionObservation,
             SessionId = commandId,
-        });
+        }, ct).ConfigureAwait(false);
+        if (lease == null)
+            return null;
+
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null
