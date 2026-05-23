@@ -17,6 +17,10 @@ public interface IStreamingProxyRoomCommandService
         StreamingProxyRoomJoinCommand command,
         CancellationToken cancellationToken = default);
 
+    Task<StreamingProxyRoomLeaveResult> LeaveAsync(
+        StreamingProxyRoomLeaveCommand command,
+        CancellationToken cancellationToken = default);
+
     Task PublishTerminalStateAsync(
         StreamingProxyRoomTerminalStateCommand command,
         CancellationToken cancellationToken = default);
@@ -47,6 +51,15 @@ public sealed record StreamingProxyRoomJoinCommand(
     string AgentId,
     string? DisplayName);
 
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// Leave is now a typed room command request, not direct construction of a committed leave event.
+// Callers report participant lifecycle observations; StreamingProxyGAgent owns fact commitment.
+// This keeps Nyx adapter behavior on the existing room command-service boundary.
+public sealed record StreamingProxyRoomLeaveCommand(
+    string RoomId,
+    string AgentId,
+    string? Reason);
+
 // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
 //   Old pattern: Streaming proxy endpoints published terminal state envelopes through raw dispatch helpers.
 //   New principle: The Application command service owns typed terminal-state publication without adding a second room interaction port.
@@ -69,6 +82,10 @@ public sealed record StreamingProxyRoomJoinResult(
     string? AgentId,
     string? DisplayName);
 
+public sealed record StreamingProxyRoomLeaveResult(
+    StreamingProxyRoomLeaveStatus Status,
+    string? AgentId);
+
 public enum StreamingProxyRoomCreateStatus
 {
     Created = 0,
@@ -85,5 +102,11 @@ public enum StreamingProxyRoomPostMessageStatus
 public enum StreamingProxyRoomJoinStatus
 {
     Joined = 0,
+    RoomNotFound = 1,
+}
+
+public enum StreamingProxyRoomLeaveStatus
+{
+    Accepted = 0,
     RoomNotFound = 1,
 }

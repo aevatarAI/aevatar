@@ -4,21 +4,23 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// Nyx-specific HTTP/status parsing and ChatStreamAsync reading stay outside the room actor turn.
+// Room effects are submitted only through IStreamingProxyRoomCommandService typed requests.
+// The adapter keeps no authority to create committed room facts.
 internal sealed class StreamingProxyNyxParticipantCoordinator
 {
     private const string NyxIdProviderName = "nyxid";
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly IStreamingProxyRoomCommandService _roomCommandService;
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -26,14 +28,14 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private readonly ILogger<StreamingProxyNyxParticipantCoordinator> _logger;
 
     public StreamingProxyNyxParticipantCoordinator(
-        IActorDispatchPort actorDispatchPort,
+        IStreamingProxyRoomCommandService roomCommandService,
         ILLMProviderFactory llmProviderFactory,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ILogger<StreamingProxyNyxParticipantCoordinator> logger,
         INyxIdUserLlmPreferencesStore? preferencesStore = null)
     {
-        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _roomCommandService = roomCommandService ?? throw new ArgumentNullException(nameof(roomCommandService));
         _llmProviderFactory = llmProviderFactory;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
@@ -49,17 +51,26 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string? preferredRoute = null,
         string? defaultModel = null)
     {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // This method resolves Nyx participant definitions and forwards join intent.
+        // It does not publish committed room history or bypass the room command service.
+        // Room actor state remains the only participant fact source.
         var participants = await ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
         if (participants.Count == 0)
             return participants;
 
         foreach (var participant in participants)
         {
-            await DispatchAsync(roomId, new GroupChatParticipantJoinedEvent
-            {
-                AgentId = participant.ParticipantId,
-                DisplayName = participant.DisplayName,
-            }, ct);
+            // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+            // Nyx catalog resolution remains outside the actor, but joining is now only a room command request.
+            // The adapter does not construct committed join facts or dispatch raw room envelopes.
+            // StreamingProxyGAgent remains the only committer of participant facts.
+            await _roomCommandService.JoinAsync(
+                new StreamingProxyRoomJoinCommand(
+                    roomId,
+                    participant.ParticipantId,
+                    participant.DisplayName),
+                ct);
         }
 
         return participants;
@@ -89,6 +100,10 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string accessToken,
         CancellationToken ct)
     {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // This method performs external Nyx streaming I/O and normalizes adapter outcomes.
+        // Successful replies and unavailable participants are forwarded as typed room commands.
+        // Committed message/leave facts are owned exclusively by StreamingProxyGAgent.
         if (participants.Count == 0)
             return 0;
 
@@ -168,13 +183,14 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                     transcript.Add((participant.DisplayName, content));
                     successfulReplies++;
                     totalSuccessfulReplies++;
-                    await DispatchAsync(roomId, new GroupChatMessageEvent
-                    {
-                        AgentId = participant.ParticipantId,
-                        AgentName = participant.DisplayName,
-                        Content = content,
-                        SessionId = sessionId,
-                    }, ct);
+                    await _roomCommandService.PostMessageAsync(
+                        new StreamingProxyRoomPostMessageCommand(
+                            roomId,
+                            participant.ParticipantId,
+                            participant.DisplayName,
+                            content,
+                            sessionId),
+                        ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -940,10 +956,16 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         if (string.IsNullOrWhiteSpace(participantId))
             return;
 
-        await DispatchAsync(roomId, new GroupChatParticipantLeftEvent
-        {
-            AgentId = participantId,
-        }, ct);
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Participant failure is reported as a typed leave command request.
+        // The adapter does not decide or publish the committed left event.
+        // Room actor state determines whether the request produces a fact.
+        await _roomCommandService.LeaveAsync(
+            new StreamingProxyRoomLeaveCommand(
+                roomId,
+                participantId,
+                "Nyx participant unavailable."),
+            ct);
     }
 
     private static bool IsUnavailableResponse(LLMResponse response)
@@ -991,32 +1013,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         yield return $"**{trimmed}**";
     }
 
-    private async Task DispatchAsync(string actorId, IMessage payload, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
-        };
-
-        await DispatchRoomEnvelopeAsync(actorId, envelope, ct);
-    }
-
-    private Task DispatchRoomEnvelopeAsync(
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct)
-    {
-        // Refactor (iter4/cluster-008):
-        //   Old pattern: the Nyx participant coordinator invoked room actors inline.
-        //   New principle: coordinators deliver StreamingProxy room events through IActorDispatchPort.
-        return _actorDispatchPort.DispatchAsync(actorId, envelope, ct);
-    }
 }
 
 internal sealed record StreamingProxyNyxParticipantDefinition(

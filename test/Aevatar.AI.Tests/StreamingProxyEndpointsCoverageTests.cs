@@ -339,6 +339,16 @@ public sealed class StreamingProxyEndpointsCoverageTests
                 command.DisplayName?.Trim()));
         }
 
+        public Task<StreamingProxyRoomLeaveResult> LeaveAsync(
+            StreamingProxyRoomLeaveCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomLeaveResult(
+                StreamingProxyRoomLeaveStatus.Accepted,
+                command.AgentId?.Trim()));
+        }
+
         public Task PublishTerminalStateAsync(
             StreamingProxyRoomTerminalStateCommand command,
             CancellationToken cancellationToken = default)

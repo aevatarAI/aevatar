@@ -14,6 +14,10 @@ namespace Aevatar.GAgents.StreamingProxy;
 /// OpenClaw agents. Does NOT call LLM itself — it receives messages from
 /// participants and broadcasts them to all SSE subscribers.
 /// </summary>
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// Room effects from adapters enter as typed request payloads through the actor inbox.
+// This actor remains the only component that converts those requests into committed room domain events.
+// External Nyx streaming I/O stays outside actor turns.
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
     public static string ProjectionKind => StreamingProxyProjectionKinds.CurrentState;
@@ -76,6 +80,22 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             evt.Content.Length > 100 ? evt.Content[..100] + "..." : evt.Content);
     }
 
+    [EventHandler(EndpointName = "requestPostMessage")]
+    public async Task HandleParticipantMessageRequested(StreamingProxyParticipantMessageRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Room command adapters now submit request payloads instead of committed room facts.
+        // This actor validates its authoritative state boundary and mints the committed message event.
+        // Projection and SSE continue to observe only the existing committed event types.
+        await HandleGroupChatMessage(new GroupChatMessageEvent
+        {
+            AgentId = request.AgentId,
+            AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? request.AgentId : request.AgentName,
+            Content = request.Content,
+            SessionId = request.SessionId,
+        });
+    }
+
     [EventHandler(EndpointName = "joinRoom")]
     public async Task HandleGroupChatParticipantJoined(GroupChatParticipantJoinedEvent evt)
     {
@@ -93,6 +113,20 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         Logger.LogInformation("[StreamingProxy] Participant joined: {Name} ({Id})", evt.DisplayName, evt.AgentId);
     }
 
+    [EventHandler(EndpointName = "requestJoinRoom")]
+    public async Task HandleParticipantJoinRequested(StreamingProxyParticipantJoinRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Join requests are command input, not already-committed participant facts.
+        // Idempotent participant ownership stays inside this room actor state.
+        // Downstream projections still receive GroupChatParticipantJoinedEvent only after this handler commits it.
+        await HandleGroupChatParticipantJoined(new GroupChatParticipantJoinedEvent
+        {
+            AgentId = request.AgentId,
+            DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? request.AgentId : request.DisplayName,
+        });
+    }
+
     [EventHandler(EndpointName = "leaveRoom")]
     public async Task HandleGroupChatParticipantLeft(GroupChatParticipantLeftEvent evt)
     {
@@ -102,6 +136,25 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         await PublishAsync(evt, TopologyAudience.Parent);
 
         Logger.LogInformation("[StreamingProxy] Participant left: {Id}", evt.AgentId);
+    }
+
+    [EventHandler(EndpointName = "requestLeaveRoom")]
+    public async Task HandleParticipantLeaveRequested(StreamingProxyParticipantLeaveRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Leave requests report adapter observations; this actor owns whether a leave fact is committed.
+        // Missing participants remain a no-op so stale Nyx failures cannot invent room history.
+        // Committed leave events remain the only projection/SSE participant removal signal.
+        if (!HasParticipant(request.AgentId))
+        {
+            Logger.LogInformation("[StreamingProxy] Participant leave ignored because participant is not joined: {Id}", request.AgentId);
+            return;
+        }
+
+        await HandleGroupChatParticipantLeft(new GroupChatParticipantLeftEvent
+        {
+            AgentId = request.AgentId,
+        });
     }
 
     [EventHandler(EndpointName = "completeSession")]
@@ -117,6 +170,22 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             Id,
             evt.SessionId,
             evt.Status);
+    }
+
+    [EventHandler(EndpointName = "requestCompleteSession")]
+    public async Task HandleSessionTerminalStateRequested(StreamingProxySessionTerminalStateRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Terminal requests carry observed adapter outcome; this actor owns the committed terminal fact.
+        // The actor stamps terminal time at commit so callers cannot imply a stronger ACK than dispatch.
+        // Existing terminal projection remains keyed by StreamingProxyChatSessionTerminalStateChanged.
+        await HandleChatSessionTerminalStateChanged(new StreamingProxyChatSessionTerminalStateChanged
+        {
+            SessionId = request.SessionId,
+            Status = request.Status,
+            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ErrorMessage = request.ErrorMessage ?? string.Empty,
+        });
     }
 
     /// <summary>
