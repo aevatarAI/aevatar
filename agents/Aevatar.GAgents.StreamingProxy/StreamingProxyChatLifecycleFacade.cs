@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -50,33 +49,24 @@ public enum StreamingProxySubscriptionLifecycleStatus
 internal sealed class StreamingProxyChatLifecycleFacade
 {
     private readonly IActorRuntime _actorRuntime;
-    private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly IStreamingProxyRoomCommandService _roomCommandService;
     private readonly ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> _interactionService;
-    private readonly StreamingProxyChatDurableCompletionResolver _durableCompletionResolver;
     private readonly IStreamingProxyParticipantStore _participantStore;
-    private readonly StreamingProxyNyxParticipantCoordinator _participantCoordinator;
     private readonly IStreamingProxyRoomSubscriptionObservationPort _subscriptionObservationPort;
     private readonly ILogger<StreamingProxyChatLifecycleFacade> _logger;
 
     public StreamingProxyChatLifecycleFacade(
         IActorRuntime actorRuntime,
-        IGAgentActorRegistryCommandPort registryCommandPort,
         IStreamingProxyRoomCommandService roomCommandService,
         ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
-        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         IStreamingProxyParticipantStore participantStore,
-        StreamingProxyNyxParticipantCoordinator participantCoordinator,
         IStreamingProxyRoomSubscriptionObservationPort subscriptionObservationPort,
         ILogger<StreamingProxyChatLifecycleFacade> logger)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _roomCommandService = roomCommandService ?? throw new ArgumentNullException(nameof(roomCommandService));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
-        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
         _participantStore = participantStore ?? throw new ArgumentNullException(nameof(participantStore));
-        _participantCoordinator = participantCoordinator ?? throw new ArgumentNullException(nameof(participantCoordinator));
         _subscriptionObservationPort = subscriptionObservationPort ?? throw new ArgumentNullException(nameof(subscriptionObservationPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -89,39 +79,18 @@ internal sealed class StreamingProxyChatLifecycleFacade
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        IActor? actor = null;
-        try
-        {
-            actor = await _actorRuntime.GetAsync(request.RoomId);
-            if (actor is null)
-            {
-                return CommandInteractionResult<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyProjectionCompletionStatus>
-                    .Failure(StreamingProxyRoomChatStartError.RoomNotFound);
-            }
-
-            return await _interactionService.ExecuteAsync(
-                new StreamingProxyRoomChatCommand(
-                    request.RoomId,
-                    request.ScopeId,
-                    request.Prompt,
-                    request.SessionId),
-                emitAsync,
-                async (_, token) => await CoordinateParticipantsAndPublishTerminalAsync(request, actor, token),
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            await TryPublishCanceledTerminalStateAsync(actor, request.SessionId);
-            throw;
-        }
-        catch
-        {
-            await TryPublishFailedTerminalStateAsync(
-                actor,
+        return await _interactionService.ExecuteAsync(
+            new StreamingProxyRoomChatCommand(
+                request.RoomId,
+                request.ScopeId,
+                request.Prompt,
                 request.SessionId,
-                "StreamingProxy chat failed before completion.");
-            throw;
-        }
+                request.AccessToken,
+                request.PreferredRoute,
+                request.DefaultModel),
+            emitAsync,
+            null,
+            ct);
     }
 
     public async Task<StreamingProxyJoinLifecycleReceipt> JoinAsync(
@@ -158,19 +127,6 @@ internal sealed class StreamingProxyChatLifecycleFacade
         string roomId,
         CancellationToken ct = default)
     {
-        try
-        {
-            await _registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
-                ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to unregister room {RoomId} from registry", roomId);
-            return StreamingProxyRoomDeleteLifecycleStatus.Failed;
-        }
-
         try
         {
             await _participantStore.RemoveRoomAsync(roomId, ct);
@@ -216,117 +172,4 @@ internal sealed class StreamingProxyChatLifecycleFacade
         CancellationToken ct = default) =>
         _subscriptionObservationPort.DetachAndDisposeAsync(attachment, sink, ct);
 
-    public Task PublishFailedTerminalStateAsync(
-        string roomId,
-        string sessionId,
-        string errorMessage,
-        CancellationToken ct = default) =>
-        _roomCommandService.PublishTerminalStateAsync(
-            new StreamingProxyRoomTerminalStateCommand(
-                roomId,
-                sessionId,
-                StreamingProxyChatSessionTerminalStatus.Failed,
-                errorMessage),
-            ct);
-
-    private async Task CoordinateParticipantsAndPublishTerminalAsync(
-        StreamingProxyChatLifecycleRequest request,
-        IActor actor,
-        CancellationToken ct)
-    {
-        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants =
-            string.IsNullOrWhiteSpace(request.AccessToken)
-                ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
-                : await _participantCoordinator.EnsureParticipantsJoinedAsync(
-                    request.ScopeId,
-                    request.RoomId,
-                    actor,
-                    _participantStore,
-                    request.AccessToken,
-                    ct,
-                    request.PreferredRoute,
-                    request.DefaultModel);
-
-        if (participants.Count == 0 || string.IsNullOrWhiteSpace(request.AccessToken))
-            return;
-
-        var successfulReplies = await _participantCoordinator.GenerateRepliesAsync(
-            participants,
-            actor,
-            request.Prompt,
-            request.SessionId,
-            request.AccessToken,
-            ct,
-            _participantStore,
-            request.RoomId);
-        var terminalState = DetermineParticipantTerminalState(successfulReplies);
-        await _roomCommandService.PublishTerminalStateAsync(
-            new StreamingProxyRoomTerminalStateCommand(
-                actor.Id,
-                request.SessionId,
-                terminalState.Status,
-                terminalState.ErrorMessage),
-            ct);
-    }
-
-    private async Task TryPublishCanceledTerminalStateAsync(
-        IActor? actor,
-        string? sessionId)
-    {
-        if (actor is null || string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        try
-        {
-            var durableCompletion = await _durableCompletionResolver.ResolveAsync(actor.Id, sessionId, CancellationToken.None);
-            if (durableCompletion is StreamingProxyProjectionCompletionStatus.Completed or StreamingProxyProjectionCompletionStatus.Failed)
-                return;
-
-            await PublishFailedTerminalStateAsync(
-                actor.Id,
-                sessionId,
-                "StreamingProxy chat was cancelled before completion.",
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to publish terminal cancellation state for room {RoomId}, session {SessionId}",
-                actor.Id,
-                sessionId);
-        }
-    }
-
-    private async Task TryPublishFailedTerminalStateAsync(
-        IActor? actor,
-        string? sessionId,
-        string errorMessage)
-    {
-        if (actor is null || string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        try
-        {
-            var durableCompletion = await _durableCompletionResolver.ResolveAsync(actor.Id, sessionId, CancellationToken.None);
-            if (durableCompletion is StreamingProxyProjectionCompletionStatus.Completed or StreamingProxyProjectionCompletionStatus.Failed)
-                return;
-
-            await PublishFailedTerminalStateAsync(actor.Id, sessionId, errorMessage, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to publish terminal failure state for room {RoomId}, session {SessionId}",
-                actor.Id,
-                sessionId);
-        }
-    }
-
-    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
-        int successfulReplies) =>
-        successfulReplies > 0
-            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
-            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 }

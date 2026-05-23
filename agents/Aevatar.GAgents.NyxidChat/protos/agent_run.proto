@@ -141,3 +141,65 @@ message NyxIdChatConversationDeletionCompensationRequested {
   string actor_id = 2;
   string reason = 3;
 }
+
+message NyxIdChatConversationCreateCommand {
+  string scope_id = 1;
+}
+
+message NyxIdChatConversationDeleteCommand {
+  string scope_id = 1;
+  string actor_id = 2;
+}
+
+message NyxIdChatConversationCreationStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool created_locally = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+}
+
+message NyxIdChatConversationRegistrationAcceptedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationRegistrationUnavailableEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool destroy_actor = 3;
+  string reason = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+}
+
+message NyxIdChatConversationDeletionStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationUnregisteredEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationHistoryDeletedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+message NyxIdChatConversationDeletionCompensationStartedEvent {
+  string scope_id = 1;
+  string actor_id = 2;
+  string reason = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+}

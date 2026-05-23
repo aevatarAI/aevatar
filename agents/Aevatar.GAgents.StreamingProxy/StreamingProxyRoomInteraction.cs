@@ -16,7 +16,10 @@ public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
     string Prompt,
-    string SessionId)
+    string SessionId,
+    string? AccessToken = null,
+    string? PreferredRoute = null,
+    string? DefaultModel = null)
     : ICommandContextSeed
 {
     public string? CommandId => SessionId;
@@ -239,6 +242,10 @@ internal sealed class StreamingProxyRoomObservationLifecycle
 internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
     : ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>
 {
+    internal const string AccessTokenHeader = "streaming_proxy.access_token";
+    internal const string PreferredRouteHeader = "streaming_proxy.preferred_route";
+    internal const string DefaultModelHeader = "streaming_proxy.default_model";
+
     public EventEnvelope CreateEnvelope(StreamingProxyRoomChatCommand command, CommandContext context)
     {
         // Refactor (iter21/cluster-002-request-path-projection-session-priming):
@@ -253,6 +260,9 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
         };
+        AddIfNotBlank(chatRequest.Metadata, AccessTokenHeader, command.AccessToken);
+        AddIfNotBlank(chatRequest.Metadata, PreferredRouteHeader, command.PreferredRoute);
+        AddIfNotBlank(chatRequest.Metadata, DefaultModelHeader, command.DefaultModel);
 
         return new EventEnvelope
         {
@@ -265,6 +275,15 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
                 CorrelationId = context.CorrelationId,
             },
         };
+    }
+
+    private static void AddIfNotBlank(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        string key,
+        string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            destination[key] = value.Trim();
     }
 }
 

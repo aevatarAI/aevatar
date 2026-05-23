@@ -221,17 +221,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
         var runtime = new RecordingActorRuntime([], new RecordingActor(roomId));
         var facade = new StreamingProxyChatLifecycleFacade(
             runtime,
-            new RecordingGAgentActorStore([]),
             roomCommandService,
             new NoOpStreamingProxyRoomChatInteractionService(),
-            new StreamingProxyChatDurableCompletionResolver(new NoOpTerminalQueryPort()),
             participantStore,
-            new StreamingProxyNyxParticipantCoordinator(
-                new NoOpActorDispatchPort(),
-                new NoOpLlmProviderFactory(),
-                new ConfigurationBuilder().Build(),
-                new NoOpHttpClientFactory(),
-                loggerFactory.CreateLogger<StreamingProxyNyxParticipantCoordinator>()),
             new NoOpSubscriptionObservationPort(),
             loggerFactory.CreateLogger<StreamingProxyChatLifecycleFacade>());
 

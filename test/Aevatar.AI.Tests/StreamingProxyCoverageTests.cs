@@ -225,7 +225,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndRemoveFromBothStores()
+    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndRemoveParticipantsOnly()
     {
         var actorStore = new StubGAgentActorStore();
         var participantStore = new StubParticipantStore();
@@ -243,14 +243,12 @@ public class StreamingProxyCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        actorStore.RemovedActors.Should().ContainSingle(x =>
-            x.scopeId == "scope-a" &&
-            x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
+        actorStore.RemovedActors.Should().BeEmpty();
         participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_UnregisterFailure_ShouldReturnUnavailable()
+    public async Task HandleDeleteRoomAsync_ShouldIgnoreRegistryAvailability()
     {
         var actorStore = new StubGAgentActorStore
         {
@@ -270,8 +268,9 @@ public class StreamingProxyCoverageTests
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        participantStore.RemovedRooms.Should().BeEmpty();
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        actorStore.RemovedActors.Should().BeEmpty();
+        participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
 
     [Fact]
@@ -674,7 +673,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleChatAsync_ShouldPublishFailedTerminalState_WhenCancelled()
+    public async Task HandleChatAsync_ShouldNotPublishFacadeOwnedTerminalState_WhenCancelled()
     {
         var context = CreateScopedHttpContext();
         context.Response.Body = new MemoryStream();
@@ -711,10 +710,7 @@ public class StreamingProxyCoverageTests
         cts.Cancel();
         await task;
 
-        roomCommandService.TerminalCommands.Should().ContainSingle(command =>
-            command.SessionId == "session-cancel" &&
-            command.Status == StreamingProxyChatSessionTerminalStatus.Failed &&
-            command.ErrorMessage == "StreamingProxy chat was cancelled before completion.");
+        roomCommandService.TerminalCommands.Should().BeEmpty();
     }
 
     [Fact]
@@ -961,7 +957,7 @@ public class StreamingProxyCoverageTests
     [Fact]
     public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
     {
-        var method = typeof(StreamingProxyChatLifecycleFacade).GetMethod(
+        var method = typeof(StreamingProxyGAgent).GetMethod(
             "DetermineParticipantTerminalState",
             BindingFlags.NonPublic | BindingFlags.Static)!;
 
@@ -975,32 +971,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task TryPublishFailedTerminalStateAsync_ShouldEmitFailedTerminalEvent_WhenCompletionIsUnknown()
-    {
-        var actor = new StubActor("room-a");
-        var runtime = new StubActorRuntime([actor]);
-        var roomCommandService = new StubRoomCommandService();
-        var facade = CreateStreamingProxyChatLifecycleFacade(
-            runtime,
-            null,
-            roomCommandService,
-            new StubParticipantStore(),
-            new StubTerminalQueryPort());
-
-        await facade.PublishFailedTerminalStateAsync(
-            actor.Id,
-            "session-123",
-            "StreamingProxy chat failed before completion.",
-            CancellationToken.None);
-
-        roomCommandService.TerminalCommands.Should().ContainSingle(command =>
-            command.SessionId == "session-123" &&
-            command.Status == StreamingProxyChatSessionTerminalStatus.Failed &&
-            command.ErrorMessage == "StreamingProxy chat failed before completion.");
-    }
-
-    [Fact]
-    public async Task TryPublishFailedTerminalStateAsync_ShouldNotEmitTerminalEvent_WhenCompletionAlreadyVisible()
+    public async Task RunChatAsync_ShouldNotPublishFacadeOwnedTerminalFallback_WhenInteractionFails()
     {
         var actor = new StubActor("room-a");
         var runtime = new StubActorRuntime([actor]);
@@ -1014,7 +985,7 @@ public class StreamingProxyCoverageTests
             null,
             roomCommandService,
             new StubParticipantStore(),
-            new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed),
+            new StubTerminalQueryPort(),
             interactionService);
 
         Func<Task> act = async () => await facade.RunChatAsync(
@@ -1743,12 +1714,9 @@ public class StreamingProxyCoverageTests
     {
         return new StreamingProxyChatLifecycleFacade(
             runtime,
-            registryCommandPort ?? new StubGAgentActorStore(),
             roomCommandService,
             interactionService ?? new StubStreamingProxyRoomChatInteractionService(),
-            new StreamingProxyChatDurableCompletionResolver(terminalQueryPort ?? new StubTerminalQueryPort()),
             participantStore,
-            CreateNyxParticipantCoordinator(),
             subscriptionObservationPort ?? new StubRoomSubscriptionObservationPort(),
             NullLogger<StreamingProxyChatLifecycleFacade>.Instance);
     }

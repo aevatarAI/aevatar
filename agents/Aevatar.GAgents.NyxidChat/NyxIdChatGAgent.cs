@@ -98,6 +98,128 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
     }
 
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleCreateConversationAsync(
+        NyxIdChatConversationCreateCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
+        var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
+        var createdLocally = Id.StartsWith(NyxIdChatServiceDefaults.ActorIdPrefix + "-", StringComparison.Ordinal);
+
+        await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = Id,
+            CreatedLocally = createdLocally,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        });
+
+        try
+        {
+            var receipt = await registryCommandPort.RegisterActorAsync(
+                new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, Id),
+                CancellationToken.None);
+            if (receipt.IsAdmissionVisible)
+            {
+                await PersistDomainEventAsync(new NyxIdChatConversationRegistrationAcceptedEvent
+                {
+                    ScopeId = command.ScopeId,
+                    ActorId = Id,
+                    CommandId = commandId,
+                    CorrelationId = correlationId,
+                });
+                return;
+            }
+
+            await PersistRegistrationUnavailableAndCompensateAsync(
+                command.ScopeId,
+                Id,
+                createdLocally,
+                "registration_not_admission_visible",
+                commandId,
+                correlationId);
+        }
+        catch
+        {
+            await PersistRegistrationUnavailableAndCompensateAsync(
+                command.ScopeId,
+                Id,
+                createdLocally,
+                "registration_failed",
+                commandId,
+                correlationId);
+            throw;
+        }
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleDeleteConversationAsync(
+        NyxIdChatConversationDeleteCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!string.Equals(Id, command.ActorId, StringComparison.Ordinal))
+            return;
+
+        var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
+        var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
+        var chatHistoryStore = Services.GetRequiredService<IChatHistoryStore>();
+
+        await PersistDomainEventAsync(new NyxIdChatConversationDeletionStartedEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = command.ActorId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        });
+
+        await registryCommandPort.UnregisterActorAsync(
+            new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, command.ActorId),
+            CancellationToken.None);
+        await PersistDomainEventAsync(new NyxIdChatConversationUnregisteredEvent
+        {
+            ScopeId = command.ScopeId,
+            ActorId = command.ActorId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        });
+
+        try
+        {
+            await chatHistoryStore.DeleteConversationAsync(command.ScopeId, command.ActorId, CancellationToken.None);
+            await PersistDomainEventAsync(new NyxIdChatConversationHistoryDeletedEvent
+            {
+                ScopeId = command.ScopeId,
+                ActorId = command.ActorId,
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            });
+        }
+        catch
+        {
+            await PersistDomainEventAsync(new NyxIdChatConversationDeletionCompensationStartedEvent
+            {
+                ScopeId = command.ScopeId,
+                ActorId = command.ActorId,
+                Reason = "history_delete_failed",
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            });
+            await HandleDeletionCompensationAsync(new NyxIdChatConversationDeletionCompensationRequested
+            {
+                ScopeId = command.ScopeId,
+                ActorId = command.ActorId,
+                Reason = "history_delete_failed",
+            });
+            throw;
+        }
+    }
+
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
     //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
@@ -203,5 +325,31 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         if (overrides?.HasMaxHistoryMessages == true && overrides.MaxHistoryMessages > 0)
             initializeEvent.MaxHistoryMessages = overrides.MaxHistoryMessages;
         return initializeEvent;
+    }
+
+    private async Task PersistRegistrationUnavailableAndCompensateAsync(
+        string scopeId,
+        string actorId,
+        bool destroyActor,
+        string reason,
+        string commandId,
+        string correlationId)
+    {
+        await PersistDomainEventAsync(new NyxIdChatConversationRegistrationUnavailableEvent
+        {
+            ScopeId = scopeId,
+            ActorId = actorId,
+            DestroyActor = destroyActor,
+            Reason = reason,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        });
+        await HandleCreationCompensationAsync(new NyxIdChatConversationCreationCompensationRequested
+        {
+            ScopeId = scopeId,
+            ActorId = actorId,
+            DestroyActor = destroyActor,
+            Reason = reason,
+        });
     }
 }

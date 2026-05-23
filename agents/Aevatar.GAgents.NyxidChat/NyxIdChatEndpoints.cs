@@ -98,7 +98,7 @@ public static partial class NyxIdChatEndpoints
         return receipt.Status switch
         {
             NyxIdChatConversationCreateStatus.Accepted => Results.Ok(new { actorId = receipt.ActorId }),
-            NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject!),
+            NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject),
             NyxIdChatConversationCreateStatus.RegistrationUnavailable => Results.Json(
                 new { error = "Conversation registration is not admission-visible" },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
@@ -108,12 +108,12 @@ public static partial class NyxIdChatEndpoints
         };
     }
 
-    private static IResult ChatRouteRejected(Reject reject) =>
+    private static IResult ChatRouteRejected(Reject? reject) =>
         Results.Json(
             new
             {
                 error = "chat_route_rejected",
-                detail = string.IsNullOrWhiteSpace(reject.Reason)
+                detail = string.IsNullOrWhiteSpace(reject?.Reason)
                     ? "The chat route policy rejected this request."
                     : reject.Reason,
             },
