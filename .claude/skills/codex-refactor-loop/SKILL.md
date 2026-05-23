@@ -987,7 +987,22 @@ Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-sol
 
 maintainer 只加 1 label:`auto-loop-triage`
 
-Controller 每 wakeup sweep `--label "auto-loop-triage"`,对每个新 issue:
+**两段实现**(per Auric 2026-05-23 "auto-loop-triage 有脚本扫么"):
+
+1. **Daemon `tools/refactor-loop/triage-monitor.sh`**(60s 周期)
+   - 扫 `gh issue list --label "auto-loop-triage" --state open`
+   - 新 issue → emit `<ISO8601> new-triage-issue <issue> <author>` 到 `.refactor-loop/.controller-pending-events.log`
+   - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
+   - 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
+   - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+
+2. **Controller per-wakeup process pending events**(已有 `.controller-pending-events.log` sweep,扩展)
+   - 读 events log 找 `^.* new-triage-issue <issue> <author>` lines
+   - 对每个新 triage issue 派 triage codex(`prompts/triage-external-issue.md`)
+   - 派完后 update offset 防重复处理
+   - triage codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
+
+Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
 1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
    - 是否属于本 refactor loop 范畴(违反 CLAUDE/AGENTS 条款)?
    - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
