@@ -146,6 +146,42 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     }
 
     [Fact]
+    public async Task RuntimeCallbackSchedulerGrain_ShouldIgnoreCancelWhenGenerationDoesNotMatch()
+    {
+        var persistentState =
+            DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
+        persistentState.State.ReminderCallbacks["cb-1"] = CreateScheduledCallback("cb-1", generation: 2);
+        var proxy = (RuntimeCallbackPersistentStateProxy)(object)persistentState;
+        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+
+        await grain.CancelAsync(
+            "cb-1",
+            expectedGeneration: 1,
+            expectedSlotEpoch: RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        persistentState.State.ReminderCallbacks.Should().ContainKey("cb-1");
+        proxy.WriteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RuntimeCallbackSchedulerGrain_ShouldRemoveScheduleWhenEpochAndGenerationMatch()
+    {
+        var persistentState =
+            DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
+        persistentState.State.ReminderCallbacks["cb-1"] = CreateScheduledCallback("cb-1", generation: 1);
+        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+
+        var act = () => grain.CancelAsync(
+            "cb-1",
+            expectedGeneration: 1,
+            expectedSlotEpoch: RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+        persistentState.State.ReminderCallbacks.Should().BeEmpty();
+        ((RuntimeCallbackPersistentStateProxy)(object)persistentState).WriteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task RuntimeCallbackSchedulerGrain_ShouldValidateTimerPeriodBeforePersistingTypedState()
     {
         var persistentState =
@@ -208,11 +244,52 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         method!.Invoke(null, [protoMode]).Should().Be(runtimeMode);
     }
 
+    [Fact]
+    public void RuntimeCallbackSchedulerGrain_ShouldRejectUnknownRuntimeDeliveryMode()
+    {
+        var method = typeof(RuntimeCallbackSchedulerGrain).GetMethod(
+            "ToProtoDeliveryMode",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        var act = () => method!.Invoke(null, [(RuntimeCallbackDeliveryMode)999]);
+
+        act.Should()
+            .Throw<TargetInvocationException>()
+            .WithInnerException<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void RuntimeCallbackSchedulerGrain_ShouldRejectUnknownPersistedDeliveryMode()
+    {
+        var method = typeof(RuntimeCallbackSchedulerGrain).GetMethod(
+            "FromProtoDeliveryMode",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        var act = () => method!.Invoke(null, [(RuntimeCallbackScheduleDeliveryMode)999]);
+
+        act.Should()
+            .Throw<TargetInvocationException>()
+            .WithInnerException<ArgumentOutOfRangeException>();
+    }
+
     private static EventEnvelope CreateEnvelope(string id) => new()
     {
         Id = id,
         Payload = Any.Pack(new StringValue { Value = "payload" }),
         Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
+    };
+
+    private static RuntimeScheduledCallback CreateScheduledCallback(string callbackId, long generation) => new()
+    {
+        ActorId = "actor-1",
+        CallbackId = callbackId,
+        Generation = generation,
+        SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+        DueTimeMillis = 1000,
+        DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
+        TriggerEnvelope = CreateEnvelope("evt-1"),
     };
 
     private class RuntimeCallbackPersistentStateProxy : DispatchProxy
