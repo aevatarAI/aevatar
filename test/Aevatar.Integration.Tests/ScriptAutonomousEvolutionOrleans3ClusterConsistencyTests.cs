@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -128,12 +129,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             await definitionPortNode1.UpsertDefinitionAsync(
                 workerAScriptId,
                 "rev-a-1",
-                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "OrleansWorkerARev1Runtime",
-                    "ORLEANS-A-V1",
-                    "orleans_worker_a",
-                    "1"),
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
                     "OrleansWorkerARev1Runtime",
                     "ORLEANS-A-V1",
                     "orleans_worker_a",
@@ -143,12 +139,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             await definitionPortNode1.UpsertDefinitionAsync(
                 workerBScriptId,
                 "rev-b-1",
-                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "OrleansWorkerBRev1Runtime",
-                    "ORLEANS-B-V1",
-                    "orleans_worker_b",
-                    "1"),
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
                     "OrleansWorkerBRev1Runtime",
                     "ORLEANS-B-V1",
                     "orleans_worker_b",
@@ -158,8 +149,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             var orchestratorDefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 $"orleans-orchestrator-script-{scopeId}",
                 "rev-orchestrator-1",
-                ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource,
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource),
+                ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource),
                 orchestratorDefinitionActorId,
                 CancellationToken.None);
 

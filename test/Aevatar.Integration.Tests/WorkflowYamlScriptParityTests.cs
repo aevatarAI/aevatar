@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -141,8 +142,7 @@ public class WorkflowYamlScriptParityTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "yaml-script-parity",
             scriptRevision: revision,
-            sourceText: TextNormalizationProtocolSampleActors.Source,
-            sourceHash: TextNormalizationProtocolSampleActors.SourceHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(TextNormalizationProtocolSampleActors.Source),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
         await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);

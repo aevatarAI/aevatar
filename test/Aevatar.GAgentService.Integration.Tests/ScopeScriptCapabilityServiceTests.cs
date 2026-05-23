@@ -1,8 +1,8 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Scripts;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Microsoft.Extensions.Options;
 
@@ -25,7 +25,8 @@ public sealed class ScopeScriptApplicationServicesTests
         const string sourceText = "public sealed class DemoScript {}";
         var expectedCatalogActorId = options.BuildCatalogActorId(scopeId);
         var expectedDefinitionActorId = options.BuildDefinitionActorId(scopeId, scriptId, revisionId);
-        var expectedSourceHash = ComputeSha256(sourceText);
+        var scriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(sourceText);
+        var expectedSourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
 
         var definitionCommandPort = new FakeScriptDefinitionCommandPort
         {
@@ -46,7 +47,7 @@ public sealed class ScopeScriptApplicationServicesTests
             new ScopeScriptUpsertRequest(
                 scopeId,
                 scriptId,
-                sourceText,
+                scriptPackage,
                 revisionId,
                 expectedBaseRevision));
 
@@ -366,12 +367,6 @@ public sealed class ScopeScriptApplicationServicesTests
             DefinitionActorId: definitionActorId,
             ScopeId: scopeId);
 
-    private static string ComputeSha256(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-    }
-
     private sealed class FakeScriptDefinitionCommandPort : IScriptDefinitionCommandPort
     {
         public Request? LastRequest { get; private set; }
@@ -384,12 +379,13 @@ public sealed class ScopeScriptApplicationServicesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            var sourceText = scriptPackage.GetPrimaryCSharpSource();
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             LastRequest = new Request(
                 scriptId,
                 scriptRevision,
@@ -403,13 +399,14 @@ public sealed class ScopeScriptApplicationServicesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             string? scopeId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            var sourceText = scriptPackage.GetPrimaryCSharpSource();
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             LastRequest = new Request(
                 scriptId,
                 scriptRevision,

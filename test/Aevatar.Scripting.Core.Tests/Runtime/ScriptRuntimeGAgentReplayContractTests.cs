@@ -77,7 +77,6 @@ public class ScriptBehaviorGAgentReplayContractTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = StatefulBehaviorSource,
             SourceHash = sourceHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(StatefulBehaviorSource),
             StateTypeUrl = Any.Pack(new ScriptProfileState()).TypeUrl,

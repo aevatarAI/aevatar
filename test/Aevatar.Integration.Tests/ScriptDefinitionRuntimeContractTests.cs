@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -35,8 +36,7 @@ public sealed class ScriptDefinitionRuntimeContractTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "contract-script",
             scriptRevision: revision,
-            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
-            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 

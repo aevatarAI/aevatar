@@ -331,7 +331,7 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-actual",
-                SourceText = "public sealed class RuntimeScript {}",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class RuntimeScript {}"),
             });
         var port = CreateDefinitionSnapshotPort(eventStore);
 
@@ -351,7 +351,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-1",
-                SourceText = "public sealed class RuntimeScript {}",
                 SourceHash = "hash-1",
                 ReadModelSchemaVersion = "v1",
                 ReadModelSchemaHash = "hash-v1",
@@ -378,7 +377,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-1",
-                SourceText = "old-source",
                 SourceHash = "hash-old",
                 ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("old-source"),
             },
@@ -386,7 +384,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-2",
-                SourceText = "new-source",
                 SourceHash = "hash-new",
                 ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("new-source"),
             });
@@ -1124,7 +1121,6 @@ public class RuntimeScriptInfrastructurePortsTests
                     case ScriptDefinitionUpsertedEvent upserted:
                         state.ScriptId = upserted.ScriptId ?? string.Empty;
                         state.Revision = upserted.ScriptRevision ?? string.Empty;
-                        state.SourceText = upserted.SourceText ?? string.Empty;
                         state.SourceHash = upserted.SourceHash ?? string.Empty;
                         state.ReadModelSchemaVersion = upserted.ReadModelSchemaVersion ?? string.Empty;
                         state.ReadModelSchemaHash = upserted.ReadModelSchemaHash ?? string.Empty;
@@ -1155,7 +1151,6 @@ public class RuntimeScriptInfrastructurePortsTests
             return new ScriptDefinitionSnapshot(
                 state.ScriptId,
                 state.Revision,
-                state.SourceText,
                 state.SourceHash,
                 state.ScriptPackage.Clone(),
                 state.StateTypeUrl,
@@ -1268,7 +1263,6 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             public string ScriptId { get; set; } = string.Empty;
             public string Revision { get; set; } = string.Empty;
-            public string SourceText { get; set; } = string.Empty;
             public string SourceHash { get; set; } = string.Empty;
             public string ReadModelSchemaVersion { get; set; } = string.Empty;
             public string ReadModelSchemaHash { get; set; } = string.Empty;

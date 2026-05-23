@@ -129,7 +129,7 @@ public sealed class ScriptCatalogEntryProjectorTests
                 {
                     ScriptId = "script-1",
                     ScriptRevision = "rev-1",
-                    SourceText = "source",
+                    ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("source"),
                 }),
                 state: BuildCatalogState(
                     lastAppliedEventVersion: 1,

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
@@ -229,8 +230,9 @@ public sealed class AppScopedScriptService
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.SourceText);
         var sourceText = NormalizeRequired(
-            AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.SourceText),
+            scriptPackage.GetPrimaryCSharpSource(),
             nameof(request.SourceText));
         var scriptId = StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script");
 
@@ -241,7 +243,7 @@ public sealed class AppScopedScriptService
                 new ScopeScriptUpsertRequest(
                     normalizedScopeId,
                     scriptId,
-                    sourceText,
+                    scriptPackage,
                     request.RevisionId,
                     request.ExpectedBaseRevision),
                 ct);

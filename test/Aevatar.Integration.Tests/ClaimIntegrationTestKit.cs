@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -47,8 +48,7 @@ internal static class ClaimIntegrationTestKit
         var result = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: orchestrator.ScriptId,
             scriptRevision: orchestrator.Revision,
-            sourceText: orchestrator.Source,
-            sourceHash: orchestrator.SourceHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(orchestrator.Source),
             definitionActorId: definitionActorId,
             ct: ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot);

@@ -1,3 +1,5 @@
+using Aevatar.Scripting.Abstractions;
+
 namespace Aevatar.Integration.Tests;
 
 internal static class ScriptEvolutionIntegrationSources
@@ -792,7 +794,7 @@ internal static class ScriptEvolutionIntegrationSources
                     {
                         ScriptId = "interaction-sendto-script",
                         ScriptRevision = "rev-sendto-1",
-                        SourceText = sendToSource,
+                        ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(sendToSource),
                         SourceHash = ComputeHash(sendToSource),
                     },
                     ct);
