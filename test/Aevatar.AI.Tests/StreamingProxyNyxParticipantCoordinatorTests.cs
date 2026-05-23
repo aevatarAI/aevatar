@@ -427,7 +427,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             cancellationToken.ThrowIfCancellationRequested();
             JoinCommands.Add(command);
             return Task.FromResult(new StreamingProxyRoomJoinResult(
-                StreamingProxyRoomJoinStatus.Joined,
+                StreamingProxyRoomJoinStatus.Accepted,
                 command.AgentId,
                 command.DisplayName));
         }
