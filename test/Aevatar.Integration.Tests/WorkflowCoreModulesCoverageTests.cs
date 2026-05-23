@@ -1004,12 +1004,14 @@ public sealed class WorkflowCoreModulesCoverageTests
         var telegram = new TelegramBridgeRequest();
 
         LLMCallModule.TryApplyTelegramParameter(telegram, "path", "/ensureLogin").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "operation", "/sendMessage").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "llm_timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
         LLMCallModule.TryApplyTelegramParameter(telegram, "timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
         LLMCallModule.TryApplyTelegramParameter(telegram, "offset", "0").Should().BeTrue();
         LLMCallModule.TryApplyTelegramParameter(telegram, "disable_web_page_preview", "not-bool").Should().BeTrue();
         LLMCallModule.TryApplyTelegramParameter(telegram, "unknown", "value").Should().BeFalse();
 
-        telegram.Operation.Should().Be(TelegramBridgeOperation.EnsureLogin);
+        telegram.Operation.Should().Be(TelegramBridgeOperation.SendMessage);
         telegram.HasTimeoutMs.Should().BeTrue();
         telegram.TimeoutMs.Should().Be(5000);
         telegram.Offset.Should().Be(0);

@@ -1,7 +1,9 @@
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.AI.Tests;
 
@@ -88,6 +90,56 @@ public sealed class AgentToolExecutionContextMapperTests
 
         context.Channel.SenderId.Should().Be("ou-lark");
         context.Channel.MessageId.Should().Be("msg-lark");
+    }
+
+    [Fact]
+    public void PayloadRoundTrip_ShouldPreserveTypedContextAndStripOwnedControlKeys()
+    {
+        var context = new AgentToolExecutionContext(
+            new AgentToolRequestIdentity(" request-1 ", " call-1 "),
+            new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
+            new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
+            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 "),
+            new AgentToolSenderBindingContext(" binding-1 "),
+            new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
+            new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external-trace"] = "trace-1",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-token",
+                ["telegram.chat_id"] = "10001",
+            });
+
+        var payload = context.ToPayload();
+        var copy = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        copy.Request.RequestId.Should().Be("request-1");
+        copy.Request.CallId.Should().Be("call-1");
+        copy.Credentials.NyxIdAccessToken.Should().Be("access-1");
+        copy.Credentials.NyxIdOrgToken.Should().Be("org-1");
+        copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-access-1");
+        copy.Caller.ScopeId.Should().Be("scope-1");
+        copy.Caller.OwnerSubject.Should().Be("owner-1");
+        copy.Caller.ResponseId.Should().Be("response-1");
+        copy.Channel.Platform.Should().Be("telegram");
+        copy.Channel.SenderId.Should().Be("sender-1");
+        copy.Channel.RegistrationScopeId.Should().Be("registration-1");
+        copy.Channel.MessageId.Should().Be("message-1");
+        copy.Channel.PlatformMessageId.Should().Be("platform-message-1");
+        copy.SenderBinding.BindingId.Should().Be("binding-1");
+        copy.Routing.ModelOverride.Should().Be("model-1");
+        copy.Routing.NyxIdRoutePreference.Should().Be("route-1");
+        copy.Routing.MaxToolRoundsOverride.Should().Be(7);
+        copy.Routing.UserMemoryPrompt.Should().Be("memory-1");
+        copy.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
+    }
+
+    [Fact]
+    public void FromPayload_WhenPayloadIsNull_ShouldReturnEmptyContext()
+    {
+        AgentToolExecutionContextMapper.FromPayload(null).Should().Be(AgentToolExecutionContext.Empty);
     }
 
     [Theory]

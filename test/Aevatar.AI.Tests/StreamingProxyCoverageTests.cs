@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -1548,6 +1549,18 @@ public class StreamingProxyCoverageTests
         {
             Prompt = "Discuss the webhook setup",
             SessionId = "room-session",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = " typed-access ",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    NyxIdRoutePreference = " typed-route ",
+                    ModelOverride = " typed-model ",
+                },
+            }).ToPayload(),
         });
         await agent.HandleGroupChatMessage(new GroupChatMessageEvent
         {
@@ -1565,6 +1578,9 @@ public class StreamingProxyCoverageTests
         state.Messages[0].IsTopic.Should().BeTrue();
         state.Messages[0].SenderAgentId.Should().Be("user");
         state.Messages[0].Content.Should().Be("Discuss the webhook setup");
+        state.ChatLifecycles["room-session"].AccessToken.Should().Be("typed-access");
+        state.ChatLifecycles["room-session"].PreferredRoute.Should().Be("typed-route");
+        state.ChatLifecycles["room-session"].DefaultModel.Should().Be("typed-model");
         state.Messages[1].IsTopic.Should().BeFalse();
         state.Messages[1].SenderAgentId.Should().Be("agent-2");
         state.Messages[1].SenderName.Should().Be("Bob");
