@@ -17,8 +17,11 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     public string TransportType => TransportTypeName;
 
-    public Func<ReadOnlyMemory<byte>, CancellationToken, Task>? OnMessageReceived { private get; set; }
-    public Func<ExternalLinkStateChange, string?, CancellationToken, Task>? OnStateChanged { private get; set; }
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // This transport emits typed ExternalLink signals instead of arbitrary delegates.
+    // The owning actor/module turn decides how to process each signal.
+    public IExternalLinkSignalSink? SignalSink { private get; set; }
 
     public async Task ConnectAsync(ExternalLinkDescriptor descriptor, CancellationToken ct)
     {
@@ -107,8 +110,20 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
                 result.RequestedOffset = request.RequestedOffset;
         }
 
-        if (OnMessageReceived != null)
-            await OnMessageReceived(result.ToByteArray(), ct);
+        // Refactor (iter56/cluster-912-external-link-signal-contract):
+        // old=transport direct callback, new=typed signal sink.
+        // Connector completion is serialized as an internal message signal.
+        // ExternalLinkManager decides the observable event in the actor turn.
+        if (SignalSink != null)
+        {
+            await SignalSink.PublishMessageReceivedAsync(
+                new ExternalLinkMessageReceivedSignal
+                {
+                    RawPayload = Google.Protobuf.ByteString.CopyFrom(result.ToByteArray()),
+                    ReceivedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                },
+                ct);
+        }
     }
 
     private static ConnectorRequest BuildConnectorRequest(TelegramGetUpdatesRequest request)
@@ -172,8 +187,28 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         return result;
     }
 
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // Lifecycle changes leave this transport as typed state signals.
+    // No caller callback is invoked from transport execution.
     private Task NotifyStateChangedAsync(ExternalLinkStateChange state, string? reason, CancellationToken ct) =>
-        OnStateChanged?.Invoke(state, reason, ct) ?? Task.CompletedTask;
+        SignalSink?.PublishStateChangedAsync(
+            new ExternalLinkTransportStateChangedSignal
+            {
+                State = ToSignalKind(state),
+                Reason = reason ?? string.Empty,
+            },
+            ct) ?? Task.CompletedTask;
+
+    private static ExternalLinkTransportStateSignalKind ToSignalKind(ExternalLinkStateChange state) =>
+        state switch
+        {
+            ExternalLinkStateChange.Connected => ExternalLinkTransportStateSignalKind.Connected,
+            ExternalLinkStateChange.Disconnected => ExternalLinkTransportStateSignalKind.Disconnected,
+            ExternalLinkStateChange.Error => ExternalLinkTransportStateSignalKind.Error,
+            ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
+            _ => ExternalLinkTransportStateSignalKind.Unspecified,
+        };
 }
 
 // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):

@@ -1176,22 +1176,18 @@ public sealed class TelegramBridgeGAgentTests
     {
         public string TransportType => TelegramGetUpdatesExternalLinkTransport.TransportTypeName;
 
-        public Func<ReadOnlyMemory<byte>, CancellationToken, Task>? OnMessageReceived
-        {
-            private get;
-            set;
-        }
-
-        public Func<ExternalLinkStateChange, string?, CancellationToken, Task>? OnStateChanged
-        {
-            private get;
-            set;
-        }
+        public IExternalLinkSignalSink? SignalSink { private get; set; }
 
         public Task ConnectAsync(ExternalLinkDescriptor descriptor, CancellationToken ct)
         {
             _ = descriptor;
-            return OnStateChanged?.Invoke(ExternalLinkStateChange.Connected, null, ct) ?? Task.CompletedTask;
+            return SignalSink?.PublishStateChangedAsync(
+                new ExternalLinkTransportStateChangedSignal
+                {
+                    State = ExternalLinkTransportStateSignalKind.Connected,
+                    Reason = string.Empty,
+                },
+                ct) ?? Task.CompletedTask;
         }
 
         public Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)

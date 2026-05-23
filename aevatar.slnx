@@ -158,6 +158,7 @@
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Core.Tests/Aevatar.ChatRouting.Core.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Voice.Integration.Tests/Aevatar.ChatRouting.Voice.Integration.Tests.csproj" />
+    <Project Path="test/Aevatar.Foundation.ExternalLinks.WebSocket.Tests/Aevatar.Foundation.ExternalLinks.WebSocket.Tests.csproj" />
     <Project Path="test/Aevatar.GAgents.ChatRouting.Tests/Aevatar.GAgents.ChatRouting.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
