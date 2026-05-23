@@ -6,8 +6,14 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -44,6 +50,81 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
+    }
+
+    // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+    //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleCreationCompensationAsync(
+        NyxIdChatConversationCreationCompensationRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
+        try
+        {
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(
+                    command.ScopeId,
+                    NyxIdChatServiceDefaults.GAgentTypeName,
+                    command.ActorId),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Failed to unregister NyxID chat conversation during actor-owned compensation: scope={ScopeId}, actor={ActorId}",
+                command.ScopeId,
+                command.ActorId);
+            return;
+        }
+
+        if (!command.DestroyActor)
+            return;
+
+        try
+        {
+            await Services.GetRequiredService<IActorRuntime>()
+                .DestroyAsync(command.ActorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Failed to destroy NyxID chat actor during actor-owned compensation: actor={ActorId}",
+                command.ActorId);
+        }
+    }
+
+    // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+    //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleDeletionCompensationAsync(
+        NyxIdChatConversationDeletionCompensationRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        try
+        {
+            await Services.GetRequiredService<IGAgentActorRegistryCommandPort>()
+                .RegisterActorAsync(
+                    new GAgentActorRegistration(
+                        command.ScopeId,
+                        NyxIdChatServiceDefaults.GAgentTypeName,
+                        command.ActorId),
+                    CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to restore NyxID chat conversation registration during actor-owned compensation: scope={ScopeId}, actor={ActorId}",
+                command.ScopeId,
+                command.ActorId);
+        }
     }
 
     // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):

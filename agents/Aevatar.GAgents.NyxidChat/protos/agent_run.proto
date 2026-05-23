@@ -128,3 +128,16 @@ message AgentRunCleanupCompletedEvent {
   string correlation_id = 2;
   int64 completed_at_unix_ms = 3;
 }
+
+message NyxIdChatConversationCreationCompensationRequested {
+  string scope_id = 1;
+  string actor_id = 2;
+  bool destroy_actor = 3;
+  string reason = 4;
+}
+
+message NyxIdChatConversationDeletionCompensationRequested {
+  string scope_id = 1;
+  string actor_id = 2;
+  string reason = 3;
+}
