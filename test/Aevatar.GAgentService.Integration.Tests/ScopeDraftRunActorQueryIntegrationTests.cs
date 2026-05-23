@@ -3,13 +3,18 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -20,6 +25,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -149,6 +155,8 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
+            DraftRunProjectionActivationServiceCollectionExtensions.AddWorkflowRunProjectionActivatingInteractionService(
+                builder.Services);
             builder.Services.AddAuthentication("Test")
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
             builder.Services.AddAuthorization();
@@ -206,6 +214,62 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
 
             throw new InvalidOperationException("Unable to locate repository root from test base directory.");
         }
+    }
+
+    private static class DraftRunProjectionActivationServiceCollectionExtensions
+    {
+        public static IServiceCollection AddWorkflowRunProjectionActivatingInteractionService(
+            IServiceCollection services)
+        {
+            services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionProjectionPort>(sp =>
+                new ActivatingWorkflowExecutionProjectionPort(
+                    sp.GetRequiredService<WorkflowExecutionProjectionPort>(),
+                    sp.GetRequiredService<IProjectionScopeActivationService<WorkflowExecutionRuntimeLease>>())));
+            return services;
+        }
+    }
+
+    private sealed class ActivatingWorkflowExecutionProjectionPort(
+        IWorkflowExecutionProjectionPort inner,
+        IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> activationService)
+        : IWorkflowExecutionProjectionPort
+    {
+        public bool ProjectionEnabled => inner.ProjectionEnabled;
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = await activationService.EnsureAsync(
+                new ProjectionScopeStartRequest
+                {
+                    RootActorId = rootActorId,
+                    ProjectionKind = "workflow-execution-session",
+                    Mode = ProjectionRuntimeMode.SessionObservation,
+                    SessionId = commandId,
+                },
+                ct);
+
+            return await inner.AttachExistingActorProjectionAsync(rootActorId, commandId, sink, ct);
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            inner.AttachLiveSinkAsync(lease, sink, ct);
+
+        public Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default) =>
+            inner.DetachLiveSinkAsync(liveSinkLease, ct);
+
+        public Task ReleaseActorProjectionAsync(
+            IWorkflowExecutionProjectionLease lease,
+            CancellationToken ct = default) =>
+            inner.ReleaseActorProjectionAsync(lease, ct);
     }
 
     private sealed class InMemoryGAgentActorStore :

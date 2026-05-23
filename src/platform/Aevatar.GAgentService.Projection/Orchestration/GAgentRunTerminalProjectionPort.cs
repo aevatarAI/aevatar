@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -11,16 +10,16 @@ public sealed class GAgentRunTerminalProjectionPort
     : ServiceProjectionPortBase<GAgentRunTerminalProjectionContext>,
       IGAgentRunTerminalProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> _attachExistingLeaseLookup;
 
     public GAgentRunTerminalProjectionPort(
         ServiceProjectionOptions options,
         IProjectionScopeActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> activationService,
         IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> releaseService,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> attachExistingLeaseLookup)
         : base(options, activationService, releaseService, ServiceProjectionKinds.GAgentRunTerminalDraftRun)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
     public async Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
@@ -72,18 +71,22 @@ public sealed class GAgentRunTerminalProjectionPort
             projectionKind,
             ProjectionRuntimeMode.DurableMaterialization,
             correlationId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
+        // Refactor (iter49/cluster-049-gagentservice-runtime-attach-existing-side-read):
+        //   Old pattern: Capability projection ports duplicated runtime existence checks via IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()).
+        //   New principle: Projection Core exposes typed attach-existing lease/session lookup contract; capability ports delegate to contract instead of runtime actor-id side reads.
+        var runtimeLease = await _attachExistingLeaseLookup.TryGetAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                Mode = scopeKey.Mode,
+                SessionId = scopeKey.SessionId,
+            },
+            ct).ConfigureAwait(false);
+        if (runtimeLease == null)
             return null;
 
-        var context = new GAgentRunTerminalProjectionContext
-        {
-            RootActorId = actorId,
-            ProjectionKind = projectionKind,
-            CorrelationId = correlationId.Trim(),
-            InteractionKind = interactionKind,
-        };
-        return new GAgentRunTerminalProjectionLease(
-            new ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>(context.RootActorId, context));
+        return new GAgentRunTerminalProjectionLease(runtimeLease);
     }
 
     public Task ReleaseProjectionAsync(
