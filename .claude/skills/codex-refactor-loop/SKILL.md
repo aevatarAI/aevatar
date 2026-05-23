@@ -969,6 +969,47 @@ In `state.json`:
 
 Runs **after Phase 6 sync** and **before** any new Phase 2 / 3 / 4 / 5 cluster work on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
 
+### 外部 issue 接入(强制,per Auric 2026-05-23 "外部 issues,非系统主动提的,能否接入流程")
+
+**问题**:audit codex 自动产生的 design issue 走完 Phase 9 链路;但 maintainer 或其他人手动开的 issue(无 `auto-loop` label)不接入,controller 看不见。
+
+**两条 onboarding path**:
+
+#### Path A — 手动 label opt-in(已现成支持)
+
+maintainer 在外部 issue 上加 **4 label**:`auto-loop` + `phase9-auto-solve` + `🔍 phase:design-solving` + `🤖 human:auto-推进`
+
+Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-solve" --state open`,把它当 Phase 9 candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
+
+**前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
+
+#### Path B — Triage codex(推荐,更安全)
+
+maintainer 只加 1 label:`auto-loop-triage`
+
+Controller 每 wakeup sweep `--label "auto-loop-triage"`,对每个新 issue:
+1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
+   - 是否属于本 refactor loop 范畴(违反 CLAUDE/AGENTS 条款)?
+   - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
+   - 若否 → 评论"非 refactor loop 范畴(原因 XXX),退出 auto-loop";移除 `auto-loop-triage` label;不再处理
+2. Triage codex 完成后 issue 进 Phase 9 标准链路
+
+**triage codex 输出 marker**:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
+
+**优势 vs Path A**:
+- maintainer 只加 1 label(易记)
+- body reshaping 由 codex 自动做(maintainer 不用学 design-issue body 模板)
+- 非 refactor 范畴会被自动拒绝(防 controller 把任意 issue 当 cluster 跑)
+- triage codex 调研代码补 evidence,solver 后续准
+
+### 反面(❌ 禁止)
+
+- ❌ controller 无 sweep `auto-loop-triage` label → 外部 issue 加 label 也无人接
+- ❌ Path B triage codex 直接派 solver 而不 reshape body → solver 找不到 evidence
+- ❌ triage codex 接受 non-refactor issue(产品需求 / bug 报告 / feature request)→ Phase 9 完全错位
+- ❌ 加 `auto-loop` label 但忘加 `phase9-auto-solve` → controller 当普通 design issue 等 maintainer,不自动派 solver
+
+
 ### Sweep procedure
 
 For each `state.design_pending[i]`:
