@@ -151,6 +151,9 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
+        // Refactor (iter51/issue-888-voice-presence-lease-ack-snapshot):
+        //   Old pattern: lease ACK returned VoicePresenceSession bound to pre-lease capability snapshot; endpoint accept/reject closed over stale transport facts.
+        //   New principle: lease ACK only signals inbox receipt; attach readiness is a separate signal; resolver preflights capability and returns typed sentinel (Unsupported/PreflightFailed/PendingAttach/Attached); endpoint maps typed sentinel, not boolean closure.
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();

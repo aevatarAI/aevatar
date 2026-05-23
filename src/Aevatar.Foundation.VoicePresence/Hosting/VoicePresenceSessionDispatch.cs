@@ -79,6 +79,21 @@ internal static class VoicePresenceSessionDispatch
             case VoicePresenceSessionLeaseReleased leaseReleased:
                 signal.SessionLeaseReleased = leaseReleased.Clone();
                 break;
+            case VoiceTransportAttachRequested attachRequested:
+                signal.TransportAttachRequested = attachRequested.Clone();
+                break;
+            case VoiceTransportDetachRequested detachRequested:
+                signal.TransportDetachRequested = detachRequested.Clone();
+                break;
+            case VoiceTransportControlFrameReceived controlReceived:
+                signal.TransportControlFrameReceived = controlReceived.Clone();
+                break;
+            case VoiceTransportRelayStopped relayStopped:
+                signal.TransportRelayStopped = relayStopped.Clone();
+                break;
+            case VoiceProviderEventReceived providerReceived:
+                signal.ProviderEventReceived = providerReceived.Clone();
+                break;
             default:
                 throw new InvalidOperationException(
                     $"Unsupported voice module signal payload '{message.GetType().Name}'.");

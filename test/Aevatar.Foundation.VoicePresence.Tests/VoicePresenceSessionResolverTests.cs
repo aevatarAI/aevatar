@@ -22,27 +22,36 @@ public class VoicePresenceSessionResolverTests
             new RecordingLeasePort(),
             new RecordingAttachmentPort());
 
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
 
-        session.ShouldBeNull();
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.PreflightFailed);
+        resolution.PreflightFailure.ShouldBe(VoicePresencePreflightFailureKind.NotFound);
     }
 
     [Fact]
-    public async Task ResolveAsync_should_create_session_from_capability_snapshot_and_typed_lease()
+    public async Task ResolveAsync_should_create_pending_attach_session_from_supported_capability_and_typed_lease()
     {
-        var capability = CreateCapability("agent-1", "voice_presence_openai", initialized: true);
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
         var queryPort = new FakeCapabilityQueryPort(capability);
         var leasePort = new RecordingLeasePort();
         var attachmentPort = new RecordingAttachmentPort();
         var resolver = new ActorOwnedVoicePresenceSessionResolver(queryPort, leasePort, attachmentPort);
 
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_openai"));
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_openai"));
 
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach);
+        resolution.ObservedStateVersion.ShouldBe(5);
+        var session = resolution.Session;
         session.ShouldNotBeNull();
         session.Module.ShouldBeNull();
         session.SelfEventDispatcher.ShouldBeNull();
         session.PcmSampleRateHz.ShouldBe(16000);
         session.IsInitialized.ShouldBeTrue();
+        session.IsTransportAttached.ShouldBeFalse();
         leasePort.AcquireRequests.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
 
         var transport = new PassiveVoiceTransport();
@@ -52,6 +61,146 @@ public class VoicePresenceSessionResolverTests
         attachmentPort.AttachedHandles.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
         attachmentPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe(session.LeaseHandle!.SessionId);
         leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.SessionId.ShouldBe(session.LeaseHandle.SessionId);
+    }
+
+    [Theory]
+    [InlineData(VoiceRemoteAudioSupport.Unspecified)]
+    [InlineData(VoiceRemoteAudioSupport.LocalOnly)]
+    public async Task ResolveAsync_should_return_unsupported_before_lease_when_remote_audio_is_not_supported(
+        VoiceRemoteAudioSupport remoteAudioSupport)
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            remoteAudioSupport: remoteAudioSupport);
+        var leasePort = new RecordingLeasePort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            new RecordingAttachmentPort());
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.Unsupported);
+        resolution.ObservedStateVersion.ShouldBe(5);
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_unsupported_before_lease_when_default_attachment_port_is_unavailable()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            new UnavailableVoicePresenceTransportAttachmentPort());
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.Unsupported);
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_preflight_failed_before_lease_when_capability_is_not_initialized()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: false,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            new RecordingAttachmentPort());
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.PreflightFailed);
+        resolution.PreflightFailure.ShouldBe(VoicePresencePreflightFailureKind.NotInitialized);
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_preflight_failed_before_lease_when_transport_is_already_attached()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            new RecordingAttachmentPort());
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.PreflightFailed);
+        resolution.PreflightFailure.ShouldBe(VoicePresencePreflightFailureKind.TransportAlreadyAttached);
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_attached_detach_session_when_transport_is_already_attached_for_detach()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "session-1",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            attachmentPort);
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest(
+            "agent-1",
+            "voice_presence",
+            VoicePresenceSessionRequestPurpose.Detach));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.LeaseAcceptedAttached);
+        resolution.ObservedStateVersion.ShouldBe(5);
+        var session = resolution.Session;
+        session.ShouldNotBeNull();
+        session.IsTransportAttached.ShouldBeTrue();
+
+        await session.DetachTransportAsync();
+
+        attachmentPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
+        leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.SessionId.ShouldBe("session-1");
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void VoicePresenceSessionResolution_should_model_four_typed_branches()
+    {
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => Task.CompletedTask,
+            detachTransportAsync: static (_, _) => Task.CompletedTask);
+
+        VoicePresenceSessionResolution.Unsupported().Kind.ShouldBe(VoicePresenceSessionResolutionKind.Unsupported);
+        VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound)
+            .Kind.ShouldBe(VoicePresenceSessionResolutionKind.PreflightFailed);
+        VoicePresenceSessionResolution.LeaseAcceptedPendingAttach(session)
+            .Kind.ShouldBe(VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach);
+        VoicePresenceSessionResolution.LeaseAcceptedAttached(session)
+            .Kind.ShouldBe(VoicePresenceSessionResolutionKind.LeaseAcceptedAttached);
     }
 
     [Fact]
@@ -89,7 +238,7 @@ public class VoicePresenceSessionResolverTests
             VoiceRemoteAudioSupport.LocalOnly));
 
         handle.SessionId.ShouldBe("lease-1");
-        handle.StateVersion.ShouldBe(7);
+        handle.ObservedStateVersion.ShouldBe(7);
         handle.ExpiresAtUtc.ShouldBe(expiresAt.ToUniversalTime());
         dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
         var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
@@ -197,7 +346,7 @@ public class VoicePresenceSessionResolverTests
     public async Task VoicePresenceCapabilityReadModelProjector_should_upsert_committed_runtime_state()
     {
         var dispatcher = new RecordingWriteDispatcher();
-        var updatedAt = DateTimeOffset.UtcNow;
+        var updatedAt = new DateTimeOffset(2026, 5, 23, 4, 0, 52, 288, TimeSpan.Zero);
         var projector = new VoicePresenceCapabilityReadModelProjector(
             dispatcher,
             new FixedProjectionClock(updatedAt));
@@ -214,7 +363,8 @@ public class VoicePresenceSessionResolverTests
                 },
             },
             version: 9,
-            eventId: "evt-9");
+            eventId: "evt-9",
+            observedAt: updatedAt);
 
         await projector.ProjectAsync(
             new VoicePresenceCapabilityMaterializationContext
@@ -301,11 +451,26 @@ public class VoicePresenceSessionResolverTests
         source.ShouldNotContain("GetModules()");
     }
 
+    [Fact]
+    public void ActorOwnedSession_source_should_not_bind_post_lease_predicates_to_preflight_snapshot()
+    {
+        var repoRoot = FindRepoRoot();
+        var sessionPath = Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence/Hosting/VoicePresenceSession.cs");
+        var source = File.ReadAllText(sessionPath);
+
+        source.ShouldNotContain("_isInitialized = () => capability.Initialized");
+        source.ShouldNotContain("_isTransportAttached = () => capability.TransportAttached");
+    }
+
     private static VoicePresenceCapabilitySnapshot CreateCapability(
         string actorId,
         string moduleName,
         bool initialized,
-        string? activeSessionId = null) =>
+        string? activeSessionId = null,
+        bool transportAttached = false,
+        VoiceRemoteAudioSupport remoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly) =>
         new(
             actorId,
             moduleName,
@@ -313,11 +478,11 @@ public class VoicePresenceSessionResolverTests
             "event-5",
             DateTimeOffset.UtcNow,
             initialized,
-            false,
+            transportAttached,
             16000,
             activeSessionId,
             DateTimeOffset.UtcNow.AddMinutes(5),
-            VoiceRemoteAudioSupport.LocalOnly);
+            remoteAudioSupport);
 
     private static string FindRepoRoot()
     {
@@ -366,9 +531,9 @@ public class VoicePresenceSessionResolverTests
                 request.ModuleName,
                 request.SessionId,
                 request.OwnerId,
-                6,
+                request.ObservedStateVersion,
                 request.ExpiresAtUtc,
-                VoiceRemoteAudioSupport.LocalOnly));
+                request.ObservedRemoteAudioSupport));
         }
 
         public Task ReleaseAsync(
@@ -441,11 +606,14 @@ public class VoicePresenceSessionResolverTests
     private static EventEnvelope WrapCommitted(
         IMessage payload,
         long version = 1,
-        string eventId = "evt-1") =>
-        new()
+        string eventId = "evt-1",
+        DateTimeOffset? observedAt = null)
+    {
+        var timestamp = Timestamp.FromDateTimeOffset(observedAt ?? DateTimeOffset.UtcNow);
+        return new EventEnvelope
         {
             Id = eventId,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = timestamp.Clone(),
             Route = EnvelopeRouteSemantics.CreateObserverPublication("agent-1"),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
@@ -453,11 +621,13 @@ public class VoicePresenceSessionResolverTests
                 {
                     EventId = eventId,
                     Version = version,
+                    Timestamp = timestamp.Clone(),
                     EventData = Any.Pack(payload),
                 },
                 StateRoot = Any.Pack(new VoicePresenceRuntimeState()),
             }),
         };
+    }
 
     private sealed class FakeCapabilityReader(VoicePresenceCapabilityReadModel? readModel)
         : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>

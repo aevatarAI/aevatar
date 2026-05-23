@@ -28,6 +28,7 @@ message StreamingProxyGAgentState {
   repeated StreamingProxyChatMessage messages = 3;
   int64 next_sequence = 4;
   map<string, StreamingProxyChatSessionTerminalRecord> terminal_sessions = 5;
+  map<string, StreamingProxyChatLifecycleRecord> chat_lifecycles = 6;
 }
 
 message StreamingProxyChatSessionTerminalRecord {
@@ -35,6 +36,14 @@ message StreamingProxyChatSessionTerminalRecord {
   StreamingProxyChatSessionTerminalStatus status = 2;
   google.protobuf.Timestamp terminal_at = 3;
   string error_message = 4;
+}
+
+message StreamingProxyChatLifecycleRecord {
+  string session_id = 1;
+  string scope_id = 2;
+  string access_token = 3;
+  string preferred_route = 4;
+  string default_model = 5;
 }
 
 // ─── Events ───
@@ -75,6 +84,14 @@ message StreamingProxyChatSessionTerminalStateChanged {
   StreamingProxyChatSessionTerminalStatus status = 2;
   google.protobuf.Timestamp terminal_at = 3;
   string error_message = 4;
+}
+
+message StreamingProxyChatLifecycleAcceptedEvent {
+  string session_id = 1;
+  string scope_id = 2;
+  string access_token = 3;
+  string preferred_route = 4;
+  string default_model = 5;
 }
 
 message StreamingProxyRoomSessionEnvelope {

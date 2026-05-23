@@ -46,6 +46,8 @@ public static class ServiceCollectionExtensions
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
+        services.TryAddSingleton<NyxIdChatLifecycleFacade>();
+        AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
@@ -169,6 +171,22 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>()));
+    }
+
+    private static void AddNyxIdLifecycleCommands(IServiceCollection services)
+    {
+        services.TryAddSingleton<ICommandTargetResolver<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>, NyxIdChatConversationCreateCommandTargetResolver>();
+        services.TryAddSingleton<ICommandTargetResolver<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandStartError>, NyxIdChatConversationDeleteCommandTargetResolver>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatConversationCreateCommand>, NyxIdChatLifecycleCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatConversationDeleteCommand>, NyxIdChatLifecycleCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>>();
+        services.TryAddSingleton<ICommandReceiptFactory<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt>, NyxIdChatCreateLifecycleCommandReceiptFactory>();
+        services.TryAddSingleton<ICommandReceiptFactory<NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt>, NyxIdChatDeleteLifecycleCommandReceiptFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
+        services.TryAddSingleton<ICommandDispatchPipeline<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchPipeline<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
+        services.TryAddSingleton<ICommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome>, DefaultCommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome>>();
+        services.TryAddSingleton<ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
     }
 
     private static NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)

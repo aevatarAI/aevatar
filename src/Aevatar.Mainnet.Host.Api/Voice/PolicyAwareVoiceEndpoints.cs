@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
 
@@ -102,42 +104,23 @@ public static class PolicyAwareVoiceEndpoints
         }
 
         var moduleName = FirstNonEmpty(action.ForwardToGagent.VoiceModuleName, routeInput.Voice?.VoiceModuleName);
-        var session = await sessionResolver.ResolveAsync(
+        var resolution = await sessionResolver.ResolveAsync(
             new VoicePresenceSessionRequest(actorId, moduleName),
             http.RequestAborted);
+        var session = await ResolveAcceptedVoiceSessionAsync(http, resolution);
         if (session is null)
-        {
-            http.Response.StatusCode = StatusCodes.Status404NotFound;
-            await http.Response.WriteAsync("Voice session not found for this agent.", http.RequestAborted);
             return;
-        }
 
-        if (!session.IsInitialized)
-        {
-            // 503 (not 404) so clients treat the routed target as cold, not
-            // missing, and retry. Matches the dev bypass at
-            // VoicePresenceEndpoints.MapVoicePresenceWebSocket so /ws/voice
-            // behaves identically while the GAgent's voice module warms up.
-            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
-            return;
-        }
-
-        if (session.IsTransportAttached)
-        {
-            http.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await http.Response.WriteAsync("Voice transport already attached.", http.RequestAborted);
-            return;
-        }
-
+        var options = http.RequestServices.GetService<IOptions<PolicyAwareVoiceEndpointOptions>>()?.Value
+                      ?? new PolicyAwareVoiceEndpointOptions();
         var ws = await http.WebSockets.AcceptWebSocketAsync();
         var transport = new WebSocketVoiceTransport(ws);
         var attached = false;
         try
         {
-            await session.AttachTransportAsync(transport, http.RequestAborted);
+            await AttachWithTimeoutAsync(session, transport, options.AttachTimeout, http.RequestAborted);
             attached = true;
-            await WaitUntilClosedAsync(ws, http.RequestAborted);
+            await WaitUntilClosedAsync(ws, options.WebSocketCloseWaitTimeout, http.RequestAborted);
         }
         catch when (!attached)
         {
@@ -147,6 +130,58 @@ public static class PolicyAwareVoiceEndpoints
         {
             if (attached)
                 await session.DetachTransportAsync(transport, http.RequestAborted);
+        }
+    }
+
+    private static async Task<VoicePresenceSession?> ResolveAcceptedVoiceSessionAsync(
+        HttpContext http,
+        VoicePresenceSessionResolution resolution)
+    {
+        switch (resolution.Kind)
+        {
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedAttached:
+                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
+                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
+            case VoicePresenceSessionResolutionKind.Unsupported:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableReason, http.RequestAborted);
+                return null;
+            case VoicePresenceSessionResolutionKind.PreflightFailed:
+                await WritePreflightFailureAsync(http, resolution.PreflightFailure);
+                return null;
+            default:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice session resolution failed.", http.RequestAborted);
+                return null;
+        }
+    }
+
+    private const string VoiceRemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
+
+    private static async Task WritePreflightFailureAsync(
+        HttpContext http,
+        VoicePresencePreflightFailureKind? failure)
+    {
+        switch (failure)
+        {
+            case VoicePresencePreflightFailureKind.NotFound:
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await http.Response.WriteAsync("Voice session not found for this agent.", http.RequestAborted);
+                break;
+            case VoicePresencePreflightFailureKind.NotInitialized:
+                // 503 (not 404) so clients treat the routed target as cold, not missing, and retry.
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
+                break;
+            case VoicePresencePreflightFailureKind.TransportAlreadyAttached:
+                http.Response.StatusCode = StatusCodes.Status409Conflict;
+                await http.Response.WriteAsync("Voice transport already attached.", http.RequestAborted);
+                break;
+            default:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice session preflight failed.", http.RequestAborted);
+                break;
         }
     }
 
@@ -311,12 +346,38 @@ public static class PolicyAwareVoiceEndpoints
             .Select(static ch => char.ToLowerInvariant(ch))
             .ToArray());
 
-    private static async Task WaitUntilClosedAsync(WebSocket ws, CancellationToken ct)
+    private static async Task AttachWithTimeoutAsync(
+        VoicePresenceSession session,
+        WebSocketVoiceTransport transport,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            await session.AttachTransportAsync(transport, ct);
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        await session.AttachTransportAsync(transport, timeoutCts.Token).WaitAsync(timeoutCts.Token);
+    }
+
+    private static async Task WaitUntilClosedAsync(
+        WebSocket ws,
+        TimeSpan timeout,
+        CancellationToken ct)
     {
         try
         {
-            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
-                await Task.Delay(500, ct);
+            using var timeoutCts = timeout > TimeSpan.Zero
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            timeoutCts?.CancelAfter(timeout);
+            var waitToken = timeoutCts?.Token ?? ct;
+
+            while (ws.State == WebSocketState.Open && !waitToken.IsCancellationRequested)
+                await Task.Delay(500, waitToken);
         }
         catch (OperationCanceledException)
         {
