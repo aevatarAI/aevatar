@@ -1,17 +1,14 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.Hosting;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -138,14 +135,12 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         GAgentDraftRunHttpRequest request,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
-        [FromServices] IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        [FromServices] IGAgentDraftRunInteractionPort interactionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
         var session = new DraftRunSseSession(http.Response);
-        GAgentDraftRunPreparedActor? preparedActor = null;
 
         try
         {
@@ -155,32 +150,34 @@ public static class ScopeGAgentEndpoints
             if (!TryValidateDraftRunRequest(http.Response, request))
                 return;
 
-            preparedActor = await TryPrepareDraftRunActorAsync(
-                actorPreparationPort,
-                http.Response,
-                scopeId,
-                request,
-                ct);
-            if (preparedActor is null)
-                return;
-            var command = await BuildDraftRunCommandAsync(http, scopeId, request, preparedActor, ct);
-
+            var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
             var timeoutMs = request.TimeoutMs > 0 ? request.TimeoutMs : 120_000;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(timeoutMs);
 
-            var interaction = await interactionService.ExecuteAsync(
-                command,
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Host keeps HTTP validation and SSE error mapping only.
+            // Application owns draft-run actor lifecycle and rollback around command interaction.
+            // This covers pre-dispatch observation failures without changing CQRS Core cleanup semantics.
+            var interaction = await interactionPort.ExecuteAsync(
+                new GAgentDraftRunInteractionRequest(
+                    ScopeId: scopeId,
+                    ActorTypeName: request.ActorTypeName,
+                    Prompt: request.Prompt,
+                    PreferredActorId: request.PreferredActorId,
+                    SessionId: request.SessionId,
+                    NyxIdAccessToken: ExtractBearerToken(http),
+                    ModelOverride: defaultModel,
+                    PreferredLlmRoute: preferredRoute),
                 session.EmitAsync,
                 session.WriteAcceptedAsync,
                 timeoutCts.Token);
 
             if (!interaction.Succeeded)
             {
-                await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
                 await WriteDraftRunStartErrorAsync(
                     http.Response,
-                    preparedActor,
+                    interaction.Receipt,
                     request.ActorTypeName,
                     request.PreferredActorId,
                     interaction.Error,
@@ -193,8 +190,6 @@ public static class ScopeGAgentEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
-
             try
             {
                 await session.WriteTimeoutAsync(CancellationToken.None);
@@ -207,12 +202,9 @@ public static class ScopeGAgentEndpoints
         catch (OperationCanceledException)
         {
             // Client disconnected.
-            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
         }
         catch (Exception ex)
         {
-            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
-
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
 
@@ -258,53 +250,6 @@ public static class ScopeGAgentEndpoints
         return true;
     }
 
-    private static async Task<GAgentDraftRunPreparedActor?> TryPrepareDraftRunActorAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        HttpResponse response,
-        string scopeId,
-        GAgentDraftRunHttpRequest request,
-        CancellationToken ct)
-    {
-        var preparation = await actorPreparationPort.PrepareAsync(
-            new GAgentDraftRunPreparationRequest(
-                scopeId,
-                request.ActorTypeName,
-                request.PreferredActorId),
-            ct);
-        if (!preparation.Succeeded)
-        {
-            await WriteDraftRunStartErrorAsync(
-                response,
-                preparedActor: null,
-                request.ActorTypeName,
-                request.PreferredActorId,
-                preparation.Error,
-                ct);
-            return null;
-        }
-
-        return preparation.PreparedActor;
-    }
-
-    private static async Task<GAgentDraftRunCommand> BuildDraftRunCommandAsync(
-        HttpContext http,
-        string scopeId,
-        GAgentDraftRunHttpRequest request,
-        GAgentDraftRunPreparedActor preparedActor,
-        CancellationToken ct)
-    {
-        var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
-        return new GAgentDraftRunCommand(
-            ScopeId: scopeId,
-            ActorTypeName: preparedActor.ActorTypeName,
-            Prompt: request.Prompt.Trim(),
-            PreferredActorId: preparedActor.ActorId,
-            SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
-            NyxIdAccessToken: ExtractBearerToken(http),
-            ModelOverride: defaultModel,
-            PreferredLlmRoute: preferredRoute);
-    }
-
     private static async Task<(string? DefaultModel, string? PreferredRoute)> TryGetUserLlmDefaultsAsync(
         HttpContext http,
         CancellationToken ct)
@@ -328,7 +273,7 @@ public static class ScopeGAgentEndpoints
 
     private static async Task WriteDraftRunStartErrorAsync(
         HttpResponse response,
-        GAgentDraftRunPreparedActor? preparedActor,
+        GAgentDraftRunAcceptedReceipt? receipt,
         string requestedActorTypeName,
         string? requestedActorId,
         GAgentDraftRunStartError error,
@@ -345,12 +290,12 @@ public static class ScopeGAgentEndpoints
                     ct);
                 break;
             case GAgentDraftRunStartError.ActorTypeMismatch:
-                var actorId = string.IsNullOrWhiteSpace(preparedActor?.ActorId)
+                var actorId = string.IsNullOrWhiteSpace(receipt?.ActorId)
                     ? requestedActorId?.Trim()
-                    : preparedActor.ActorId;
-                var actorTypeName = string.IsNullOrWhiteSpace(preparedActor?.ActorTypeName)
+                    : receipt.ActorId;
+                var actorTypeName = string.IsNullOrWhiteSpace(receipt?.ActorTypeName)
                     ? requestedActorTypeName
-                    : preparedActor.ActorTypeName;
+                    : receipt.ActorTypeName;
                 response.StatusCode = StatusCodes.Status409Conflict;
                 await WriteJsonErrorAsync(
                     response,
@@ -361,14 +306,6 @@ public static class ScopeGAgentEndpoints
                     ct);
                 break;
         }
-    }
-
-    private static async Task RollbackPreparedActorAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        GAgentDraftRunPreparedActor? preparedActor)
-    {
-        if (preparedActor?.RequiresRollbackOnFailure == true)
-            await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
     }
 
     private static async Task WriteDraftRunExceptionJsonAsync(
