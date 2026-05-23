@@ -104,6 +104,60 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+
+        services.AddProjectionMaterializationRuntimeCore<
+            TestSessionScopedMaterializationContext,
+            TestSessionScopedMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestSessionScopedMaterializationContext>>(
+            scopeKey => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionScopedMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var lookup = provider.GetRequiredService<IProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-lookup",
+            "projection-lookup",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "correlation-lookup");
+
+        var missing = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+        var lease = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+
+        missing.Should().BeNull();
+        lease.Should().NotBeNull();
+        lease!.Context.RootActorId.Should().Be("actor-lookup");
+        lease.Context.ProjectionKind.Should().Be("projection-lookup");
+        lease.Context.SessionId.Should().Be("correlation-lookup");
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterSessionLifecycleAndSessionScopeContext()
     {
         var runtime = new RecordingActorRuntime();
@@ -150,6 +204,52 @@ public sealed class ProjectionRuntimeRegistrationTests
         dispatchPort.Dispatched.Should().HaveCount(2);
         dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("session-9");
         dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId.Should().Be("session-9");
+    }
+
+    [Fact]
+    public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterAttachExistingSessionLeaseLookup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+
+        services.AddEventSinkProjectionRuntimeCore<
+            TestSessionContext,
+            TestSessionLease,
+            StringValue,
+            ProjectionSessionScopeGAgent<TestSessionContext>>(
+            scopeKey => new TestSessionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var lookup = provider.GetRequiredService<IProjectionScopeAttachExistingLeaseLookup<TestSessionLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-session",
+            "projection-session",
+            ProjectionRuntimeMode.SessionObservation,
+            "session-lookup");
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+
+        var lease = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+
+        lease.Should().NotBeNull();
+        lease!.ScopeId.Should().Be("actor-session");
+        lease.SessionId.Should().Be("session-lookup");
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]

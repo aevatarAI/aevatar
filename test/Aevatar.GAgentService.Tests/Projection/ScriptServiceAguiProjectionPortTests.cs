@@ -35,7 +35,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
             activation,
             release,
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingRunProjectionAsync("script-actor-1", "run-1", sink, CancellationToken.None);
@@ -77,7 +77,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
             activation,
             release,
             hub,
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup(new RecordingActorRuntime()));
 
         var attachment = await port.AttachExistingRunProjectionAsync(
             "script-actor-1",
@@ -129,7 +129,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingRunProjectionAsync(
@@ -173,13 +173,13 @@ public sealed class ScriptServiceAguiProjectionPortTests
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var enabledPort = new ScriptServiceAguiProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
 
         (await disabledPort.AttachExistingRunProjectionAsync(
             "script-actor-1",
@@ -212,6 +212,18 @@ public sealed class ScriptServiceAguiProjectionPortTests
         ProjectionRuntimeMode mode,
         string sessionId) =>
         ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(actorId, projectionKind, mode, sessionId));
+
+    private static IProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease, ScriptServiceAguiProjectionContext>(
+            runtime,
+            static request => new ScriptServiceAguiProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            static (_, context) => new ScriptServiceAguiRuntimeLease(context));
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease>
     {

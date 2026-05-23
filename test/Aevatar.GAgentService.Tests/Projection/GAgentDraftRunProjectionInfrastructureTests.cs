@@ -49,7 +49,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             activation,
             release,
             hub,
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup(new RecordingActorRuntime()));
         var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1", CancellationToken.None);
         var sink = new RecordingEventSink();
 
@@ -94,7 +94,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingActorProjectionAsync(
@@ -135,13 +135,13 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
         var enabledPort = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
             activation,
             new RecordingReleaseService(),
             hub,
-            runtime);
+            CreateAttachExistingLookup(runtime));
 
         (await disabledPort.AttachExistingActorProjectionAsync(
             "actor-1",
@@ -167,6 +167,18 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         activation.Requests.Should().BeEmpty();
         hub.SubscribeCalls.Should().Be(0);
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease, GAgentDraftRunProjectionContext>(
+            runtime,
+            static request => new GAgentDraftRunProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            static (_, context) => new GAgentDraftRunRuntimeLease(context));
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>
     {
