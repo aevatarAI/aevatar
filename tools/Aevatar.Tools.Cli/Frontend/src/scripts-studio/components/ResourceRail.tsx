@@ -3,7 +3,7 @@ import type {
   ScriptCatalogSnapshot,
   ScriptDraft,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScopedScriptDetail,
 } from '../models';
 import { formatDateTime, isScopeDetailDirty } from '../utils';
@@ -13,7 +13,7 @@ export function ResourceRail(props: {
   drafts: ScriptDraft[];
   filteredDrafts: ScriptDraft[];
   filteredScopeScripts: ScopedScriptDetail[];
-  runtimeSnapshots: ScriptReadModelSnapshot[];
+  runtimeSnapshots: ScriptRuntimeActivitySnapshot[];
   proposalDecisions: ScriptPromotionDecision[];
   scopeCatalogsByScriptId: Record<string, ScriptCatalogSnapshot>;
   selectedDraft: ScriptDraft | null;

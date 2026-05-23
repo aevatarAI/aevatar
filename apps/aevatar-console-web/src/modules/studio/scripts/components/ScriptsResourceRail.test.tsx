@@ -4,7 +4,7 @@ import { renderWithQueryClient } from '../../../../../tests/reactQueryTestUtils'
 import type {
   ScriptDraft,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScopedScriptDetail,
 } from '@/shared/studio/scriptsModels';
 import ScriptsResourceRail from './ScriptsResourceRail';
@@ -53,14 +53,17 @@ function createScopeScript(): ScopedScriptDetail {
   };
 }
 
-function createRuntimeSnapshot(): ScriptReadModelSnapshot {
+function createRuntimeSnapshot(): ScriptRuntimeActivitySnapshot {
   return {
     actorId: 'runtime-1',
     scriptId: 'runtime-script',
     definitionActorId: 'definition-1',
     revision: 'rev-1',
-    readModelTypeUrl: 'type.googleapis.com/example.ReadModel',
-    readModelPayloadJson: '{"status":"ok"}',
+    input: '',
+    output: '',
+    status: 'ok',
+    lastCommandId: '',
+    notes: [],
     stateVersion: 1,
     lastEventId: 'event-1',
     updatedAt: '2026-03-23T00:00:00Z',

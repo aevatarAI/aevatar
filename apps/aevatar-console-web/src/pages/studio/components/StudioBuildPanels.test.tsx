@@ -650,7 +650,7 @@ describe('StudioWorkflowBuildPanel', () => {
       runId: 'run-script-1',
       sourceHash: 'hash-run',
       commandTypeUrl: 'type.googleapis.com/AppScriptCommand',
-      readModelUrl: 'type.googleapis.com/AppScriptReadModel',
+      activityUrl: '/api/app/scripts/runtimes/runtime-run/activity',
     });
 
     render(

@@ -4,7 +4,7 @@ import { renderWithQueryClient } from '../../../../../tests/reactQueryTestUtils'
 import type {
   ScriptCatalogSnapshot,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScriptValidationResult,
   ScopedScriptDetail,
 } from '@/shared/studio/scriptsModels';
@@ -32,13 +32,16 @@ const validationResult: ScriptValidationResult = {
   ],
 };
 
-const runtimeSnapshot: ScriptReadModelSnapshot = {
+const runtimeSnapshot: ScriptRuntimeActivitySnapshot = {
   actorId: 'runtime-1',
   scriptId: 'script-1',
   definitionActorId: 'definition-1',
   revision: 'rev-1',
-  readModelTypeUrl: 'type.googleapis.com/example.ReadModel',
-  readModelPayloadJson: '{"input":"hello","output":"HELLO","status":"ok","last_command_id":"cmd-1","notes":["trimmed"]}',
+  input: 'hello',
+  output: 'HELLO',
+  status: 'ok',
+  lastCommandId: 'cmd-1',
+  notes: ['trimmed'],
   stateVersion: 3,
   lastEventId: 'event-1',
   updatedAt: '2026-03-23T00:00:00Z',

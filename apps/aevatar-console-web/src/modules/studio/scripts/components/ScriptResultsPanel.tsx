@@ -7,7 +7,7 @@ import type {
   ScriptDefinitionBindingSnapshot,
   ScriptCatalogSnapshot,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
   ScopedScriptDetail,
@@ -31,7 +31,7 @@ type ScriptResultsPanelProps = {
   validationPending: boolean;
   validationError: string;
   validationResult: ScriptValidationResult | null;
-  selectedSnapshot: ScriptReadModelSnapshot | null;
+  selectedSnapshot: ScriptRuntimeActivitySnapshot | null;
   selectedSnapshotView: SnapshotView;
   selectedCatalog: ScriptCatalogSnapshot | null;
   scopeDetail: ScopedScriptDetail | null;
@@ -47,18 +47,6 @@ function formatProblemLocation(diagnostic: ScriptValidationDiagnostic): string {
   }
 
   return `${filePath}:${diagnostic.startLine}:${diagnostic.startColumn}`;
-}
-
-function prettyPrintJson(rawJson: string | null | undefined): string {
-  if (!rawJson) {
-    return '-';
-  }
-
-  try {
-    return JSON.stringify(JSON.parse(rawJson), null, 2);
-  } catch {
-    return rawJson;
-  }
 }
 
 function summarizeDefinitionSnapshot(
@@ -138,10 +126,13 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
           </div>
         </div>
         <div className="console-scripts-detail-card muted">
-          <div className="console-scripts-section-label">Read model payload</div>
-          <pre className="console-scripts-pre" style={{ marginTop: 12 }}>
-            {prettyPrintJson(selectedSnapshot.readModelPayloadJson)}
-          </pre>
+          <div className="console-scripts-section-label">Runtime activity</div>
+          <div className="console-scripts-detail-copy">
+            <div>Input: {selectedSnapshot.input || '-'}</div>
+            <div>Output: {selectedSnapshot.output || '-'}</div>
+            <div>Last command: {selectedSnapshot.lastCommandId || '-'}</div>
+            <div>Notes: {selectedSnapshot.notes.join(', ') || '-'}</div>
+          </div>
         </div>
       </div>
     );

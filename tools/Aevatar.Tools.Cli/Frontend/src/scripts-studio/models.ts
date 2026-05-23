@@ -48,16 +48,19 @@ export type DraftRunResult = {
   runId: string;
   sourceHash: string;
   commandTypeUrl: string;
-  readModelUrl: string;
+  activityUrl: string;
 };
 
-export type ScriptReadModelSnapshot = {
+export type ScriptRuntimeActivitySnapshot = {
   actorId: string;
   scriptId: string;
   definitionActorId: string;
   revision: string;
-  readModelTypeUrl: string;
-  readModelPayloadJson: string;
+  input: string;
+  output: string;
+  status: string;
+  lastCommandId: string;
+  notes: string[];
   stateVersion: number;
   lastEventId: string;
   updatedAt: string;
@@ -216,7 +219,7 @@ export type ScriptDraft = {
   lastSourceHash: string;
   lastRun: DraftRunResult | null;
   lastChatResponse: string | null;
-  lastSnapshot: ScriptReadModelSnapshot | null;
+  lastSnapshot: ScriptRuntimeActivitySnapshot | null;
   lastPromotion: ScriptPromotionDecision | null;
   scopeDetail: ScopedScriptDetail | null;
 };
