@@ -12,12 +12,9 @@ using ProtoWorkspaceSettings = Aevatar.Studio.Workspace.StudioWorkspaceSettings;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: workspace services wrote directly to a file store and treated that file as authoritative state.
-//   New principle: this adapter is only the dispatch boundary; it ensures the workspace actor exists and sends typed commands into its inbox.
-// Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-//   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-//   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspaceCommandPort
 {
     private readonly IStudioActorBootstrap _bootstrap;
@@ -45,8 +42,6 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
             Settings = new ProtoWorkspaceSettings
             {
                 RuntimeBaseUrl = settings.RuntimeBaseUrl,
-                AppearanceTheme = settings.AppearanceTheme,
-                ColorMode = settings.ColorMode,
             },
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             ExpectedVersion = expectedVersion ?? 0,
@@ -86,9 +81,9 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
         }, expectedVersion, ct);
     }
 
-    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+    //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+    //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
     public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
         StudioWorkflowDraftRecord draft,
         long? expectedVersion = null,
@@ -110,9 +105,9 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
         }, expectedVersion, ct);
     }
 
-    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+    //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+    //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
     public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
         string workflowId,
         long? expectedVersion = null,
@@ -187,39 +182,10 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
             DirectoryId = draft.DirectoryId,
             DirectoryLabel = draft.DirectoryLabel,
             Yaml = draft.Yaml,
-            Layout = draft.Layout is null ? null : ToProtoLayout(draft.Layout),
             CreatedAtUtc = Timestamp.FromDateTimeOffset(draft.CreatedAtUtc),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(draft.UpdatedAtUtc),
             Version = draft.Version,
         };
-    }
-
-    internal static StudioWorkflowLayout ToProtoLayout(WorkflowLayoutDocument layout)
-    {
-        var proto = new StudioWorkflowLayout
-        {
-            Viewport = new StudioWorkflowViewport
-            {
-                X = layout.Viewport.X,
-                Y = layout.Viewport.Y,
-                Zoom = layout.Viewport.Zoom,
-            },
-            EntryWorkflow = layout.EntryWorkflow ?? string.Empty,
-        };
-        proto.Nodes.AddRange(layout.NodePositions.Select(item => new StudioWorkflowNodeLayout
-        {
-            NodeId = item.Key,
-            X = item.Value.X,
-            Y = item.Value.Y,
-        }));
-        proto.Groups.AddRange(layout.Groups.Select(item =>
-        {
-            var group = new StudioWorkflowLayoutGroup { GroupId = item.Key };
-            group.NodeIds.AddRange(item.Value);
-            return group;
-        }));
-        proto.Collapsed.AddRange(layout.Collapsed);
-        return proto;
     }
 
     private static string NormalizeRequired(string value, string fieldName)

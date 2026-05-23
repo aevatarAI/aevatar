@@ -32,8 +32,6 @@ public sealed class StudioWorkspaceGAgentTests
             Settings = new StudioWorkspaceSettings
             {
                 RuntimeBaseUrl = "http://127.0.0.1:5100",
-                AppearanceTheme = "teal",
-                ColorMode = "dark",
             },
             UpdatedAtUtc = Now(),
         }));
@@ -54,14 +52,14 @@ public sealed class StudioWorkspaceGAgentTests
         }));
 
         agent.State.ScopeId.Should().Be("scope-1");
-        agent.State.Settings.AppearanceTheme.Should().Be("teal");
+        agent.State.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
         agent.State.Drafts.Should().ContainKey("workflow-1");
         agent.State.Drafts["workflow-1"].Version.Should().Be(1);
 
         var replayed = CreateAgent("studio-workspace-scope-1", services);
         await replayed.ActivateAsync();
 
-        replayed.State.Settings.ColorMode.Should().Be("dark");
+        replayed.State.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
         replayed.State.Drafts.Should().ContainKey("workflow-1");
         replayed.State.Drafts["workflow-1"].Name.Should().Be("workflow-one");
     }
@@ -287,7 +285,6 @@ public sealed class StudioWorkspaceGAgentTests
             Settings = new StudioWorkspaceSettings
             {
                 RuntimeBaseUrl = "http://127.0.0.1:5100",
-                AppearanceTheme = "blue",
             },
             UpdatedAtUtc = Now(),
         }));
@@ -299,7 +296,6 @@ public sealed class StudioWorkspaceGAgentTests
             Settings = new StudioWorkspaceSettings
             {
                 RuntimeBaseUrl = "http://127.0.0.1:5101",
-                AppearanceTheme = "teal",
             },
             UpdatedAtUtc = Now(),
         }));

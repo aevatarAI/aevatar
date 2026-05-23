@@ -101,7 +101,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task ListDraftsAsync_WhenDraftHasTypedLayout_ShouldMarkWorkflowSummaryAsHavingLayout()
+    public async Task ListDraftsAsync_WhenDraftHasTypedLayout_ShouldDeriveDraftSummaryWithoutLayoutBadge()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
@@ -129,7 +129,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         summaries.Should().ContainSingle();
         summaries[0].WorkflowId.Should().Be("workflow-1");
-        summaries[0].HasLayout.Should().BeTrue();
+        summaries[0].HasLayout.Should().BeFalse();
     }
 
     [Fact]

@@ -6,9 +6,9 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: workspace operations mutated local JSON files and returned those files as current state.
-//   New principle: workspace writes are actor commands and reads are projected current-state snapshots.
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class WorkspaceService
 {
     private static readonly Regex FileNameCleaner = new("[^a-zA-Z0-9._-]+", RegexOptions.Compiled);
@@ -118,7 +118,7 @@ public sealed class WorkspaceService
                 summary.DirectoryId,
                 summary.DirectoryLabel,
                 summary.StepCount,
-                summary.HasLayout,
+                HasLayout: false,
                 summary.UpdatedAtUtc))
             .ToList();
     }
@@ -157,7 +157,7 @@ public sealed class WorkspaceService
             file.DirectoryLabel,
             file.Yaml,
             parse.Document,
-            file.Layout,
+            Layout: null,
             parse.Findings,
             file.UpdatedAtUtc);
     }
@@ -185,7 +185,7 @@ public sealed class WorkspaceService
             request.WorkflowName,
             request.FileName,
             request.Yaml,
-            request.Layout);
+            Layout: null);
         return string.IsNullOrWhiteSpace(request.WorkflowId)
             ? CreateDraftAsync(nextRequest, cancellationToken)
             : UpdateDraftAsync(request.WorkflowId, nextRequest, cancellationToken);
@@ -251,7 +251,7 @@ public sealed class WorkspaceService
             DirectoryId: directory.DirectoryId,
             DirectoryLabel: directory.Label,
             Yaml: normalizedYaml,
-            Layout: request.Layout,
+            Layout: null,
             UpdatedAtUtc: updatedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? updatedAtUtc,
             Version: existingDraft?.Version ?? 0);
@@ -301,7 +301,7 @@ public sealed class WorkspaceService
             file.DirectoryId,
             file.DirectoryLabel,
             file.Yaml,
-            file.Layout,
+            Layout: null,
             file.UpdatedAtUtc);
 
     private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings) =>
@@ -325,7 +325,7 @@ public sealed class WorkspaceService
             file.DirectoryId,
             file.DirectoryLabel,
             document?.Steps.Count ?? 0,
-            file.Layout is not null,
+            HasLayout: false,
             file.UpdatedAtUtc);
 
     private static string GenerateWorkflowId(string workflowName, IEnumerable<string> existingWorkflowIds)
