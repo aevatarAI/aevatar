@@ -6,6 +6,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
@@ -77,6 +78,25 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+    }
+
+    [Fact]
+    public void AddDeviceRegistration_RegistersDeviceCommandFacades()
+    {
+        var services = new ServiceCollection();
+
+        var result = services.AddDeviceRegistration();
+
+        result.Should().BeSameAs(services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(DeviceRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IDeviceCallbackCommandService) &&
+            descriptor.ImplementationType == typeof(DeviceCallbackCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceCallbackDispatchCommand, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>));
     }
 
     [Fact]
