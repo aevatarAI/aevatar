@@ -283,7 +283,7 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenWaitReplyPollControlsExplicitZero_ShouldPreserveZero()
+    public async Task HandleChatRequest_WhenTelegramControlsExplicitZero_ShouldPreserveZero()
     {
         var runtime = new NoopActorRuntime();
         var publisher = new RecordingEventPublisher();
@@ -303,20 +303,26 @@ public sealed class TelegramBridgeGAgentTests
             {
                 ChatId = "10001",
                 Operation = TelegramBridgeOperation.WaitReply,
+                WaitTimeoutMs = 0,
                 PollTimeoutSeconds = 0,
                 SettlePollsAfterMatch = 0,
+                TimeoutMs = 0,
             },
         };
 
+        request.Telegram.HasWaitTimeoutMs.Should().BeTrue();
         request.Telegram.HasPollTimeoutSeconds.Should().BeTrue();
         request.Telegram.HasSettlePollsAfterMatch.Should().BeTrue();
+        request.Telegram.HasTimeoutMs.Should().BeTrue();
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
         var command = publisher.Sent.Should().ContainSingle().Subject.evt
             .Should().BeOfType<TelegramWaitForReplyCommand>().Subject;
+        command.WaitTimeoutMs.Should().Be(0);
         command.PollTimeoutSeconds.Should().Be(0);
         command.SettlePollsAfterMatch.Should().Be(0);
+        command.ConnectorParameters["timeout_ms"].Should().Be("0");
     }
 
     [Fact]

@@ -223,8 +223,8 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private static int ResolveWaitReplyTimeoutMs(TelegramBridgeRequest? telegram)
     {
-        return telegram?.HasWaitTimeoutMs == true && telegram.WaitTimeoutMs > 0
-            ? telegram.WaitTimeoutMs
+        return telegram?.HasWaitTimeoutMs == true
+            ? Math.Max(0, telegram.WaitTimeoutMs)
             : DefaultWaitReplyTimeoutMs;
     }
 
@@ -290,8 +290,8 @@ public class TelegramBridgeGAgent : GAgentBase
     private static int? ResolveConnectorTimeoutMs(ChatRequestEvent request)
     {
         var explicitConnectorTimeout =
-            request.Telegram?.HasTimeoutMs == true && request.Telegram.TimeoutMs > 0
-                ? request.Telegram.TimeoutMs
+            request.Telegram?.HasTimeoutMs == true
+                ? Math.Max(0, request.Telegram.TimeoutMs)
                 : (int?)null;
         var llmTimeout = request.TimeoutMs > 0 ? request.TimeoutMs : (int?)null;
         var candidate = explicitConnectorTimeout ?? llmTimeout;
