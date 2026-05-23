@@ -2,12 +2,9 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: workspace reads could observe local store files that doubled as business state.
-//   New principle: queries read the projected current-state replica for the workspace actor; write-side state is not side-read.
-// Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-//   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-//   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public interface IStudioWorkspaceQueryPort
 {
     Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default);

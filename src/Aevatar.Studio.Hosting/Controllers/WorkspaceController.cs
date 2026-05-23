@@ -13,6 +13,9 @@ namespace Aevatar.Studio.Hosting.Controllers;
 
 [ApiController]
 [Route("api/workspace")]
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class WorkspaceController : ControllerBase
 {
     private readonly WorkspaceService _workspaceService;
@@ -144,7 +147,7 @@ public sealed class WorkspaceController : ControllerBase
                 summary.DirectoryId,
                 summary.DirectoryLabel,
                 summary.StepCount,
-                summary.HasLayout,
+                HasLayout: false,
                 summary.UpdatedAtUtc)).ToList());
         }
 
@@ -162,7 +165,7 @@ public sealed class WorkspaceController : ControllerBase
             summary.DirectoryId,
             summary.DirectoryLabel,
             summary.StepCount,
-            summary.HasLayout,
+            HasLayout: false,
             summary.UpdatedAtUtc)).ToList() ?? []);
     }
     #pragma warning restore CS0618
@@ -290,7 +293,7 @@ public sealed class WorkspaceController : ControllerBase
                     request.WorkflowName,
                     request.FileName,
                     request.Yaml,
-                    request.Layout),
+                    Layout: null),
                 scopeId,
                 cancellationToken)
             : await UpdateDraft(
@@ -300,7 +303,7 @@ public sealed class WorkspaceController : ControllerBase
                     request.WorkflowName,
                     request.FileName,
                     request.Yaml,
-                    request.Layout),
+                    Layout: null),
                 scopeId,
                 cancellationToken);
 
@@ -479,7 +482,7 @@ public sealed class WorkspaceController : ControllerBase
             draft.DirectoryLabel,
             draft.Yaml,
             Document: null,
-            draft.Layout,
+            Layout: null,
             Findings: [],
             draft.UpdatedAtUtc);
     }

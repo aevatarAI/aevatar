@@ -32,6 +32,8 @@ public sealed class ExecutionServiceTests
         invocationPort.LastRequest.EndpointId.Should().Be("chat");
         detail.Status.Should().Be("accepted");
         detail.ActorId.Should().Be("run-actor-1");
+        detail.Prompt.Should().BeEmpty();
+        detail.Frames.Should().BeEmpty();
     }
 
     [Fact]
@@ -63,7 +65,9 @@ public sealed class ExecutionServiceTests
 
         runQueryPort.LastQuery.Should().NotBeNull();
         runQueryPort.LastQuery!.ScopeId.Should().Be("scope-a");
+        runQueryPort.LastQuery.Take.Should().Be(50);
         summaries.Should().ContainSingle(summary => summary.ExecutionId == "cmd-a");
+        summaries[0].PromptPreview.Should().BeEmpty();
     }
 
     [Fact]
@@ -82,6 +86,9 @@ public sealed class ExecutionServiceTests
         detail!.ExecutionId.Should().Be("cmd-a");
         detail.Status.Should().Be("completed");
         detail.CompletedAtUtc.Should().Be(run.UpdatedAt);
+        runQueryPort.ListCallCount.Should().Be(0);
+        detail.Prompt.Should().BeEmpty();
+        detail.Frames.Should().BeEmpty();
     }
 
     [Fact]
@@ -299,13 +306,17 @@ public sealed class ExecutionServiceTests
 
         public ServiceRunQuery? LastQuery { get; private set; }
 
+        public int ListCallCount { get; private set; }
+
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(
             ServiceRunQuery query,
             CancellationToken ct = default)
         {
             LastQuery = query;
+            ListCallCount++;
             return Task.FromResult<IReadOnlyList<ServiceRunSnapshot>>(Runs
                 .Where(run => string.Equals(run.ScopeId, query.ScopeId, StringComparison.Ordinal))
+                .Take(query.Take)
                 .ToList());
         }
 

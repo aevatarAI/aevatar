@@ -2,14 +2,13 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Projection.ReadModels;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
-// Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-//   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-//   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPort
 {
     private readonly IProjectionDocumentReader<StudioWorkspaceCurrentStateDocument, string> _documentReader;
@@ -29,9 +28,9 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
         return await GetAsync(scopeId, ct);
     }
 
-    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+    //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+    //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
     public async Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default)
     {
         var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(scopeId);
@@ -79,8 +78,8 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
                 ? UserConfigRuntimeDefaults.LocalRuntimeBaseUrl
                 : settings.RuntimeBaseUrl,
             Directories: directories,
-            AppearanceTheme: string.IsNullOrWhiteSpace(settings?.AppearanceTheme) ? "blue" : settings.AppearanceTheme,
-            ColorMode: string.IsNullOrWhiteSpace(settings?.ColorMode) ? "light" : settings.ColorMode);
+            AppearanceTheme: "blue",
+            ColorMode: "light");
     }
 
     private static Application.Studio.Abstractions.StudioWorkspaceDirectory ToApplicationDirectory(
@@ -103,29 +102,9 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
             draft.DirectoryId,
             draft.DirectoryLabel,
             draft.Yaml,
-            draft.Layout is null ? null : ToApplicationLayout(draft.Layout),
+            Layout: null,
             draft.UpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             draft.CreatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             draft.Version);
-    }
-
-    private static WorkflowLayoutDocument ToApplicationLayout(StudioWorkflowLayout layout)
-    {
-        return new WorkflowLayoutDocument
-        {
-            NodePositions = layout.Nodes.ToDictionary(
-                node => node.NodeId,
-                node => new WorkflowNodeLayout(node.X, node.Y),
-                StringComparer.Ordinal),
-            Groups = layout.Groups.ToDictionary(
-                group => group.GroupId,
-                group => group.NodeIds.ToList(),
-                StringComparer.Ordinal),
-            Collapsed = layout.Collapsed.ToList(),
-            Viewport = layout.Viewport is null
-                ? new WorkflowViewport()
-                : new WorkflowViewport(layout.Viewport.X, layout.Viewport.Y, layout.Viewport.Zoom),
-            EntryWorkflow = string.IsNullOrWhiteSpace(layout.EntryWorkflow) ? null : layout.EntryWorkflow,
-        };
     }
 }

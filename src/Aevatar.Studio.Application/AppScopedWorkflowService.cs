@@ -16,9 +16,9 @@ using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Services;
 namespace Aevatar.Studio.Application;
 
-// Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-//   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-//   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class AppScopedWorkflowService
 {
     private const string BackendClientName = "AppBridgeBackend";
@@ -156,7 +156,7 @@ public sealed class AppScopedWorkflowService
             DirectoryId: scopeDirectory.DirectoryId,
             DirectoryLabel: scopeDirectory.Label,
             Yaml: normalizedYaml,
-            Layout: request.Layout,
+            Layout: null,
             UpdatedAtUtc: savedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? savedAtUtc,
             Version: existingDraft?.Version ?? 0);
@@ -288,7 +288,6 @@ public sealed class AppScopedWorkflowService
                     normalizedScopeId,
                     workflow,
                     yaml,
-                    draft?.Layout,
                     findingsFallbackMessage: "Workflow YAML is not available yet.");
             }
 
@@ -309,7 +308,6 @@ public sealed class AppScopedWorkflowService
             normalizedScopeId,
             detail.Workflow,
             detail.Source?.WorkflowYaml ?? string.Empty,
-            draft?.Layout,
             findingsFallbackMessage: "Workflow YAML is not available yet.");
     }
 
@@ -326,7 +324,7 @@ public sealed class AppScopedWorkflowService
             request.WorkflowName,
             request.FileName,
             request.Yaml,
-            request.Layout);
+            Layout: null);
         var saved = string.IsNullOrWhiteSpace(request.WorkflowId)
             ? await CreateDraftAsync(scopeId, nextRequest, ct)
             : await UpdateDraftAsync(scopeId, request.WorkflowId, nextRequest, ct);
@@ -366,7 +364,6 @@ public sealed class AppScopedWorkflowService
         string scopeId,
         ScopeWorkflowSummary workflow,
         string yaml,
-        WorkflowLayoutDocument? layout,
         WorkflowParseResult? parseResult = null,
         string? findingsFallbackMessage = null)
     {
@@ -404,9 +401,9 @@ public sealed class AppScopedWorkflowService
         return workflow.WorkflowId;
     }
 
-    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+    //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+    //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
     private async Task<IReadOnlyDictionary<string, StudioWorkflowDraftRecord>> ListDraftsByIdAsync(
         string scopeId,
         CancellationToken ct)
@@ -439,9 +436,9 @@ public sealed class AppScopedWorkflowService
         }
     }
 
-    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
-    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
-    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+    //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+    //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
     private async Task<StudioWorkflowDraftRecord?> TryGetDraftAsync(
         string scopeId,
         string workflowId,
@@ -486,7 +483,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.DirectoryId,
             scopeDirectory.Label,
             parse.Document?.Steps.Count ?? 0,
-            draft.Layout is not null,
+            HasLayout: false,
             draft.UpdatedAtUtc);
     }
 
@@ -508,7 +505,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.DirectoryId,
             scopeDirectory.Label,
             parse?.Document?.Steps.Count ?? 0,
-            draft?.Layout is not null,
+            HasLayout: false,
             ResolveWorkflowSummaryUpdatedAt(workflow, draft));
     }
 
@@ -536,7 +533,7 @@ public sealed class AppScopedWorkflowService
                 nextDraftSummary.DirectoryId,
                 nextDraftSummary.DirectoryLabel,
                 nextDraftSummary.StepCount,
-                nextDraftSummary.HasLayout,
+                HasLayout: false,
                 nextDraftSummary.UpdatedAtUtc);
         }
 
@@ -587,7 +584,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.DirectoryId,
             scopeDirectory.Label,
             draft.Yaml,
-            draft.Layout,
+            Layout: null,
             draft.UpdatedAtUtc);
     }
 
@@ -606,7 +603,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.Label,
             draft.Yaml,
             parse.Document,
-            draft.Layout,
+            Layout: null,
             parse.Findings,
             draft.UpdatedAtUtc);
     }
@@ -615,7 +612,6 @@ public sealed class AppScopedWorkflowService
         string scopeId,
         ScopeWorkflowSummary workflow,
         string yaml,
-        WorkflowLayoutDocument? layout,
         WorkflowParseResult? parseResult = null,
         string? findingsFallbackMessage = null)
     {
@@ -644,7 +640,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.Label,
             yaml,
             parse.Document,
-            layout,
+            Layout: null,
             findings,
             workflow.UpdatedAt);
     }
@@ -661,7 +657,7 @@ public sealed class AppScopedWorkflowService
             draftResponse.DirectoryLabel,
             draftResponse.Yaml,
             parse.Document,
-            draftResponse.Layout,
+            Layout: null,
             parse.Findings,
             draftResponse.UpdatedAtUtc);
     }

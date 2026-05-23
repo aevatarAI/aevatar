@@ -29,8 +29,6 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         evt.ScopeId.Should().Be("scope-1");
         evt.ExpectedVersion.Should().Be(3);
         evt.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
-        evt.Settings.AppearanceTheme.Should().Be("teal");
-        evt.Settings.ColorMode.Should().Be("dark");
         receipt.WorkspaceId.Should().Be("studio-workspace:scope-1");
         receipt.ActorId.Should().Be("studio-workspace:scope-1");
         receipt.ExpectedVersion.Should().Be(3);
@@ -70,7 +68,7 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
     }
 
     [Fact]
-    public async Task SaveDraftAsync_ShouldDispatchDraftSavedEventWithLayout()
+    public async Task SaveDraftAsync_ShouldDispatchDraftSavedEventWithoutServerLayoutFact()
     {
         var harness = new CommandPortHarness();
         var updatedAt = DateTimeOffset.Parse("2026-05-19T10:00:00Z");
@@ -104,11 +102,6 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         evt.Draft.Version.Should().Be(2);
         evt.Draft.CreatedAtUtc.ToDateTimeOffset().Should().Be(createdAt);
         evt.Draft.UpdatedAtUtc.ToDateTimeOffset().Should().Be(updatedAt);
-        evt.Draft.Layout.EntryWorkflow.Should().Be("workflow-one");
-        evt.Draft.Layout.Nodes.Should().ContainSingle().Which.NodeId.Should().Be("start");
-        evt.Draft.Layout.Groups.Should().ContainSingle().Which.NodeIds.Should().Equal("start");
-        evt.Draft.Layout.Collapsed.Should().Equal("group-1");
-        evt.Draft.Layout.Viewport.Zoom.Should().Be(0.75);
     }
 
     [Fact]
