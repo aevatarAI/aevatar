@@ -218,6 +218,15 @@ message VoiceTransportControlFrameReceived {
   google.protobuf.Timestamp lease_expires_at = 5;
 }
 
+message VoiceTransportAudioFrameReceived {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  bytes pcm16 = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+  int32 sample_rate_hz = 6;
+}
+
 message VoiceTransportRelayStopped {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -269,6 +278,7 @@ message VoiceModuleSignal {
     VoiceTransportControlFrameReceived transport_control_frame_received = 12;
     VoiceTransportRelayStopped transport_relay_stopped = 13;
     VoiceProviderEventReceived provider_event_received = 14;
+    VoiceTransportAudioFrameReceived transport_audio_frame_received = 15;
   }
 }
 

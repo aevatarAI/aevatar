@@ -45,15 +45,13 @@ public sealed class VoicePresenceSession
         _isInitialized = () => module.IsInitialized;
         _isTransportAttached = () => module.HasVolatileTransportLease;
         _attachTransportAsync = (transport, _) =>
-        {
-            module.AttachTransport(
+            module.AttachTransportAsync(
                 transport,
                 selfEventDispatcher,
                 leaseHandle?.SessionId,
                 leaseHandle?.OwnerId,
-                leaseHandle == null ? null : Timestamp.FromDateTimeOffset(leaseHandle.ExpiresAtUtc));
-            return Task.CompletedTask;
-        };
+                leaseHandle == null ? null : Timestamp.FromDateTimeOffset(leaseHandle.ExpiresAtUtc),
+                _);
         _detachTransportAsync = (expectedTransport, _) => module.DetachTransportAsync(expectedTransport);
     }
 

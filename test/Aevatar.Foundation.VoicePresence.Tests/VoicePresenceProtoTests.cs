@@ -1,5 +1,6 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
 namespace Aevatar.Foundation.VoicePresence.Tests;
@@ -109,5 +110,32 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoicePresenceCapabilityReadModel));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoicePresenceSessionLeaseRequested));
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_audio_frame_received()
+    {
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportAudioFrameReceived = new VoiceTransportAudioFrameReceived
+            {
+                SessionId = "lease-1",
+                OwnerId = "host-1",
+                TransportLeaseId = "transport-1",
+                LeaseExpiresAt = expiresAt,
+                Pcm16 = ByteString.CopyFrom([1, 2, 3]),
+                SampleRateHz = 24000,
+            },
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
     }
 }

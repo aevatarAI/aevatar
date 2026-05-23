@@ -15,15 +15,40 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class VoicePresenceModuleTests
 {
     [Fact]
-    public async Task Initialize_and_audio_fast_path_should_forward_provider_calls()
+    public async Task Transport_audio_actor_signal_should_forward_provider_inside_actor_turn()
     {
         var provider = new RecordingVoiceProvider();
-        var module = CreateModule(provider, linkId: "user-audio");
+        var module = CreateModule(provider);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-1",
+            ActiveLeaseOwnerId = "host-1",
+            LeaseExpiresAt = expiresAt.Clone(),
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-1",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
 
         await module.InitializeAsync(CancellationToken.None);
-        await module.HandleAudioAsync(
-            new VoiceAudioFastPathFrame("user-audio", new byte[] { 1, 2, 3 }, DateTimeOffset.UtcNow),
-            CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportAudioFrameReceived = new VoiceTransportAudioFrameReceived
+            {
+                SessionId = "lease-1",
+                OwnerId = "host-1",
+                TransportLeaseId = "transport-1",
+                LeaseExpiresAt = expiresAt.Clone(),
+                Pcm16 = ByteString.CopyFrom([1, 2, 3]),
+                SampleRateHz = 24000,
+            },
+        }), ctx, CancellationToken.None);
         await module.DisposeAsync();
 
         provider.ConnectCalls.ShouldBe(1);
@@ -465,6 +490,22 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("Task? _providerToUserRelay", Case.Sensitive);
         moduleSource.ShouldNotContain("TransportAttached = _transportLease", Case.Sensitive);
         moduleSource.ShouldNotContain("TransportAttached = _userTransport", Case.Sensitive);
+    }
+
+    [Fact]
+    public void Voice_presence_should_not_restore_public_audio_fast_path_bypass()
+    {
+        var repoRoot = FindRepositoryRoot();
+        File.Exists(Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.Abstractions/IAudioFastPath.cs"))
+            .ShouldBeFalse();
+        File.Exists(Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.Abstractions/VoiceAudioFastPathFrame.cs"))
+            .ShouldBeFalse();
+
+        var moduleSourcePath = Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Modules/VoicePresenceModule.cs");
+        var moduleSource = StripLineComments(File.ReadAllLines(moduleSourcePath));
+        moduleSource.ShouldNotContain("IAudioFastPath", Case.Sensitive);
+        moduleSource.ShouldNotContain("CanHandleAudio", Case.Sensitive);
+        moduleSource.ShouldNotContain("HandleAudioAsync", Case.Sensitive);
     }
 
     [Fact]
@@ -952,11 +993,12 @@ public class VoicePresenceModuleTests
         var module = CreateModule(provider);
         var transport = new RecordingVoiceTransport();
         var dispatched = new List<IMessage>();
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
         module.AttachTransport(transport, (message, _) =>
         {
             dispatched.Add(message);
             return Task.CompletedTask;
-        }, "lease-1", "host-1", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)));
+        }, "lease-1", "host-1", expiresAt.Clone());
 
         await provider.RaiseEventAsync(new VoiceProviderEvent
         {
@@ -979,7 +1021,7 @@ public class VoicePresenceModuleTests
         {
             ActiveSessionId = "lease-1",
             ActiveLeaseOwnerId = "host-1",
-            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseExpiresAt = expiresAt.Clone(),
         };
         var ctx = new StubEventHandlerContext(agent: roleAgent);
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -1002,6 +1044,14 @@ public class VoicePresenceModuleTests
                 SampleRateHz = 24000,
             },
         }, CancellationToken.None);
+
+        transport.SentAudio.ShouldBeEmpty();
+        var actorTurnSignal = dispatched.OfType<VoiceProviderEventReceived>().ShouldHaveSingleItem();
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = actorTurnSignal,
+        }), ctx, CancellationToken.None);
 
         transport.SentAudio.ShouldHaveSingleItem().ShouldBe([4, 5]);
     }
@@ -1281,23 +1331,84 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public void HandleAudio_wrong_link_should_throw()
+    public async Task Transport_audio_actor_signal_should_ignore_empty_stale_wrong_owner_wrong_lease_or_expired_pcm()
     {
-        var module = CreateModule(new RecordingVoiceProvider(), linkId: "link-a");
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var now = DateTimeOffset.UtcNow;
+        var expiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-current",
+            ActiveLeaseOwnerId = "host-current",
+            LeaseExpiresAt = expiresAt.Clone(),
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-current",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
 
-        Should.Throw<InvalidOperationException>(() =>
-            module.HandleAudioAsync(
-                new VoiceAudioFastPathFrame("link-b", new byte[] { 1 }, DateTimeOffset.UtcNow),
-                CancellationToken.None));
-    }
+        foreach (var request in new[]
+                 {
+                     new VoiceTransportAudioFrameReceived
+                     {
+                         SessionId = "lease-current",
+                         OwnerId = "host-current",
+                         TransportLeaseId = "transport-current",
+                         LeaseExpiresAt = expiresAt.Clone(),
+                         Pcm16 = ByteString.Empty,
+                         SampleRateHz = 24000,
+                     },
+                     new VoiceTransportAudioFrameReceived
+                     {
+                         SessionId = "lease-stale",
+                         OwnerId = "host-current",
+                         TransportLeaseId = "transport-current",
+                         LeaseExpiresAt = expiresAt.Clone(),
+                         Pcm16 = ByteString.CopyFrom([1]),
+                         SampleRateHz = 24000,
+                     },
+                     new VoiceTransportAudioFrameReceived
+                     {
+                         SessionId = "lease-current",
+                         OwnerId = "host-stale",
+                         TransportLeaseId = "transport-current",
+                         LeaseExpiresAt = expiresAt.Clone(),
+                         Pcm16 = ByteString.CopyFrom([2]),
+                         SampleRateHz = 24000,
+                     },
+                     new VoiceTransportAudioFrameReceived
+                     {
+                         SessionId = "lease-current",
+                         OwnerId = "host-current",
+                         TransportLeaseId = "transport-stale",
+                         LeaseExpiresAt = expiresAt.Clone(),
+                         Pcm16 = ByteString.CopyFrom([3]),
+                         SampleRateHz = 24000,
+                     },
+                     new VoiceTransportAudioFrameReceived
+                     {
+                         SessionId = "lease-current",
+                         OwnerId = "host-current",
+                         TransportLeaseId = "transport-current",
+                         LeaseExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+                         Pcm16 = ByteString.CopyFrom([4]),
+                         SampleRateHz = 24000,
+                     },
+                 })
+        {
+            await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+            {
+                ModuleName = "voice_presence",
+                TransportAudioFrameReceived = request,
+            }), ctx, CancellationToken.None);
+        }
 
-    [Fact]
-    public void CanHandleAudio_empty_linkId_matches_any()
-    {
-        var module = CreateModule(new RecordingVoiceProvider(), linkId: null);
-
-        module.CanHandleAudio(new VoiceAudioFastPathFrame("any-link", new byte[] { 1 }, DateTimeOffset.UtcNow))
-            .ShouldBeTrue();
+        provider.AudioFrames.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1345,6 +1456,24 @@ public class VoicePresenceModuleTests
 
         module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask);
         await module.DetachTransportAsync();
+    }
+
+    [Fact]
+    public async Task AttachTransportAsync_should_surface_attach_signal_dispatch_failure()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var transport = new PassiveVoiceTransport();
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            module.AttachTransportAsync(
+                transport,
+                static (_, _) => throw new InvalidOperationException("dispatch failed"),
+                "lease-1",
+                "host-1",
+                Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5))));
+
+        module.HasVolatileTransportLease.ShouldBeFalse();
+        transport.Disposed.ShouldBeTrue();
     }
 
     [Fact]

@@ -13,7 +13,7 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class VoiceTransportRelayTests
 {
     [Fact]
-    public async Task User_audio_should_not_relay_to_provider_before_attach_acceptance()
+    public async Task User_audio_should_dispatch_transport_audio_signal_without_provider_send_before_actor_turn()
     {
         var provider = new RecordingProvider();
         var module = CreateModule(provider);
@@ -34,7 +34,64 @@ public class VoiceTransportRelayTests
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
         provider.AudioFrames.ShouldBeEmpty();
-        dispatched.ShouldBeEmpty();
+        var audioSignals = dispatched.OfType<VoiceTransportAudioFrameReceived>().ToArray();
+        audioSignals.Length.ShouldBe(2);
+        audioSignals[0].Pcm16.ToByteArray().ShouldBe([10, 20, 30]);
+        audioSignals[1].Pcm16.ToByteArray().ShouldBe([40, 50]);
+        audioSignals.All(static x => x.SampleRateHz == 24000).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task User_audio_actor_turn_should_send_provider_once_for_current_lease()
+    {
+        var provider = new RecordingProvider();
+        var module = CreateModule(provider);
+        await module.InitializeAsync(CancellationToken.None);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(roleAgent);
+        var leaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-1",
+            ActiveLeaseOwnerId = "host-1",
+            LeaseExpiresAt = leaseExpiresAt.Clone(),
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+
+        var transport = new FakeVoiceTransport([
+            VoiceTransportFrame.Audio(new byte[] { 10, 20, 30 }),
+        ]);
+
+        module.AttachTransport(transport, (message, ct) =>
+        {
+            if (message is VoiceTransportAttachRequested attach)
+            {
+                attach.LeaseExpiresAt = leaseExpiresAt.Clone();
+                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                {
+                    ModuleName = "voice_presence",
+                    TransportAttachRequested = attach,
+                }), ctx, ct);
+            }
+
+            if (message is VoiceTransportAudioFrameReceived audio)
+            {
+                audio.LeaseExpiresAt = leaseExpiresAt.Clone();
+                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                {
+                    ModuleName = "voice_presence",
+                    TransportAudioFrameReceived = audio,
+                }), ctx, ct);
+            }
+
+            return Task.CompletedTask;
+        }, "lease-1", "host-1", leaseExpiresAt.Clone());
+        await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
+
+        provider.AudioFrames.ShouldHaveSingleItem().ShouldBe([10, 20, 30]);
     }
 
     [Fact]
