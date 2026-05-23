@@ -75,9 +75,7 @@ public sealed class ExecutionService
         if (byCommand != null)
             return await ToDetailAsync(byCommand, cancellationToken);
 
-        // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
-        //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
-        //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
+        // Bounded fallback for callers that pass runId instead of commandId.
         var runs = await _serviceRunQueryPort.ListAsync(
             new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: ExecutionLookupTake),
             cancellationToken);
@@ -187,9 +185,7 @@ public sealed class ExecutionService
             cancellationToken);
         if (run is null)
         {
-            // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
-            //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
-            //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
+            // Bounded fallback for callers that pass runId instead of commandId.
             var runs = await _serviceRunQueryPort.ListAsync(
                 new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: ExecutionLookupTake),
                 cancellationToken);

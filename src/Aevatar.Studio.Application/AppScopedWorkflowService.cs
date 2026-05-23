@@ -288,7 +288,6 @@ public sealed class AppScopedWorkflowService
                     normalizedScopeId,
                     workflow,
                     yaml,
-                    layout: null,
                     findingsFallbackMessage: "Workflow YAML is not available yet.");
             }
 
@@ -309,7 +308,6 @@ public sealed class AppScopedWorkflowService
             normalizedScopeId,
             detail.Workflow,
             detail.Source?.WorkflowYaml ?? string.Empty,
-            layout: null,
             findingsFallbackMessage: "Workflow YAML is not available yet.");
     }
 
@@ -366,7 +364,6 @@ public sealed class AppScopedWorkflowService
         string scopeId,
         ScopeWorkflowSummary workflow,
         string yaml,
-        WorkflowLayoutDocument? layout,
         WorkflowParseResult? parseResult = null,
         string? findingsFallbackMessage = null)
     {
@@ -615,7 +612,6 @@ public sealed class AppScopedWorkflowService
         string scopeId,
         ScopeWorkflowSummary workflow,
         string yaml,
-        WorkflowLayoutDocument? layout,
         WorkflowParseResult? parseResult = null,
         string? findingsFallbackMessage = null)
     {
@@ -644,7 +640,7 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.Label,
             yaml,
             parse.Document,
-            layout,
+            Layout: null,
             findings,
             workflow.UpdatedAt);
     }
@@ -661,7 +657,7 @@ public sealed class AppScopedWorkflowService
             draftResponse.DirectoryLabel,
             draftResponse.Yaml,
             parse.Document,
-            draftResponse.Layout,
+            Layout: null,
             parse.Findings,
             draftResponse.UpdatedAtUtc);
     }

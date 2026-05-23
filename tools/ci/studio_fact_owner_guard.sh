@@ -85,3 +85,55 @@ if [ -n "${forbidden_symbol_hits}" ]; then
   echo "Studio execution/workspace fact owner regression found. Do not resurrect local execution history, draft index sidecars, or FileStudioWorkspaceStore production paths."
   exit 1
 fi
+
+set +e
+forbidden_ui_layout_hits="$(
+  rg -n "WorkflowLayoutDocument|request\.(Layout|AppearanceTheme|ColorMode)|[[:<:]]Layout:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*|.*\.(Layout|AppearanceTheme|ColorMode))|HasLayout:[[:space:]]*true|HasLayout[[:space:]]*=[[:space:]]*true" \
+    "${scan_roots[@]}" \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/node_modules/**' \
+    -g '!**/wwwroot/**' \
+    -g '!tools/ci/studio_fact_owner_guard.sh' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+  trimmed = text;
+  sub(/^[[:space:]]+/, "", trimmed);
+
+  if (file ~ /(^|\/)test\// || file ~ /Tests\.cs$/ || file ~ /(^|\/)[^\/]*\.Tests\//)
+    next;
+  if (file ~ /^src\/Aevatar\.Studio\.Application\/Studio\/Contracts\//)
+    next;
+  if (file ~ /^src\/Aevatar\.Studio\.Application\/Studio\/Abstractions\//)
+    next;
+  if (file == "src/Aevatar.Studio.Domain/Studio/Models/WorkflowLayoutDocument.cs")
+    next;
+  if (trimmed ~ /^(\/\/|#|\*)/)
+    next;
+  if (trimmed ~ /^<!--/)
+    next;
+  if (trimmed ~ /^Layout:[[:space:]]*null[,\)]?$/)
+    next;
+  if (trimmed ~ /^HasLayout:[[:space:]]*false[,\)]?$/)
+    next;
+
+  print $0;
+}'
+)"
+forbidden_ui_layout_status=$?
+set -e
+
+if [[ ${forbidden_ui_layout_status} -ne 0 && ${forbidden_ui_layout_status} -ne 1 ]]; then
+  echo "Studio UI/layout fact guard execution failed."
+  exit "${forbidden_ui_layout_status}"
+fi
+
+if [ -n "${forbidden_ui_layout_hits}" ]; then
+  echo "${forbidden_ui_layout_hits}"
+  echo "Studio UI/layout facts are client-owned compatibility fields. Production paths must not map request layout/theme/color into actor events, storage, readmodels, or query truth."
+  exit 1
+fi
