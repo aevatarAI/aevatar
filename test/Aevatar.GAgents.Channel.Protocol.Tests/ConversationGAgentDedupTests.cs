@@ -2449,9 +2449,27 @@ public sealed class ConversationGAgentDedupTests
             Success = true,
         });
 
+        var followUp = agent.State.ActiveReplyLifecycles.Single();
+        followUp.LastFlushedText.ShouldBe("second");
+        followUp.Sequence.ShouldBe(2);
+        followUp.PendingAccumulatedText.ShouldBe("third");
+        followUp.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Stream);
+        followUp.LarkCardInFlightSequence.ShouldBe(3);
+
+        await agent.HandleLarkCardStreamContinuationAsync(new LarkCardStreamContinuationEvent
+        {
+            CorrelationId = "act-card-coalesce",
+            Sequence = followUp.LarkCardInFlightSequence,
+            OperationGeneration = followUp.LarkCardOperationGeneration,
+            CardId = "card_xyz",
+            StreamingElementId = "streaming_main",
+            Chunk = CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "third"),
+            Success = true,
+        });
+
         var coalesced = agent.State.ActiveReplyLifecycles.Single();
         coalesced.LastFlushedText.ShouldBe("third");
-        coalesced.Sequence.ShouldBe(2);
+        coalesced.Sequence.ShouldBe(3);
         coalesced.PendingAccumulatedText.ShouldBeEmpty();
         coalesced.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
     }

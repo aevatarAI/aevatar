@@ -1034,17 +1034,20 @@ public sealed partial class ConversationGAgent
             return;
         }
 
-        var flushedText = state.PendingAccumulatedText ?? evt.Chunk?.AccumulatedText ?? state.LastFlushedText;
+        var ackedText = evt.Chunk?.AccumulatedText ?? state.LastFlushedText;
+        var pendingText = string.Equals(state.PendingAccumulatedText, ackedText, StringComparison.Ordinal)
+            ? null
+            : state.PendingAccumulatedText;
         var updated = await TransitionLarkCardStreamingPhaseAsync(
             correlationId,
             state,
             LarkCardStreamingPhase.Streaming,
             fieldUpdate: s => s with
             {
-                LastFlushedText = flushedText,
+                LastFlushedText = ackedText,
                 Sequence = evt.Sequence,
                 InFlight = null,
-                PendingAccumulatedText = null,
+                PendingAccumulatedText = pendingText,
             });
         await ContinueLarkCardCoalescedWorkAsync(correlationId, updated, evt.Chunk);
     }
