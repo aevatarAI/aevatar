@@ -37,6 +37,10 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
 

@@ -788,7 +788,6 @@ public class RuntimeScriptInfrastructurePortsTests
         var target = new ScriptEvolutionCommandTarget(
             new TestActor("script-evolution-session:proposal-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         var lease = new TestProjectionLease("script-evolution-session:proposal-1", "proposal-1");
         target.BindLiveObservation(lease, new TestLiveSinkLease(), new ScriptEvolutionScopedEventSink("proposal-1", new EventChannel<ScriptEvolutionSessionCompletedEvent>()));
@@ -803,14 +802,13 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task ScriptEvolutionObservationLifecycle_ShouldReturnProjectionDisabled_WhenActivationFails()
+    public async Task ScriptEvolutionObservationLifecycle_ShouldReturnProjectionDisabled_WhenExistingProjectionIsUnavailable()
     {
         var projectionPort = new TestProjectionPort { ReturnNullLease = true };
         var lifecycle = new ScriptEvolutionObservationLifecycle(projectionPort);
         var target = new ScriptEvolutionCommandTarget(
             new TestActor("script-evolution-session:proposal-disabled"),
             "proposal-disabled",
-            projectionPort,
             projectionPort);
         var context = new CommandContext(
             "script-evolution-session:proposal-disabled",
@@ -839,6 +837,9 @@ public class RuntimeScriptInfrastructurePortsTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(ScriptEvolutionStartError.ProjectionDisabled);
         target.ProjectionLease.Should().BeNull();
+        projectionPort.EnsureCount.Should().Be(0);
+        projectionPort.ActivateCount.Should().Be(0);
+        projectionPort.AttachExistingCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(0);
         projectionPort.ReleaseCount.Should().Be(0);
     }
@@ -904,7 +905,6 @@ public class RuntimeScriptInfrastructurePortsTests
         var targetResolver = new ScriptEvolutionCommandTargetResolver(
             actorAccessor,
             addressResolver,
-            projectionPort,
             projectionPort);
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
@@ -1405,6 +1405,12 @@ public class RuntimeScriptInfrastructurePortsTests
 
         public bool ReturnNullLease { get; set; }
 
+        public int EnsureCount { get; private set; }
+
+        public int ActivateCount { get; private set; }
+
+        public int AttachExistingCount { get; private set; }
+
         public int DetachCount { get; private set; }
 
         public int ReleaseCount { get; private set; }
@@ -1415,14 +1421,36 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            EnsureCount++;
             if (ReturnNullLease)
                 return Task.FromResult<IScriptEvolutionProjectionLease?>(null);
             return Task.FromResult<IScriptEvolutionProjectionLease?>(
                 new TestProjectionLease(sessionActorId, proposalId));
         }
 
-        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-            await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
+        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            ActivateCount++;
+            return await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
+        }
+
+        public async Task<EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string sessionActorId,
+            string proposalId,
+            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingCount++;
+            if (ReturnNullLease)
+                return null;
+
+            var lease = new TestProjectionLease(sessionActorId, proposalId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>(lease, liveSinkLease);
+        }
 
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,

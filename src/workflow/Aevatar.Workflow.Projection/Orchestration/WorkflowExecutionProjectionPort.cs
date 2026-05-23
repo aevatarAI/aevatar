@@ -43,10 +43,10 @@ public sealed class WorkflowExecutionProjectionPort
             },
             ct);
 
-    // Refactor (iter35/cluster-039-observation-binder-attach-only):
-    //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
-    //   New principle: Command observation binders 仅 attach 到 pre-existing lease/session;cold session 返回 ProjectionPending / ProjectionUnavailable;projection activation 移到 projection-owned startup / background lifecycle。
-    //   删除 pre-dispatch projection activation from command binders。不新增 top-level CLAUDE.md exception。
+    // Refactor (iter41/cluster-041-command-observation-projection-activation):
+    //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+    //   New principle: observation binders attach only to existing projection-owned sessions;
+    //   activation happens in projection-owned startup/background/committed-state lifecycle.
     public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
         string rootActorId,
         string commandId,
