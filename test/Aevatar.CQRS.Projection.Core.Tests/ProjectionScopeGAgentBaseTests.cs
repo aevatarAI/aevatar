@@ -15,6 +15,14 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionScopeGAgentBaseTests
 {
     [Fact]
+    public void ProjectionScopeGAgentBase_ShouldOptIntoEventSourcingVersionDriftRecovery()
+    {
+        var agent = new TestScopeAgent(_ => ProjectionScopeDispatchResult.Skip());
+
+        agent.Should().BeAssignableTo<IEventSourcingVersionDriftRecoverableActor>();
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldPropagate_RetryableOptimisticConcurrencyException()
     {
         var agent = BuildActivatedAgent(

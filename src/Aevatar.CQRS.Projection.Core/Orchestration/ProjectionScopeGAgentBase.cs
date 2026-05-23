@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -11,6 +12,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 public abstract class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
+    , IEventSourcingVersionDriftRecoverableActor
     where TContext : class, IProjectionMaterializationContext
 {
     private ILogger _logger = NullLogger.Instance;

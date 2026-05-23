@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
@@ -174,6 +175,30 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         options.EventSourcingSnapshotInterval.Should().Be(17);
         options.EventSourcingEnableEventCompaction.Should().BeFalse();
         options.EventSourcingRetainedEventsAfterSnapshot.Should().Be(9);
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_ShouldWireEventSourcingOptionsWithoutActorIdPrefixRecovery()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableSnapshots"] = "false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:SnapshotInterval"] = "23",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableEventCompaction"] = "false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:RetainedEventsAfterSnapshot"] = "11",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        // Refactor (iter56/cluster-921-runtime-recovery-actor-type-marker): old=hosting actorId prefix recovery, new=actor-type marker in factory
+        var eventSourcingOptions = provider.GetRequiredService<EventSourcingRuntimeOptions>();
+        eventSourcingOptions.EnableSnapshots.Should().BeFalse();
+        eventSourcingOptions.SnapshotInterval.Should().Be(23);
+        eventSourcingOptions.EnableEventCompaction.Should().BeFalse();
+        eventSourcingOptions.RetainedEventsAfterSnapshot.Should().Be(11);
+        eventSourcingOptions.RecoverFromVersionDriftOnReplay.Should().BeFalse();
     }
 
     [Fact]

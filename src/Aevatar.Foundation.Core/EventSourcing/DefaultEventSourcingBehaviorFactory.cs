@@ -33,9 +33,11 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
 
     public IEventSourcingBehavior<TState> Create(
         string agentId,
+        Type actorType,
         Func<TState, IMessage, TState> transitionState)
     {
         ArgumentNullException.ThrowIfNull(agentId);
+        ArgumentNullException.ThrowIfNull(actorType);
         ArgumentNullException.ThrowIfNull(transitionState);
 
         var snapshotsEnabled = _options.EnableSnapshots && _snapshotStore != null;
@@ -44,8 +46,9 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ? new IntervalSnapshotStrategy(_options.SnapshotInterval)
             : NeverSnapshotStrategy.Instance;
 
+        // Refactor (iter56/cluster-921-runtime-recovery-actor-type-marker): old=hosting actorId prefix recovery, new=actor-type marker in factory
         var recoverFromVersionDrift = _options.RecoverFromVersionDriftOnReplay
-            || (_options.ShouldRecoverFromVersionDriftOnReplay?.Invoke(agentId) ?? false);
+            || typeof(IEventSourcingVersionDriftRecoverableActor).IsAssignableFrom(actorType);
 
         return new DelegatingEventSourcingBehavior(
             _eventStore,
