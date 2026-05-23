@@ -65,33 +65,46 @@ public class VoiceTransportRelayTests
             VoiceTransportFrame.Audio(new byte[] { 10, 20, 30 }),
         ]);
 
-        module.AttachTransport(transport, (message, ct) =>
+        await module.AttachTransportAsync(transport, async (message, ct) =>
         {
             if (message is VoiceTransportAttachRequested attach)
             {
-                attach.LeaseExpiresAt = leaseExpiresAt.Clone();
-                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                attach.SessionId.ShouldBe("lease-1");
+                attach.OwnerId.ShouldBe("host-1");
+                attach.TransportLeaseId.ShouldNotBeNullOrWhiteSpace();
+                attach.LeaseExpiresAt.ShouldBe(leaseExpiresAt);
+
+                await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
                 {
                     ModuleName = "voice_presence",
                     TransportAttachRequested = attach,
                 }), ctx, ct);
+                return;
             }
 
             if (message is VoiceTransportAudioFrameReceived audio)
             {
-                audio.LeaseExpiresAt = leaseExpiresAt.Clone();
-                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                audio.SessionId.ShouldBe("lease-1");
+                audio.OwnerId.ShouldBe("host-1");
+                audio.TransportLeaseId.ShouldBe(roleAgent.State.VoicePresence["voice_presence"].ActiveTransportLeaseId);
+                audio.LeaseExpiresAt.ShouldBe(leaseExpiresAt);
+                audio.Pcm16.ToByteArray().ShouldBe([10, 20, 30]);
+                audio.SampleRateHz.ShouldBe(24000);
+
+                await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
                 {
                     ModuleName = "voice_presence",
                     TransportAudioFrameReceived = audio,
                 }), ctx, ct);
+                return;
             }
 
-            return Task.CompletedTask;
+            throw new InvalidOperationException($"Unexpected self signal {message.GetType().Name}.");
         }, "lease-1", "host-1", leaseExpiresAt.Clone());
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
         provider.AudioFrames.ShouldHaveSingleItem().ShouldBe([10, 20, 30]);
+        roleAgent.State.VoicePresence["voice_presence"].TransportAttached.ShouldBeTrue();
     }
 
     [Fact]
