@@ -13,7 +13,9 @@ DIFF_RANGE_VALUE="${DIFF_RANGE:-}"
 if [[ -n "${DIFF_RANGE_VALUE}" ]]; then
   DIFF_MODE="range"
 elif [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" && -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+  if ! git rev-parse --verify "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+    git fetch --no-tags --depth=1 origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+  fi
   DIFF_RANGE_VALUE="origin/${GITHUB_BASE_REF}...HEAD"
   DIFF_MODE="range"
 elif [[ -n "${GITHUB_EVENT_BEFORE:-}" && "${GITHUB_EVENT_BEFORE}" != "${ZERO_SHA}" && -n "${GITHUB_SHA:-}" ]]; then
