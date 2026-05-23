@@ -421,10 +421,14 @@ public sealed class OrleansActorRuntimeForwardingTests
             throw new NotSupportedException();
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             _ = expectedGeneration;
+            _ = expectedSlotEpoch;
             return Task.CompletedTask;
         }
 

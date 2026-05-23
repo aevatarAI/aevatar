@@ -18,7 +18,10 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
         int periodMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);
 
-    Task CancelAsync(string callbackId, long expectedGeneration = 0);
+    Task CancelAsync(
+        string callbackId,
+        long expectedGeneration = 0,
+        int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified);
 
     Task PurgeAsync();
 }

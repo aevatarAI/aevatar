@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using FluentAssertions;
@@ -23,6 +24,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
                     ActorId = "actor-1",
                     CallbackId = "cb-1",
                     Generation = 7,
+                    SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
                     Periodic = true,
                     DueTimeMillis = 125,
                     PeriodMillis = 250,
@@ -40,6 +42,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         callback.ActorId.Should().Be("actor-1");
         callback.CallbackId.Should().Be("cb-1");
         callback.Generation.Should().Be(7);
+        callback.SlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
         callback.Periodic.Should().BeTrue();
         callback.DueTimeMillis.Should().Be(125);
         callback.PeriodMillis.Should().Be(250);
@@ -113,6 +116,33 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         var attribute = parameter.GetCustomAttribute<PersistentStateAttribute>();
         attribute.Should().NotBeNull();
         attribute!.StateName.Should().Be("runtime-callback-scheduler-v2");
+    }
+
+    [Fact]
+    public async Task RuntimeCallbackSchedulerGrain_ShouldNotCancelV2ScheduleWithOldEpochLease()
+    {
+        var persistentState =
+            DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
+        persistentState.State.ReminderCallbacks["cb-1"] = new RuntimeScheduledCallback
+        {
+            ActorId = "actor-1",
+            CallbackId = "cb-1",
+            Generation = 1,
+            SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+            DueTimeMillis = 1000,
+            DeliveryMode = RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
+            TriggerEnvelope = CreateEnvelope("evt-1"),
+        };
+        var proxy = (RuntimeCallbackPersistentStateProxy)(object)persistentState;
+        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+
+        await grain.CancelAsync(
+            "cb-1",
+            expectedGeneration: 1,
+            expectedSlotEpoch: RuntimeCallbackSlotEpoch.Unspecified);
+
+        persistentState.State.ReminderCallbacks.Should().ContainKey("cb-1");
+        proxy.WriteCount.Should().Be(0);
     }
 
     [Fact]

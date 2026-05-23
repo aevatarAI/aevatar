@@ -149,6 +149,7 @@ message WorkflowRuntimeCallbackLeaseState
   string callback_id = 2;
   int64 generation = 3;
   WorkflowRuntimeCallbackBackendState backend = 4;
+  int32 slot_epoch = 5;
 }
 
 message RetryBackoffState

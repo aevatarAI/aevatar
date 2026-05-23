@@ -26,4 +26,5 @@ message RuntimeScheduledCallback {
   int64 fire_index = 7;
   RuntimeCallbackScheduleDeliveryMode delivery_mode = 8;
   aevatar.EventEnvelope trigger_envelope = 9;
+  int32 slot_epoch = 10;
 }

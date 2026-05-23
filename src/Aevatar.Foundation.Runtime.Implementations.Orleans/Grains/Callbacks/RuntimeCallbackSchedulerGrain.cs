@@ -11,6 +11,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 {
     private const string ReminderNamePrefix = "runtime-callback:";
     private const string SchedulerStateName = "runtime-callback-scheduler-v2";
+    private const int SchedulerSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2;
     private static readonly TimeSpan OneShotReminderPeriod = TimeSpan.FromDays(36500);
 
     private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
@@ -72,13 +73,19 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         return nextGeneration;
     }
 
-    public async Task CancelAsync(string callbackId, long expectedGeneration = 0)
+    public async Task CancelAsync(
+        string callbackId,
+        long expectedGeneration = 0,
+        int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
 
         if (expectedGeneration > 0 && reminderCallback.Generation != expectedGeneration)
+            return;
+
+        if (expectedGeneration > 0 && reminderCallback.SlotEpoch != expectedSlotEpoch)
             return;
 
         _state.State.ReminderCallbacks.Remove(callbackId);
@@ -142,6 +149,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         await PublishScheduledEnvelopeAsync(
             callbackId,
             scheduled.Generation,
+            scheduled.SlotEpoch,
             checked((int)fireIndex),
             scheduled.TriggerEnvelope,
             FromProtoDeliveryMode(scheduled.DeliveryMode),
@@ -180,6 +188,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             ActorId = this.GetPrimaryKeyString(),
             CallbackId = callbackId,
             Generation = generation,
+            SlotEpoch = SchedulerSlotEpoch,
             Periodic = periodic,
             DueTimeMillis = checked((long)dueTime.TotalMilliseconds),
             PeriodMillis = periodMs,
@@ -207,6 +216,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private async Task PublishScheduledEnvelopeAsync(
         string callbackId,
         long generation,
+        int slotEpoch,
         int fireIndex,
         EventEnvelope triggerEnvelope,
         RuntimeCallbackDeliveryMode deliveryMode,
@@ -218,7 +228,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             generation,
             fireIndex,
             triggerEnvelope,
-            deliveryMode);
+            deliveryMode,
+            slotEpoch);
 
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }

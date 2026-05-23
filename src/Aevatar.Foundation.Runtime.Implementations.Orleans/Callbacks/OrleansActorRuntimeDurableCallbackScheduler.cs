@@ -33,7 +33,10 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             request.ActorId,
             request.CallbackId,
             generation,
-            RuntimeCallbackBackend.Dedicated);
+            RuntimeCallbackBackend.Dedicated)
+        {
+            SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+        };
     }
 
     public async Task<RuntimeCallbackLease> ScheduleTimerAsync(
@@ -57,7 +60,10 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             request.ActorId,
             request.CallbackId,
             generation,
-            RuntimeCallbackBackend.Dedicated);
+            RuntimeCallbackBackend.Dedicated)
+        {
+            SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+        };
     }
 
     public Task CancelAsync(
@@ -73,7 +79,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
                 $"Durable Orleans callback scheduler cannot cancel backend '{lease.Backend}'.");
         }
 
-        return CancelDedicatedCallbackAsync(lease.ActorId, lease.CallbackId, lease.Generation);
+        return CancelDedicatedCallbackAsync(lease.ActorId, lease.CallbackId, lease.Generation, lease.SlotEpoch);
     }
 
     public Task PurgeActorAsync(
@@ -120,10 +126,11 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
     private Task CancelDedicatedCallbackAsync(
         string actorId,
         string callbackId,
-        long expectedGeneration = 0)
+        long expectedGeneration = 0,
+        int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
-        return grain.CancelAsync(callbackId, expectedGeneration);
+        return grain.CancelAsync(callbackId, expectedGeneration, expectedSlotEpoch);
     }
 
     private static int ToPositiveMilliseconds(TimeSpan value)
