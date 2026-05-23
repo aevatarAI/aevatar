@@ -1671,17 +1671,42 @@ Concretely, this means:
 - iter16 implement / verify / Phase 8 review runs in parallel with iter15 rollup PR being reviewed.
 - If iter15 rollup PR gets rejected by human, iter16 work stays on auto-refact-dev (which now contains iter15 + iter16 deltas); we re-do iter15 rework on top and ship combined.
 
-### Concurrency-driven 提前派下一轮 audit(强制,per Auric 2026-05-23 "如果并行codex太少则应该开启下一轮次")
+### Concurrency floor = 5 codex(强制,per Auric 2026-05-23 "并发数保持至少5个codex" + "如果并行codex太少则应该开启下一轮次")
 
-**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的 4-6。
+**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的 5+。
 
-**规则**:**并发不足时主动提前派下一 iter audit**,不等 last cluster merge。
+**规则**:**活跃 codex < 5 时主动派额外工作填满 floor**,不等当前 phase 完成。
 
-| 条件 | 动作 |
+| 活跃 codex 数 | 动作 |
 |---|---|
-| 活跃 codex `<= 2` AND 上一 iter audit 已完成(`audit-iter-N.log` 有 `AUDIT_DONE`)| 立即派下一 iter audit(N+1),独立于 iter N 的 cluster PR merge 进度 |
-| 活跃 codex `>= 3` | 不抢资源,保持现状 |
-| 上一 iter audit 仍在跑 | 不重派,等当前 audit done |
+| `>= 5` | 不抢资源,保持现状 |
+| `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
+
+**填 floor 优先级**(从高到低):
+
+1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
+2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
+3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
+4. **tools/refactor-loop self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
+5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
+6. **CI guard completeness codex** — 检查 `tools/ci/*_guard.sh` 是否覆盖所有 CLAUDE 条款
+
+**反面禁止**:
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
+- ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
+- ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+
+**判定脚本**(controller wakeup step 1.5):
+
+```bash
+ACTIVE=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+NEEDED=$(( 5 - ACTIVE ))
+[ "$NEEDED" -le 0 ] && return  # floor 已满
+
+# 按优先级派 NEEDED 个 codex,优先 audit,其次 retrospective / self-audit
+# (具体派什么由 controller 根据 priority 表决定)
+```
 
 **判定脚本**(controller wakeup step 1.5):
 
