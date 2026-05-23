@@ -53,6 +53,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
             ScopeId = "scope-1",
             HmacKey = "key-1",
             Description = "Test device",
+            DeviceEventTargetActorId = "household-scope-1",
         };
 
         await _agent.HandleRegister(cmd);
@@ -62,6 +63,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
         entry.ScopeId.Should().Be("scope-1");
         entry.HmacKey.Should().Be("key-1");
         entry.Description.Should().Be("Test device");
+        entry.DeviceEventTargetActorId.Should().Be("household-scope-1");
         entry.Id.Should().NotBeNullOrWhiteSpace();
     }
 
@@ -89,6 +91,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
             HmacKey = "hmac-secret",
             NyxConversationId = "conv-42",
             Description = "Living room sensor hub",
+            DeviceEventTargetActorId = "household-scope-x",
         };
 
         await _agent.HandleRegister(cmd);
@@ -99,6 +102,7 @@ public class DeviceRegistrationGAgentTests : IAsyncLifetime
         entry.HmacKey.Should().Be("hmac-secret");
         entry.NyxConversationId.Should().Be("conv-42");
         entry.Description.Should().Be("Living room sensor hub");
+        entry.DeviceEventTargetActorId.Should().Be("household-scope-x");
         entry.CreatedAt.Should().NotBeNull();
     }
 
