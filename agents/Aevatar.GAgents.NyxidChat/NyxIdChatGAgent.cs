@@ -161,7 +161,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 "registration_failed",
                 commandId,
                 correlationId);
-            throw;
         }
     }
 

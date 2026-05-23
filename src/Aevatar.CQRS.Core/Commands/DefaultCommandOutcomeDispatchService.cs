@@ -1,10 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Google.Protobuf;
 
 namespace Aevatar.CQRS.Core.Commands;
 
 public sealed class DefaultCommandOutcomeDispatchService<TCommand, TTarget, TReceipt, TError, TOutcome>
     : ICommandOutcomeDispatchService<TCommand, TReceipt, TError, TOutcome>
     where TTarget : class, ICommandDispatchTarget
+    where TOutcome : IMessage, new()
 {
     private readonly ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> _pipeline;
     private readonly IActorOutcomeChannel<TOutcome> _outcomeChannel;

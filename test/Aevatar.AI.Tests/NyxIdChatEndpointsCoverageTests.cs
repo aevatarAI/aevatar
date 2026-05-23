@@ -22,6 +22,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
@@ -311,7 +312,7 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_ShouldBubbleFailure_WhenActorRegistrationFails()
+    public async Task HandleCreateConversationAsync_ShouldReturn503_WhenActorRegistrationFails()
     {
         var actorStore = new StubGAgentActorStore
         {
@@ -319,7 +320,7 @@ public class NyxIdChatEndpointsCoverageTests
         };
         var runtime = new StubActorRuntime();
 
-        var act = async () => await InvokeResultAsync(
+        var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
@@ -327,8 +328,9 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             CancellationToken.None);
 
-        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
-        assertion.Which.Message.Should().Be("registry unavailable");
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        response.Body.Should().Contain("Conversation registration is not admission-visible");
         actorStore.AddedActors.Should().BeEmpty();
         var actorId = runtime.CreateCalls.Single().Id!;
         await AssertSingleCreationUnavailableEventAsync(
@@ -349,7 +351,7 @@ public class NyxIdChatEndpointsCoverageTests
         };
         var runtime = new StubActorRuntime();
 
-        var act = async () => await InvokeResultAsync(
+        var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
@@ -357,7 +359,8 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         actorStore.AddedActors.Should().ContainSingle();
         var actorId = actorStore.AddedActors.Single().ActorId;
         await AssertSingleCreationUnavailableEventAsync(
@@ -477,7 +480,7 @@ public class NyxIdChatEndpointsCoverageTests
             new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "existing-agent-2" } },
             []));
 
-        var act = async () => await InvokeResultAsync(
+        var result = await InvokeResultAsync(
             "HandleCreateConversationAsync",
             new DefaultHttpContext(),
             "scope-a",
@@ -487,7 +490,8 @@ public class NyxIdChatEndpointsCoverageTests
             NewChatRouteResolver(),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
@@ -2490,11 +2494,7 @@ public class NyxIdChatEndpointsCoverageTests
         List<object> args)
     {
         var registryCommandPort = args.OfType<IGAgentActorRegistryCommandPort>().FirstOrDefault() ?? new StubGAgentActorStore();
-        var outcomeChannel = new InMemoryActorOutcomeChannel<NyxIdChatConversationCreationOutcome>();
-        var runtime = args.OfType<IActorRuntime>().FirstOrDefault()
-            ?? new StubActorRuntime(registryCommandPort, outcomeChannel);
-        if (runtime is StubActorRuntime stubRuntime)
-            stubRuntime.ConfigureNyxIdChatServices(registryCommandPort, outcomeChannel);
+        var outcomeChannel = new StreamActorOutcomeChannel<NyxIdChatConversationCreationOutcome>(new InMemoryStreamProvider());
         var routeQueryPort = args.OfType<IChatRoutePolicyQueryPort>().FirstOrDefault()
             ?? StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), []));
         var resolver = args.OfType<ChatRouteResolver>().FirstOrDefault() ?? NewChatRouteResolver();
@@ -2502,6 +2502,10 @@ public class NyxIdChatEndpointsCoverageTests
             ?? registryCommandPort as IScopeResourceAdmissionPort
             ?? new StubGAgentActorStore();
         var historyStore = args.OfType<IChatHistoryStore>().FirstOrDefault() ?? new StubChatHistoryStore();
+        var runtime = args.OfType<IActorRuntime>().FirstOrDefault()
+            ?? new StubActorRuntime(registryCommandPort, outcomeChannel, historyStore);
+        if (runtime is StubActorRuntime stubRuntime)
+            stubRuntime.ConfigureNyxIdChatServices(registryCommandPort, outcomeChannel, historyStore);
         var dispatchPort = new StubActorDispatchPort(runtime);
         var facade = new NyxIdChatLifecycleFacade(
             new DefaultCommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome>(
@@ -2512,7 +2516,13 @@ public class NyxIdChatEndpointsCoverageTests
                     new ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>(dispatchPort),
                     new NyxIdChatCreateLifecycleCommandReceiptFactory()),
                 outcomeChannel),
-            new InlineNyxIdDeleteLifecycleDispatchService(runtime, admissionPort, registryCommandPort, historyStore));
+            new DefaultCommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
+                new DefaultCommandDispatchPipeline<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
+                    new NyxIdChatConversationDeleteCommandTargetResolver(runtime, admissionPort),
+                    new DefaultCommandContextPolicy(),
+                    new NyxIdChatLifecycleCommandEnvelopeFactory(),
+                    new ActorCommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>(dispatchPort),
+                    new NyxIdChatDeleteLifecycleCommandReceiptFactory())));
 
         return RebuildArgs(parameters, args, facade);
     }
@@ -2558,45 +2568,6 @@ public class NyxIdChatEndpointsCoverageTests
         }
 
         return rebuilt.ToArray();
-    }
-
-    private sealed class InlineNyxIdDeleteLifecycleDispatchService(
-        IActorRuntime actorRuntime,
-        IScopeResourceAdmissionPort admissionPort,
-        IGAgentActorRegistryCommandPort registryCommandPort,
-        IChatHistoryStore historyStore)
-        : ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>
-    {
-        public async Task<CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>> DispatchAsync(
-            NyxIdChatConversationDeleteCommand command,
-            CancellationToken ct = default)
-        {
-            var resolver = new NyxIdChatConversationDeleteCommandTargetResolver(actorRuntime, admissionPort);
-            var resolution = await resolver.ResolveAsync(command, ct);
-            if (!resolution.Succeeded || resolution.Target is null)
-                return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Failure(resolution.Error);
-
-            var target = resolution.Target;
-            var context = new DefaultCommandContextPolicy().Create(target.TargetId, commandId: Guid.NewGuid().ToString("N"));
-            var receipt = new NyxIdChatDeleteLifecycleCommandReceiptFactory().Create(target, context);
-
-            await registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, command.ActorId),
-                ct);
-            try
-            {
-                await historyStore.DeleteConversationAsync(command.ScopeId, command.ActorId, ct);
-            }
-            catch
-            {
-                await registryCommandPort.RegisterActorAsync(
-                    new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, command.ActorId),
-                    CancellationToken.None);
-                throw;
-            }
-
-            return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Success(receipt);
-        }
     }
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
@@ -2928,16 +2899,19 @@ public class NyxIdChatEndpointsCoverageTests
         private ServiceProvider? _nyxIdChatServices;
         private IGAgentActorRegistryCommandPort? _registryCommandPort;
         private IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>? _outcomeChannel;
+        private IChatHistoryStore? _historyStore;
 
         public StubActorRuntime(
             IGAgentActorRegistryCommandPort? registryCommandPort = null,
-            IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>? outcomeChannel = null)
+            IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>? outcomeChannel = null,
+            IChatHistoryStore? historyStore = null)
         {
-            if (registryCommandPort is not null || outcomeChannel is not null)
+            if (registryCommandPort is not null || outcomeChannel is not null || historyStore is not null)
             {
                 ConfigureNyxIdChatServices(
                     registryCommandPort ?? new StubGAgentActorStore(),
-                    outcomeChannel ?? new InMemoryActorOutcomeChannel<NyxIdChatConversationCreationOutcome>());
+                    outcomeChannel ?? new StreamActorOutcomeChannel<NyxIdChatConversationCreationOutcome>(new InMemoryStreamProvider()),
+                    historyStore ?? new StubChatHistoryStore());
             }
         }
 
@@ -2949,15 +2923,19 @@ public class NyxIdChatEndpointsCoverageTests
 
         public void ConfigureNyxIdChatServices(
             IGAgentActorRegistryCommandPort registryCommandPort,
-            IActorOutcomeChannel<NyxIdChatConversationCreationOutcome> outcomeChannel)
+            IActorOutcomeChannel<NyxIdChatConversationCreationOutcome> outcomeChannel,
+            IChatHistoryStore? historyStore = null)
         {
+            historyStore ??= new StubChatHistoryStore();
             if (ReferenceEquals(_registryCommandPort, registryCommandPort) &&
                 ReferenceEquals(_outcomeChannel, outcomeChannel) &&
+                ReferenceEquals(_historyStore, historyStore) &&
                 _nyxIdChatServices is not null)
                 return;
 
             _registryCommandPort = registryCommandPort;
             _outcomeChannel = outcomeChannel;
+            _historyStore = historyStore;
             _nyxIdChatServices?.Dispose();
             _nyxIdChatServices = new ServiceCollection()
                 .AddLogging()
@@ -2966,6 +2944,7 @@ public class NyxIdChatEndpointsCoverageTests
                 .AddSingleton<IActorRuntime>(this)
                 .AddSingleton(registryCommandPort)
                 .AddSingleton(outcomeChannel)
+                .AddSingleton(historyStore)
                 .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();

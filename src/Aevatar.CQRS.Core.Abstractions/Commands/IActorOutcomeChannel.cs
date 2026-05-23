@@ -1,6 +1,7 @@
 namespace Aevatar.CQRS.Core.Abstractions.Commands;
 
 public interface IActorOutcomeChannel<TOutcome>
+    where TOutcome : Google.Protobuf.IMessage, new()
 {
     Task<ActorOutcomeSubscription<TOutcome>> SubscribeAsync(
         string commandId,
