@@ -15,15 +15,22 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowRunActorPortBranchTests
 {
     [Fact]
-    public async Task CreateDefinitionAsync_ShouldForwardPreferredActorId()
+    public async Task EnsureDefinitionAsync_ShouldForwardPreferredActorId()
     {
         var runtime = new RecordingActorRuntime();
         runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-preferred", new WorkflowGAgent()));
         var port = CreatePort(runtime);
 
-        var actor = await port.CreateDefinitionAsync("definition-preferred", CancellationToken.None);
+        var receipt = await port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                "definition-preferred",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            "definition-preferred",
+            CancellationToken.None);
 
-        actor.Id.Should().Be("definition-preferred");
+        receipt.ActorId.Should().Be("definition-preferred");
         runtime.CreateRequests.Should().ContainSingle()
             .Which.Should().Be((typeof(WorkflowGAgent), "definition-preferred"));
     }
@@ -332,12 +339,12 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task BindWorkflowDefinitionAsync_ShouldValidateNullActorInput()
+    public async Task BindWorkflowDefinitionAsync_ShouldValidateMissingActorIdInput()
     {
         var port = CreatePort(new RecordingActorRuntime());
 
-        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(null!, "name: x", "x", null, ct: CancellationToken.None))
-            .Should().ThrowAsync<ArgumentNullException>();
+        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(" ", "name: x", "x", null, ct: CancellationToken.None))
+            .Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]
@@ -349,7 +356,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var port = CreatePort(runtime);
 
         await port.BindWorkflowDefinitionAsync(
-            actor,
+            actor.Id,
             "name: direct\nroles: []\nsteps: []\n",
             "direct",
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

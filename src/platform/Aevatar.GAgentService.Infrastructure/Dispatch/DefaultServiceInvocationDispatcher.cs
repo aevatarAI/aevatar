@@ -13,18 +13,18 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 {
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScriptRuntimeCommandPort _scriptRuntimeCommandPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
 
     public DefaultServiceInvocationDispatcher(
         IActorDispatchPort dispatchPort,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IWorkflowRunActorPort workflowRunActorPort,
+        IWorkflowRunProvisioningPort workflowRunProvisioningPort,
         IServiceRunRegistrationPort serviceRunRegistrationPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort ?? throw new ArgumentNullException(nameof(scriptRuntimeCommandPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
     }
 
@@ -90,7 +90,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
-        var run = await _workflowRunActorPort.CreateRunAsync(
+        var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 target.Service.PrimaryActorId,
                 plan.WorkflowName,
@@ -101,10 +101,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.Actor.Id, ServiceImplementationKind.Workflow, ct);
-        var envelope = CreateEnvelope(run.Actor.Id, Any.Pack(chatRequest), commandId, correlationId);
-        await _dispatchPort.DispatchAsync(run.Actor.Id, envelope, ct);
-        return CreateReceipt(target, run.Actor.Id, commandId, correlationId);
+        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var envelope = CreateEnvelope(run.ActorId, Any.Pack(chatRequest), commandId, correlationId);
+        await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId);
     }
 
     private async Task RegisterRunAsync(

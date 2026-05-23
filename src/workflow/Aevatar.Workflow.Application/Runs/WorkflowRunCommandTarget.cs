@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using System.Runtime.ExceptionServices;
@@ -9,43 +8,44 @@ using System.Runtime.ExceptionServices;
 namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowRunCommandTarget
-    : IActorCommandDispatchTarget,
+    : ICommandDispatchTarget,
       ICommandEventTarget<WorkflowRunEventEnvelope>,
       ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDetachedContinuationTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
-    private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
-        IActor actor,
+        string actorId,
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowRunActorPort actorPort,
+        IWorkflowRunProvisioningPort runProvisioningPort,
         WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
-        Actor = actor ?? throw new ArgumentNullException(nameof(actor));
+        ActorId = string.IsNullOrWhiteSpace(actorId)
+            ? throw new ArgumentException("Actor id is required.", nameof(actorId))
+            : actorId;
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
             ? throw new ArgumentException("Workflow name is required.", nameof(workflowName))
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
 
-    public IActor Actor { get; }
+    public string ActorId { get; }
     public string WorkflowName { get; }
     public IReadOnlyList<string> CreatedActorIds { get; }
-    public string TargetId => Actor.Id;
-    public string ActorId => Actor.Id;
+    public string TargetId => ActorId;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
     public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
@@ -245,7 +245,7 @@ internal sealed class WorkflowRunCommandTarget
         {
             try
             {
-                await _actorPort.DestroyAsync(actorId, ct);
+                await _runProvisioningPort.DestroyAsync(actorId, ct);
             }
             catch (Exception ex)
             {

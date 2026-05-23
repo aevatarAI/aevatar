@@ -219,14 +219,12 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public void WorkflowRunControlCommandTarget_ShouldValidateRunIdAndExposeActorIdentity()
     {
-        var actor = new FakeActor("actor-1");
-        var target = new WorkflowRunControlCommandTarget(actor, "run-1");
+        var target = new WorkflowRunControlCommandTarget("actor-1", "run-1");
 
-        target.Actor.Should().BeSameAs(actor);
         target.ActorId.Should().Be("actor-1");
         target.TargetId.Should().Be("actor-1");
 
-        var act = () => new WorkflowRunControlCommandTarget(actor, " ");
+        var act = () => new WorkflowRunControlCommandTarget("actor-1", " ");
 
         act.Should().Throw<ArgumentException>();
     }
@@ -308,9 +306,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunControlResolver_ShouldRejectInvalidActorId()
     {
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            new FakeActorRuntime(),
-            new FakeWorkflowActorBindingReader());
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader());
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand(" ", "run-1", "step-1", "cmd-1", true, "approved"),
@@ -323,9 +319,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunControlResolver_ShouldRejectInvalidRunId()
     {
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            new FakeActorRuntime(),
-            new FakeWorkflowActorBindingReader());
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader());
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", " ", "step-1", "cmd-1", true, "approved"),
@@ -338,9 +332,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunControlResolver_ShouldRejectInvalidStepId()
     {
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            new FakeActorRuntime(),
-            new FakeWorkflowActorBindingReader());
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader());
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
@@ -353,9 +345,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunControlResolver_ShouldRejectInvalidSignalName()
     {
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            new FakeActorRuntime(),
-            new FakeWorkflowActorBindingReader());
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader());
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
@@ -368,9 +358,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunControlResolver_ShouldReturnActorNotFound_WhenRuntimeDoesNotContainActor()
     {
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            new FakeActorRuntime(),
-            new FakeWorkflowActorBindingReader());
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader());
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-404", "run-1", "approve", "cmd-1", "yes"),
@@ -385,9 +373,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Definition,
                     "actor-1",
@@ -410,9 +396,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -437,16 +421,16 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var actorPort = new FakeWorkflowRunActorPort();
 
         var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnWorkflowName = () => new WorkflowRunCommandTarget("actor-1", " ", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnProjectionPort = () => new WorkflowRunCommandTarget("actor-1", "workflow-1", [], null!, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnActorPort = () => new WorkflowRunCommandTarget("actor-1", "workflow-1", [], projectionPort, null!, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        actOnActor.Should().Throw<ArgumentNullException>();
+        actOnActor.Should().Throw<ArgumentException>();
         actOnWorkflowName.Should().Throw<ArgumentException>();
         actOnProjectionPort.Should().Throw<ArgumentNullException>();
         actOnActorPort.Should().Throw<ArgumentNullException>();
 
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var target = new WorkflowRunCommandTarget("actor-1", "workflow-1", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var lease = new FakeProjectionLease("actor-1", "cmd-1");
         var sink = new FakeEventSink();
 
@@ -468,8 +452,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunCommandTarget("actor-1",
             "workflow-1",
             ["definition-1", "run-1"],
             projectionPort,
@@ -501,8 +484,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [Fact]
     public async Task WorkflowRunCommandTarget_ReleaseAfterInteraction_ShouldValidateArguments()
     {
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunCommandTarget("actor-1",
             "workflow-1",
             [],
             new FakeProjectionPort(),
@@ -597,8 +579,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             DestroyException = new InvalidOperationException("destroy failed"),
         };
         var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunCommandTarget("actor-1",
             "workflow-1",
             ["actor-1"],
             projectionPort,
@@ -632,8 +613,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         projectionPort ??= new FakeProjectionPort();
         actorPort ??= new FakeWorkflowRunActorPort();
         sink ??= new FakeEventSink();
-        var target = new WorkflowRunCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunCommandTarget("actor-1",
             "workflow-1",
             ["definition-1", "run-1"],
             projectionPort,
@@ -773,15 +753,11 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         }
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public Exception? DestroyException { get; set; }
         public List<string> DestroyCalls { get; } = [];
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

@@ -13,18 +13,18 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     private readonly IActorRuntime _runtime;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
     private readonly IScriptRuntimeProvisioningPort _scriptRuntimeProvisioningPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionProvisioningPort _workflowDefinitionProvisioningPort;
 
     public DefaultServiceRuntimeActivator(
         IActorRuntime runtime,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         IScriptRuntimeProvisioningPort scriptRuntimeProvisioningPort,
-        IWorkflowRunActorPort workflowRunActorPort)
+        IWorkflowDefinitionProvisioningPort workflowDefinitionProvisioningPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
         _scriptRuntimeProvisioningPort = scriptRuntimeProvisioningPort ?? throw new ArgumentNullException(nameof(scriptRuntimeProvisioningPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionProvisioningPort = workflowDefinitionProvisioningPort ?? throw new ArgumentNullException(nameof(workflowDefinitionProvisioningPort));
     }
 
     public async Task<ServiceRuntimeActivationResult> ActivateAsync(
@@ -108,25 +108,23 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
             ? $"gagent-service:workflow-definition:{deploymentId}"
             : $"{plan.DefinitionActorId}:{deploymentId}";
-        IActor actor;
-        if (await _runtime.ExistsAsync(preferredActorId))
-        {
-            actor = await _runtime.GetAsync(preferredActorId)
-                ?? throw new InvalidOperationException($"Workflow definition actor '{preferredActorId}' was not found.");
-        }
-        else
-        {
-            actor = await _workflowRunActorPort.CreateDefinitionAsync(preferredActorId, ct);
-        }
+        var receipt = await _workflowDefinitionProvisioningPort.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                preferredActorId,
+                plan.WorkflowName,
+                plan.WorkflowYaml,
+                plan.InlineWorkflowYamls),
+            preferredActorId,
+            ct);
 
-        await _workflowRunActorPort.BindWorkflowDefinitionAsync(
-            actor,
+        await _workflowDefinitionProvisioningPort.BindWorkflowDefinitionAsync(
+            receipt.ActorId,
             plan.WorkflowYaml,
             plan.WorkflowName,
             plan.InlineWorkflowYamls,
             ct: ct);
 
-        return new ServiceRuntimeActivationResult(deploymentId, actor.Id, "active");
+        return new ServiceRuntimeActivationResult(deploymentId, receipt.ActorId, "active");
     }
 
     private static Type? ResolveActorType(string typeName)
