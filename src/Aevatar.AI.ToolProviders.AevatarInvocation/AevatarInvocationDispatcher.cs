@@ -345,11 +345,41 @@ public sealed class AevatarInvocationDispatcher
 
         _ = ObserveDetachedInvocationAsync(invocationTask);
 
-        var accepted = await acceptedSource.Task.WaitAsync(ct);
+        await Task.WhenAny(acceptedSource.Task, invocationTask).WaitAsync(ct);
+
+        if (acceptedSource.Task.Status == TaskStatus.RanToCompletion)
+        {
+            var signaledAcceptedReceipt = await acceptedSource.Task.WaitAsync(ct);
+            return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
+                resolution,
+                endpointId,
+                signaledAcceptedReceipt,
+                wait));
+        }
+
+        var result = await invocationTask;
+        if (acceptedSource.Task.Status == TaskStatus.RanToCompletion)
+        {
+            var completedAcceptedReceipt = await acceptedSource.Task.WaitAsync(ct);
+            return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
+                resolution,
+                endpointId,
+                completedAcceptedReceipt,
+                wait));
+        }
+
+        if (!result.Succeeded || result.Accepted == null)
+        {
+            return AevatarInvocationJson.Error(Error(
+                result.StartError.ToString(),
+                $"Team invocation was not accepted: {result.StartError}"));
+        }
+
+        var resultAcceptedReceipt = result.Accepted;
         return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
             resolution,
             endpointId,
-            accepted,
+            resultAcceptedReceipt,
             wait));
     }
 
@@ -462,7 +492,21 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(request.ActorId))
-            return ActorTargetResolution.Success(request.ActorId.Trim());
+        {
+            var actorId = request.ActorId.Trim();
+            var registrySnapshot = await _actorRegistryQueryPort.ListActorsAsync(scope.ScopeId, ct);
+            var isRegistered = registrySnapshot.Groups.Any(g =>
+                g.ActorIds.Any(candidate => string.Equals(candidate, actorId, StringComparison.Ordinal)));
+            if (!isRegistered)
+            {
+                return ActorTargetResolution.Failed(Error(
+                    "actor_not_found",
+                    $"actor_id '{actorId}' is not registered in caller scope '{scope.ScopeId}'.",
+                    "actor_id"));
+            }
+
+            return ActorTargetResolution.Success(actorId);
+        }
 
         if (string.IsNullOrWhiteSpace(request.ActorName))
         {

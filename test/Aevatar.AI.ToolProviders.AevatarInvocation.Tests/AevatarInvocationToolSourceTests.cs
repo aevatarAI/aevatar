@@ -149,6 +149,33 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgent_ShouldRejectActorIdOutsideCallerScope()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["actor-1"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(callId: "call-gagent-outside-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "actor-2",
+              "payload": {
+                "prompt": "hello"
+              }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("actor_not_found");
+        harness.ActorRegistry.LastScopeId.Should().Be("scope-1");
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InvokeGAgent_ShouldRejectPayloadHeaderCredentialOverrides()
     {
         var harness = new Harness();
@@ -306,6 +333,31 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenInvocationReturnsFailureBeforeAcceptance_ShouldReturnStructuredError()
+    {
+        var harness = new Harness();
+        harness.TeamInvocation.Result = new StaticGAgentStreamInvocationResult(
+            null,
+            GAgentDraftRunStartError.ActorTypeMismatch,
+            GAgentDraftRunCompletionStatus.Unknown,
+            false);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+
+        using var _ = PushContext(callId: "call-team-failed-before-acceptance");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": { "prompt": "go" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("actortypemismatch");
+        harness.TeamInvocation.Request.Should().NotBeNull();
     }
 
     [Fact]
@@ -687,8 +739,8 @@ public sealed class AevatarInvocationToolSourceTests
         public string? LastScopeId { get; private set; }
         public GAgentActorRegistrySnapshot Snapshot { get; set; } = new(
             "scope-1",
-            [],
-            0,
+            [new GAgentActorGroup("RoleGAgent", ["actor-1"])],
+            1,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow);
 
@@ -738,7 +790,10 @@ public sealed class AevatarInvocationToolSourceTests
                 throw Failure;
 
             Request = request;
-            var accepted = new StaticGAgentStreamAcceptedReceipt(
+            if (Result is { Accepted: null })
+                return Result;
+
+            var accepted = Result?.Accepted ?? new StaticGAgentStreamAcceptedReceipt(
                 new ServiceInvocationAcceptedReceipt
                 {
                     RequestId = "request-team",
