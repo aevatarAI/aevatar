@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
+        services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         AddNyxIdLifecycleCommands(services);
 

@@ -111,8 +111,24 @@ public class NyxIdChatEndpointsCoverageTests
         streamingEndpoints.Should().NotContain("actor.HandleEventAsync");
         streamingEndpoints.Should().NotContain(".HandleEventAsync(");
         streamingEndpoints.Should().NotContain("INyxIdChatSessionProjectionPort");
+        streamingEndpoints.Should().NotContain("[FromServices] IActorRuntime");
         streamingRunner.Should().NotContain("TaskCompletionSource");
         streamingRunner.Should().NotContain("WaitAsync(TimeSpan.FromSeconds(120))");
+    }
+
+    [Fact]
+    public void NyxRelayEndpointSource_ShouldUseIngressPortInsteadOfRuntimeDispatch()
+    {
+        var root = GetRepositoryRoot();
+        var relayEndpoints = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs"));
+
+        relayEndpoints.Should().Contain("INyxIdRelayIngressPort");
+        relayEndpoints.Should().NotContain("[FromServices] IActorRuntime");
+        relayEndpoints.Should().NotContain("[FromServices] IActorDispatchPort");
+        relayEndpoints.Should().NotContain("CreateAsync<ConversationGAgent>");
+        relayEndpoints.Should().NotContain("DispatchAsync(");
     }
 
     [Fact]
@@ -1026,10 +1042,15 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleStreamMessageAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
+    public async Task HandleStreamMessageAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+        {
+            Failure = NyxIdChatStartError.ActorNotFound,
+        };
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
@@ -1037,13 +1058,17 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubGAgentActorStore(),
-            new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
+            interactionService,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
-        context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("NyxID chat conversation was not found.");
     }
 
     [Fact]
@@ -1127,10 +1152,15 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleApproveAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
+    public async Task HandleApproveAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdApprovalCommand>
+        {
+            Failure = NyxIdChatStartError.ActorNotFound,
+        };
 
         await InvokeTaskAsync(
             "HandleApproveAsync",
@@ -1138,13 +1168,17 @@ public class NyxIdChatEndpointsCoverageTests
             "scope-a",
             "actor-1",
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
-            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubGAgentActorStore(),
-            new StubNyxIdChatInteractionService<NyxIdApprovalCommand>(),
+            interactionService,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
-        context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("NyxID chat conversation was not found.");
     }
 
     [Fact]
@@ -1377,6 +1411,8 @@ public class NyxIdChatEndpointsCoverageTests
             .Should().BeOfType<NyxIdChatCommandEnvelopeFactory>();
         services.GetRequiredService<ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()
             .Should().BeOfType<NyxIdChatObservationLifecycle<NyxIdChatCommand>>();
+        services.GetRequiredService<INyxIdRelayIngressPort>()
+            .Should().BeOfType<NyxIdRelayIngressPort>();
     }
 
     [Fact]
@@ -2427,6 +2463,31 @@ public class NyxIdChatEndpointsCoverageTests
     {
         var parameters = method.GetParameters();
         var normalized = args.ToList();
+        var suppliedRuntime = normalized.OfType<IActorRuntime>().FirstOrDefault();
+        var isLifecycleEndpoint = parameters.Any(parameter => parameter.ParameterType == typeof(NyxIdChatLifecycleFacade));
+
+        if (!isLifecycleEndpoint && parameters.All(parameter => parameter.ParameterType != typeof(IActorRuntime)))
+        {
+            normalized.RemoveAll(arg => arg is IActorRuntime);
+        }
+
+        if (parameters.Any(parameter => parameter.ParameterType == typeof(INyxIdRelayIngressPort)) &&
+            normalized.All(arg => arg is not INyxIdRelayIngressPort))
+        {
+            var relayIngressIndex = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(INyxIdRelayIngressPort));
+            if (relayIngressIndex >= 0)
+            {
+                var runtime = suppliedRuntime ?? new StubActorRuntime();
+                normalized.Insert(
+                    relayIngressIndex,
+                    new NyxIdRelayIngressPort(
+                        runtime,
+                        new StubActorDispatchPort(runtime),
+                        NullLogger<NyxIdRelayIngressPort>.Instance));
+            }
+        }
 
         if (parameters.Any(parameter => parameter.ParameterType == typeof(IActorDispatchPort)) &&
             normalized.All(arg => arg is not IActorDispatchPort))
@@ -3430,32 +3491,6 @@ public class NyxIdChatEndpointsCoverageTests
             DeletedConversations.Add((scopeId, conversationId));
             return Task.CompletedTask;
         }
-    }
-
-    private sealed class ThrowingActorRuntime(Exception exception) : IActorRuntime
-    {
-        public Task<IActor?> GetAsync(string id)
-        {
-            _ = id;
-            throw exception;
-        }
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            throw exception;
-
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
-        {
-            _ = agentType;
-            _ = id;
-            _ = ct;
-            throw exception;
-        }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class StubPreferencesStore(string model, string route, int maxToolRounds) : INyxIdUserLlmPreferencesStore
