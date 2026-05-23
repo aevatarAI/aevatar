@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -51,6 +52,7 @@ internal sealed class StreamingProxyChatLifecycleFacade
     private readonly IActorRuntime _actorRuntime;
     private readonly IStreamingProxyRoomCommandService _roomCommandService;
     private readonly ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> _interactionService;
+    private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly IStreamingProxyParticipantStore _participantStore;
     private readonly IStreamingProxyRoomSubscriptionObservationPort _subscriptionObservationPort;
     private readonly ILogger<StreamingProxyChatLifecycleFacade> _logger;
@@ -59,6 +61,7 @@ internal sealed class StreamingProxyChatLifecycleFacade
         IActorRuntime actorRuntime,
         IStreamingProxyRoomCommandService roomCommandService,
         ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
+        IGAgentActorRegistryCommandPort registryCommandPort,
         IStreamingProxyParticipantStore participantStore,
         IStreamingProxyRoomSubscriptionObservationPort subscriptionObservationPort,
         ILogger<StreamingProxyChatLifecycleFacade> logger)
@@ -66,6 +69,7 @@ internal sealed class StreamingProxyChatLifecycleFacade
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _roomCommandService = roomCommandService ?? throw new ArgumentNullException(nameof(roomCommandService));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
+        _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _participantStore = participantStore ?? throw new ArgumentNullException(nameof(participantStore));
         _subscriptionObservationPort = subscriptionObservationPort ?? throw new ArgumentNullException(nameof(subscriptionObservationPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -129,12 +133,19 @@ internal sealed class StreamingProxyChatLifecycleFacade
     {
         try
         {
+            await _registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(
+                    scopeId,
+                    StreamingProxyDefaults.GAgentTypeName,
+                    roomId),
+                ct);
             await _participantStore.RemoveRoomAsync(roomId, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to remove participants for room {RoomId}", roomId);
+            _logger.LogWarning(ex, "Failed to delete streaming proxy room {RoomId}", roomId);
+            return StreamingProxyRoomDeleteLifecycleStatus.Failed;
         }
 
         return StreamingProxyRoomDeleteLifecycleStatus.Accepted;

@@ -2520,7 +2520,6 @@ public class NyxIdChatEndpointsCoverageTests
             if (target.Status == NyxIdChatConversationCreateStatus.RouteRejected)
                 return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Success(receipt);
 
-            var createdLocally = target.Actor.Id.StartsWith(NyxIdChatServiceDefaults.ActorIdPrefix + "-", StringComparison.Ordinal);
             try
             {
                 var register = await registryCommandPort.RegisterActorAsync(
@@ -2529,13 +2528,13 @@ public class NyxIdChatEndpointsCoverageTests
                 if (register.IsAdmissionVisible)
                     return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Success(receipt);
 
-                DispatchCreationCompensation(target.Actor, command.ScopeId, target.Actor.Id, createdLocally, "registration_not_admission_visible");
+                DispatchCreationCompensation(target.Actor, command.ScopeId, target.Actor.Id, command.CreatedLocally, "registration_not_admission_visible");
                 return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Success(
                     receipt with { CreateStatus = NyxIdChatConversationCreateStatus.RegistrationUnavailable });
             }
             catch
             {
-                DispatchCreationCompensation(target.Actor, command.ScopeId, target.Actor.Id, createdLocally, "registration_failed");
+                DispatchCreationCompensation(target.Actor, command.ScopeId, target.Actor.Id, command.CreatedLocally, "registration_failed");
                 throw;
             }
         }
@@ -2579,8 +2578,6 @@ public class NyxIdChatEndpointsCoverageTests
             var target = resolution.Target;
             var context = new DefaultCommandContextPolicy().Create(target.TargetId, commandId: Guid.NewGuid().ToString("N"));
             var receipt = new NyxIdChatDeleteLifecycleCommandReceiptFactory().Create(target, context);
-            if (target.Status != NyxIdChatConversationDeleteStatus.Accepted)
-                return CommandDispatchResult<NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>.Success(receipt);
 
             await registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, command.ActorId),

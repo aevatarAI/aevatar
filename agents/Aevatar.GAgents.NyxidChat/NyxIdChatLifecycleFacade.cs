@@ -47,6 +47,7 @@ public enum NyxIdChatLifecycleCommandStartError
     RouteRejected = 1,
     AdmissionUnavailable = 2,
     TargetNotFound = 3,
+    AccessDenied = 4,
 }
 
 public sealed class NyxIdChatLifecycleFacade
@@ -107,7 +108,14 @@ public sealed class NyxIdChatLifecycleFacade
         if (result.Succeeded && result.Receipt is not null)
             return new NyxIdChatConversationDeleteReceipt(result.Receipt.DeleteStatus);
 
-        return new NyxIdChatConversationDeleteReceipt(NyxIdChatConversationDeleteStatus.AdmissionUnavailable);
+        return result.Error switch
+        {
+            NyxIdChatLifecycleCommandStartError.TargetNotFound =>
+                new NyxIdChatConversationDeleteReceipt(NyxIdChatConversationDeleteStatus.NotFound),
+            NyxIdChatLifecycleCommandStartError.AccessDenied =>
+                new NyxIdChatConversationDeleteReceipt(NyxIdChatConversationDeleteStatus.AccessDenied),
+            _ => new NyxIdChatConversationDeleteReceipt(NyxIdChatConversationDeleteStatus.AdmissionUnavailable),
+        };
     }
 
     private static string NormalizeRequired(string value, string parameterName)
@@ -124,16 +132,19 @@ internal sealed class NyxIdChatConversationCreateCommandTarget
 {
     public NyxIdChatConversationCreateCommandTarget(
         IActor actor,
+        bool createdLocally,
         NyxIdChatConversationCreateStatus status,
         Reject? reject = null)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
+        CreatedLocally = createdLocally;
         Status = status;
         Reject = reject;
     }
 
     public IActor Actor { get; }
     public string TargetId => Actor.Id;
+    public bool CreatedLocally { get; }
     public NyxIdChatConversationCreateStatus Status { get; }
     public Reject? Reject { get; }
 }
@@ -201,14 +212,22 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                     NyxIdChatLifecycleCommandStartError.TargetNotFound);
 
+            command.CreatedLocally = false;
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(
-                new NyxIdChatConversationCreateCommandTarget(forwardedActor, NyxIdChatConversationCreateStatus.Accepted));
+                new NyxIdChatConversationCreateCommandTarget(
+                    forwardedActor,
+                    createdLocally: false,
+                    NyxIdChatConversationCreateStatus.Accepted));
         }
 
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         var createdActor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+        command.CreatedLocally = true;
         return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(
-            new NyxIdChatConversationCreateCommandTarget(createdActor, NyxIdChatConversationCreateStatus.Accepted));
+            new NyxIdChatConversationCreateCommandTarget(
+                createdActor,
+                createdLocally: true,
+                NyxIdChatConversationCreateStatus.Accepted));
     }
 
     private static ChatRouteCallerScope ToChatRouteCallerScope(OwnerScope scope) => new()
@@ -250,6 +269,14 @@ internal sealed class NyxIdChatConversationDeleteCommandTargetResolver
             ct);
 
         var status = MapDeleteAdmission(admission.Status);
+        if (status != NyxIdChatConversationDeleteStatus.Accepted)
+            return CommandTargetResolution<NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                status == NyxIdChatConversationDeleteStatus.NotFound
+                    ? NyxIdChatLifecycleCommandStartError.TargetNotFound
+                    : status == NyxIdChatConversationDeleteStatus.AccessDenied
+                        ? NyxIdChatLifecycleCommandStartError.AccessDenied
+                        : NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+
         var actor = await _actorRuntime.GetAsync(command.ActorId);
         if (actor is null)
             return CommandTargetResolution<NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(

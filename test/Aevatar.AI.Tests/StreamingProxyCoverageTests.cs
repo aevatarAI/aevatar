@@ -225,7 +225,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndRemoveParticipantsOnly()
+    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndUnregisterRoom()
     {
         var actorStore = new StubGAgentActorStore();
         var participantStore = new StubParticipantStore();
@@ -243,12 +243,15 @@ public class StreamingProxyCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        actorStore.RemovedActors.Should().BeEmpty();
+        actorStore.RemovedActors.Should().ContainSingle(entry =>
+            entry.scopeId == "scope-a" &&
+            entry.gagentType == StreamingProxyDefaults.GAgentTypeName &&
+            entry.actorId == "room-1");
         participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_ShouldIgnoreRegistryAvailability()
+    public async Task HandleDeleteRoomAsync_ShouldReturnServiceUnavailable_WhenRegistryUnavailable()
     {
         var actorStore = new StubGAgentActorStore
         {
@@ -268,9 +271,9 @@ public class StreamingProxyCoverageTests
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         actorStore.RemovedActors.Should().BeEmpty();
-        participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
+        participantStore.RemovedRooms.Should().BeEmpty();
     }
 
     [Fact]
@@ -1716,6 +1719,7 @@ public class StreamingProxyCoverageTests
             runtime,
             roomCommandService,
             interactionService ?? new StubStreamingProxyRoomChatInteractionService(),
+            registryCommandPort ?? new StubGAgentActorStore(),
             participantStore,
             subscriptionObservationPort ?? new StubRoomSubscriptionObservationPort(),
             NullLogger<StreamingProxyChatLifecycleFacade>.Instance);

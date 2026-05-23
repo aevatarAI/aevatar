@@ -107,7 +107,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
         var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
-        var createdLocally = Id.StartsWith(NyxIdChatServiceDefaults.ActorIdPrefix + "-", StringComparison.Ordinal);
+        var createdLocally = command.CreatedLocally;
 
         await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
         {

@@ -144,6 +144,7 @@ message NyxIdChatConversationDeletionCompensationRequested {
 
 message NyxIdChatConversationCreateCommand {
   string scope_id = 1;
+  bool created_locally = 2;
 }
 
 message NyxIdChatConversationDeleteCommand {

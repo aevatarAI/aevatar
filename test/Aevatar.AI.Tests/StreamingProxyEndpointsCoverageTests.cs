@@ -223,6 +223,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             runtime,
             roomCommandService,
             new NoOpStreamingProxyRoomChatInteractionService(),
+            new RecordingGAgentActorStore([]),
             participantStore,
             new NoOpSubscriptionObservationPort(),
             loggerFactory.CreateLogger<StreamingProxyChatLifecycleFacade>());
