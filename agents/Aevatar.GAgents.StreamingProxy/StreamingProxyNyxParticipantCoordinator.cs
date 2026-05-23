@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
@@ -45,27 +44,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
         string scopeId,
         string roomId,
-        IActor actor,
-        IStreamingProxyParticipantStore participantStore,
-        string accessToken,
-        CancellationToken ct,
-        string? preferredRoute = null,
-        string? defaultModel = null) =>
-        await EnsureParticipantsJoinedAsync(
-            scopeId,
-            roomId,
-            actor.Id,
-            participantStore,
-            accessToken,
-            ct,
-            preferredRoute,
-            defaultModel);
-
-    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
-        string scopeId,
-        string roomId,
-        string actorId,
-        IStreamingProxyParticipantStore participantStore,
+        IReadOnlySet<string> existingParticipantIds,
         string accessToken,
         CancellationToken ct,
         string? preferredRoute = null,
@@ -75,17 +54,12 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         if (participants.Count == 0)
             return participants;
 
-        var existing = await participantStore.ListAsync(roomId, ct);
-        var existingIds = existing
-            .Select(entry => entry.AgentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         foreach (var participant in participants)
         {
-            if (existingIds.Contains(participant.ParticipantId))
+            if (existingParticipantIds.Contains(participant.ParticipantId))
                 continue;
 
-            await DispatchAsync(actorId, new GroupChatParticipantJoinedEvent
+            await DispatchAsync(roomId, new GroupChatParticipantJoinedEvent
             {
                 AgentId = participant.ParticipantId,
                 DisplayName = participant.DisplayName,
@@ -97,32 +71,11 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
     public async Task<int> GenerateRepliesAsync(
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
-        IActor actor,
+        string roomId,
         string prompt,
         string sessionId,
         string accessToken,
-        CancellationToken ct,
-        IStreamingProxyParticipantStore? participantStore = null,
-        string? roomId = null) =>
-        await GenerateRepliesAsync(
-            participants,
-            actor.Id,
-            prompt,
-            sessionId,
-            accessToken,
-            ct,
-            participantStore,
-            roomId);
-
-    public async Task<int> GenerateRepliesAsync(
-        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
-        string actorId,
-        string prompt,
-        string sessionId,
-        string accessToken,
-        CancellationToken ct,
-        IStreamingProxyParticipantStore? participantStore = null,
-        string? roomId = null)
+        CancellationToken ct)
     {
         if (participants.Count == 0)
             return 0;
@@ -174,7 +127,10 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                     if (IsUnavailableResponse(response))
                     {
                         failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
+                        await MarkParticipantLeftAsync(
+                            roomId,
+                            participant.ParticipantId,
+                            ct);
                         _logger.LogWarning(
                             "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
                             participant.DisplayName,
@@ -190,14 +146,17 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                     if (string.IsNullOrWhiteSpace(content))
                     {
                         failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
+                        await MarkParticipantLeftAsync(
+                            roomId,
+                            participant.ParticipantId,
+                            ct);
                         continue;
                     }
 
                     transcript.Add((participant.DisplayName, content));
                     successfulReplies++;
                     totalSuccessfulReplies++;
-                    await DispatchAsync(actorId, new GroupChatMessageEvent
+                    await DispatchAsync(roomId, new GroupChatMessageEvent
                     {
                         AgentId = participant.ParticipantId,
                         AgentName = participant.DisplayName,
@@ -212,7 +171,10 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                 catch (Exception ex)
                 {
                     failedParticipants.Add(participant.ParticipantId);
-                    await MarkParticipantLeftAsync(actorId, participant.ParticipantId, ct);
+                    await MarkParticipantLeftAsync(
+                        roomId,
+                        participant.ParticipantId,
+                        ct);
                     _logger.LogWarning(ex,
                         "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
                         participant.DisplayName,
@@ -959,14 +921,14 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
     }
 
     private async Task MarkParticipantLeftAsync(
-        string actorId,
+        string roomId,
         string participantId,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(participantId))
             return;
 
-        await DispatchAsync(actorId, new GroupChatParticipantLeftEvent
+        await DispatchAsync(roomId, new GroupChatParticipantLeftEvent
         {
             AgentId = participantId,
         }, ct);

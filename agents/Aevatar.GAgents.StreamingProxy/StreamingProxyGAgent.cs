@@ -3,10 +3,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
@@ -59,8 +57,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         // Publish topic so all SSE subscribers (user + OpenClaws) receive it
         await PublishAsync(topicEvent, TopologyAudience.Parent);
 
-        await ContinueParticipantLifecycleAsync(request, lifecycleEvent);
-
         Logger.LogInformation(
             "[StreamingProxy] Topic started: {Preview}",
             request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
@@ -85,10 +81,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     {
         await PersistDomainEventAsync(evt);
 
-        var participantStore = Services.GetService<IStreamingProxyParticipantStore>();
-        if (participantStore is not null)
-            await participantStore.AddAsync(Id, evt.AgentId, evt.DisplayName, CancellationToken.None);
-
         // Broadcast join notification
         await PublishAsync(evt, TopologyAudience.Parent);
 
@@ -99,10 +91,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     public async Task HandleGroupChatParticipantLeft(GroupChatParticipantLeftEvent evt)
     {
         await PersistDomainEventAsync(evt);
-
-        var participantStore = Services.GetService<IStreamingProxyParticipantStore>();
-        if (participantStore is not null)
-            await participantStore.RemoveParticipantAsync(Id, evt.AgentId, CancellationToken.None);
 
         // Broadcast leave notification
         await PublishAsync(evt, TopologyAudience.Parent);
@@ -192,6 +180,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         StreamingProxyGAgentState current,
         GroupChatParticipantJoinedEvent evt)
     {
+        // Refactor (iter50/issue-887-streaming-proxy-participant-authority):
+        //   Old pattern: StreamingProxyGAgent and singleton StreamingProxyParticipantGAgent both held participant fact; reads went to singleton readmodel, writes to both — dual fact source.
+        //   New principle: StreamingProxyGAgent per room is the single participant authority; singleton actor/store/readmodel deleted; reads go through room current-state projection.
         var next = current.Clone();
         RemoveParticipant(next, evt.AgentId);
         next.Participants.Add(new StreamingProxyParticipant
@@ -246,99 +237,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         };
         return next;
     }
-
-    private async Task ContinueParticipantLifecycleAsync(
-        ChatRequestEvent request,
-        StreamingProxyChatLifecycleAcceptedEvent lifecycleEvent)
-    {
-        if (string.IsNullOrWhiteSpace(lifecycleEvent.AccessToken))
-            return;
-
-        try
-        {
-            var participantStore = Services.GetService<IStreamingProxyParticipantStore>();
-            var coordinator = Services.GetService<StreamingProxyNyxParticipantCoordinator>();
-            if (participantStore is null || coordinator is null)
-                return;
-            var participants = await coordinator.EnsureParticipantsJoinedAsync(
-                lifecycleEvent.ScopeId,
-                Id,
-                Id,
-                participantStore,
-                lifecycleEvent.AccessToken,
-                CancellationToken.None,
-                lifecycleEvent.PreferredRoute,
-                lifecycleEvent.DefaultModel);
-
-            if (participants.Count == 0)
-                return;
-
-            var successfulReplies = await coordinator.GenerateRepliesAsync(
-                participants,
-                Id,
-                request.Prompt,
-                request.SessionId,
-                lifecycleEvent.AccessToken,
-                CancellationToken.None,
-                participantStore,
-                Id);
-
-            var terminalState = DetermineParticipantTerminalState(successfulReplies);
-            await PersistAndPublishTerminalStateAsync(
-                request.SessionId,
-                terminalState.Status,
-                terminalState.ErrorMessage,
-                CancellationToken.None);
-        }
-        catch (OperationCanceledException)
-        {
-            await PersistAndPublishTerminalStateAsync(
-                request.SessionId,
-                StreamingProxyChatSessionTerminalStatus.Failed,
-                "StreamingProxy chat was cancelled before completion.",
-                CancellationToken.None);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(
-                ex,
-                "StreamingProxy participant lifecycle failed: room={RoomId} session={SessionId}",
-                Id,
-                request.SessionId);
-            await PersistAndPublishTerminalStateAsync(
-                request.SessionId,
-                StreamingProxyChatSessionTerminalStatus.Failed,
-                "StreamingProxy chat failed before completion.",
-                CancellationToken.None);
-        }
-    }
-
-    private async Task PersistAndPublishTerminalStateAsync(
-        string sessionId,
-        StreamingProxyChatSessionTerminalStatus status,
-        string? errorMessage,
-        CancellationToken ct)
-    {
-        if (State.TerminalSessions.ContainsKey(sessionId))
-            return;
-
-        var terminalEvent = new StreamingProxyChatSessionTerminalStateChanged
-        {
-            SessionId = sessionId,
-            Status = status,
-            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            ErrorMessage = errorMessage ?? string.Empty,
-        };
-        await PersistDomainEventAsync(terminalEvent, ct);
-        await PublishAsync(terminalEvent, TopologyAudience.Parent);
-    }
-
-    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
-        int successfulReplies) =>
-        successfulReplies > 0
-            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
-            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 
     private static StreamingProxyGAgentState ApplyLifecycleAccepted(
         StreamingProxyGAgentState current,

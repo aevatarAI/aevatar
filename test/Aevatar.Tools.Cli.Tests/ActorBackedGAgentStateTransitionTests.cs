@@ -2,7 +2,6 @@ using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
-using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -75,71 +74,6 @@ public sealed class ActorBackedGAgentStateTransitionTests
 
     #endregion
 
-    #region StreamingProxyParticipant helpers
-
-    private static StreamingProxyParticipantGAgentState ApplyParticipant(
-        StreamingProxyParticipantGAgentState current, IMessage evt) =>
-        StateTransitionMatcher
-            .Match(current, evt)
-            .On<ParticipantAddedEvent>(ApplyParticipantAdded)
-            .On<ParticipantRemovedEvent>(ApplyParticipantRemoved)
-            .On<RoomParticipantsRemovedEvent>(ApplyRoomRemoved)
-            .OrCurrent();
-
-    private static StreamingProxyParticipantGAgentState ApplyParticipantAdded(
-        StreamingProxyParticipantGAgentState state, ParticipantAddedEvent evt)
-    {
-        var next = state.Clone();
-
-        if (!next.Rooms.TryGetValue(evt.RoomId, out var list))
-        {
-            list = new ParticipantList();
-            next.Rooms[evt.RoomId] = list;
-        }
-
-        var existing = list.Participants.FirstOrDefault(p =>
-            string.Equals(p.AgentId, evt.AgentId, StringComparison.Ordinal));
-        if (existing is not null)
-            list.Participants.Remove(existing);
-
-        list.Participants.Add(new ParticipantEntry
-        {
-            AgentId = evt.AgentId,
-            DisplayName = evt.DisplayName,
-            JoinedAt = evt.JoinedAt,
-        });
-
-        return next;
-    }
-
-    private static StreamingProxyParticipantGAgentState ApplyRoomRemoved(
-        StreamingProxyParticipantGAgentState state, RoomParticipantsRemovedEvent evt)
-    {
-        var next = state.Clone();
-        next.Rooms.Remove(evt.RoomId);
-        return next;
-    }
-
-    private static StreamingProxyParticipantGAgentState ApplyParticipantRemoved(
-        StreamingProxyParticipantGAgentState state, ParticipantRemovedEvent evt)
-    {
-        var next = state.Clone();
-        if (!next.Rooms.TryGetValue(evt.RoomId, out var list))
-            return next;
-
-        for (var index = list.Participants.Count - 1; index >= 0; index--)
-        {
-            if (string.Equals(list.Participants[index].AgentId, evt.AgentId, StringComparison.Ordinal))
-                list.Participants.RemoveAt(index);
-        }
-
-        if (list.Participants.Count == 0)
-            next.Rooms.Remove(evt.RoomId);
-
-        return next;
-    }
-
-    #endregion
 
     #region UserConfig helpers
 
@@ -461,8 +395,8 @@ public sealed class ActorBackedGAgentStateTransitionTests
         var state = new GAgentRegistryState();
         state.Groups.Add(new GAgentRegistryEntry { GagentType = "T", ActorIds = { "x" } });
 
-        // ParticipantAddedEvent is unrelated to the registry matcher
-        var unrelated = new ParticipantAddedEvent { RoomId = "r1", AgentId = "ag1" };
+        // UserConfigUpdatedEvent is unrelated to the registry matcher
+        var unrelated = new UserConfigUpdatedEvent { DefaultModel = "model-a" };
 
         var next = ApplyRegistry(state, unrelated);
 
@@ -470,168 +404,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  2. StreamingProxyParticipantGAgent
-    // ═══════════════════════════════════════════════════════════════════
-
-    [Fact]
-    public void Participant_Add_CreatesRoom()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var evt = new ParticipantAddedEvent
-        {
-            RoomId = "room1",
-            AgentId = "agent1",
-            DisplayName = "Agent One",
-            JoinedAt = now,
-        };
-
-        var next = ApplyParticipant(state, evt);
-
-        next.Rooms.Should().ContainKey("room1");
-        next.Rooms["room1"].Participants.Should().HaveCount(1);
-        next.Rooms["room1"].Participants[0].AgentId.Should().Be("agent1");
-        next.Rooms["room1"].Participants[0].DisplayName.Should().Be("Agent One");
-        next.Rooms["room1"].Participants[0].JoinedAt.Should().Be(now);
-    }
-
-    [Fact]
-    public void Participant_Add_MultipleToSameRoom()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent1", DisplayName = "A1", JoinedAt = now,
-        });
-        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent2", DisplayName = "A2", JoinedAt = now,
-        });
-
-        s2.Rooms["room1"].Participants.Should().HaveCount(2);
-    }
-
-    [Fact]
-    public void Participant_Add_DuplicateAgentId_UpsertsEntry()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var time1 = Timestamp.FromDateTimeOffset(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero));
-        var time2 = Timestamp.FromDateTimeOffset(new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero));
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent1", DisplayName = "OldName", JoinedAt = time1,
-        });
-        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent1", DisplayName = "NewName", JoinedAt = time2,
-        });
-
-        s2.Rooms["room1"].Participants.Should().HaveCount(1);
-        s2.Rooms["room1"].Participants[0].DisplayName.Should().Be("NewName");
-        s2.Rooms["room1"].Participants[0].JoinedAt.Should().Be(time2);
-    }
-
-    [Fact]
-    public void Participant_RemoveRoom_RemovesAllParticipants()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent1", DisplayName = "A1", JoinedAt = now,
-        });
-        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "agent2", DisplayName = "A2", JoinedAt = now,
-        });
-
-        var s3 = ApplyParticipant(s2, new RoomParticipantsRemovedEvent { RoomId = "room1" });
-
-        s3.Rooms.Should().NotContainKey("room1");
-    }
-
-    [Fact]
-    public void Participant_RemoveRoom_NonexistentRoom_ReturnsUnchanged()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-
-        var next = ApplyParticipant(state, new RoomParticipantsRemovedEvent { RoomId = "no-room" });
-
-        next.Rooms.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void Participant_RemoveRoom_DoesNotAffectOtherRooms()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "a1", DisplayName = "A1", JoinedAt = now,
-        });
-        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
-        {
-            RoomId = "room2", AgentId = "a2", DisplayName = "A2", JoinedAt = now,
-        });
-
-        var s3 = ApplyParticipant(s2, new RoomParticipantsRemovedEvent { RoomId = "room1" });
-
-        s3.Rooms.Should().ContainKey("room2");
-        s3.Rooms.Should().NotContainKey("room1");
-    }
-
-    [Fact]
-    public void Participant_RemoveParticipant_RemovesOnlyTargetParticipant()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "a1", DisplayName = "A1", JoinedAt = now,
-        });
-        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "a2", DisplayName = "A2", JoinedAt = now,
-        });
-
-        var s3 = ApplyParticipant(s2, new ParticipantRemovedEvent { RoomId = "room1", AgentId = "a1" });
-
-        s3.Rooms.Should().ContainKey("room1");
-        s3.Rooms["room1"].Participants.Should().ContainSingle(p => p.AgentId == "a2");
-    }
-
-    [Fact]
-    public void Participant_RemoveParticipant_LastParticipant_RemovesRoom()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
-        {
-            RoomId = "room1", AgentId = "a1", DisplayName = "A1", JoinedAt = now,
-        });
-
-        var s2 = ApplyParticipant(s1, new ParticipantRemovedEvent { RoomId = "room1", AgentId = "a1" });
-
-        s2.Rooms.Should().NotContainKey("room1");
-    }
-
-    [Fact]
-    public void Participant_EmptyState_IsValid()
-    {
-        var state = new StreamingProxyParticipantGAgentState();
-
-        state.Rooms.Should().BeEmpty();
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  3. UserConfigGAgent
+    //  2. UserConfigGAgent
     // ═══════════════════════════════════════════════════════════════════
 
     [Fact]

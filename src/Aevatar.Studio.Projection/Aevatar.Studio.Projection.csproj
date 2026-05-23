@@ -20,7 +20,6 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ConnectorCatalog\Aevatar.GAgents.ConnectorCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioMember\Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioTeam\Aevatar.GAgents.StudioTeam.csproj" />

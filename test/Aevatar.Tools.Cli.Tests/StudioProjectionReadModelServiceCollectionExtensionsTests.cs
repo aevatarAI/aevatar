@@ -12,7 +12,7 @@ namespace Aevatar.Tools.Cli.Tests;
 /// Covers <see cref="StudioProjectionReadModelServiceCollectionExtensions"/>
 /// to guard the DI registrations for the actor-backed Studio readmodel stores
 /// (role catalog, connector catalog, chat history, chat conversation, gagent
-/// registry, user memory, streaming proxy participant). The catalog stores
+/// registry, user memory). The catalog stores
 /// require these readers at startup; missing registrations surface as
 /// <c>Unable to resolve service</c> in Development-mode DI validation.
 /// </summary>
@@ -29,7 +29,6 @@ public sealed class StudioProjectionReadModelServiceCollectionExtensionsTests
         typeof(ChatConversationCurrentStateDocument),
         typeof(GAgentRegistryCurrentStateDocument),
         typeof(UserMemoryCurrentStateDocument),
-        typeof(StreamingProxyParticipantCurrentStateDocument),
         typeof(UserConfigCurrentStateDocument),
         typeof(StudioWorkspaceCurrentStateDocument),
     ];

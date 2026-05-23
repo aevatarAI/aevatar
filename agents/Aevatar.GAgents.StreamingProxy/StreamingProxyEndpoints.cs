@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -10,8 +9,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Microsoft.Extensions.Logging;
 using System.Threading.Channels;
@@ -385,7 +382,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] StreamingProxyChatLifecycleFacade chatLifecycleFacade,
+        [FromServices] IStreamingProxyRoomParticipantService participantService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -404,8 +401,10 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var participants = await chatLifecycleFacade.ListParticipantsAsync(roomId, ct);
-            return Results.Ok(participants);
+            var result = await participantService.ListAsync(
+                new StreamingProxyRoomParticipantListQuery(roomId),
+                ct);
+            return Results.Ok(result.Participants);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -448,7 +447,9 @@ public static class StreamingProxyEndpoints
         if (result.Status == StreamingProxyJoinLifecycleStatus.RoomNotFound)
             return Results.NotFound(new { error = "Room not found" });
 
-        return Results.Ok(new { status = "joined", agentId = result.AgentId });
+        var agentId = result.AgentId ?? request.AgentId.Trim();
+
+        return Results.Ok(new { status = "joined", agentId });
     }
 
     private static async Task PumpRoomSessionEventsAsync(
