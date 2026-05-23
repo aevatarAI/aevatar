@@ -21,6 +21,10 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
@@ -152,10 +156,54 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoicePresenceSessionResolver, ActorOwnedVoicePresenceSessionResolver>();
         services.AddVoicePresenceCapabilityProjection();
+        services.AddVoicePresenceCapabilityProjectionStore(configuration);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
+        var inMemoryEnabled = ResolveOptionalBool(
+            configuration["Projection:Document:Providers:InMemory:Enabled"],
+            fallbackValue: !elasticsearchEnabled);
+        var providerCount = (elasticsearchEnabled ? 1 : 0) + (inMemoryEnabled ? 1 : 0);
+        if (providerCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one document projection provider must be enabled for VoicePresence.");
+        }
+
+        if (HasAnyVoicePresenceCapabilityReader(services))
+            return services;
+
+        if (elasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<VoicePresenceCapabilityReadModel>>().Metadata,
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key,
+                defaultSortSelector: static readModel => readModel.UpdatedAt);
+        }
+
+        return services;
+    }
+
+    private static bool HasAnyVoicePresenceCapabilityReader(IServiceCollection services)
+    {
+        return services.Any(x =>
+            x.ServiceType == typeof(IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>));
     }
 
     private static List<VoicePresenceModuleRegistration> BuildVoicePresenceModuleRegistrations(
@@ -839,6 +887,42 @@ public static class ServiceCollectionExtensions
         OpenAI,
         DeepSeek,
         NyxId,
+    }
+
+    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
+        var explicitEnabled = section["Enabled"];
+        var hasEndpoints = section
+            .GetSection("Endpoints")
+            .GetChildren()
+            .Select(x => x.Value?.Trim() ?? string.Empty)
+            .Any(x => x.Length > 0);
+        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
+    }
+
+    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
+        IConfiguration configuration)
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions();
+        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
+        if (options.Endpoints.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
+        }
+
+        return options;
+    }
+
+    private static bool ResolveOptionalBool(string? rawValue, bool fallbackValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return fallbackValue;
+        if (!bool.TryParse(rawValue, out var parsed))
+            throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
+
+        return parsed;
     }
 
     private sealed record ConfiguredProvider(

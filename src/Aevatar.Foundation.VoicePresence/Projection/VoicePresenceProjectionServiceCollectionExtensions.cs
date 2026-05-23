@@ -2,7 +2,9 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -19,6 +21,9 @@ public static class VoicePresenceProjectionServiceCollectionExtensions
 
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<VoicePresenceCapabilityReadModel>,
+            VoicePresenceCapabilityReadModelMetadataProvider>();
         services.AddProjectionMaterializationRuntimeCore<
             VoicePresenceCapabilityMaterializationContext,
             VoicePresenceCapabilityMaterializationRuntimeLease,
