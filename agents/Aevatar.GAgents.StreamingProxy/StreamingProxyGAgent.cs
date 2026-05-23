@@ -5,14 +5,15 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
 /// <summary>
-/// Group chat room GAgent. Acts as a message broker for multiple external
-/// OpenClaw agents. Does NOT call LLM itself — it receives messages from
-/// participants and broadcasts them to all SSE subscribers.
+/// Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+///   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+///   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
 /// </summary>
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
@@ -26,27 +27,93 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         Logger.LogInformation("[StreamingProxy] Room initialized: {RoomName}", evt.RoomName);
     }
 
-    /// <summary>
-    /// Overrides base ChatRequestEvent handler. Instead of calling LLM,
-    /// converts the user prompt into a group chat topic and broadcasts it.
-    /// </summary>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
-        var topicEvent = new GroupChatTopicEvent
+        await PublishTopicAndTerminalAsync(
+            request.Prompt,
+            request.SessionId,
+            StreamingProxyChatSessionTerminalStatus.Completed,
+            null);
+    }
+
+    [EventHandler]
+    public async Task HandleRoomChatRequested(StreamingProxyRoomChatRequested request)
+    {
+        var prompt = request.Prompt?.Trim() ?? string.Empty;
+        var sessionId = string.IsNullOrWhiteSpace(request.SessionId)
+            ? Guid.NewGuid().ToString("N")
+            : request.SessionId.Trim();
+
+        if (string.IsNullOrWhiteSpace(prompt))
         {
-            Prompt = request.Prompt,
-            SessionId = request.SessionId,
-        };
+            await PublishTerminalStateAsync(
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                "StreamingProxy chat prompt is required.");
+            return;
+        }
 
-        await PersistDomainEventAsync(topicEvent);
+        var topic = await PublishTopicAsync(prompt, sessionId);
+        var accessToken = request.AccessToken?.Trim();
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            await PublishTerminalStateAsync(
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Completed,
+                null);
+            return;
+        }
 
-        // Publish topic so all SSE subscribers (user + OpenClaws) receive it
-        await PublishAsync(topicEvent, TopologyAudience.Parent);
+        var coordinator = Services.GetService<StreamingProxyNyxParticipantCoordinator>();
+        if (coordinator == null)
+        {
+            await PublishTerminalStateAsync(
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Completed,
+                null);
+            return;
+        }
 
-        Logger.LogInformation(
-            "[StreamingProxy] Topic started: {Preview}",
-            request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
+        var participants = await coordinator.ResolveParticipantsAsync(
+            accessToken,
+            NormalizeOptional(request.PreferredRoute),
+            NormalizeOptional(request.DefaultModel),
+            CancellationToken.None);
+        var participant = participants.FirstOrDefault();
+        if (participant == null)
+        {
+            await PublishTerminalStateAsync(
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Completed,
+                null);
+            return;
+        }
+
+        await EnsureParticipantJoinedAsync(participant);
+        var reply = await coordinator.GenerateReplyAsync(
+            participant,
+            participants,
+            topic.Prompt,
+            sessionId,
+            accessToken,
+            CancellationToken.None);
+        if (reply.Status == StreamingProxyNyxParticipantReplyStatus.Succeeded &&
+            !string.IsNullOrWhiteSpace(reply.Content))
+        {
+            await PublishParticipantMessageAsync(participant, reply.Content, sessionId);
+            await PublishTerminalStateAsync(
+                sessionId,
+                StreamingProxyChatSessionTerminalStatus.Completed,
+                null);
+            return;
+        }
+
+        await PublishParticipantLeftAsync(participant.ParticipantId);
+        await PublishTerminalStateAsync(
+            sessionId,
+            StreamingProxyChatSessionTerminalStatus.Failed,
+            reply.ErrorMessage ?? "StreamingProxy participant reply failed.");
     }
 
     [EventHandler(EndpointName = "postMessage")]
@@ -111,6 +178,115 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             .On<GroupChatParticipantLeftEvent>(ApplyParticipantLeft)
             .On<StreamingProxyChatSessionTerminalStateChanged>(ApplyTerminalStateChanged)
             .OrCurrent();
+
+    private async Task PublishTopicAndTerminalAsync(
+        string prompt,
+        string sessionId,
+        StreamingProxyChatSessionTerminalStatus status,
+        string? errorMessage)
+    {
+        await PublishTopicAsync(prompt, sessionId);
+        await PublishTerminalStateAsync(sessionId, status, errorMessage);
+    }
+
+    private async Task<GroupChatTopicEvent> PublishTopicAsync(string prompt, string sessionId)
+    {
+        var topicEvent = new GroupChatTopicEvent
+        {
+            Prompt = prompt,
+            SessionId = sessionId,
+        };
+
+        await PersistDomainEventAsync(topicEvent);
+        await PublishAsync(topicEvent, TopologyAudience.Parent);
+
+        Logger.LogInformation(
+            "[StreamingProxy] Topic started: {Preview}",
+            prompt.Length > 100 ? prompt[..100] + "..." : prompt);
+
+        return topicEvent;
+    }
+
+    private async Task EnsureParticipantJoinedAsync(StreamingProxyNyxParticipantDefinition participant)
+    {
+        if (State.Participants.Any(existing =>
+                string.Equals(existing.AgentId, participant.ParticipantId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var evt = new GroupChatParticipantJoinedEvent
+        {
+            AgentId = participant.ParticipantId,
+            DisplayName = participant.DisplayName,
+        };
+
+        await PersistDomainEventAsync(evt);
+        await PublishAsync(evt, TopologyAudience.Parent);
+    }
+
+    private async Task PublishParticipantMessageAsync(
+        StreamingProxyNyxParticipantDefinition participant,
+        string content,
+        string sessionId)
+    {
+        var evt = new GroupChatMessageEvent
+        {
+            AgentId = participant.ParticipantId,
+            AgentName = participant.DisplayName,
+            Content = content,
+            SessionId = sessionId,
+        };
+
+        await PersistDomainEventAsync(evt);
+        await PublishAsync(evt, TopologyAudience.Parent);
+    }
+
+    private async Task PublishParticipantLeftAsync(string participantId)
+    {
+        if (string.IsNullOrWhiteSpace(participantId) ||
+            !State.Participants.Any(existing =>
+                string.Equals(existing.AgentId, participantId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var evt = new GroupChatParticipantLeftEvent
+        {
+            AgentId = participantId,
+        };
+
+        await PersistDomainEventAsync(evt);
+        await PublishAsync(evt, TopologyAudience.Parent);
+    }
+
+    private async Task PublishTerminalStateAsync(
+        string sessionId,
+        StreamingProxyChatSessionTerminalStatus status,
+        string? errorMessage)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            State.TerminalSessions.ContainsKey(sessionId))
+        {
+            return;
+        }
+
+        var evt = new StreamingProxyChatSessionTerminalStateChanged
+        {
+            SessionId = sessionId,
+            Status = status,
+            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ErrorMessage = errorMessage ?? string.Empty,
+        };
+
+        await PersistDomainEventAsync(evt);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static StreamingProxyGAgentState ApplyRoomInitialized(
         StreamingProxyGAgentState current,

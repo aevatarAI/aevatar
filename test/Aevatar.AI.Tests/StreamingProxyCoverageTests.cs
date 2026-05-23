@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -13,9 +14,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using StreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 using Google.Protobuf;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using Google.Protobuf.WellKnownTypes;
@@ -137,9 +136,10 @@ public class StreamingProxyCoverageTests
         endpoints.Should().NotContain("DispatchRoomEnvelopeAsync");
         endpoints.Should().NotContain("Any.Pack");
         endpoints.Should().Contain("IStreamingProxyRoomCommandService");
+        endpoints.Should().Contain("StreamingProxyRoomChatCommand");
         endpoints.Should().Contain("StreamingProxyRoomPostMessageCommand");
         endpoints.Should().Contain("StreamingProxyRoomJoinCommand");
-        endpoints.Should().Contain("StreamingProxyRoomTerminalStateCommand");
+        endpoints.Should().NotContain("StreamingProxyRoomTerminalStateCommand");
     }
 
     [Fact]
@@ -226,10 +226,9 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndRemoveFromBothStores()
+    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndOnlyUnregisterRoom()
     {
         var actorStore = new StubGAgentActorStore();
-        var participantStore = new StubParticipantStore();
 
         var result = await InvokeResultAsync(
             "HandleDeleteRoomAsync",
@@ -238,7 +237,6 @@ public class StreamingProxyCoverageTests
             "room-1",
             actorStore,
             actorStore,
-            participantStore,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -247,7 +245,6 @@ public class StreamingProxyCoverageTests
         actorStore.RemovedActors.Should().ContainSingle(x =>
             x.scopeId == "scope-a" &&
             x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
-        participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
 
     [Fact]
@@ -257,7 +254,6 @@ public class StreamingProxyCoverageTests
         {
             UnregisterException = new InvalidOperationException("registry unavailable"),
         };
-        var participantStore = new StubParticipantStore();
 
         var result = await InvokeResultAsync(
             "HandleDeleteRoomAsync",
@@ -266,31 +262,24 @@ public class StreamingProxyCoverageTests
             "room-1",
             actorStore,
             actorStore,
-            participantStore,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        participantStore.RemovedRooms.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleChatAsync_ShouldRejectEmptyPrompt()
     {
         var context = CreateScopedHttpContext();
-        var runtime = new StubActorRuntime();
-        var roomCommandService = new StubRoomCommandService();
         var interactionService = new StubStreamingProxyRoomChatInteractionService();
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
-        var participantStore = new StubParticipantStore();
         var actorStore = new StubGAgentActorStore();
-        var coordinator = CreateNyxParticipantCoordinator();
 
         var method = typeof(StreamingProxyEndpoints).GetMethod(
             "HandleChatAsync",
             BindingFlags.NonPublic | BindingFlags.Static)!;
-        var task = method.Invoke(null, [context, "scope-a", "room-a", new ChatTopicRequest(null), runtime, roomCommandService, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]);
+        var task = method.Invoke(null, [context, "scope-a", "room-a", new ChatTopicRequest(null), actorStore, interactionService, NullLoggerFactory.Instance, CancellationToken.None]);
         await InvokeTaskAsync(task);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -302,20 +291,15 @@ public class StreamingProxyCoverageTests
     {
         var context = CreateScopedHttpContext("scope-b");
         context.Response.Body = new MemoryStream();
-        var runtime = new StubActorRuntime(new List<IActor> { new StubActor("room-a") });
-        var roomCommandService = new StubRoomCommandService();
         var interactionService = new StubStreamingProxyRoomChatInteractionService();
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
-        var participantStore = new StubParticipantStore();
         var actorStore = new StubGAgentActorStore();
-        var coordinator = CreateNyxParticipantCoordinator();
 
         var method = typeof(StreamingProxyEndpoints).GetMethod(
             "HandleChatAsync",
             BindingFlags.NonPublic | BindingFlags.Static)!;
         var task = method.Invoke(
             null,
-            [context, "scope-a", "room-a", new ChatTopicRequest("hello"), runtime, roomCommandService, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]);
+            [context, "scope-a", "room-a", new ChatTopicRequest("hello"), actorStore, interactionService, NullLoggerFactory.Instance, CancellationToken.None]);
         await InvokeTaskAsync(task);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
@@ -323,26 +307,6 @@ public class StreamingProxyCoverageTests
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("SCOPE_ACCESS_DENIED");
         body.Should().Contain("Authenticated scope does not match requested scope.");
-    }
-
-    [Fact]
-    public async Task HandleMessageStreamAsync_ShouldRejectMissingRoom()
-    {
-        var context = CreateScopedHttpContext();
-        var runtime = new StubActorRuntime();
-        var actorStore = new StubGAgentActorStore();
-        var observationPort = new StubRoomSubscriptionObservationPort();
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "HandleMessageStreamAsync",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        var task = method.Invoke(
-            null,
-            [context, "scope-a", "missing", runtime, actorStore, observationPort, NullLoggerFactory.Instance, CancellationToken.None]);
-        await InvokeTaskAsync(task);
-
-        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        observationPort.AttachCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -360,7 +324,7 @@ public class StreamingProxyCoverageTests
             BindingFlags.NonPublic | BindingFlags.Static)!;
         var task = InvokeTaskAsync(method.Invoke(
             null,
-            [context, "scope-a", "room-a", runtime, actorStore, observationPort, NullLoggerFactory.Instance, cts.Token]));
+            [context, "scope-a", "room-a", actorStore, observationPort, NullLoggerFactory.Instance, cts.Token]));
 
         await observationPort.Attached.Task;
         await observationPort.PublishAsync(
@@ -521,14 +485,8 @@ public class StreamingProxyCoverageTests
     {
         var context = CreateScopedHttpContext();
         context.Response.Body = new MemoryStream();
-        var runtime = new StubActorRuntime(new List<IActor> { new StubActor("room-a") });
-        var roomCommandService = new StubRoomCommandService();
         var interactionService = new StubStreamingProxyRoomChatInteractionService();
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(
-            new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed));
-        var participantStore = new StubParticipantStore();
         var actorStore = new StubGAgentActorStore();
-        var coordinator = CreateNyxParticipantCoordinator();
         var request = new ChatTopicRequest("Discuss webhook relay", "session-123");
         interactionService.Frames.Add(new StreamingProxyRoomSessionEnvelope
         {
@@ -613,14 +571,16 @@ public class StreamingProxyCoverageTests
             BindingFlags.NonPublic | BindingFlags.Static)!;
         await InvokeTaskAsync(method.Invoke(
             null,
-            [context, "scope-a", "room-a", request, runtime, roomCommandService, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]));
+            [context, "scope-a", "room-a", request, actorStore, interactionService, NullLoggerFactory.Instance, CancellationToken.None]));
 
         interactionService.Commands.Should().ContainSingle().Which.Should().Be(new StreamingProxyRoomChatCommand(
             "room-a",
             "scope-a",
             "Discuss webhook relay",
-            "session-123"));
-        roomCommandService.TerminalCommands.Should().BeEmpty();
+            "session-123",
+            null,
+            null,
+            null));
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -630,21 +590,15 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleChatAsync_ShouldPublishFailedTerminalState_WhenCancelled()
+    public async Task HandleChatAsync_ShouldNotPublishTerminalState_WhenCancelled()
     {
         var context = CreateScopedHttpContext();
         context.Response.Body = new MemoryStream();
-        var actor = new StubActor("room-a");
-        var runtime = new StubActorRuntime(new List<IActor> { actor });
-        var roomCommandService = new StubRoomCommandService();
         var interactionService = new StubStreamingProxyRoomChatInteractionService
         {
             WaitForCancellation = true,
         };
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
-        var participantStore = new StubParticipantStore();
         var actorStore = new StubGAgentActorStore();
-        var coordinator = CreateNyxParticipantCoordinator();
         using var cts = new CancellationTokenSource();
 
         var method = typeof(StreamingProxyEndpoints).GetMethod(
@@ -652,16 +606,14 @@ public class StreamingProxyCoverageTests
             BindingFlags.NonPublic | BindingFlags.Static)!;
         var task = InvokeTaskAsync(method.Invoke(
             null,
-            [context, "scope-a", "room-a", new ChatTopicRequest("Cancel me", "session-cancel"), runtime, roomCommandService, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, cts.Token]));
+            [context, "scope-a", "room-a", new ChatTopicRequest("Cancel me", "session-cancel"), actorStore, interactionService, NullLoggerFactory.Instance, cts.Token]));
 
         await interactionService.Started.Task;
         cts.Cancel();
         await task;
 
-        roomCommandService.TerminalCommands.Should().ContainSingle(command =>
-            command.SessionId == "session-cancel" &&
-            command.Status == StreamingProxyChatSessionTerminalStatus.Failed &&
-            command.ErrorMessage == "StreamingProxy chat was cancelled before completion.");
+        interactionService.Commands.Should().ContainSingle(command =>
+            command.SessionId == "session-cancel");
     }
 
     [Fact]
@@ -705,7 +657,7 @@ public class StreamingProxyCoverageTests
         var emitted = new List<StreamingProxyRoomSessionEnvelope>();
 
         var result = await interaction.ExecuteAsync(
-            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "Discuss claims", "session-123"),
+            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "Discuss claims", "session-123", "token-1", "route-1", "model-1"),
             (frame, _) =>
             {
                 emitted.Add(frame);
@@ -725,10 +677,13 @@ public class StreamingProxyCoverageTests
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
         dispatchPort.Dispatches.Should().ContainSingle();
-        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyRoomChatRequested>();
         request.Prompt.Should().Be("Discuss claims");
         request.SessionId.Should().Be("session-123");
         request.ScopeId.Should().Be("scope-a");
+        request.AccessToken.Should().Be("token-1");
+        request.PreferredRoute.Should().Be("route-1");
+        request.DefaultModel.Should().Be("model-1");
         emitted.Should().HaveCount(2);
         emitted.Last().Envelope.Payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>().Status
             .Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
@@ -752,7 +707,7 @@ public class StreamingProxyCoverageTests
             ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>();
 
         var result = await interaction.ExecuteAsync(
-            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "prompt", "session-123"),
+            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "prompt", "session-123", null, null, null),
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -784,7 +739,7 @@ public class StreamingProxyCoverageTests
             ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>();
 
         var act = async () => await interaction.ExecuteAsync(
-            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "prompt", "session-123"),
+            new StreamingProxyRoomChatCommand(actor.Id, "scope-a", "prompt", "session-123", null, null, null),
             (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -803,15 +758,18 @@ public class StreamingProxyCoverageTests
     {
         var factory = new StreamingProxyRoomChatCommandEnvelopeFactory();
         var envelope = factory.CreateEnvelope(
-            new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-123"),
+            new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-123", "token-1", "route-1", "model-1"),
             new CommandContext("room-a", "command-1", "correlation-1", new Dictionary<string, string>()));
 
         envelope.Route?.Direct?.TargetActorId.Should().Be("room-a");
         envelope.Propagation?.CorrelationId.Should().Be("correlation-1");
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<StreamingProxyRoomChatRequested>();
         request.Prompt.Should().Be("topic");
         request.ScopeId.Should().Be("scope-a");
         request.SessionId.Should().Be("session-123");
+        request.AccessToken.Should().Be("token-1");
+        request.PreferredRoute.Should().Be("route-1");
+        request.DefaultModel.Should().Be("model-1");
     }
 
     [Fact]
@@ -909,59 +867,73 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
+    public async Task GAgent_ShouldOwnRoomChatProgression_ForTypedChatCommand()
     {
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "DetermineParticipantTerminalState",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var provider = new StreamingReplyLlmProvider("Room-owned reply.");
+        await using var services = new ServiceCollection()
+            .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+                })
+                .Build())
+            .AddSingleton<IHttpClientFactory>(new StubHttpClientFactory(new StaticHttpMessageHandler("""
+                {
+                  "services": [
+                    {
+                      "user_service_id": "svc-node-a",
+                      "service_slug": "openclaw",
+                      "display_name": "OpenClaw",
+                      "status": "ready",
+                      "route_value": "/api/v1/proxy/s/openclaw/node-a",
+                      "node_id": "node-a",
+                      "allowed": true,
+                      "models": ["model-a"]
+                    }
+                  ]
+                }
+                """)))
+            .AddSingleton<ILLMProviderFactory>(new StubLlmProviderFactory(provider, includeNyxId: true))
+            .AddLogging()
+            .AddStreamingProxy()
+            .BuildServiceProvider();
+        var agent = CreateAgent(services, "streaming-proxy-agent");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
 
-        var failed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [0])!;
-        failed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
-        failed.ErrorMessage.Should().Be("StreamingProxy chat completed without any participant replies.");
+        await agent.ActivateAsync();
+        await agent.HandleRoomChatRequested(new StreamingProxyRoomChatRequested
+        {
+            ScopeId = "scope-a",
+            Prompt = "Discuss actor-owned orchestration",
+            SessionId = "session-123",
+            AccessToken = "token-1",
+            PreferredRoute = "/api/v1/proxy/s/openclaw/node-a",
+            DefaultModel = "model-a",
+        });
 
-        var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [1])!;
-        completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
-        completed.ErrorMessage.Should().BeNull();
-    }
+        agent.State.Messages.Should().HaveCount(2);
+        agent.State.Messages[0].IsTopic.Should().BeTrue();
+        agent.State.Messages[0].Content.Should().Be("Discuss actor-owned orchestration");
+        agent.State.Messages[1].SenderAgentId.Should().Contain("node-a");
+        agent.State.Messages[1].Content.Should().Be("Room-owned reply.");
+        agent.State.Participants.Should().ContainSingle(participant =>
+            participant.DisplayName == "OpenClaw" &&
+            participant.AgentId.Contains("node-a", StringComparison.Ordinal));
+        agent.State.TerminalSessions.Should().ContainKey("session-123");
+        agent.State.TerminalSessions["session-123"].Status.Should()
+            .Be(StreamingProxyChatSessionTerminalStatus.Completed);
 
-    [Fact]
-    public async Task TryPublishFailedTerminalStateAsync_ShouldEmitFailedTerminalEvent_WhenCompletionIsUnknown()
-    {
-        var actor = new StubActor("room-a");
-        var roomCommandService = new StubRoomCommandService();
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
-        var logger = NullLogger.Instance;
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "TryPublishFailedTerminalStateAsync",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        await InvokeTaskAsync(method.Invoke(
-            null,
-            [roomCommandService, actor, "session-123", "StreamingProxy chat failed before completion.", durableCompletionResolver, logger]));
-
-        roomCommandService.TerminalCommands.Should().ContainSingle(command =>
-            command.SessionId == "session-123" &&
-            command.Status == StreamingProxyChatSessionTerminalStatus.Failed &&
-            command.ErrorMessage == "StreamingProxy chat failed before completion.");
-    }
-
-    [Fact]
-    public async Task TryPublishFailedTerminalStateAsync_ShouldNotEmitTerminalEvent_WhenCompletionAlreadyVisible()
-    {
-        var actor = new StubActor("room-a");
-        var roomCommandService = new StubRoomCommandService();
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(
-            new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed));
-        var logger = NullLogger.Instance;
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "TryPublishFailedTerminalStateAsync",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        await InvokeTaskAsync(method.Invoke(
-            null,
-            [roomCommandService, actor, "session-123", "StreamingProxy chat failed before completion.", durableCompletionResolver, logger]));
-
-        roomCommandService.TerminalCommands.Should().BeEmpty();
+        publisher.Published.OfType<GroupChatTopicEvent>().Should().ContainSingle();
+        publisher.Published.OfType<GroupChatParticipantJoinedEvent>().Should().ContainSingle();
+        publisher.Published.OfType<GroupChatMessageEvent>().Should().ContainSingle(message =>
+            message.SessionId == "session-123" &&
+            message.Content == "Room-owned reply.");
+        provider.Requests.Should().ContainSingle(request =>
+            request.Metadata![LLMRequestMetadataKeys.NyxIdRoutePreference] == "/api/v1/proxy/s/openclaw/node-a");
     }
 
     [Fact]
@@ -1141,9 +1113,8 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleJoinAsync_ShouldRejectMissingAgentIdAndAddParticipant()
+    public async Task HandleJoinAsync_ShouldRejectMissingAgentIdAndSubmitRoomCommandOnly()
     {
-        var participantStore = new StubParticipantStore();
         var roomCommandService = new StubRoomCommandService();
         var actorStore = new StubGAgentActorStore();
 
@@ -1155,8 +1126,6 @@ public class StreamingProxyCoverageTests
             new JoinRoomRequest(null, null),
             roomCommandService,
             actorStore,
-            participantStore,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -1177,13 +1146,10 @@ public class StreamingProxyCoverageTests
             new JoinRoomRequest("agent-1", "Alice"),
             roomCommandService,
             actorStore,
-            participantStore,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        participantStore.AddedParticipants.Should().BeEmpty();
 
         roomCommandService = new StubRoomCommandService();
         var joinRequest = new JoinRoomRequest("agent-1", "Alice");
@@ -1195,14 +1161,10 @@ public class StreamingProxyCoverageTests
             joinRequest,
             roomCommandService,
             actorStore,
-            participantStore,
-            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        participantStore.AddedParticipants.Should().ContainSingle(x =>
-            x.roomId == "room-a" && x.agentId == "agent-1" && x.displayName == "Alice");
         roomCommandService.JoinCommands.Should().ContainSingle(x => x.RoomId == "room-a");
     }
 
@@ -1347,13 +1309,25 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnStoreParticipants()
+    public async Task HandleListParticipantsAsync_ShouldReturnReadModelParticipants()
     {
-        var participantStore = new StubParticipantStore();
-        participantStore.Participants["room-a"] =
-        [
-            new StreamingProxyParticipant("agent-1", "Alice", DateTimeOffset.UtcNow),
-        ];
+        var queryPort = new StubRoomParticipantsQueryPort(new StreamingProxyRoomParticipantsSnapshot
+        {
+            Id = "room-a",
+            ActorId = "room-a",
+            RootActorId = "room-a",
+            StateVersion = 7,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Participants =
+            {
+                new Aevatar.GAgents.StreamingProxy.StreamingProxyParticipant
+                {
+                    AgentId = "agent-1",
+                    DisplayName = "Alice",
+                    JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            },
+        });
 
         var result = await InvokeResultAsync(
             "HandleListParticipantsAsync",
@@ -1361,7 +1335,7 @@ public class StreamingProxyCoverageTests
             "scope-a",
             "room-a",
             new StubGAgentActorStore(),
-            participantStore,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -1415,6 +1389,8 @@ public class StreamingProxyCoverageTests
         state.Messages[1].SenderAgentId.Should().Be("agent-2");
         state.Messages[1].SenderName.Should().Be("Bob");
         state.Participants.Should().BeEmpty();
+        state.TerminalSessions.Should().ContainKey("room-session");
+        state.TerminalSessions["room-session"].Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
 
         publisher.Published.OfType<GroupChatParticipantJoinedEvent>().Should().HaveCount(2);
         publisher.Published.OfType<GroupChatTopicEvent>()
@@ -2142,39 +2118,13 @@ public class StreamingProxyCoverageTests
         }
     }
 
-    private sealed class StubParticipantStore : IStreamingProxyParticipantStore
+    private sealed class StubRoomParticipantsQueryPort(StreamingProxyRoomParticipantsSnapshot? snapshot)
+        : IStreamingProxyRoomParticipantsQueryPort
     {
-        public Dictionary<string, List<StreamingProxyParticipant>> Participants { get; } = new(StringComparer.Ordinal);
-        public List<(string roomId, string agentId, string displayName)> AddedParticipants { get; } = [];
-        public List<string> RemovedRooms { get; } = [];
-
-        public Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
-            string roomId, CancellationToken cancellationToken = default)
-        {
-            if (Participants.TryGetValue(roomId, out var list))
-                return Task.FromResult<IReadOnlyList<StreamingProxyParticipant>>(list.AsReadOnly());
-            return Task.FromResult<IReadOnlyList<StreamingProxyParticipant>>([]);
-        }
-
-        public Task AddAsync(
-            string roomId, string agentId, string displayName,
-            CancellationToken cancellationToken = default)
-        {
-            AddedParticipants.Add((roomId, agentId, displayName));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveParticipantAsync(
-            string roomId, string agentId,
-            CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task RemoveRoomAsync(
-            string roomId, CancellationToken cancellationToken = default)
-        {
-            RemovedRooms.Add(roomId);
-            return Task.CompletedTask;
-        }
+        public Task<StreamingProxyRoomParticipantsSnapshot?> GetAsync(
+            string rootActorId,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
     }
 
     private sealed class StubTerminalQueryPort : IStreamingProxyChatSessionTerminalQueryPort
@@ -2209,21 +2159,6 @@ public class StreamingProxyCoverageTests
         }
     }
 
-    private static StreamingProxyNyxParticipantCoordinator CreateNyxParticipantCoordinator()
-    {
-        var stubProvider = new StubLlmProvider();
-        var llmFactory = new StubLlmProviderFactory(stubProvider);
-        var configuration = new ConfigurationBuilder().Build();
-        var httpClientFactory = new StubHttpClientFactory();
-
-        return new StreamingProxyNyxParticipantCoordinator(
-            new StubActorDispatchPort(new StubActorRuntime()),
-            llmFactory,
-            configuration,
-            httpClientFactory,
-            NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance);
-    }
-
     private sealed class StubLlmProvider : ILLMProvider
     {
         public string Name => "stub";
@@ -2234,16 +2169,49 @@ public class StreamingProxyCoverageTests
         }
     }
 
-    private sealed class StubLlmProviderFactory(ILLMProvider provider) : ILLMProviderFactory
+    private sealed class StreamingReplyLlmProvider(string content) : ILLMProvider
+    {
+        public string Name => "nyxid";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            yield return new LLMStreamChunk { DeltaContent = content };
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+        }
+    }
+
+    private sealed class StubLlmProviderFactory(ILLMProvider provider, bool includeNyxId = false) : ILLMProviderFactory
     {
         public ILLMProvider GetProvider(string name) => provider;
         public ILLMProvider GetDefault() => provider;
-        public IReadOnlyList<string> GetAvailableProviders() => [];
+        public IReadOnlyList<string> GetAvailableProviders() => includeNyxId ? ["nyxid"] : [];
     }
 
-    private sealed class StubHttpClientFactory : IHttpClientFactory
+    private sealed class StubHttpClientFactory(HttpMessageHandler? handler = null) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new();
+        public HttpClient CreateClient(string name) =>
+            handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+    }
+
+    private sealed class StaticHttpMessageHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _ = request;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body),
+            });
+        }
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

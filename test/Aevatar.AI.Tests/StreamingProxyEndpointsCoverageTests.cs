@@ -4,7 +4,6 @@ using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -12,7 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using AppStreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -96,14 +95,22 @@ public sealed class StreamingProxyEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnStoredParticipants()
+    public async Task HandleListParticipantsAsync_ShouldReturnReadModelParticipants()
     {
-        var participantStore = new RecordingParticipantStore
+        var queryPort = new RecordingRoomParticipantsQueryPort
         {
-            Participants =
-            [
-                new AppStreamingProxyParticipant("agent-1", "Bot", DateTimeOffset.Parse("2026-04-14T10:00:00+08:00")),
-            ],
+            Snapshot = new StreamingProxyRoomParticipantsSnapshot
+            {
+                Participants =
+                {
+                    new StreamingProxyParticipant
+                    {
+                        AgentId = "agent-1",
+                        DisplayName = "Bot",
+                        JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-14T10:00:00+08:00")),
+                    },
+                },
+            },
         };
         var loggerFactory = LoggerFactory.Create(_ => { });
 
@@ -111,7 +118,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            queryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -123,11 +130,11 @@ public sealed class StreamingProxyEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenStoreThrows()
+    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenReadModelThrows()
     {
-        var participantStore = new RecordingParticipantStore
+        var queryPort = new RecordingRoomParticipantsQueryPort
         {
-            ThrowOnList = new InvalidOperationException("list failed"),
+            ThrowOnGet = new InvalidOperationException("list failed"),
         };
         var loggerFactory = LoggerFactory.Create(_ => { });
 
@@ -135,7 +142,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            queryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -172,14 +179,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
-        var participantStore = new RecordingParticipantStore();
+        var queryPort = new RecordingRoomParticipantsQueryPort();
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             "room-1",
-            participantStore,
+            queryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -206,13 +213,13 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         string roomId,
-        IStreamingProxyParticipantStore participantStore,
+        IStreamingProxyRoomParticipantsQueryPort participantsQueryPort,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantsQueryPort, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -349,48 +356,20 @@ public sealed class StreamingProxyEndpointsCoverageTests
         }
     }
 
-    private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
+    private sealed class RecordingRoomParticipantsQueryPort : IStreamingProxyRoomParticipantsQueryPort
     {
-        public Exception? ThrowOnList { get; init; }
-        public IReadOnlyList<AppStreamingProxyParticipant> Participants { get; init; } = [];
+        public Exception? ThrowOnGet { get; init; }
+        public StreamingProxyRoomParticipantsSnapshot? Snapshot { get; init; }
 
-        public Task<IReadOnlyList<AppStreamingProxyParticipant>> ListAsync(
-            string roomId,
-            CancellationToken cancellationToken = default)
+        public Task<StreamingProxyRoomParticipantsSnapshot?> GetAsync(
+            string rootActorId,
+            CancellationToken ct = default)
         {
-            _ = roomId;
-            if (ThrowOnList is not null)
-                throw ThrowOnList;
+            _ = rootActorId;
+            if (ThrowOnGet is not null)
+                throw ThrowOnGet;
 
-            return Task.FromResult(Participants);
-        }
-
-        public Task AddAsync(
-            string roomId,
-            string agentId,
-            string displayName,
-            CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            _ = agentId;
-            _ = displayName;
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveParticipantAsync(
-            string roomId,
-            string agentId,
-            CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            _ = agentId;
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            return Task.CompletedTask;
+            return Task.FromResult(Snapshot);
         }
     }
 

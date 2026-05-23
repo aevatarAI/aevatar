@@ -1,29 +1,16 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 /// <summary>
-/// Persistent participant index for streaming proxy rooms.
+/// Read-only participant index for streaming proxy rooms.
 /// </summary>
 /// <remarks>
-/// TODO: When wiring to endpoints, the caller must handle corrupt-data exceptions
-/// from the underlying store (e.g. <see cref="InvalidOperationException"/> from
-/// deserialization failures). Swallowing errors and returning an empty list would
-/// silently discard existing participants. The chrono-storage implementation
-/// intentionally throws on corruption to prevent data loss.
+/// Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+///   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+///   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
 /// </remarks>
 public interface IStreamingProxyParticipantStore
 {
     Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
-        string roomId, CancellationToken cancellationToken = default);
-
-    Task AddAsync(
-        string roomId, string agentId, string displayName,
-        CancellationToken cancellationToken = default);
-
-    Task RemoveParticipantAsync(
-        string roomId, string agentId,
-        CancellationToken cancellationToken = default);
-
-    Task RemoveRoomAsync(
         string roomId, CancellationToken cancellationToken = default);
 }
 

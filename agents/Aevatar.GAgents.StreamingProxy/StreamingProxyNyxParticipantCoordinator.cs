@@ -4,10 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -19,7 +16,6 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -27,14 +23,12 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private readonly ILogger<StreamingProxyNyxParticipantCoordinator> _logger;
 
     public StreamingProxyNyxParticipantCoordinator(
-        IActorDispatchPort actorDispatchPort,
         ILLMProviderFactory llmProviderFactory,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ILogger<StreamingProxyNyxParticipantCoordinator> logger,
         INyxIdUserLlmPreferencesStore? preferencesStore = null)
     {
-        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _llmProviderFactory = llmProviderFactory;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
@@ -42,182 +36,10 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         _preferencesStore = preferencesStore;
     }
 
-    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
-        string scopeId,
-        string roomId,
-        IActor actor,
-        IStreamingProxyParticipantStore participantStore,
-        string accessToken,
-        CancellationToken ct,
-        string? preferredRoute = null,
-        string? defaultModel = null)
-    {
-        var participants = await ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
-        if (participants.Count == 0)
-            return participants;
-
-        var existing = await participantStore.ListAsync(roomId, ct);
-        var existingIds = existing
-            .Select(entry => entry.AgentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var participant in participants)
-        {
-            if (existingIds.Contains(participant.ParticipantId))
-                continue;
-
-            await DispatchAsync(actor, new GroupChatParticipantJoinedEvent
-            {
-                AgentId = participant.ParticipantId,
-                DisplayName = participant.DisplayName,
-            }, ct);
-
-            await participantStore.AddAsync(roomId, participant.ParticipantId, participant.DisplayName, ct);
-        }
-
-        return participants;
-    }
-
-    public async Task<int> GenerateRepliesAsync(
-        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
-        IActor actor,
-        string prompt,
-        string sessionId,
-        string accessToken,
-        CancellationToken ct,
-        IStreamingProxyParticipantStore? participantStore = null,
-        string? roomId = null)
-    {
-        if (participants.Count == 0)
-            return 0;
-
-        if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
-        {
-            _logger.LogWarning("NyxID provider '{ProviderName}' is not registered; skip Streaming Proxy participants.", NyxIdProviderName);
-            return 0;
-        }
-
-        var provider = _llmProviderFactory.GetProvider(NyxIdProviderName);
-        var transcript = new List<(string Speaker, string Content)>();
-        var activeParticipants = participants.ToList();
-        var rounds = activeParticipants.Count > 1 ? StreamingProxyDefaults.MaxDiscussionRounds : 1;
-        var totalSuccessfulReplies = 0;
-
-        for (var round = 1; round <= rounds && activeParticipants.Count > 0; round++)
-        {
-            var successfulReplies = 0;
-            var failedParticipants = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var roundParticipants = activeParticipants.ToList();
-
-            foreach (var participant in roundParticipants)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                if (failedParticipants.Contains(participant.ParticipantId))
-                    continue;
-
-                var availableParticipants = activeParticipants
-                    .Where(candidate => !failedParticipants.Contains(candidate.ParticipantId))
-                    .ToList();
-
-                if (availableParticipants.Count == 0)
-                    break;
-
-                try
-                {
-                    var request = BuildParticipantRequest(
-                        participant,
-                        availableParticipants,
-                        prompt,
-                        sessionId,
-                        accessToken,
-                        transcript,
-                        round,
-                        rounds);
-                    var response = await ReadParticipantResponseAsync(provider, request, ct);
-                    if (IsUnavailableResponse(response))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        _logger.LogWarning(
-                            "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
-                            participant.DisplayName,
-                            participant.RoutePreference,
-                            round);
-                        continue;
-                    }
-
-                    var content = NormalizeParticipantReply(
-                        participant,
-                        availableParticipants,
-                        response.Content);
-                    if (string.IsNullOrWhiteSpace(content))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            actor,
-                            participantStore,
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        continue;
-                    }
-
-                    transcript.Add((participant.DisplayName, content));
-                    successfulReplies++;
-                    totalSuccessfulReplies++;
-                    await DispatchAsync(actor, new GroupChatMessageEvent
-                    {
-                        AgentId = participant.ParticipantId,
-                        AgentName = participant.DisplayName,
-                        Content = content,
-                        SessionId = sessionId,
-                    }, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    failedParticipants.Add(participant.ParticipantId);
-                    await MarkParticipantLeftAsync(
-                        actor,
-                        participantStore,
-                        roomId,
-                        participant.ParticipantId,
-                        ct);
-                    _logger.LogWarning(ex,
-                        "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
-                        participant.DisplayName,
-                        participant.RoutePreference,
-                        round);
-                }
-            }
-
-            if (failedParticipants.Count > 0)
-            {
-                activeParticipants = activeParticipants
-                    .Where(participant => !failedParticipants.Contains(participant.ParticipantId))
-                    .ToList();
-            }
-
-            if (successfulReplies == 0)
-                break;
-
-            if (activeParticipants.Count < 2)
-                break;
-        }
-
-        return totalSuccessfulReplies;
-    }
-
-    private async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
+    // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+    //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+    //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
+    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
         string accessToken,
         string? preferredRoute,
         string? defaultModel,
@@ -276,6 +98,65 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         }
 
         return EnsureDistinctDisplayNames(participants);
+    }
+
+    // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+    //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+    //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
+    public async Task<StreamingProxyNyxParticipantReplyResult> GenerateReplyAsync(
+        StreamingProxyNyxParticipantDefinition participant,
+        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
+        string prompt,
+        string sessionId,
+        string accessToken,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(participant);
+        ArgumentNullException.ThrowIfNull(participants);
+
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return StreamingProxyNyxParticipantReplyResult.Unavailable("No NyxID access token is available.");
+
+        if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("NyxID provider '{ProviderName}' is not registered; skip Streaming Proxy participants.", NyxIdProviderName);
+            return StreamingProxyNyxParticipantReplyResult.Unavailable("NyxID provider is not registered.");
+        }
+
+        try
+        {
+            var provider = _llmProviderFactory.GetProvider(NyxIdProviderName);
+            var request = BuildParticipantRequest(
+                participant,
+                participants,
+                prompt,
+                sessionId,
+                accessToken);
+            var response = await ReadParticipantResponseAsync(provider, request, ct);
+            if (IsUnavailableResponse(response))
+                return StreamingProxyNyxParticipantReplyResult.Unavailable("Participant provider is unavailable.");
+
+            var content = NormalizeParticipantReply(
+                participant,
+                participants,
+                response.Content);
+            return string.IsNullOrWhiteSpace(content)
+                ? StreamingProxyNyxParticipantReplyResult.Failed("Participant reply was empty.")
+                : StreamingProxyNyxParticipantReplyResult.Succeeded(content);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}'.",
+                participant.DisplayName,
+                participant.RoutePreference);
+            return StreamingProxyNyxParticipantReplyResult.Failed("Participant reply failed.");
+        }
     }
 
     private async Task<List<StreamingProxyNyxProviderStatus>> FetchReadyProvidersAsync(
@@ -745,93 +626,32 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> allParticipants,
         string prompt,
         string sessionId,
-        string accessToken,
-        IReadOnlyList<(string Speaker, string Content)> transcript,
-        int round,
-        int totalRounds)
+        string accessToken)
     {
         var others = string.Join(", ",
             allParticipants
                 .Where(candidate => !string.Equals(candidate.ParticipantId, participant.ParticipantId, StringComparison.OrdinalIgnoreCase))
                 .Select(candidate => candidate.DisplayName));
 
-        var nextPreferredResponder = allParticipants
-            .FirstOrDefault(candidate => !string.Equals(candidate.ParticipantId, participant.ParticipantId, StringComparison.OrdinalIgnoreCase))
-            ?.DisplayName;
-
-        var activeSpeakerNames = allParticipants
-            .Select(candidate => candidate.DisplayName)
-            .Where(displayName => !string.IsNullOrWhiteSpace(displayName))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var promptTranscript = transcript
-            .TakeLast(StreamingProxyDefaults.MaxTranscriptMessagesPerPrompt)
-            .Where(entry => activeSpeakerNames.Contains(entry.Speaker))
-            .ToList();
-
-        var latestOtherTurn = promptTranscript
-            .LastOrDefault(entry => !string.Equals(entry.Speaker, participant.DisplayName, StringComparison.OrdinalIgnoreCase));
-        var hasLatestOtherTurn =
-            !string.IsNullOrWhiteSpace(latestOtherTurn.Speaker) &&
-            !string.IsNullOrWhiteSpace(latestOtherTurn.Content);
-
-        var transcriptText = promptTranscript.Count == 0
-            ? "暂无其他 participant 回复。"
-            : string.Join("\n", promptTranscript.Select(entry => $"- {entry.Speaker}: {entry.Content}"));
-
-        var turnDirective = hasLatestOtherTurn
-            ? $"""
-Your primary job in this turn is to reply to {latestOtherTurn.Speaker}'s latest point.
-Treat this as an internal room discussion between participants. The human is observing, not filling in blanks right now.
-Do not ask the human follow-up questions. Instead, make a reasonable assumption, react to {latestOtherTurn.Speaker}, and move the discussion forward.
-Mention or clearly reference {latestOtherTurn.Speaker}'s point early in your reply so it feels like a real back-and-forth.
-End your turn by pressing one concrete challenge, rebuttal, or counterexample back to the room, preferably aimed at {latestOtherTurn.Speaker}.
-Only address participants who are explicitly listed as currently active in this room. If someone is unavailable, failed earlier, or is not listed, do not ask them anything and do not hand the turn to them.
-"""
-            : """
-This is the opening turn for you in the room.
-Treat this as an internal room discussion between participants. The human is observing, not filling in blanks right now.
-Do not ask the human follow-up questions. Make reasonable assumptions from the topic and start the discussion with a concrete point of view.
-State a clear stance immediately and end with one pointed challenge to another currently active participant so the debate can continue without waiting for the human.
-Only address participants who are explicitly listed as currently active in this room. If someone is unavailable, failed earlier, or is not listed, do not ask them anything and do not hand the turn to them.
-""";
-
-        var turnContext = hasLatestOtherTurn
-            ? $"""
-Latest other-participant message you should respond to:
-{latestOtherTurn.Speaker}: {latestOtherTurn.Content}
-"""
-            : "No other participant has spoken before your turn.";
-
         var systemPrompt = $"""
-You are {participant.DisplayName}, one participant in a multi-agent discussion room.
+You are {participant.DisplayName}, one participant in a StreamingProxy room.
 Other participants in this room: {(string.IsNullOrWhiteSpace(others) ? "none" : others)}.
-This is round {round} of {totalRounds}.
-Write exactly one chat turn as {participant.DisplayName}.
+Write exactly one concise chat turn as {participant.DisplayName}.
 You are speaking to the other participants in the room, not interviewing the user.
 Speak only for yourself and never simulate, script, or continue another participant's reply.
 Do not output speaker labels, role-play transcripts, markdown headings for speakers, or sections named after other participants.
 Only treat these names as valid live participants: {(string.IsNullOrWhiteSpace(others) ? "none" : others)}.
 Do not mention, ask, tag, or wait for any unavailable participant outside that list.
-If another participant just made a point, engage with it directly instead of restarting from scratch.
 Do not mention provider routing, service slugs, or proxy internals.
 Keep the response concise, useful, and conversational so other participants can build on it.
-Avoid repeating your earlier points unless you are refining or challenging them.
 Use 2-3 short paragraphs or 2-4 bullet points at most.
-{turnDirective}
 """;
 
         var userPrompt = $"""
 Original room topic from the human:
 {prompt}
 
-Conversation transcript so far:
-{transcriptText}
-
-{turnContext}
-
-Add your next reply to move the participant discussion forward.
-If you want to hand the turn to someone, only hand it to this currently active participant set: {(string.IsNullOrWhiteSpace(others) ? "none" : others)}{(string.IsNullOrWhiteSpace(nextPreferredResponder) ? string.Empty : $". A good default is {nextPreferredResponder}")}.
+Add your reply to move the discussion forward.
 Return only {participant.DisplayName}'s reply text, with no prefixed name and no extra transcript formatting.
 """;
 
@@ -846,7 +666,7 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
 
         return new LLMRequest
         {
-            RequestId = $"{sessionId}:{participant.ParticipantId}:round-{round}",
+            RequestId = $"{sessionId}:{participant.ParticipantId}",
             Messages =
             [
                 ChatMessage.System(systemPrompt),
@@ -937,28 +757,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         return string.Join('\n', lines).Trim();
     }
 
-    private async Task MarkParticipantLeftAsync(
-        IActor actor,
-        IStreamingProxyParticipantStore? participantStore,
-        string? roomId,
-        string participantId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(participantId))
-            return;
-
-        if (participantStore is not null &&
-            !string.IsNullOrWhiteSpace(roomId))
-        {
-            await participantStore.RemoveParticipantAsync(roomId, participantId, ct);
-        }
-
-        await DispatchAsync(actor, new GroupChatParticipantLeftEvent
-        {
-            AgentId = participantId,
-        }, ct);
-    }
-
     private static bool IsUnavailableResponse(LLMResponse response)
     {
         if (string.Equals(response.FinishReason, "error", StringComparison.OrdinalIgnoreCase) ||
@@ -1004,32 +802,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         yield return $"**{trimmed}**";
     }
 
-    private async Task DispatchAsync(IActor actor, IMessage payload, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-
-        await DispatchRoomEnvelopeAsync(actor.Id, envelope, ct);
-    }
-
-    private Task DispatchRoomEnvelopeAsync(
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct)
-    {
-        // Refactor (iter4/cluster-008):
-        //   Old pattern: the Nyx participant coordinator invoked room actors inline.
-        //   New principle: coordinators deliver StreamingProxy room events through IActorDispatchPort.
-        return _actorDispatchPort.DispatchAsync(actorId, envelope, ct);
-    }
 }
 
 internal sealed record StreamingProxyNyxParticipantDefinition(
@@ -1037,6 +809,28 @@ internal sealed record StreamingProxyNyxParticipantDefinition(
     string RoutePreference,
     string DisplayName,
     string? Model);
+
+internal sealed record StreamingProxyNyxParticipantReplyResult(
+    StreamingProxyNyxParticipantReplyStatus Status,
+    string? Content,
+    string? ErrorMessage)
+{
+    public static StreamingProxyNyxParticipantReplyResult Succeeded(string content) =>
+        new(StreamingProxyNyxParticipantReplyStatus.Succeeded, content, null);
+
+    public static StreamingProxyNyxParticipantReplyResult Unavailable(string errorMessage) =>
+        new(StreamingProxyNyxParticipantReplyStatus.Unavailable, null, errorMessage);
+
+    public static StreamingProxyNyxParticipantReplyResult Failed(string errorMessage) =>
+        new(StreamingProxyNyxParticipantReplyStatus.Failed, null, errorMessage);
+}
+
+internal enum StreamingProxyNyxParticipantReplyStatus
+{
+    Succeeded = 0,
+    Unavailable = 1,
+    Failed = 2,
+}
 
 internal sealed record StreamingProxyNyxParticipantCandidate(
     StreamingProxyNyxProviderStatus Provider,

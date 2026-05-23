@@ -876,64 +876,14 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // StreamingProxyParticipantStore: command dispatch + read
+    // StreamingProxyParticipantStore: read-only projection query
     // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task ParticipantStore_AddAsync_SendsParticipantAddedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-
-        await store.AddAsync("room-1", "agent-abc", "Alice");
-
-        var actorId = "streaming-proxy-participants";
-        runtime.Actors.Should().ContainKey(actorId);
-        var actor = runtime.Actors[actorId];
-        var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<ParticipantAddedEvent>();
-        evt.RoomId.Should().Be("room-1");
-        evt.AgentId.Should().Be("agent-abc");
-        evt.DisplayName.Should().Be("Alice");
-    }
-
-    [Fact]
-    public async Task ParticipantStore_RemoveRoomAsync_SendsRoomParticipantsRemovedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-
-        await store.RemoveRoomAsync("room-1");
-
-        var actorId = "streaming-proxy-participants";
-        var actor = runtime.Actors[actorId];
-        var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<RoomParticipantsRemovedEvent>();
-        evt.RoomId.Should().Be("room-1");
-    }
-
-    [Fact]
-    public async Task ParticipantStore_RemoveParticipantAsync_SendsParticipantRemovedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
-
-        await store.RemoveParticipantAsync("room-1", "agent-abc");
-
-        var actorId = "streaming-proxy-participants";
-        var actor = runtime.Actors[actorId];
-        var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<ParticipantRemovedEvent>();
-        evt.RoomId.Should().Be("room-1");
-        evt.AgentId.Should().Be("agent-abc");
-    }
 
     [Fact]
     public async Task ParticipantStore_ListAsync_NoActor_ReturnsEmpty()
     {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<StreamingProxyParticipantCurrentStateDocument>(), logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(
+            EmptyReader<StreamingProxyParticipantCurrentStateDocument>());
 
         var participants = await store.ListAsync("room-1");
 
@@ -943,7 +893,6 @@ public sealed class ActorBackedStoreAdapterTests
     [Fact]
     public async Task ParticipantStore_ListAsync_MapsStateCorrectly()
     {
-        var runtime = new FakeActorRuntime();
         var state = new StreamingProxyParticipantGAgentState();
         var room = new ParticipantList();
         var joinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
@@ -961,8 +910,7 @@ public sealed class ActorBackedStoreAdapterTests
             ActorId = "streaming-proxy-participants",
             StateRoot = Any.Pack(state),
         });
-        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
-        var store = new ActorBackedStreamingProxyParticipantStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), reader, logger);
+        var store = new ActorBackedStreamingProxyParticipantStore(reader);
 
         var participants = await store.ListAsync("room-1");
 

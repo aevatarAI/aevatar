@@ -3,102 +3,63 @@ using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
-using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using ParticipantStoreEntry = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 
 namespace Aevatar.AI.Tests;
 
 public sealed class StreamingProxyNyxParticipantCoordinatorTests
 {
     [Fact]
-    public async Task EnsureParticipantsJoinedAsync_ShouldPreserveDistinctNodesWithSharedSlug()
+    public async Task ResolveParticipantsAsync_ShouldPreserveDistinctNodesWithSharedSlug()
     {
-        var (coordinator, actor, store, _) = CreateCoordinator();
+        var (coordinator, provider) = CreateCoordinator();
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
-            "room-1",
-            actor,
-            store,
+        var participants = await coordinator.ResolveParticipantsAsync(
             "test-token",
+            preferredRoute: null,
+            defaultModel: null,
             CancellationToken.None);
 
         participants.Should().HaveCount(3);
         participants.Select(participant => participant.ParticipantId).Should().OnlyHaveUniqueItems();
         participants.Select(participant => participant.DisplayName).Should().OnlyHaveUniqueItems();
-        participants.Select(participant => participant.DisplayName).Should().OnlyContain(name => name.StartsWith("OpenClaw-Node", StringComparison.Ordinal));
-
-        var joinedEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantJoinedEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantJoinedEvent>())
-            .ToList();
-
-        joinedEvents.Should().HaveCount(3);
-        joinedEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
-
-        store.ListParticipants("room-1").Should().HaveCount(3);
+        participants.Select(participant => participant.DisplayName).Should()
+            .OnlyContain(name => name.StartsWith("OpenClaw-Node", StringComparison.Ordinal));
+        provider.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldSkipUnavailableOpenerAndContinueWithHealthyParticipant()
+    public async Task GenerateReplyAsync_ShouldReturnFailedResultWithoutActorSideEffect()
     {
-        var (coordinator, actor, store, llmProvider) = CreateCoordinator();
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
-            "room-1",
-            actor,
-            store,
+        var (coordinator, llmProvider) = CreateCoordinator();
+        var participants = await coordinator.ResolveParticipantsAsync(
             "test-token",
-            CancellationToken.None,
-            preferredRoute: "/api/v1/proxy/s/openclaw/node-a");
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-a",
+            defaultModel: null,
+            CancellationToken.None);
 
-        var roomParticipants = participants.Take(2).ToList();
-
-        await coordinator.GenerateRepliesAsync(
-            roomParticipants,
-            actor,
+        var result = await coordinator.GenerateReplyAsync(
+            participants[0],
+            participants.Take(2).ToList(),
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
-        llmProvider.Requests.Should().HaveCount(2);
+        result.Status.Should().Be(StreamingProxyNyxParticipantReplyStatus.Failed);
+        result.ErrorMessage.Should().Be("Participant reply failed.");
+        llmProvider.Requests.Should().ContainSingle();
         llmProvider.Requests[0].RequestId.Should().Contain("node-a");
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
-
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
-            .ToList();
-
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Should().NotContain(evt => evt.Content.StartsWith("当前暂时不可用", StringComparison.Ordinal));
-        messageEvents.Single().Content.Should().Contain("reply from");
-        messageEvents.Single().Content.Should().Contain("node-b");
-        messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
-        leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldIgnoreUnavailableTextResponseAndContinueWithHealthyParticipant()
+    public async Task GenerateReplyAsync_ShouldClassifyUnavailableTextResponse()
     {
-        var (coordinator, actor, store, llmProvider) = CreateCoordinator(request =>
+        var (coordinator, llmProvider) = CreateCoordinator(request =>
         {
             if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
             {
@@ -114,54 +75,29 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             };
         });
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
-            "room-1",
-            actor,
-            store,
+        var participants = await coordinator.ResolveParticipantsAsync(
             "test-token",
-            CancellationToken.None,
-            preferredRoute: "/api/v1/proxy/s/openclaw/node-a");
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-a",
+            defaultModel: null,
+            CancellationToken.None);
 
-        var roomParticipants = participants.Take(2).ToList();
-
-        await coordinator.GenerateRepliesAsync(
-            roomParticipants,
-            actor,
+        var result = await coordinator.GenerateReplyAsync(
+            participants[0],
+            participants.Take(2).ToList(),
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
-        llmProvider.Requests.Should().HaveCount(2);
-        llmProvider.Requests[0].RequestId.Should().Contain("node-a");
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
-
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
-            .ToList();
-
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Single().Content.Should().Contain("reply from");
-        messageEvents.Single().Content.Should().Contain("node-b");
-        messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
-        leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
+        result.Status.Should().Be(StreamingProxyNyxParticipantReplyStatus.Unavailable);
+        result.ErrorMessage.Should().Be("Participant provider is unavailable.");
+        llmProvider.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldUseStreamContentWhenSynchronousContentIsMissing()
+    public async Task GenerateReplyAsync_ShouldUseStreamContentWhenSynchronousContentIsMissing()
     {
-        var (coordinator, actor, store, llmProvider) = CreateCoordinator(
+        var (coordinator, llmProvider) = CreateCoordinator(
             responseFactory: _ => new LLMResponse(),
             streamFactory: request =>
             [
@@ -169,75 +105,51 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
                 new LLMStreamChunk { FinishReason = "stop", IsLast = true },
             ]);
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
-            "room-1",
-            actor,
-            store,
+        var participants = await coordinator.ResolveParticipantsAsync(
             "test-token",
-            CancellationToken.None,
-            preferredRoute: "/api/v1/proxy/s/openclaw/node-b");
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-b",
+            defaultModel: null,
+            CancellationToken.None);
 
-        var roomParticipants = participants.Take(1).ToList();
-
-        await coordinator.GenerateRepliesAsync(
-            roomParticipants,
-            actor,
+        var result = await coordinator.GenerateReplyAsync(
+            participants[0],
+            participants.Take(1).ToList(),
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
         llmProvider.Requests.Should().HaveCount(1);
-
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
-            .ToList();
-
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Single().Content.Should().Contain("streamed reply from");
-        messageEvents.Single().SessionId.Should().Be("session-1");
-        leftEvents.Should().BeEmpty();
+        result.Status.Should().Be(StreamingProxyNyxParticipantReplyStatus.Succeeded);
+        result.Content.Should().Contain("streamed reply from");
     }
 
     [Fact]
-    public async Task EnsureParticipantsJoinedAsync_ShouldFallbackToLegacyStatus_WhenServicesEndpointIsMissing()
+    public async Task ResolveParticipantsAsync_ShouldFallbackToLegacyStatus_WhenServicesEndpointIsMissing()
     {
         var handler = new StreamingProxyHttpHandler(servicesNotFound: true);
-        var (coordinator, actor, store, _) = CreateCoordinator(null, null, handler);
+        var (coordinator, _) = CreateCoordinator(null, null, handler);
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
-            "room-1",
-            actor,
-            store,
+        var participants = await coordinator.ResolveParticipantsAsync(
             "test-token",
+            preferredRoute: null,
+            defaultModel: null,
             CancellationToken.None);
 
         handler.RequestPaths.Should().Equal("/api/v1/llm/services", "/api/v1/llm/status");
         participants.Should().ContainSingle();
         participants.Single().RoutePreference.Should().Be("/api/v1/proxy/s/openclaw/legacy");
         participants.Single().Model.Should().Be("legacy-model");
-        store.ListParticipants("room-1").Should().ContainSingle(entry =>
-            entry.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingLlmProvider Provider) CreateCoordinator()
         => CreateCoordinator(null);
 
-    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator(
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory)
         => CreateCoordinator(responseFactory, null);
 
-    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator(
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory,
         Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory,
         StreamingProxyHttpHandler? handler = null)
@@ -254,15 +166,13 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             })
             .Build();
 
-        var actor = new RecordingActor("room-1");
         var coordinator = new StreamingProxyNyxParticipantCoordinator(
-            new RecordingActorDispatchPort(actor),
             llmFactory,
             configuration,
             httpClientFactory,
             NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance);
 
-        return (coordinator, actor, new RecordingParticipantStore(), provider);
+        return (coordinator, provider);
     }
 
     private sealed class StreamingProxyHttpHandler(bool servicesNotFound = false) : HttpMessageHandler
@@ -379,20 +289,6 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
         public List<LLMRequest> Requests { get; } = [];
 
-        private LLMResponse BuildResponse(LLMRequest request)
-        {
-            if (_responseFactory != null)
-                return _responseFactory(request);
-
-            if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
-                throw new InvalidOperationException("node-a is unavailable");
-
-            return new LLMResponse
-            {
-                Content = $"reply from {request.RequestId}",
-            };
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -438,124 +334,5 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
                 IsLast = true,
             };
         }
-    }
-
-    private sealed class RecordingActor(string id) : IActor
-    {
-        private readonly IAgent _agent = new RecordingAgent(id);
-
-        public List<EventEnvelope> Events { get; } = [];
-
-        public string Id { get; } = id;
-
-        public IAgent Agent => _agent;
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            Events.Add(envelope);
-            return Task.CompletedTask;
-        }
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class RecordingActorDispatchPort : IActorDispatchPort
-    {
-        private readonly Dictionary<string, RecordingActor> _actors;
-
-        public RecordingActorDispatchPort(params RecordingActor[] actors)
-        {
-            _actors = actors.ToDictionary(actor => actor.Id, StringComparer.OrdinalIgnoreCase);
-        }
-
-        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            Dispatches.Add((actorId, envelope));
-            if (_actors.TryGetValue(actorId, out var actor))
-                actor.Events.Add(envelope);
-
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
-    {
-        private readonly Dictionary<string, List<ParticipantStoreEntry>> _rooms = new(StringComparer.OrdinalIgnoreCase);
-
-        public Task<IReadOnlyList<ParticipantStoreEntry>> ListAsync(
-            string roomId,
-            CancellationToken cancellationToken = default)
-        {
-            IReadOnlyList<ParticipantStoreEntry> participants = _rooms.TryGetValue(roomId, out var existing)
-                ? existing.ToList()
-                : [];
-            return Task.FromResult(participants);
-        }
-
-        public Task AddAsync(
-            string roomId,
-            string agentId,
-            string displayName,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_rooms.TryGetValue(roomId, out var participants))
-            {
-                participants = [];
-                _rooms[roomId] = participants;
-            }
-
-            participants.RemoveAll(entry => string.Equals(entry.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
-            participants.Add(new ParticipantStoreEntry(agentId, displayName, DateTimeOffset.UtcNow));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveParticipantAsync(
-            string roomId,
-            string agentId,
-            CancellationToken cancellationToken = default)
-        {
-            if (_rooms.TryGetValue(roomId, out var participants))
-            {
-                participants.RemoveAll(entry => string.Equals(entry.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
-                if (participants.Count == 0)
-                    _rooms.Remove(roomId);
-            }
-
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
-        {
-            _rooms.Remove(roomId);
-            return Task.CompletedTask;
-        }
-
-        public IReadOnlyList<ParticipantStoreEntry> ListParticipants(string roomId) =>
-            _rooms.TryGetValue(roomId, out var participants)
-                ? participants
-                : [];
-    }
-
-    private sealed class RecordingAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string> GetDescriptionAsync() => Task.FromResult("recording-agent");
-
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 }

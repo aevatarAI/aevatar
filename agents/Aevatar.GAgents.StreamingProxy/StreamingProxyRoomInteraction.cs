@@ -9,14 +9,17 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
-// Refactor (iter21/cluster-002-request-path-projection-session-priming):
-//   Old pattern: room chat endpoints created projection leases and inferred completion in handler code.
-//   New principle: room chat commands enter a shared interaction pipeline and bind observation by session.
+// Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+//   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+//   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
 public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
     string Prompt,
-    string SessionId)
+    string SessionId,
+    string? AccessToken,
+    string? PreferredRoute,
+    string? DefaultModel)
     : ICommandContextSeed
 {
     public string? CommandId => SessionId;
@@ -24,9 +27,9 @@ public sealed record StreamingProxyRoomChatCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
-// Refactor (iter21/cluster-002-request-path-projection-session-priming):
-//   Old pattern: endpoint-local state mixed accepted dispatch with terminal observation.
-//   New principle: receipt exposes accepted dispatch identity; projection/durable completion stays separate.
+// Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+//   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+//   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
 public sealed record StreamingProxyRoomChatAcceptedReceipt(
     string ActorId,
     string CommandId,
@@ -52,9 +55,9 @@ internal sealed class StreamingProxyRoomChatCommandTarget
         IActor actor,
         IStreamingProxyRoomSessionProjectionPort projectionPort)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+        //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+        //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
@@ -181,9 +184,9 @@ internal sealed class StreamingProxyRoomChatCommandTargetResolver
 internal sealed class StreamingProxyRoomObservationLifecycle
     : ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>
 {
-    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
-    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
-    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+    //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+    //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
     private readonly IStreamingProxyRoomSessionProjectionPort _projectionPort;
 
     public StreamingProxyRoomObservationLifecycle(
@@ -197,9 +200,9 @@ internal sealed class StreamingProxyRoomObservationLifecycle
         CommandDispatchExecution<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
-        //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
-        //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+        // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+        //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+        //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -241,17 +244,20 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
 {
     public EventEnvelope CreateEnvelope(StreamingProxyRoomChatCommand command, CommandContext context)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+        //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+        //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        var chatRequest = new ChatRequestEvent
+        var chatRequest = new StreamingProxyRoomChatRequested
         {
             Prompt = command.Prompt,
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
+            AccessToken = command.AccessToken ?? string.Empty,
+            PreferredRoute = command.PreferredRoute ?? string.Empty,
+            DefaultModel = command.DefaultModel ?? string.Empty,
         };
 
         return new EventEnvelope
@@ -321,9 +327,9 @@ internal sealed class StreamingProxyRoomChatFinalizeEmitter
         Func<StreamingProxyRoomSessionEnvelope, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+        //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+        //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(emitAsync);
 

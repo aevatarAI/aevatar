@@ -21,6 +21,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+//   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+//   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddStreamingProxy(
@@ -69,22 +72,29 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StreamingProxyCurrentStateProjectionContext,
             StreamingProxyChatSessionTerminalProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            StreamingProxyCurrentStateProjectionContext,
+            StreamingProxyRoomParticipantsProjector>();
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StreamingProxyChatSessionTerminalSnapshot>,
             StreamingProxyChatSessionTerminalSnapshotMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StreamingProxyRoomParticipantsSnapshot>,
+            StreamingProxyRoomParticipantsSnapshotMetadataProvider>();
         services.TryAddSingleton<IStreamingProxyChatSessionTerminalQueryPort, StreamingProxyChatSessionTerminalQueryPort>();
+        services.TryAddSingleton<IStreamingProxyRoomParticipantsQueryPort, StreamingProxyRoomParticipantsQueryPort>();
         services.TryAddSingleton<StreamingProxyChatDurableCompletionResolver>();
         AddStreamingProxyRoomInteraction(services);
-        AddTerminalSnapshotReadModelProvider(services, configuration);
+        AddStreamingProxyReadModelProviders(services, configuration);
 
         return services;
     }
 
     private static void AddStreamingProxyRoomInteraction(IServiceCollection services)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter43/issue-865-streaming-proxy-room-chat-host-orchestration):
+        //   Old pattern: StreamingProxy chat endpoint and participant coordinator fetch runtime actor objects, run Nyx participant discussion loops, mutate participant side-store state, and dispatch room events from Host/Application-side orchestration.
+        //   New principle: StreamingProxyGAgent owns participant admission, reply rounds, leave/failure decisions, and terminal-state publication; Host submits one typed command and observes projection/readmodel events only. Coordinator is adapter-only for Nyx external calls.
         services.TryAddSingleton<ICommandTargetResolver<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>, StreamingProxyRoomChatCommandTargetResolver>();
         services.TryAddSingleton<ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>, StreamingProxyRoomObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>, StreamingProxyRoomChatCommandEnvelopeFactory>();
@@ -105,6 +115,14 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt>>()));
+    }
+
+    private static void AddStreamingProxyReadModelProviders(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        AddTerminalSnapshotReadModelProvider(services, configuration);
+        AddRoomParticipantsReadModelProvider(services, configuration);
     }
 
     private static void AddTerminalSnapshotReadModelProvider(
@@ -138,6 +156,42 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddInMemoryDocumentProjectionStore<StreamingProxyChatSessionTerminalSnapshot, string>(
+            keySelector: readModel => readModel.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());
+    }
+
+    private static void AddRoomParticipantsReadModelProvider(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<StreamingProxyRoomParticipantsSnapshot, string>)))
+            return;
+
+        var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
+        var inMemoryEnabled = ResolveOptionalBool(
+            configuration?["Projection:Document:Providers:InMemory:Enabled"],
+            fallbackValue: !elasticsearchEnabled);
+        var providerCount = (elasticsearchEnabled ? 1 : 0) + (inMemoryEnabled ? 1 : 0);
+        if (providerCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one document projection provider must be enabled for StreamingProxy.");
+        }
+
+        if (elasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<StreamingProxyRoomParticipantsSnapshot, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration!),
+                metadataFactory: sp => sp
+                    .GetRequiredService<IProjectionDocumentMetadataProvider<StreamingProxyRoomParticipantsSnapshot>>()
+                    .Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            return;
+        }
+
+        services.AddInMemoryDocumentProjectionStore<StreamingProxyRoomParticipantsSnapshot, string>(
             keySelector: readModel => readModel.Id,
             keyFormatter: key => key,
             defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());

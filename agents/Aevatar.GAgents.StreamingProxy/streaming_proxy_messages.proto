@@ -54,6 +54,15 @@ message GroupChatTopicEvent {
   string session_id = 2;
 }
 
+message StreamingProxyRoomChatRequested {
+  string scope_id = 1;
+  string prompt = 2;
+  string session_id = 3;
+  string access_token = 4;
+  string preferred_route = 5;
+  string default_model = 6;
+}
+
 message GroupChatMessageEvent {
   string agent_id = 1;
   string agent_name = 2;
@@ -92,4 +101,14 @@ message StreamingProxyChatSessionTerminalSnapshot {
   StreamingProxyChatSessionTerminalStatus status = 8;
   google.protobuf.Timestamp terminal_at = 9;
   string error_message = 10;
+}
+
+message StreamingProxyRoomParticipantsSnapshot {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string root_actor_id = 6;
+  repeated StreamingProxyParticipant participants = 7;
 }
