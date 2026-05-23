@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
-using Google.Protobuf;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 
@@ -96,7 +95,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return await grain.ScheduleTimeoutAsync(
             callbackId,
-            envelope.ToByteArray(),
+            envelope,
             ToPositiveMilliseconds(dueTime),
             deliveryMode);
     }
@@ -112,7 +111,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return await grain.ScheduleTimerAsync(
             callbackId,
-            envelope.ToByteArray(),
+            envelope,
             ToPositiveMilliseconds(dueTime),
             ToPositiveMilliseconds(period),
             deliveryMode);

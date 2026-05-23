@@ -153,6 +153,41 @@ public class CiTestAuthorityContractTests
         Assert.Contains("test/Aevatar.Orphan.Tests/Aevatar.Orphan.Tests.csproj", result.Output);
     }
 
+    [Fact]
+    public async Task RuntimeCallbackGuardPassesForGeneratedProtoSchedulerState()
+    {
+        using var repo = TemporaryCiRepo.Create();
+        repo.WriteFoundationRuntimeSource(
+            "src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/Callbacks/RuntimeCallbackSchedulerGrain.cs",
+            "private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;\n");
+
+        var result = await repo.RunScriptAsync("tools/ci/runtime_callback_guards.sh");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Runtime callback guards passed.", result.Output);
+    }
+
+    [Fact]
+    public async Task RuntimeCallbackGuardRejectsHandwrittenCallbackPayloadState()
+    {
+        using var repo = TemporaryCiRepo.Create();
+        repo.WriteFoundationRuntimeSource(
+            "src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/Callbacks/RuntimeCallbackSchedulerGrainState.cs",
+            """
+            public sealed class RuntimeCallbackSchedulerGrainState {}
+            public sealed class ReminderScheduledCallbackState
+            {
+                public byte[] EnvelopeBytes { get; set; } = [];
+            }
+            """);
+
+        var result = await repo.RunScriptAsync("tools/ci/runtime_callback_guards.sh");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Durable runtime callback scheduler state must use generated protobuf RuntimeCallbackSchedulerState", result.Output);
+        Assert.Contains("EnvelopeBytes", result.Output);
+    }
+
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private sealed class TemporaryCiRepo : IDisposable
@@ -165,12 +200,30 @@ public class CiTestAuthorityContractTests
             _fakeBin = Path.Combine(root, "fake-bin");
             Directory.CreateDirectory(_fakeBin);
             Directory.CreateDirectory(Path.Combine(root, "tools", "ci"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "Aevatar.Foundation.Runtime"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "Aevatar.Foundation.Runtime.Implementations.Orleans"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "Aevatar.Foundation.Runtime.Implementations.Orleans", "Grains"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "workflow", "Aevatar.Workflow.Core", "Modules"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "Aevatar.Scripting.Core"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "Aevatar.Scripting.Abstractions"));
+            File.WriteAllText(
+                Path.Combine(root, "src", "Aevatar.Foundation.Runtime.Implementations.Orleans", "Grains", "RuntimeActorGrain.cs"),
+                "");
+            File.WriteAllText(
+                Path.Combine(root, "src", "Aevatar.Scripting.Core", "ScriptBehaviorGAgent.cs"),
+                "");
+            File.WriteAllText(
+                Path.Combine(root, "src", "Aevatar.Scripting.Abstractions", "script_host_messages.proto"),
+                "");
             File.Copy(
                 Path.Combine(FindRepositoryRoot(), "tools", "ci", "coverage_quality_guard.sh"),
                 Path.Combine(root, "tools", "ci", "coverage_quality_guard.sh"));
             File.Copy(
                 Path.Combine(FindRepositoryRoot(), "tools", "ci", "test_solution_ownership_guard.sh"),
                 Path.Combine(root, "tools", "ci", "test_solution_ownership_guard.sh"));
+            File.Copy(
+                Path.Combine(FindRepositoryRoot(), "tools", "ci", "runtime_callback_guards.sh"),
+                Path.Combine(root, "tools", "ci", "runtime_callback_guards.sh"));
         }
 
         public string Root { get; }
@@ -219,6 +272,13 @@ public class CiTestAuthorityContractTests
                     UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
                     UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
             }
+        }
+
+        public void WriteFoundationRuntimeSource(string relativePath, string body)
+        {
+            var fullPath = Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, body);
         }
 
         public async Task<ScriptResult> RunScriptAsync(string relativePath)

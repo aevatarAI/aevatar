@@ -58,4 +58,26 @@ if [ -n "${script_runtime_persistent_lease_hits}" ]; then
   exit 1
 fi
 
+handwritten_callback_state_hits="$(
+  rg -n "class (RuntimeCallbackSchedulerGrainState|ReminderScheduledCallbackState)|EnvelopeBytes|IPersistentState<[^>]*(Callback|callback)[^>]*State" \
+    src/Aevatar.Foundation.Runtime \
+    src/Aevatar.Foundation.Runtime.Implementations.Orleans \
+    | rg -v "^\S+:\d+:\s*//" \
+    || true
+)"
+
+if [ -n "${handwritten_callback_state_hits}" ]; then
+  allowed_callback_state_hits="$(
+    printf '%s\n' "${handwritten_callback_state_hits}" |
+      rg -v "IPersistentState<RuntimeCallbackSchedulerState>" \
+      || true
+  )"
+
+  if [ -n "${allowed_callback_state_hits}" ]; then
+    echo "${allowed_callback_state_hits}"
+    echo "Durable runtime callback scheduler state must use generated protobuf RuntimeCallbackSchedulerState and typed EventEnvelope fields, not hand-written callback state payload classes or raw envelope bytes."
+    exit 1
+  fi
+fi
+
 echo "Runtime callback guards passed."

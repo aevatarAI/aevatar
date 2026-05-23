@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
@@ -6,13 +7,13 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
 {
     Task<long> ScheduleTimeoutAsync(
         string callbackId,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         int dueTimeMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);
 
     Task<long> ScheduleTimerAsync(
         string callbackId,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         int dueTimeMs,
         int periodMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent);

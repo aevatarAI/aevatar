@@ -59,7 +59,7 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             },
         });
 
-        var scheduled = EventEnvelope.Parser.ParseFrom(dedicatedGrain.LastTimeoutEnvelopeBytes);
+        var scheduled = dedicatedGrain.LastTimeoutTriggerEnvelope;
         dedicatedGrain.LastDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         scheduled.Id.Should().Be("retry-envelope-1");
         scheduled.Route!.PublisherActorId.Should().Be("child-run");
@@ -212,33 +212,33 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public long LastCancelExpectedGeneration { get; private set; }
 
-        public byte[] LastTimeoutEnvelopeBytes { get; private set; } = [];
+        public EventEnvelope LastTimeoutTriggerEnvelope { get; private set; } = new();
 
         public RuntimeCallbackDeliveryMode LastDeliveryMode { get; private set; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
             _ = dueTimeMs;
             LastDeliveryMode = deliveryMode;
-            LastTimeoutEnvelopeBytes = envelopeBytes;
+            LastTimeoutTriggerEnvelope = triggerEnvelope.Clone();
             ScheduleTimeoutCalls++;
             return Task.FromResult(NextGeneration);
         }
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             LastTimerPeriodMs = periodMs;
             LastDeliveryMode = deliveryMode;
