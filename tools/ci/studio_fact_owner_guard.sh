@@ -21,6 +21,19 @@ if [ "${#scan_roots[@]}" -eq 0 ]; then
   exit 0
 fi
 
+grep_source_files() {
+  local pattern="$1"
+  shift
+
+  find "${scan_roots[@]}" \
+    -path '*/bin/*' -prune -o \
+    -path '*/obj/*' -prune -o \
+    -path '*/node_modules/*' -prune -o \
+    -path '*/wwwroot/*' -prune -o \
+    -type f \( "$@" \) -print0 \
+    | xargs -0 grep -nEH "${pattern}" 2>/dev/null || true
+}
+
 forbidden_file_hits="$(
   find "${scan_roots[@]}" \
     -path '*/bin/*' -prune -o \
@@ -42,8 +55,10 @@ if [ -n "${forbidden_file_hits}" ]; then
 fi
 
 set +e
-forbidden_symbol_hits="$(
-  rg -n "FileStudioWorkspaceStore|IStudioWorkspaceStore|StoredExecutionRecord|StudioExecutionHistory|ScopeExecutionHistory|DraftIndexActor|IDraftIndexStore|workflow-draft-index\.json|executions/[^\"]*\.json" \
+forbidden_symbol_pattern="FileStudioWorkspaceStore|IStudioWorkspaceStore|StoredExecutionRecord|StudioExecutionHistory|ScopeExecutionHistory|DraftIndexActor|IDraftIndexStore|workflow-draft-index\.json|executions/[^\"]*\.json"
+if command -v rg >/dev/null 2>&1; then
+  forbidden_symbol_hits="$(
+    rg -n "${forbidden_symbol_pattern}" \
     "${scan_roots[@]}" \
     -g '*.cs' \
     -g '*.proto' \
@@ -54,7 +69,7 @@ forbidden_symbol_hits="$(
     -g '!**/node_modules/**' \
     -g '!**/wwwroot/**' \
     -g '!tools/ci/studio_fact_owner_guard.sh' \
-    | awk -F: '
+      | awk -F: '
 {
   file = $1;
   line_no = $2;
@@ -71,8 +86,37 @@ forbidden_symbol_hits="$(
 
   print $0;
 }'
-)"
-forbidden_symbol_status=$?
+  )"
+  forbidden_symbol_status=$?
+else
+  forbidden_symbol_hits="$(
+    grep_source_files "${forbidden_symbol_pattern}" \
+      -name '*.cs' -o \
+      -name '*.proto' -o \
+      -name '*.json' -o \
+      -name '*.sh' \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+  trimmed = text;
+  sub(/^[[:space:]]+/, "", trimmed);
+
+  if (file ~ /(^|\/)test\// || file ~ /Tests\.cs$/ || file ~ /(^|\/)[^\/]*\.Tests\//)
+    next;
+  if (file == "tools/ci/studio_fact_owner_guard.sh")
+    next;
+  if (trimmed ~ /^(\/\/|#|\*)/)
+    next;
+  if (trimmed ~ /^<!--/)
+    next;
+
+  print $0;
+}'
+  )"
+  forbidden_symbol_status=$?
+fi
 set -e
 
 if [[ ${forbidden_symbol_status} -ne 0 && ${forbidden_symbol_status} -ne 1 ]]; then
@@ -87,8 +131,10 @@ if [ -n "${forbidden_symbol_hits}" ]; then
 fi
 
 set +e
-forbidden_ui_layout_hits="$(
-  rg -n "WorkflowLayoutDocument|request\.(Layout|AppearanceTheme|ColorMode)|[[:<:]]Layout:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*|.*\.(Layout|AppearanceTheme|ColorMode))|HasLayout:[[:space:]]*true|HasLayout[[:space:]]*=[[:space:]]*true" \
+forbidden_ui_layout_pattern="WorkflowLayoutDocument|request\.(Layout|AppearanceTheme|ColorMode)|(^|[^[:alnum:]_])Layout:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*|.*\.(Layout|AppearanceTheme|ColorMode))|HasLayout:[[:space:]]*true|HasLayout[[:space:]]*=[[:space:]]*true"
+if command -v rg >/dev/null 2>&1; then
+  forbidden_ui_layout_hits="$(
+    rg -n "${forbidden_ui_layout_pattern}" \
     "${scan_roots[@]}" \
     -g '*.cs' \
     -g '!**/bin/**' \
@@ -96,7 +142,7 @@ forbidden_ui_layout_hits="$(
     -g '!**/node_modules/**' \
     -g '!**/wwwroot/**' \
     -g '!tools/ci/studio_fact_owner_guard.sh' \
-    | awk -F: '
+      | awk -F: '
 {
   file = $1;
   line_no = $2;
@@ -116,15 +162,51 @@ forbidden_ui_layout_hits="$(
     next;
   if (trimmed ~ /^<!--/)
     next;
-  if (trimmed ~ /^Layout:[[:space:]]*null[,\)]?$/)
+  if (trimmed ~ /^Layout:[[:space:]]*null[,\);]*$/)
     next;
   if (trimmed ~ /^HasLayout:[[:space:]]*false[,\)]?$/)
     next;
 
   print $0;
 }'
-)"
-forbidden_ui_layout_status=$?
+  )"
+  forbidden_ui_layout_status=$?
+else
+  forbidden_ui_layout_hits="$(
+    grep_source_files "${forbidden_ui_layout_pattern}" \
+      -name '*.cs' \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+  trimmed = text;
+  sub(/^[[:space:]]+/, "", trimmed);
+
+  if (file ~ /(^|\/)test\// || file ~ /Tests\.cs$/ || file ~ /(^|\/)[^\/]*\.Tests\//)
+    next;
+  if (file ~ /^src\/Aevatar\.Studio\.Application\/Studio\/Contracts\//)
+    next;
+  if (file ~ /^src\/Aevatar\.Studio\.Application\/Studio\/Abstractions\//)
+    next;
+  if (file == "src/Aevatar.Studio.Domain/Studio/Models/WorkflowLayoutDocument.cs")
+    next;
+  if (file == "tools/ci/studio_fact_owner_guard.sh")
+    next;
+  if (trimmed ~ /^(\/\/|#|\*)/)
+    next;
+  if (trimmed ~ /^<!--/)
+    next;
+  if (trimmed ~ /^Layout:[[:space:]]*null[,\);]*$/)
+    next;
+  if (trimmed ~ /^HasLayout:[[:space:]]*false[,\)]?$/)
+    next;
+
+  print $0;
+}'
+  )"
+  forbidden_ui_layout_status=$?
+fi
 set -e
 
 if [[ ${forbidden_ui_layout_status} -ne 0 && ${forbidden_ui_layout_status} -ne 1 ]]; then
