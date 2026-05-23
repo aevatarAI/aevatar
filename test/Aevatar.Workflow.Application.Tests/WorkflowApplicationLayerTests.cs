@@ -283,8 +283,7 @@ public sealed class WorkflowApplicationLayerTests
     public async Task AcceptedOnlyCommandDispatchService_ShouldReturnReceipt_WithoutConsumingRunEvents()
     {
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = new WorkflowRunAcceptedCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
             "direct",
             ["definition-1", "actor-1"],
             actorPort);
@@ -349,7 +348,7 @@ public sealed class WorkflowApplicationLayerTests
         IReadOnlyList<string>? createdActorIds = null)
     {
         var target = new WorkflowRunCommandTarget(
-            new FakeActor(actorId),
+            actorId,
             workflowName,
             createdActorIds ?? [],
             projectionPort,
@@ -667,17 +666,13 @@ public sealed class WorkflowApplicationLayerTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string> DestroyCalls { get; } = [];
         public int ExpectedDestroyCount { get; set; } = int.MaxValue;
         public TaskCompletionSource<bool> DestroyCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DestroyException { get; set; }
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

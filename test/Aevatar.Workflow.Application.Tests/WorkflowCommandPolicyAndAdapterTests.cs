@@ -57,9 +57,8 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromTargetAndContext()
     {
         var projectionPort = new NoOpProjectionPort();
-        var actor = new FakeActor("actor-1");
         var target = new WorkflowRunCommandTarget(
-            actor,
+            "actor-1",
             "direct",
             createdActorIds: [],
             projectionPort,
@@ -80,8 +79,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     [Fact]
     public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromAcceptedTargetAndContext()
     {
-        var target = new WorkflowRunAcceptedCommandTarget(
-            new FakeActor("actor-accepted"),
+        var target = new WorkflowRunAcceptedCommandTarget("actor-accepted",
             "direct",
             createdActorIds: [],
             new NoOpWorkflowRunActorPort());
@@ -126,12 +124,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             Task.CompletedTask;
     }
 
-    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;

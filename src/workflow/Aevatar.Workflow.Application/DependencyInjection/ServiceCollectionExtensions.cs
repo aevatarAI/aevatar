@@ -47,7 +47,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(
                 sp.GetRequiredService<IWorkflowActorBindingReader>(),
-                sp.GetRequiredService<IWorkflowRunActorPort>(),
+                sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
+                sp.GetRequiredService<IWorkflowDefinitionParser>(),
                 sp.GetRequiredService<IWorkflowDefinitionCatalog>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();

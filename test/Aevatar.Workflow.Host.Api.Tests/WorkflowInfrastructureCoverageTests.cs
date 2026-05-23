@@ -47,8 +47,11 @@ public sealed class WorkflowInfrastructureCoverageTests
         provider.GetRequiredService<IWorkflowRunReportExportPort>()
             .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowRunActorPort) &&
+            x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionParser));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowDefinitionResolver) &&
             x.ImplementationType == typeof(RegistryWorkflowDefinitionResolver));

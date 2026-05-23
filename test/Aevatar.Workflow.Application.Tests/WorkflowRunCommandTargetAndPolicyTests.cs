@@ -35,8 +35,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     public void Constructor_ShouldRejectMissingDurableCompletionResolver()
     {
         var projectionPort = new FakeProjectionPort();
-        var act = () => new WorkflowRunCommandTarget(
-            new FakeActor("run-1"),
+        var act = () => new WorkflowRunCommandTarget("run-1",
             "direct",
             [],
             projectionPort,
@@ -378,8 +377,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         projectionPort ??= new FakeProjectionPort();
         actorPort ??= new FakeWorkflowRunActorPort();
         currentStateQueryPort ??= new FakeCurrentStateQueryPort();
-        return new WorkflowRunCommandTarget(
-            new FakeActor("run-1"),
+        return new WorkflowRunCommandTarget("run-1",
             "direct",
             createdActorIds ?? [],
             projectionPort,
@@ -458,15 +456,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public Exception? DestroyException { get; set; }
         public List<string> DestroyCalls { get; } = [];
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -476,10 +470,6 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
                 throw DestroyException;
             return Task.CompletedTask;
         }
-
-        public Task BindWorkflowDefinitionAsync(IActor actor, string workflowYaml, string workflowName, IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null, string? scopeId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
         public Task MarkStoppedAsync(
             string actorId,
             string runId,

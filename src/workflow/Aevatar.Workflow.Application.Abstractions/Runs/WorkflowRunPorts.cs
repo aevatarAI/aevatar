@@ -1,5 +1,3 @@
-using Aevatar.Foundation.Abstractions;
-
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowYamlParseResult(
@@ -29,10 +27,14 @@ public sealed record WorkflowDefinitionBinding(
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     string ScopeId = "");
 
-public sealed record WorkflowRunCreationResult(
-    IActor Actor,
+public sealed record WorkflowRunCreationReceipt(
+    string ActorId,
     string DefinitionActorId,
     IReadOnlyList<string> CreatedActorIds);
+
+public sealed record WorkflowDefinitionProvisioningReceipt(
+    string ActorId,
+    bool CreatedNow);
 
 public sealed record WorkflowActorBinding(
     WorkflowActorKind ActorKind,
@@ -101,31 +103,36 @@ public interface IWorkflowRunBindingReader
         CancellationToken ct = default);
 }
 
-/// <summary>
-/// Port for resolving workflow definition actors and creating workflow execution actors.
-/// Implemented by infrastructure to avoid Application depending on Workflow.Core.
-/// </summary>
-public interface IWorkflowRunActorPort
+public interface IWorkflowDefinitionProvisioningPort
 {
-    Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default);
-
-    Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default);
+    Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
+        WorkflowDefinitionBinding definition,
+        string? preferredActorId = null,
+        CancellationToken ct = default);
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 
     Task BindWorkflowDefinitionAsync(
-        IActor actor,
+        string actorId,
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
         CancellationToken ct = default);
+}
 
-    Task MarkStoppedAsync(
-        string actorId,
-        string runId,
-        string reason,
+public interface IWorkflowRunProvisioningPort
+{
+    Task<WorkflowRunCreationReceipt> CreateRunAsync(
+        WorkflowDefinitionBinding definition,
         CancellationToken ct = default);
 
-    Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default);
+    Task DestroyAsync(string actorId, CancellationToken ct = default);
+}
+
+public interface IWorkflowDefinitionParser
+{
+    Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+        string workflowYaml,
+        CancellationToken ct = default);
 }

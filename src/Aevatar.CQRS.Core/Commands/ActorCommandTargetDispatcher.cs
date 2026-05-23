@@ -4,7 +4,7 @@ namespace Aevatar.CQRS.Core.Commands;
 
 public sealed class ActorCommandTargetDispatcher<TTarget>
     : ICommandTargetDispatcher<TTarget>
-    where TTarget : class, IActorCommandDispatchTarget
+    where TTarget : class, ICommandDispatchTarget
 {
     private readonly IActorDispatchPort _dispatchPort;
 
