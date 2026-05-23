@@ -8,6 +8,6 @@ public sealed record VoicePresenceSessionLeaseHandle(
     string ModuleName,
     string SessionId,
     string OwnerId,
-    long StateVersion,
+    long ObservedStateVersion,
     DateTimeOffset ExpiresAtUtc,
     VoiceRemoteAudioSupport RemoteAudioSupport);
