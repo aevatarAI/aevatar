@@ -779,6 +779,8 @@ public sealed class ScopeGAgentEndpointsTests
     public async Task HandleListGAgentTypesAsync_ShouldReadRegisteredStaticServiceRevisionFacts()
     {
         var staticActorTypeName = "Tests.RegisteredStaticGAgent, Tests.Assembly";
+        var requestTypeUrl = "type.googleapis.com/aevatar.ai.ChatRequestEvent";
+        var responseTypeUrl = "type.googleapis.com/aevatar.ai.ChatResponseEvent";
         var catalogReader = new FakeServiceCatalogQueryReader
         {
             Services =
@@ -804,8 +806,8 @@ public sealed class ScopeGAgentEndpointsTests
                                     "chat",
                                     "Chat",
                                     ServiceEndpointKind.Chat.ToString(),
-                                    "type.googleapis.com/aevatar.ai.ChatRequestEvent",
-                                    string.Empty,
+                                    requestTypeUrl,
+                                    responseTypeUrl,
                                     "Registered chat endpoint."),
                             ],
                             DateTimeOffset.UtcNow,
@@ -823,10 +825,20 @@ public sealed class ScopeGAgentEndpointsTests
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         statusCode.Should().Be((int)HttpStatusCode.OK);
-        body.Should().Contain("RegisteredStaticGAgent");
-        body.Should().Contain(staticActorTypeName);
-        body.Should().Contain("Tests.Assembly");
-        body.Should().Contain("chat");
+        using var document = JsonDocument.Parse(body);
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("RegisteredStaticGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        var endpoint = gAgentType.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
+        AssertEndpointContract(
+            endpoint,
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            requestTypeUrl: requestTypeUrl,
+            responseTypeUrl: responseTypeUrl,
+            description: "Registered chat endpoint.");
         revisionReader.RequestedIdentities.Should().ContainSingle(identity =>
             identity.ServiceId == "svc-a" &&
             identity.TenantId == "scope-a");
@@ -889,6 +901,62 @@ public sealed class ScopeGAgentEndpointsTests
         revisionReader.RequestedIdentities.Should().ContainSingle(identity =>
             identity.ServiceId == "svc-filtered-revisions" &&
             identity.TenantId == "scope-a");
+    }
+
+    [Fact]
+    public async Task HandleListGAgentTypesAsync_ShouldMapBlankDisplayNameAndCustomEndpointKind()
+    {
+        var staticActorTypeName = "Tests.CustomEndpointGAgent, Tests.Assembly";
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services =
+            [
+                CreateServiceCatalogSnapshot("svc-custom-endpoint"),
+            ],
+        };
+        var identity = CreateServiceIdentity("svc-custom-endpoint");
+        var requestTypeUrl = "type.googleapis.com/tests.CustomRequest";
+        var responseTypeUrl = "type.googleapis.com/tests.CustomResponse";
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader
+        {
+            Revisions =
+            {
+                [ServiceKeys.Build(identity)] = new ServiceRevisionCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        CreateStaticRevisionSnapshot(
+                            "rev-custom",
+                            staticActorTypeName,
+                            new ServiceEndpointSnapshot(
+                                "custom-action",
+                                " ",
+                                "  BatchCommand  ",
+                                requestTypeUrl,
+                                responseTypeUrl,
+                                "Runs a custom action.")),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+        };
+
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(body);
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("CustomEndpointGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        var endpoint = gAgentType.GetProperty("endpoints").EnumerateArray().Should().ContainSingle().Subject;
+        AssertEndpointContract(
+            endpoint,
+            endpointId: "custom-action",
+            displayName: "custom-action",
+            kind: "batchcommand",
+            requestTypeUrl: requestTypeUrl,
+            responseTypeUrl: responseTypeUrl,
+            description: "Runs a custom action.");
     }
 
     [Fact]
@@ -1164,13 +1232,22 @@ public sealed class ScopeGAgentEndpointsTests
         string revisionId,
         string actorTypeName,
         params string[] endpointIds) =>
+        CreateStaticRevisionSnapshot(
+            revisionId,
+            actorTypeName,
+            endpointIds.Select(CreateEndpointSnapshot).ToArray());
+
+    private static ServiceRevisionSnapshot CreateStaticRevisionSnapshot(
+        string revisionId,
+        string actorTypeName,
+        params ServiceEndpointSnapshot[] endpoints) =>
         new(
             revisionId,
             ServiceImplementationKind.Static.ToString(),
             ServiceRevisionStatus.Published.ToString(),
             $"{revisionId}-hash",
             string.Empty,
-            endpointIds.Select(CreateEndpointSnapshot).ToList(),
+            endpoints.ToList(),
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
@@ -1205,6 +1282,24 @@ public sealed class ScopeGAgentEndpointsTests
             $"type.googleapis.com/tests.{endpointId}",
             string.Empty,
             $"{endpointId} endpoint.");
+
+    private static void AssertEndpointContract(
+        JsonElement endpoint,
+        string endpointId,
+        string displayName,
+        string kind,
+        string requestTypeUrl,
+        string responseTypeUrl,
+        string description)
+    {
+        endpoint.GetProperty("endpointId").GetString().Should().Be(endpointId);
+        endpoint.GetProperty("displayName").GetString().Should().Be(displayName);
+        endpoint.GetProperty("kind").GetString().Should().Be(kind);
+        endpoint.GetProperty("requestTypeUrl").GetString().Should().Be(requestTypeUrl);
+        endpoint.GetProperty("responseTypeUrl").GetString().Should().Be(responseTypeUrl);
+        endpoint.GetProperty("description").GetString().Should().Be(description);
+        endpoint.GetProperty("auto").GetBoolean().Should().BeFalse();
+    }
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {
