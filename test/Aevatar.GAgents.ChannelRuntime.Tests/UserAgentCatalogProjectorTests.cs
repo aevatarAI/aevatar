@@ -24,7 +24,7 @@ public sealed class UserAgentCatalogProjectorTests
         _context = new UserAgentCatalogMaterializationContext
         {
             RootActorId = UserAgentCatalogGAgent.WellKnownId,
-            ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+            ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
         };
     }
 
@@ -137,7 +137,7 @@ public sealed class UserAgentCatalogProjectorTests
             new UserAgentCatalogMaterializationContext
             {
                 RootActorId = "runner-1",
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
             },
             BuildSkillRunnerCommittedEnvelope("runner-event-2", 2, state),
             CancellationToken.None);
@@ -171,7 +171,7 @@ public sealed class UserAgentCatalogProjectorTests
             new UserAgentCatalogMaterializationContext
             {
                 RootActorId = "runner-failed",
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
             },
             BuildSkillRunnerCommittedEnvelope("runner-event-4", 4, state),
             CancellationToken.None);

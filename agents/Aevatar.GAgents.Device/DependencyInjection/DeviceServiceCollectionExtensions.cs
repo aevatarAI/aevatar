@@ -67,7 +67,7 @@ public static class DeviceServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
-        services.TryAddSingleton<DeviceRegistrationProjectionPort>();
+        services.TryAddSingleton<DeviceRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<DeviceRegistrationStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, DeviceTombstoneCompactionTarget>());

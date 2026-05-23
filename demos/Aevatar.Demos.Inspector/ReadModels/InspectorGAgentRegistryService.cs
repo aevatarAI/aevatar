@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Registry;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
@@ -13,18 +14,18 @@ public sealed class InspectorGAgentRegistryService
 
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly StudioProjectionPort _projectionPort;
+    private readonly IStudioActorBootstrap _bootstrap;
     private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
 
     public InspectorGAgentRegistryService(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        StudioProjectionPort projectionPort,
+        IStudioActorBootstrap bootstrap,
         IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
@@ -100,9 +101,6 @@ public sealed class InspectorGAgentRegistryService
 
     private async Task<IActor> EnsureRegistryActorAsync(CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(RegistryActorId)
-                    ?? await _runtime.CreateAsync<GAgentRegistryGAgent>(RegistryActorId, ct);
-        await _projectionPort.EnsureProjectionAsync(RegistryActorId, GAgentRegistryGAgent.ProjectionKind, ct);
-        return actor;
+        return await _bootstrap.EnsureAsync<GAgentRegistryGAgent>(RegistryActorId, ct);
     }
 }

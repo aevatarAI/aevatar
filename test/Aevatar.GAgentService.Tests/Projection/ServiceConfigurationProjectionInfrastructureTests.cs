@@ -1,14 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
+using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.Metadata;
-using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Governance.Projection.Projectors;
 using Aevatar.GAgentService.Governance.Projection.Queries;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
@@ -20,36 +18,6 @@ namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceConfigurationProjectionInfrastructureTests
 {
-    [Fact]
-    public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
-    {
-        var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(
-            new ServiceGovernanceProjectionOptions(),
-            activationService,
-            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
-
-        await service.EnsureProjectionAsync(string.Empty);
-        await service.EnsureProjectionAsync("config-actor");
-
-        activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
-    }
-
-    [Fact]
-    public async Task ConfigurationProjectionPort_ShouldSkipActivation_WhenDisabled()
-    {
-        var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(
-            new ServiceGovernanceProjectionOptions { Enabled = false },
-            activationService,
-            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
-
-        await service.EnsureProjectionAsync("config-actor");
-
-        activationService.Calls.Should().BeEmpty();
-    }
-
     [Fact]
     public void MetadataProviders_ShouldExposeStableIndexNames()
     {
@@ -71,8 +39,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>) &&
             x.ImplementationType == typeof(ServiceConfigurationReadModelMetadataProvider));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IServiceConfigurationProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceConfigurationQueryReader) &&
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
@@ -197,20 +163,4 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    private sealed class RecordingConfigurationActivationService : IProjectionScopeActivationService<ServiceConfigurationRuntimeLease>
-    {
-        public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
-
-        public Task<ServiceConfigurationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Calls.Add((request.RootActorId, request.ProjectionKind));
-            return Task.FromResult(new ServiceConfigurationRuntimeLease(new ServiceConfigurationProjectionContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            }));
-        }
-    }
 }

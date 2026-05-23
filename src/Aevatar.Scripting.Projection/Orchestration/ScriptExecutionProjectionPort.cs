@@ -24,12 +24,12 @@ public sealed class ScriptExecutionProjectionPort
     {
     }
 
-    public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+    internal Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
         string actorId,
         CancellationToken ct = default) =>
         EnsureRunProjectionAsync(actorId, actorId, ct);
 
-    public Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
+    internal Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
         string actorId,
         string runId,
         CancellationToken ct = default) =>

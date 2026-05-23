@@ -12,10 +12,8 @@ namespace Aevatar.Studio.Projection.Orchestration;
 /// every GET then returns defaults and "persisted" data appears to vanish
 /// on refresh.
 ///
-/// Mirror of
-/// <c>Aevatar.GAgentService.Governance.Projection.Orchestration.ServiceConfigurationProjectionPort</c>
-/// and <c>Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationProjectionPort</c>,
-/// applied here to the Studio runtime lease.
+/// Studio-specific projection-owner activation surface applied to the Studio
+/// runtime lease.
 /// </summary>
 public sealed class StudioProjectionPort
     : MaterializationProjectionPortBase<StudioMaterializationRuntimeLease>
@@ -26,7 +24,7 @@ public sealed class StudioProjectionPort
     {
     }
 
-    public Task<StudioMaterializationRuntimeLease?> EnsureProjectionAsync(
+    internal Task<StudioMaterializationRuntimeLease?> EnsureProjectionAsync(
         string actorId,
         string projectionKind,
         CancellationToken ct = default)
@@ -46,4 +44,3 @@ public sealed class StudioProjectionPort
             ct);
     }
 }
-

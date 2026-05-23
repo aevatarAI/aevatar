@@ -3,19 +3,19 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Device;
 
-public sealed class DeviceRegistrationStartupService : IHostedService
+internal sealed class DeviceRegistrationStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
-    private readonly DeviceRegistrationProjectionPort _projectionPort;
+    private readonly DeviceRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly ILogger<DeviceRegistrationStartupService> _logger;
 
     public DeviceRegistrationStartupService(
-        DeviceRegistrationProjectionPort projectionPort,
+        DeviceRegistrationProjectionBootstrapActivator projectionActivator,
         ILogger<DeviceRegistrationStartupService> logger)
     {
-        _projectionPort = projectionPort;
+        _projectionActivator = projectionActivator;
         _logger = logger;
     }
 
@@ -26,7 +26,7 @@ public sealed class DeviceRegistrationStartupService : IHostedService
         {
             try
             {
-                await _projectionPort.EnsureProjectionForActorAsync(DeviceRegistrationGAgent.WellKnownId, ct);
+                await _projectionActivator.ActivateWellKnownRegistryAsync(ct);
                 _logger.LogInformation(
                     "Device registration projection scope activated for {ActorId} (attempt {Attempt})",
                     DeviceRegistrationGAgent.WellKnownId,

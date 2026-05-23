@@ -76,7 +76,7 @@ public static class ScheduledServiceCollectionExtensions
         // IAgentTool implementation; LLM tools see only the caller-scoped public port
         // (which excludes NyxApiKey by DTO shape).
         services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
-        services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so

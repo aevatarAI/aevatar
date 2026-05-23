@@ -75,7 +75,6 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new StreamingProxyCurrentStateRuntimeLease(context));
-        services.TryAddSingleton<StreamingProxyCurrentStateProjectionPort>();
         services.AddCurrentStateProjectionMaterializer<
             StreamingProxyCurrentStateProjectionContext,
             StreamingProxyChatSessionTerminalProjector>();
