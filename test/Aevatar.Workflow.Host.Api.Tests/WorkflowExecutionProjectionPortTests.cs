@@ -14,23 +14,13 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowExecutionProjectionPortTests
 {
     [Fact]
-    public async Task EnsureActorProjectionAsync_ShouldStartWorkflowExecutionSession()
+    public void WorkflowExecutionProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
     {
-        var activation = new RecordingActivationService();
-        var port = new WorkflowExecutionProjectionPort(
-            new WorkflowExecutionProjectionOptions { Enabled = true },
-            activation,
-            new RecordingReleaseService(),
-            new RecordingRunEventHub(),
-            new RecordingActorRuntime());
-
-        var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1");
-
-        lease.Should().BeSameAs(activation.LeaseToReturn);
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].RootActorId.Should().Be("actor-1");
-        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution-session");
-        activation.Requests[0].SessionId.Should().Be("cmd-1");
+        typeof(IWorkflowExecutionProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
     }
 
     [Fact]

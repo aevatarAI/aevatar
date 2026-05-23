@@ -390,14 +390,20 @@ public static class StreamingProxyEndpoints
                 return;
             }
 
-            await writer.StartAsync(ct);
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
             var attachment = await subscriptionObservationPort.AttachAsync(actor.Id, eventChannel, ct);
+            if (attachment == null)
+            {
+                await eventChannel.DisposeAsync();
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
 
             Task? pumpTask = null;
 
             try
             {
+                await writer.StartAsync(ct);
                 pumpTask = PumpRoomSessionEventsAsync(eventChannel, writer);
                 await WaitForClientDisconnectAsync(ct);
             }

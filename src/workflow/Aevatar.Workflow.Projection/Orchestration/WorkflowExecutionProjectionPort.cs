@@ -29,24 +29,9 @@ public sealed class WorkflowExecutionProjectionPort
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-        string rootActorId,
-        string commandId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = commandId,
-            },
-            ct);
-
-    // Refactor (iter41/cluster-041-command-observation-projection-activation):
-    //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
-    //   New principle: observation binders attach only to existing projection-owned sessions;
-    //   activation happens in projection-owned startup/background/committed-state lifecycle.
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
         string rootActorId,
         string commandId,
