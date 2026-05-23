@@ -50,18 +50,20 @@ public class TelegramBridgeGAgent : GAgentBase
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var connectorName = ReadMetadata(request.Headers, "telegram.connector", "connector", "connector_name");
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        var telegram = request.Telegram;
+        var connectorName = Normalize(telegram?.ConnectorName);
         if (string.IsNullOrWhiteSpace(connectorName))
             connectorName = DefaultConnectorName;
 
-        var chatId = ReadMetadata(request.Headers, "telegram.chat_id", "chat_id");
+        var chatId = Normalize(telegram?.ChatId);
         if (string.IsNullOrWhiteSpace(chatId))
         {
             await PublishFailureAsync(request, "telegram metadata 'chat_id' is required");
             return;
         }
 
-        var operation = ReadMetadata(request.Headers, "telegram.operation", "operation", "path");
+        var operation = ResolveOperation(telegram);
         if (string.IsNullOrWhiteSpace(operation))
             operation = "/sendMessage";
 
@@ -79,11 +81,11 @@ public class TelegramBridgeGAgent : GAgentBase
         }
 
         var requestPayload = BuildTelegramPayload(request, chatId.Trim());
-        var connectorParameters = BuildConnectorParameters(request.Headers);
+        var connectorParameters = BuildConnectorParameters(request);
         var connectorRequest = new ConnectorRequest
         {
-            RunId = ReadMetadata(request.Headers, "run_id", "workflow.run_id", "workflow_run_id", "session_id"),
-            StepId = ReadMetadata(request.Headers, "step_id", "workflow.step_id", "workflow_step_id"),
+            RunId = Normalize(telegram?.RunId),
+            StepId = Normalize(telegram?.StepId),
             Connector = connectorName,
             Operation = operation,
             Payload = requestPayload,
@@ -121,39 +123,25 @@ public class TelegramBridgeGAgent : GAgentBase
         ChatRequestEvent request,
         string connectorName)
     {
-        var expectedChatId = ReadMetadata(request.Headers, "telegram.chat_id", "chat_id").Trim();
+        var telegram = request.Telegram;
+        var expectedChatId = Normalize(telegram?.ChatId);
         if (string.IsNullOrWhiteSpace(expectedChatId))
         {
             await PublishFailureAsync(request, "telegram metadata 'chat_id' is required for /waitReply");
             return;
         }
 
-        var expectedFromUserId = ReadMetadata(
-            request.Headers,
-            "telegram.expected_from_user_id",
-            "expected_from_user_id",
-            "from_user_id").Trim();
-        var expectedFromUsername = NormalizeUsername(ReadMetadata(
-            request.Headers,
-            "telegram.expected_from_username",
-            "expected_from_username",
-            "from_username",
-            "from_user"));
-        var correlationContains = ReadMetadata(
-            request.Headers,
-            "telegram.correlation_contains",
-            "correlation_contains",
-            "contains").Trim();
+        var expectedFromUserId = Normalize(telegram?.ExpectedFromUserId);
+        var expectedFromUsername = NormalizeUsername(telegram?.ExpectedFromUsername);
+        var correlationContains = Normalize(telegram?.CorrelationContains);
 
-        var waitTimeoutMs = ResolveWaitReplyTimeoutMs(request.Headers);
-        var pollTimeoutSeconds = ResolvePollTimeoutSeconds(request.Headers);
-        var settlePollsAfterMatch = ResolveSettlePollsAfterMatch(request.Headers);
-        var collectAllReplies = ResolveCollectAllReplies(request.Headers);
-        var startFromLatest = ResolveStartFromLatest(request.Headers);
-        var connectorParameters = BuildConnectorParameters(request.Headers);
-        var offset = TryReadInt64(
-            ReadMetadata(request.Headers, "telegram.offset", "offset"),
-            minimum: 0);
+        var waitTimeoutMs = ResolveWaitReplyTimeoutMs(telegram);
+        var pollTimeoutSeconds = ResolvePollTimeoutSeconds(telegram);
+        var settlePollsAfterMatch = ResolveSettlePollsAfterMatch(telegram);
+        var collectAllReplies = telegram?.CollectAllReplies == true;
+        var startFromLatest = telegram?.HasStartFromLatest != true || telegram.StartFromLatest;
+        var connectorParameters = BuildConnectorParameters(request);
+        var offset = telegram?.Offset > 0 ? telegram.Offset : (long?)null;
 
         var commandId = BuildWaitReplyCommandId(request);
         var waitActorId = BuildWaitReplyActorId(commandId);
@@ -173,7 +161,7 @@ public class TelegramBridgeGAgent : GAgentBase
             SettlePollsAfterMatch = settlePollsAfterMatch,
             CollectAllReplies = collectAllReplies,
             StartFromLatest = startFromLatest,
-            EmitChatResponse = ShouldEmitChatResponse(request.Headers),
+            EmitChatResponse = telegram?.EmitChatResponse == true,
         };
         command.ConnectorParameters.Add(connectorParameters);
         if (offset.HasValue)
@@ -204,8 +192,8 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private static string BuildWaitReplyCommandId(ChatRequestEvent request)
     {
-        var runId = ReadMetadata(request.Headers, "run_id", "workflow.run_id", "workflow_run_id", "session_id");
-        var stepId = ReadMetadata(request.Headers, "step_id", "workflow.step_id", "workflow_step_id");
+        var runId = Normalize(request.Telegram?.RunId);
+        var stepId = Normalize(request.Telegram?.StepId);
         if (!string.IsNullOrWhiteSpace(runId) && !string.IsNullOrWhiteSpace(stepId))
             return $"telegram-wait-reply-{NormalizeActorIdSegment(runId)}-{NormalizeActorIdSegment(stepId)}";
 
@@ -233,72 +221,26 @@ public class TelegramBridgeGAgent : GAgentBase
         return new string(buffer[..count]).Trim('-');
     }
 
-    private static int ResolveWaitReplyTimeoutMs(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static int ResolveWaitReplyTimeoutMs(TelegramBridgeRequest? telegram)
     {
-        var raw = ReadMetadata(
-            metadata,
-            "telegram.wait_timeout_ms",
-            "wait_timeout_ms",
-            "timeout_ms",
-            "aevatar.llm_timeout_ms");
-        if (int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
-            parsed > 0)
-        {
-            return parsed;
-        }
-
-        return DefaultWaitReplyTimeoutMs;
+        return telegram?.WaitTimeoutMs > 0 ? telegram.WaitTimeoutMs : DefaultWaitReplyTimeoutMs;
     }
 
-    private static int ResolvePollTimeoutSeconds(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static int ResolvePollTimeoutSeconds(TelegramBridgeRequest? telegram)
     {
-        var raw = ReadMetadata(metadata, "telegram.poll_timeout_sec", "poll_timeout_sec");
-        if (int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
-            parsed >= 0)
-        {
-            return Math.Clamp(parsed, 1, MaxPollTimeoutSeconds);
-        }
-
-        return DefaultPollTimeoutSeconds;
+        return telegram?.PollTimeoutSeconds >= 0
+            ? Math.Clamp(telegram.PollTimeoutSeconds, 1, MaxPollTimeoutSeconds)
+            : DefaultPollTimeoutSeconds;
     }
 
-    private static int ResolveSettlePollsAfterMatch(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static int ResolveSettlePollsAfterMatch(TelegramBridgeRequest? telegram)
     {
-        var raw = ReadMetadata(
-            metadata,
-            "telegram.settle_polls_after_match",
-            "settle_polls_after_match");
-        if (int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-            return Math.Clamp(parsed, 0, MaxSettlePollsAfterMatch);
-
-        return DefaultSettlePollsAfterMatch;
+        return telegram?.SettlePollsAfterMatch >= 0
+            ? Math.Clamp(telegram.SettlePollsAfterMatch, 0, MaxSettlePollsAfterMatch)
+            : DefaultSettlePollsAfterMatch;
     }
 
-    private static bool ResolveCollectAllReplies(Google.Protobuf.Collections.MapField<string, string> metadata)
-    {
-        var raw = ReadMetadata(
-            metadata,
-            "telegram.collect_all_replies",
-            "collect_all_replies");
-        return TryParseBool(raw, out var parsed) && parsed;
-    }
-
-    private static bool ResolveStartFromLatest(Google.Protobuf.Collections.MapField<string, string> metadata)
-    {
-        var raw = ReadMetadata(metadata, "telegram.start_from_latest", "start_from_latest");
-        return !TryParseBool(raw, out var parsed) || parsed;
-    }
-
-    private static long? TryReadInt64(string raw, long minimum)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-        if (!long.TryParse(raw.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-            return null;
-        return parsed < minimum ? null : parsed;
-    }
-
-    private static string NormalizeUsername(string raw)
+    private static string NormalizeUsername(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return string.Empty;
@@ -307,12 +249,13 @@ public class TelegramBridgeGAgent : GAgentBase
     }
 
     private static Dictionary<string, string> BuildConnectorParameters(
-        Google.Protobuf.Collections.MapField<string, string> metadata)
+        ChatRequestEvent request)
     {
+        var telegram = request.Telegram;
         var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["method"] = ReadMetadata(metadata, "telegram.http_method", "method", "http_method"),
-            ["content_type"] = ReadMetadata(metadata, "telegram.content_type", "content_type"),
+            ["method"] = Normalize(telegram?.HttpMethod),
+            ["content_type"] = Normalize(telegram?.ContentType),
         };
 
         if (string.IsNullOrWhiteSpace(parameters["method"]))
@@ -320,66 +263,37 @@ public class TelegramBridgeGAgent : GAgentBase
         if (string.IsNullOrWhiteSpace(parameters["content_type"]))
             parameters["content_type"] = "application/json";
 
-        var timeoutMs = ResolveConnectorTimeoutMs(metadata);
+        var timeoutMs = ResolveConnectorTimeoutMs(request);
         if (timeoutMs.HasValue)
             parameters["timeout_ms"] = timeoutMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        // Allow workflow-level human_input (or other dynamic variables) to pass
-        // Telegram login values into telegram_user connector initialization.
-        CopyMetadataValueToConnectorParameter(
-            metadata,
-            parameters,
-            "phone_number",
-            "telegram.phone_number",
-            "telegram_user.phone_number",
-            "phone_number");
-        CopyMetadataValueToConnectorParameter(
-            metadata,
-            parameters,
-            "verification_code",
-            "telegram.verification_code",
-            "telegram_user.verification_code",
-            "verification_code");
-        CopyMetadataValueToConnectorParameter(
-            metadata,
-            parameters,
-            "password",
-            "telegram.2fa_password",
-            "telegram.password",
-            "telegram_user.2fa_password",
-            "telegram_user.password",
-            "2fa_password",
-            "password");
+        AddParameterIfNotBlank(parameters, "phone_number", telegram?.PhoneNumber);
+        AddParameterIfNotBlank(parameters, "verification_code", telegram?.VerificationCode);
+        AddParameterIfNotBlank(parameters, "password", telegram?.Password);
 
         return parameters;
     }
 
-    private static void CopyMetadataValueToConnectorParameter(
-        Google.Protobuf.Collections.MapField<string, string> metadata,
+    private static void AddParameterIfNotBlank(
         IDictionary<string, string> connectorParameters,
         string connectorKey,
-        params string[] metadataKeys)
+        string? value)
     {
-        var value = ReadMetadata(metadata, metadataKeys);
         if (string.IsNullOrWhiteSpace(value))
             return;
 
         connectorParameters[connectorKey] = value.Trim();
     }
 
-    private static int? ResolveConnectorTimeoutMs(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static int? ResolveConnectorTimeoutMs(ChatRequestEvent request)
     {
-        var explicitConnectorTimeout = TryReadPositiveInt32(ReadMetadata(metadata, "telegram.timeout_ms"));
-        if (explicitConnectorTimeout.HasValue)
-            return explicitConnectorTimeout.Value;
-
-        var llmTimeout = TryReadPositiveInt32(ReadMetadata(metadata, "aevatar.llm_timeout_ms"));
-        var requestedTimeout = TryReadPositiveInt32(ReadMetadata(metadata, "timeout_ms"));
-        var candidate = requestedTimeout ?? llmTimeout;
+        var explicitConnectorTimeout = request.Telegram?.TimeoutMs > 0 ? request.Telegram.TimeoutMs : (int?)null;
+        var llmTimeout = request.TimeoutMs > 0 ? request.TimeoutMs : (int?)null;
+        var candidate = explicitConnectorTimeout ?? llmTimeout;
         if (!candidate.HasValue)
             return null;
 
-        if (llmTimeout.HasValue && candidate.Value >= llmTimeout.Value)
+        if (!explicitConnectorTimeout.HasValue && llmTimeout.HasValue && candidate.Value >= llmTimeout.Value)
         {
             // Keep connector timeout slightly below LLM watchdog to avoid "LLM timed out first" races.
             candidate = Math.Max(100, llmTimeout.Value - 1000);
@@ -388,41 +302,29 @@ public class TelegramBridgeGAgent : GAgentBase
         return candidate.Value;
     }
 
-    private static int? TryReadPositiveInt32(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-        if (!int.TryParse(raw.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-            return null;
-        return parsed > 0 ? parsed : null;
-    }
-
     private static string BuildTelegramPayload(ChatRequestEvent request, string chatId)
     {
+        var telegram = request.Telegram;
         var payload = new Dictionary<string, object?>
         {
             ["chat_id"] = chatId,
-            ["text"] = request.Prompt ?? string.Empty,
+            ["text"] = string.IsNullOrWhiteSpace(telegram?.Text)
+                ? request.Prompt ?? string.Empty
+                : telegram.Text.Trim(),
         };
 
-        var threadId = ReadMetadata(request.Headers, "telegram.message_thread_id", "message_thread_id");
-        if (!string.IsNullOrWhiteSpace(threadId) && long.TryParse(threadId, out var parsedThreadId))
-            payload["message_thread_id"] = parsedThreadId;
+        if (telegram?.MessageThreadId > 0)
+            payload["message_thread_id"] = telegram.MessageThreadId;
 
-        var parseMode = ReadMetadata(request.Headers, "telegram.parse_mode", "parse_mode");
+        var parseMode = Normalize(telegram?.ParseMode);
         if (!string.IsNullOrWhiteSpace(parseMode))
-            payload["parse_mode"] = parseMode.Trim();
+            payload["parse_mode"] = parseMode;
 
-        var disablePreview = ReadMetadata(
-            request.Headers,
-            "telegram.disable_web_page_preview",
-            "disable_web_page_preview");
-        if (TryParseBool(disablePreview, out var parsedDisablePreview))
-            payload["disable_web_page_preview"] = parsedDisablePreview;
+        if (telegram?.HasDisableWebPagePreview == true)
+            payload["disable_web_page_preview"] = telegram.DisableWebPagePreview;
 
-        var replyToMessageId = ReadMetadata(request.Headers, "telegram.reply_to_message_id", "reply_to_message_id");
-        if (!string.IsNullOrWhiteSpace(replyToMessageId) && long.TryParse(replyToMessageId, out var parsedReplyToMessageId))
-            payload["reply_to_message_id"] = parsedReplyToMessageId;
+        if (telegram?.ReplyToMessageId > 0)
+            payload["reply_to_message_id"] = telegram.ReplyToMessageId;
 
         return JsonSerializer.Serialize(payload);
     }
@@ -455,7 +357,7 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private async Task PublishSuccessAsync(ChatRequestEvent request, string content)
     {
-        await PublishSuccessAsync(request.SessionId, content, ShouldEmitChatResponse(request.Headers));
+        await PublishSuccessAsync(request.SessionId, content, request.Telegram?.EmitChatResponse == true);
     }
 
     private async Task PublishSuccessAsync(string sessionId, string content, bool emitChatResponse)
@@ -497,58 +399,18 @@ public class TelegramBridgeGAgent : GAgentBase
             TopologyAudience.Parent);
     }
 
-    private static bool ShouldEmitChatResponse(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static string ResolveOperation(TelegramBridgeRequest? telegram)
     {
-        var value = ReadMetadata(metadata, "telegram.emit_chat_response", "emit_chat_response");
-        return TryParseBool(value, out var parsed) && parsed;
+        return telegram?.Operation switch
+        {
+            TelegramBridgeOperation.WaitReply => WaitReplyOperation,
+            TelegramBridgeOperation.EnsureLogin => "/ensureLogin",
+            TelegramBridgeOperation.SendMessage => "/sendMessage",
+            _ => string.Empty,
+        };
     }
 
-    private static bool TryParseBool(string raw, out bool value)
-    {
-        value = false;
-        if (string.IsNullOrWhiteSpace(raw))
-            return false;
-
-        var normalized = raw.Trim();
-        if (string.Equals(normalized, "1", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase))
-        {
-            value = true;
-            return true;
-        }
-
-        if (string.Equals(normalized, "0", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "false", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "no", StringComparison.OrdinalIgnoreCase))
-        {
-            value = false;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static string ReadMetadata(
-        Google.Protobuf.Collections.MapField<string, string> metadata,
-        params string[] keys)
-    {
-        foreach (var key in keys)
-        {
-            if (metadata.TryGetValue(key, out var exact))
-                return exact ?? string.Empty;
-        }
-
-        foreach (var (existingKey, value) in metadata)
-        {
-            foreach (var key in keys)
-            {
-                if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase))
-                    return value ?? string.Empty;
-            }
-        }
-
-        return string.Empty;
-    }
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
 }

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -15,7 +16,7 @@ namespace Aevatar.Workflow.Core.Tests.Execution;
 public sealed class WorkflowExecutionRuntimeContextTests
 {
     [Fact]
-    public void SetRequestMetadata_ShouldPromoteTypedRuntimeValuesAndFilterPassthrough()
+    public void SetRequestMetadata_ShouldKeepLlmControlAsPassthroughOnly()
     {
         var host = new RecordingStateHost();
 
@@ -32,14 +33,42 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
+        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
+        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().BeNull();
+        host.RuntimeContext.Connector.Authorization.Should().Be("Bearer secret");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKeys(
+            "trace-id",
+            LLMRequestMetadataKeys.NyxIdAccessToken,
+            LLMRequestMetadataKeys.ModelOverride,
+            LLMRequestMetadataKeys.NyxIdRoutePreference);
+        host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+    }
+
+    [Fact]
+    public void SetToolContext_ShouldPromoteLlmRuntimeValuesFromTypedContext()
+    {
+        var host = new RecordingStateHost();
+
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+            host,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = " token ",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = " model ",
+                    NyxIdRoutePreference = " route ",
+                },
+            });
+
         host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().Be("token");
         host.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model");
         host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().Be("route");
-        host.RuntimeContext.Connector.Authorization.Should().Be("Bearer secret");
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainSingle();
-        host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -173,10 +202,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         var copied = WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(context, target);
 
-        copied.Should().Be(1);
-        target.Should().ContainSingle();
+        copied.Should().Be(2);
+        target.Should().HaveCount(2);
         target["trace-id"].Should().Be("abc");
-        target.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        target.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         target.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 

@@ -421,6 +421,29 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenMetadataOnlyRoutingProvided_ShouldNotPromoteRoutingContext()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(provider);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "metadata-route",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+        };
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-metadata-only", metadata))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RoutingContext.Should().Be(LLMRequestRoutingContext.Empty);
+        provider.LastStreamRequest.ToolContext!.Routing.ModelOverride.Should().BeNull();
+        provider.LastStreamRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        provider.LastStreamRequest.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldExposeRequestIdToLlmMiddlewareMetadata()
     {
         var provider = new StreamingProvider(["A"]);

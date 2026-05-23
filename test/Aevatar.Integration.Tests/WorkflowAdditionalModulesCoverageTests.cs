@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
@@ -1737,7 +1738,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldDispatchViaTargetRoleAndForwardStepParametersAsMetadata()
+    public async Task LlmCallModule_ShouldDispatchViaTargetRoleAndPromoteTelegramParameters()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1758,7 +1759,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Sent.Should().ContainSingle();
         ctx.Sent[0].targetActorId.Should().Be($"{ctx.AgentId}:telegram_user_bridge");
         var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        chatRequest.Metadata["chat_id"].Should().Be("10001");
+        chatRequest.Telegram.ChatId.Should().Be("10001");
+        chatRequest.Telegram.RunId.Should().Be("run-target-role");
+        chatRequest.Telegram.StepId.Should().Be("llm-target-role");
+        chatRequest.Metadata.Should().NotContainKey("chat_id");
+        chatRequest.Metadata.Should().NotContainKey("llm_timeout_ms");
 
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
@@ -1776,7 +1781,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldForwardTypedRuntimeMetadataOverrides()
+    public async Task LlmCallModule_ShouldForwardTypedRuntimeContextOverrides()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1784,10 +1789,21 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = " token-123 ",
-                [LLMRequestMetadataKeys.ModelOverride] = " model-main ",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = " route-fast ",
                 ["trace-id"] = " trace-abc ",
+            });
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = " token-123 ",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = " model-main ",
+                    NyxIdRoutePreference = " route-fast ",
+                },
             });
 
         await module.HandleAsync(
@@ -1802,9 +1818,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var chatRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("token-123");
-        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("model-main");
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("route-fast");
+        chatRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-123");
+        chatRequest.ToolContext.Routing.ModelOverride.Should().Be("model-main");
+        chatRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-fast");
         chatRequest.Metadata["trace-id"].Should().Be("trace-abc");
     }
 
@@ -1863,7 +1879,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         ctx.Sent.Should().ContainSingle(x => x.targetActorId == $"{ctx.AgentId}:judge");
         var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        evaluateChat.Headers["chat_id"].Should().Be("chat-eval");
+        evaluateChat.Telegram.ChatId.Should().Be("chat-eval");
+        evaluateChat.Headers.Should().NotContainKey("chat_id");
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
@@ -1894,7 +1911,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         ctx.Sent.Should().Contain(x => x.targetActorId == $"{ctx.AgentId}:reviewer");
         var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        reflectChat.Headers["chat_id"].Should().Be("chat-reflect");
+        reflectChat.Telegram.ChatId.Should().Be("chat-reflect");
+        reflectChat.Headers.Should().NotContainKey("chat_id");
         ctx.Published.Clear();
 
         await reflect.HandleAsync(

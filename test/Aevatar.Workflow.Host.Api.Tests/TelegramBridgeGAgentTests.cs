@@ -40,8 +40,12 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "hello telegram",
             SessionId = "session-1",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+                Operation = TelegramBridgeOperation.SendMessage,
+            },
         };
-        request.Headers["chat_id"] = "10001";
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
         connector.Received.Should().ContainSingle();
@@ -75,13 +79,51 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "hello telegram",
             SessionId = "session-2",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+            },
         };
-        request.Headers["chat_id"] = "10001";
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
         var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
         textEnd.Content.Should().StartWith("[[AEVATAR_LLM_ERROR]]");
         textEnd.Content.Should().Contain("connector");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenOnlyLegacyHeadersProvided_ShouldNotDriveTelegramControl()
+    {
+        var connector = new RecordingConnector(new ConnectorResponse
+        {
+            Success = true,
+            Output = """{"ok":true,"result":{"text":"telegram-ok"}}""",
+        });
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            registry)
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "legacy header should not route",
+            SessionId = "session-legacy-header",
+        };
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/sendMessage";
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        connector.Received.Should().BeEmpty();
+        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
+        textEnd.Content.Should().StartWith("[[AEVATAR_LLM_ERROR]]");
+        textEnd.Content.Should().Contain("chat_id");
     }
 
     [Fact]
@@ -107,10 +149,12 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "hello",
             SessionId = "session-timeout-buffer",
+            TimeoutMs = 15000,
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+            },
         };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["timeout_ms"] = "15000";
-        request.Headers["aevatar.llm_timeout_ms"] = "15000";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -143,11 +187,14 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "hello",
             SessionId = "session-runtime-login",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+                VerificationCode = "123 456",
+                Password = "secret-2fa",
+                PhoneNumber = "+8613800000000",
+            },
         };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["telegram.verification_code"] = "123 456";
-        request.Headers["telegram.2fa_password"] = "secret-2fa";
-        request.Headers["telegram.phone_number"] = "+8613800000000";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -177,12 +224,15 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "wait",
             SessionId = "session-wait",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+                Operation = TelegramBridgeOperation.WaitReply,
+                ExpectedFromUsername = "openclaw_bot",
+                WaitTimeoutMs = 5000,
+                PollTimeoutSeconds = 1,
+            },
         };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["operation"] = "/waitReply";
-        request.Headers["expected_from_username"] = "openclaw_bot";
-        request.Headers["wait_timeout_ms"] = "5000";
-        request.Headers["poll_timeout_sec"] = "1";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -791,8 +841,11 @@ public sealed class TelegramBridgeGAgentTests
         {
             Prompt = "hello telegram user",
             SessionId = "session-user-1",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+            },
         };
-        request.Headers["chat_id"] = "10001";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 

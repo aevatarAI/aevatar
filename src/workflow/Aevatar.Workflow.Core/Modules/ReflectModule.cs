@@ -208,8 +208,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             Prompt = prompt,
             SessionId = sessionId,
+            Telegram = new TelegramBridgeRequest(),
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
@@ -242,8 +243,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             Prompt = prompt,
             SessionId = sessionId,
+            Telegram = new TelegramBridgeRequest(),
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
@@ -280,9 +282,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
-    private static void CopyParameters(
+    private static void CopyParametersToChatRequest(
         MapField<string, string> source,
-        MapField<string, string> destination)
+        ChatRequestEvent chatRequest)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
@@ -291,6 +293,26 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
+
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
+                continue;
+
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
+        }
+    }
+
+    private static void CopyParameters(
+        MapField<string, string> source,
+        MapField<string, string> destination)
+    {
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+
             destination[key.Trim()] = value.Trim();
         }
     }

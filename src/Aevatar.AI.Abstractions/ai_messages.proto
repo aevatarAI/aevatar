@@ -30,8 +30,46 @@ message ChatRequestEvent  {
   repeated ChatContentPart input_parts = 6;
   map<string, string> metadata = 7;
   AgentToolExecutionContextPayload tool_context = 8;
+  // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+  TelegramBridgeRequest telegram = 9;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+enum TelegramBridgeOperation {
+  TELEGRAM_BRIDGE_OPERATION_UNSPECIFIED = 0;
+  TELEGRAM_BRIDGE_OPERATION_SEND_MESSAGE = 1;
+  TELEGRAM_BRIDGE_OPERATION_WAIT_REPLY = 2;
+  TELEGRAM_BRIDGE_OPERATION_ENSURE_LOGIN = 3;
+}
+
+message TelegramBridgeRequest {
+  string connector_name = 1;
+  TelegramBridgeOperation operation = 2;
+  string chat_id = 3;
+  int64 message_thread_id = 4;
+  string text = 5;
+  string parse_mode = 6;
+  optional bool disable_web_page_preview = 7;
+  int64 reply_to_message_id = 8;
+  string expected_from_user_id = 9;
+  string expected_from_username = 10;
+  string correlation_contains = 11;
+  int32 wait_timeout_ms = 12;
+  int32 poll_timeout_seconds = 13;
+  int32 settle_polls_after_match = 14;
+  bool collect_all_replies = 15;
+  optional bool start_from_latest = 16;
+  int64 offset = 17;
+  string http_method = 18;
+  string content_type = 19;
+  int32 timeout_ms = 20;
+  string phone_number = 21;
+  string verification_code = 22;
+  string password = 23;
+  bool emit_chat_response = 24;
+  string run_id = 25;
+  string step_id = 26;
+}
 
 // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
 //   Old pattern: tool credentials, caller, routing and channel facts lived in Metadata.

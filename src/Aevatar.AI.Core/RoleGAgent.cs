@@ -799,18 +799,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
-        IReadOnlyDictionary<string, string>? metadata = null;
-        if (request.Headers.Count > 0 || request.Metadata.Count > 0)
-        {
-            var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var kv in request.Headers) merged[kv.Key] = kv.Value;
-            // Metadata takes precedence (contains NyxID token, model override, etc.)
-            foreach (var kv in request.Metadata) merged[kv.Key] = kv.Value;
-            metadata = merged;
-        }
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
+            ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
+                new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
+            : null;
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
         var inputParts = ResolveRequestInputParts(request);
 
-        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, toolContext, metadata, streamCt))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {

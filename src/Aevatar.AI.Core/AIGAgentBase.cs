@@ -230,6 +230,18 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, metadata, ct);
     }
 
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, toolContext, metadata, ct);
+    }
+
     /// <summary>
     /// Resolve maxToolRounds: metadata override > EffectiveConfig > int.MaxValue (no limit).
     /// </summary>
