@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Queries;
+using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -191,6 +192,49 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         capabilitiesPort.Calls.Should().Equal("GetCapabilities");
         catalogPort.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
         capabilitiesPort.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
+    }
+
+    [Fact]
+    public async Task RegistryBackedWorkflowCatalogPort_ShouldExposeStartupCatalogThroughAsyncQueryMethods()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        registry.Register("beta", """
+            name: beta
+            description: Beta workflow.
+            steps:
+              - id: reply
+                type: llm_call
+            """);
+        registry.Register("alpha", """
+            name: alpha
+            description: Alpha workflow.
+            steps:
+              - id: reply
+                type: llm_call
+            """);
+        var port = new RegistryBackedWorkflowCatalogPort(registry);
+
+        var catalog = await port.ListWorkflowCatalogAsync();
+        var detail = await port.GetWorkflowDetailAsync(" alpha ");
+        var blankDetail = await port.GetWorkflowDetailAsync("   ");
+        var missingDetail = await port.GetWorkflowDetailAsync("missing");
+        var capabilities = await port.GetCapabilitiesAsync();
+
+        catalog.Select(item => item.Name).Should().Equal("alpha", "beta");
+        catalog.Should().OnlyContain(item =>
+            item.Source == "builtin" &&
+            item.SourceLabel == "Built-in" &&
+            item.Group == "starter-workflows" &&
+            item.GroupLabel == "Starter Workflows" &&
+            item.ShowInLibrary);
+        detail.Should().NotBeNull();
+        detail!.Catalog.Name.Should().Be("alpha");
+        detail.Yaml.Should().Contain("name: alpha");
+        blankDetail.Should().BeNull();
+        missingDetail.Should().BeNull();
+        capabilities.SchemaVersion.Should().Be("capabilities.v1");
+        capabilities.Workflows.Select(workflow => workflow.Name).Should().Equal("alpha", "beta");
+        capabilities.Workflows.Should().OnlyContain(workflow => workflow.Source == "builtin");
     }
 
     private sealed class StaticWorkflowDefinitionCatalog(IReadOnlyList<string> names) : IWorkflowDefinitionCatalog
