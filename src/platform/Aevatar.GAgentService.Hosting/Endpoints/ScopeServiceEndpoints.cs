@@ -1608,8 +1608,8 @@ public static class ScopeServiceEndpoints
         CancellationToken ct)
     {
         // Refactor (iter39/cluster-039-scope-service-host-orchestration):
-        //   Old pattern: ScopeServiceEndpoints.HandleInvokeDefaultChatStreamAsync 在 unbound default service 情况下 launch Host-inline DefaultChatWorkflowYaml 作为 hidden fallback,把 Host 当成 business orchestrator。
-        //   New principle: Host endpoint 仅做 routing + bound service stream;unbound case 返回 explicit error;stream registration / static orchestration 归 Application owner。
+        //   Old pattern: Host built the static GAgent draft-run command, registered service-run state from the endpoint callback, and owned timeout/SSE lifecycle around that orchestration.
+        //   New principle: Host only adapts HTTP/SSE callbacks; Application-owned IStaticGAgentStreamInvocationPort<AGUIEvent> owns static invocation and service-run registration semantics.
         var writer = new AGUISseWriter(http.Response);
         var responseStarted = false;
 
