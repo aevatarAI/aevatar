@@ -23,10 +23,12 @@ internal sealed class WorkflowRunObservationLifecycle
         CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter35/cluster-039-observation-binder-attach-only):
-        //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
-        //   New principle: Command observation binders 仅 attach 到 pre-existing lease/session;cold session 返回 ProjectionPending / ProjectionUnavailable;projection activation 移到 projection-owned startup / background lifecycle。
-        //   删除 pre-dispatch projection activation from command binders。不新增 top-level CLAUDE.md exception。
+        // Refactor (iter39/cluster-039-draft-run-projection-session-activation):
+        //   Old pattern: BindAsync only attached to an already-active projection session, so a cold
+        //   draft-run stream could fail before the command reached the workflow actor.
+        //   New principle: Live workflow observation may create/lease the actorized projection
+        //   session inside this explicit observation lifecycle before dispatch; PrepareAsync,
+        //   Host endpoints, and query/read paths remain free of projection lifecycle work.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -36,9 +38,11 @@ internal sealed class WorkflowRunObservationLifecycle
 
         try
         {
-            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
-                target.ActorId,
-                context.CommandId,
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
+                token => _projectionPort.EnsureActorProjectionAsync(
+                    target.ActorId,
+                    context.CommandId,
+                    token),
                 sink,
                 ct);
 
@@ -85,5 +89,4 @@ internal sealed class WorkflowRunObservationLifecycle
         return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
             WorkflowChatRunStartError.ProjectionDisabled);
     }
-
 }
