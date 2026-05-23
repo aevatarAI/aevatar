@@ -75,6 +75,49 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
     }
 
     [Fact]
+    public void GetPlans_ShouldMapScriptDomainFactCommittedToExecutionMaterializationScope()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ScriptBehaviorGAgent),
+            new ScriptDomainFactCommitted
+            {
+                ActorId = "script-runtime:scope-1:my-script",
+                ScriptId = "my-script",
+                Revision = "rev-1",
+            },
+            "script-runtime:scope-1:my-script")).ToArray();
+
+        plans.Should().ContainSingle();
+        plans[0].LeaseType.Should().Be(typeof(ScriptExecutionMaterializationRuntimeLease));
+        plans[0].StartRequest.RootActorId.Should().Be("script-runtime:scope-1:my-script");
+        plans[0].StartRequest.ProjectionKind.Should().Be("script-execution-read-model");
+        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapScriptEvolutionSessionMutationsToEvolutionMaterializationScope()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ScriptEvolutionSessionGAgent),
+            new ScriptEvolutionSessionCompletedEvent
+            {
+                ProposalId = "proposal-1",
+                Status = "promoted",
+            },
+            "script-evolution-session:scope-1:proposal-1")).ToArray();
+
+        plans.Should().ContainSingle();
+        plans[0].LeaseType.Should().Be(typeof(ScriptEvolutionMaterializationRuntimeLease));
+        plans[0].StartRequest.RootActorId.Should().Be("script-evolution-session:scope-1:proposal-1");
+        plans[0].StartRequest.ProjectionKind.Should().Be("script-evolution-read-model");
+        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
     public void GetPlans_ShouldMapScriptCatalogAuthorityMutationsToAuthorityMaterializationScope()
     {
         var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();

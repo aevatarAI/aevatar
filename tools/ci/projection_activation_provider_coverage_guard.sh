@@ -31,7 +31,7 @@ done < <(
 
 all_tests="$(rg -n "CommittedStateProjectionActivationPlanProvider|ProjectionActivationPlanProvider" test -g '*.cs' || true)"
 
-registered_projectors_in() {
+registered_materializers_in() {
   local composition_file="$1"
   local start_line="${2:-1}"
 
@@ -46,8 +46,8 @@ registered_projectors_in() {
       sub(/^.*AddCurrentStateProjectionMaterializer</, "", text)
       sub(/>.*/, "", text)
       split(text, parts, ",")
-      if (parts[2] != "") {
-        print parts[2]
+      if (parts[1] != "" && parts[2] != "") {
+        print parts[1] " " parts[2]
       }
     }
   ' "${composition_file}"
@@ -56,20 +56,79 @@ registered_projectors_in() {
 registration_file_contains_projector() {
   local composition_file="$1"
   local projector="$2"
-  local registered_projector
+  local registered_context registered_projector
 
-  while IFS= read -r registered_projector; do
+  while read -r registered_context registered_projector; do
     if [ "${registered_projector}" = "${projector}" ]; then
       return 0
     fi
-  done < <(registered_projectors_in "${composition_file}")
+  done < <(registered_materializers_in "${composition_file}")
 
   return 1
 }
 
-has_provider_coverage() {
+runtime_lease_for_context_in() {
   local composition_file="$1"
-  local composition_dir provider_file provider_name test_name
+  local context="$2"
+
+  awk -v context="${context}" '
+    /AddProjectionMaterializationRuntimeCore</ {
+      text = $0
+      while (text !~ />[[:space:]]*\(/ && (getline next_line) > 0) {
+        text = text next_line
+      }
+      gsub(/[[:space:]]/, "", text)
+      sub(/^.*AddProjectionMaterializationRuntimeCore</, "", text)
+      sub(/>.*/, "", text)
+      split(text, parts, ",")
+      if (parts[1] == context && parts[2] != "") {
+        print parts[2]
+        exit
+      }
+    }
+    /AddServiceProjectionRuntime</ {
+      text = $0
+      while (text !~ />[[:space:]]*\(/ && (getline next_line) > 0) {
+        text = text next_line
+      }
+      gsub(/[[:space:]]/, "", text)
+      sub(/^.*AddServiceProjectionRuntime</, "", text)
+      sub(/>.*/, "", text)
+      split(text, parts, ",")
+      if (parts[1] == context) {
+        print "ServiceProjectionRuntimeLease<" context ">"
+        exit
+      }
+    }
+  ' "${composition_file}"
+}
+
+provider_returns_plan_for_context() {
+  local provider_file="$1"
+  local context="$2"
+  local lease="$3"
+  local compact
+
+  compact="$(tr -d '[:space:]' < "${provider_file}")"
+
+  if [[ "${compact}" == *"DurablePlan<${context}>"* ]] ||
+     [[ "${compact}" == *"ServiceProjectionRuntimeLease<${context}>"* ]]; then
+    return 0
+  fi
+
+  if [ -n "${lease}" ] &&
+     { [[ "${compact}" == *"typeof(${lease})"* ]] ||
+       [[ "${compact}" == *"DurablePlan<${lease}>"* ]]; }; then
+    return 0
+  fi
+
+  return 1
+}
+
+has_provider_coverage_for_context() {
+  local composition_file="$1"
+  local context="$2"
+  local composition_dir provider_file provider_name test_name lease
   composition_dir="$(dirname "${composition_file}")"
 
   if ! rg -q "IProjectionActivationPlanProvider" "${composition_file}"; then
@@ -82,6 +141,8 @@ has_provider_coverage() {
     return 1
   fi
 
+  lease="$(runtime_lease_for_context_in "${composition_file}" "${context}")"
+
   for provider_file in "${provider_files[@]}"; do
     if [[ "${provider_file}" == "${composition_dir}"/* ]] ||
        [[ "${provider_file}" == "$(dirname "${composition_dir}")"/* ]] ||
@@ -90,7 +151,8 @@ has_provider_coverage() {
       if [[ "${provider_name}" == *CommittedStateProjectionActivationPlanProvider ]] &&
          rg -q "${provider_name}" "${composition_file}"; then
         test_name="${provider_name}Tests"
-        if grep -q "${test_name}" <<< "${all_tests}"; then
+        if grep -q "${test_name}" <<< "${all_tests}" &&
+           provider_returns_plan_for_context "${provider_file}" "${context}" "${lease}"; then
           return 0
         fi
       fi
@@ -109,7 +171,7 @@ has_exemption() {
       -g '*.cs' \
       -g '!**/bin/**' \
       -g '!**/obj/**' \
-      | head -1
+      | awk 'NR == 1 { first = $0 } END { if (first != "") print first }'
   )"
 
   if [ -z "${projector_file}" ]; then
@@ -133,13 +195,15 @@ has_exemption() {
 
 has_registered_projector_provider_coverage() {
   local projector="$1"
-  local composition_file
+  local composition_file registered_context registered_projector
 
   while IFS= read -r composition_file; do
-    if registration_file_contains_projector "${composition_file}" "${projector}" &&
-       has_provider_coverage "${composition_file}"; then
-      return 0
-    fi
+    while read -r registered_context registered_projector; do
+      if [ "${registered_projector}" = "${projector}" ] &&
+         has_provider_coverage_for_context "${composition_file}" "${registered_context}"; then
+        return 0
+      fi
+    done < <(registered_materializers_in "${composition_file}")
   done < <(
     rg -l "AddCurrentStateProjectionMaterializer<" "${scan_roots[@]}" \
       -g '*.cs' \
@@ -155,21 +219,23 @@ while IFS= read -r match; do
   file="${match%%:*}"
   line="${match#*:}"
   line="${line%%:*}"
-  projector="$(registered_projectors_in "${file}" "${line}" | head -1)"
+  materializer="$(registered_materializers_in "${file}" "${line}" | awk 'NR == 1 { print }')"
+  context="${materializer%% *}"
+  projector="${materializer#* }"
 
-  if [ -z "${projector}" ]; then
+  if [ -z "${materializer}" ] || [ "${context}" = "${projector}" ]; then
     failures+=("${file}:${line}: unable to parse AddCurrentStateProjectionMaterializer projector type.")
     continue
   fi
 
-  if has_provider_coverage "${file}"; then
+  if has_provider_coverage_for_context "${file}" "${context}"; then
     continue
   fi
   if has_exemption "${projector}"; then
     continue
   fi
 
-  failures+=("${file}:${line}: ${projector} current-state materializer requires same-composition IProjectionActivationPlanProvider + ProjectionActivationPlanDispatcher + CommittedStateProjectionActivationHook + ${projector%%Projector}*CommittedStateProjectionActivationPlanProviderTests, or [ProjectionExempt(Category=..., Reason=\"...\")] on the projector.")
+  failures+=("${file}:${line}: ${projector} current-state materializer for ${context} requires same-composition IProjectionActivationPlanProvider + ProjectionActivationPlanDispatcher + CommittedStateProjectionActivationHook + provider test, and the provider must return a ${context} activation plan, or [ProjectionExempt(Category=..., Reason=\"...\")] on the projector.")
 done < <(
   rg -n "AddCurrentStateProjectionMaterializer<" "${scan_roots[@]}" \
     -g '*.cs' \
@@ -234,7 +300,10 @@ while IFS= read -r file; do
   )
 done < <(
   {
-    rg --files "${scan_roots[@]}" | rg 'CurrentState(Document|Projector).*\.cs$'
+    rg --files "${scan_roots[@]}" \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' |
+      rg 'CurrentState(Document|Projector).*\.cs$'
     rg -l "class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(CurrentStateDocument|CurrentStateProjector)([[:space:]:]|$)" "${scan_roots[@]}" \
       -g '*.cs' \
       -g '!**/bin/**' \
