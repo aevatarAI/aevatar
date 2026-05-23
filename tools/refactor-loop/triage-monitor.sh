@@ -43,11 +43,23 @@ while true; do
     seen=$(jq -r --arg n "$issue" '.[$n] // "no"' "$STATE_FILE" 2>/dev/null)
     if [ "$seen" = "no" ]; then
       ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      echo "$ts new-triage-issue $issue $author" >> "$PENDING_LOG"
-      # mark seen
+      # mark seen FIRST(防 spawn 失败后无限重派)
       tmp=$(mktemp)
       jq --arg n "$issue" --arg ts "$ts" '. + {($n): $ts}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
-      log "emit: new-triage-issue $issue (author=$author)"
+      # Materialize triage codex prompt(每 issue 一份)
+      prompt_file="$REPO_ROOT/.refactor-loop/prompts/triage-issue-${issue}.md"
+      sed "s/#560/#${issue}/g; s/issue 560/issue ${issue}/g; s/Author: loning/Author: ${author}/g" \
+          "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+          > "$prompt_file" 2>/dev/null || cp "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" "$prompt_file"
+      # Spawn triage codex(nohup disown — daemon 自己派,不需 harness 跟踪;codex 自己 update GitHub)
+      log_file="$REPO_ROOT/.refactor-loop/logs/triage-issue-${issue}.log"
+      ISSUE_NUMBER="$issue" nohup bash "$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh" \
+        --cd "$REPO_ROOT" \
+        --prompt "$prompt_file" \
+        --log "$log_file" \
+        --timeout 5400 >> "$REPO_ROOT/.refactor-loop/logs/triage-monitor.log" 2>&1 &
+      disown
+      log "spawned: triage codex for issue #$issue (author=$author)"
     fi
   done <<< "$issues"
 

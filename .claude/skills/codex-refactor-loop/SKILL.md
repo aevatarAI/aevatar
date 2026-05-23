@@ -987,23 +987,20 @@ Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-sol
 
 maintainer 只加 1 label:`auto-loop-triage`
 
-**两段实现**(per Auric 2026-05-23 "auto-loop-triage 有脚本扫么"):
+**Daemon 自包含**(per Auric 2026-05-23 "不用单独一个脚本吧,复用现有脚本就好"):
 
-1. **Daemon `tools/refactor-loop/triage-monitor.sh`**(60s 周期)
-   - 扫 `gh issue list --label "auto-loop-triage" --state open`
-   - 新 issue → emit `<ISO8601> new-triage-issue <issue> <author>` 到 `.refactor-loop/.controller-pending-events.log`
-   - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
-   - 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
-   - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+`tools/refactor-loop/triage-monitor.sh` 60s 周期:
+- 扫 `gh issue list --label "auto-loop-triage" --state open`
+- 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
+- triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
+- daemon 不依赖 controller 中转,无中间 event log
+- state 存 `.refactor-loop/triage-monitor-state.json` 防重复
+- 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
+- Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+- Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
+- Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
 
-2. **Controller per-wakeup process pending events**(强制,per Auric 2026-05-23 "为什么没自动扫到")
-   - 每次 wakeup **第一动作之一**:`bash tools/refactor-loop/sweep_pending_triage.sh`
-   - script 输出 0 或多行 `DISPATCH_TRIAGE:<issue>:<author>`,对每行立即派 triage codex(spawn-codex.sh)
-   - **不允许** wakeup 不跑此 sweep — 否则 daemon emit event 但 controller 看不见,等同 daemon 失效
-   - script 自维护 `.refactor-loop/.triage-events-processed-offset`,自动防重复
-   - triage codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
-
-**事故记录**:2026-05-23 #560 maintainer 加 `auto-loop-triage` label,daemon 06:49Z emit event 到 pending-events log,但 controller 后续 wakeup 没 sweep pending-events,等 maintainer 直接问"为什么没自动扫到"才发现。bug:SKILL 写了规则但 controller 缺执行 step。已加 `sweep_pending_triage.sh` 作为强制 wakeup step。
+**事故记录**:2026-05-23 #560 maintainer 加 `auto-loop-triage` label,初版 daemon 只 emit event 到 `.controller-pending-events.log` 等 controller 中转,**但 controller 没 sweep pending-events**,#560 漏读 20min,maintainer 问"为什么没自动扫到"。修法:daemon 直接 spawn codex,移除中转环节(daemon = comment-monitor.sh eyes-react pattern,自己 take action 不让 controller 中转)。
 
 Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
 1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
