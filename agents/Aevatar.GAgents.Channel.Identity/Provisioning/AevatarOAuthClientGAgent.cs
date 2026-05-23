@@ -74,7 +74,23 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     [EventHandler]
     public async Task HandleEnsureProvisioned(EnsureAevatarOAuthClientProvisionedCommand cmd)
     {
+        await HandleEnsureProvisionedAsync(cmd, allowPendingRetryBypass: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleEnsureProvisionedAsync(
+        EnsureAevatarOAuthClientProvisionedCommand cmd,
+        bool allowPendingRetryBypass)
+    {
         ArgumentNullException.ThrowIfNull(cmd);
+        if (!allowPendingRetryBypass && HasPendingProvisioningRetryNotDue(DateTimeOffset.UtcNow))
+        {
+            Logger.LogInformation(
+                "Ignoring duplicate external aevatar OAuth client provisioning ensure while actor-owned retry is pending: attempt={Attempt}, due_unix_ms={DueUnixMs}",
+                State.ProvisioningRetryAttempt,
+                State.ProvisioningRetryDueUnixMs);
+            return;
+        }
+
         try
         {
             await TryEnsureProvisionedAsync(cmd).ConfigureAwait(false);
@@ -272,13 +288,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        await HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        await HandleEnsureProvisionedAsync(new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = State.ProvisioningRetryAuthority,
             RedirectUri = State.ProvisioningRetryRedirectUri,
             ClientName = State.ProvisioningRetryClientName,
-        }).ConfigureAwait(false);
+        }, allowPendingRetryBypass: true).ConfigureAwait(false);
     }
+
+    private bool HasPendingProvisioningRetryNotDue(DateTimeOffset now) =>
+        State.ProvisioningRetryAttempt > 0
+        && State.ProvisioningRetryDueUnixMs > now.ToUnixTimeMilliseconds();
 
     private bool RetryFiredMatchesPendingState(AevatarOAuthClientProvisioningRetryFiredEvent evt)
     {

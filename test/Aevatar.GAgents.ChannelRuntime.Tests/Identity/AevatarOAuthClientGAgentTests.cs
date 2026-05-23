@@ -245,6 +245,52 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_DuplicateExternalEnsures_DoNotBypassPendingBackoff()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(1);
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "client-after-self-callback";
+        await _agent.HandleEnsureProvisioned(cmd);
+        await _agent.HandleEnsureProvisioned(cmd);
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(1,
+            "duplicate cold-boot external ensures must not drive retry timing while backoff is pending");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
+
+        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+        });
+
+        _registrar.Calls.Should().HaveCount(2,
+            "only the durable self-callback may re-enter DCR before the external due-time gate opens");
+        _agent.State.ClientId.Should().Be("client-after-self-callback");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleProvisioningRetryFired_RetriesAndClearsRetry_WhenCallbackMatches()
     {
         _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
