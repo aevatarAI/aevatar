@@ -2,6 +2,7 @@ using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.VoicePresence.Transport;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
@@ -24,6 +25,15 @@ public sealed class VoicePresenceSession
         VoicePresenceModule module,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz)
+        : this(module, selfEventDispatcher, null, pcmSampleRateHz)
+    {
+    }
+
+    public VoicePresenceSession(
+        VoicePresenceModule module,
+        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
+        VoicePresenceSessionLeaseHandle? leaseHandle,
+        int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(selfEventDispatcher);
@@ -31,12 +41,17 @@ public sealed class VoicePresenceSession
         Module = module;
         SelfEventDispatcher = selfEventDispatcher;
         PcmSampleRateHz = pcmSampleRateHz;
-        _leaseHandle = null;
+        _leaseHandle = leaseHandle;
         _isInitialized = () => module.IsInitialized;
-        _isTransportAttached = () => module.IsTransportAttached;
+        _isTransportAttached = () => module.HasVolatileTransportLease;
         _attachTransportAsync = (transport, _) =>
         {
-            module.AttachTransport(transport, selfEventDispatcher);
+            module.AttachTransport(
+                transport,
+                selfEventDispatcher,
+                leaseHandle?.SessionId,
+                leaseHandle?.OwnerId,
+                leaseHandle == null ? null : Timestamp.FromDateTimeOffset(leaseHandle.ExpiresAtUtc));
             return Task.CompletedTask;
         };
         _detachTransportAsync = (expectedTransport, _) => module.DetachTransportAsync(expectedTransport);
