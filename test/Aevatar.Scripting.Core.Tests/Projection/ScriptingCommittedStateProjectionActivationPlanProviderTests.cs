@@ -75,6 +75,64 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
     }
 
     [Fact]
+    public void GetPlans_ShouldMapScriptDomainFactCommittedToExecutionMaterializationScope()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ScriptBehaviorGAgent),
+            new ScriptDomainFactCommitted
+            {
+                ActorId = "script-runtime:scope-1:my-script",
+                ScriptId = "my-script",
+                Revision = "rev-1",
+            },
+            "script-runtime:scope-1:my-script")).ToArray();
+
+        plans.Should().ContainSingle();
+        plans[0].LeaseType.Should().Be(typeof(ScriptExecutionMaterializationRuntimeLease));
+        plans[0].StartRequest.RootActorId.Should().Be("script-runtime:scope-1:my-script");
+        plans[0].StartRequest.ProjectionKind.Should().Be("script-execution-read-model");
+        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapScriptEvolutionSessionMutationsToEvolutionMaterializationScope()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        IMessage[] mutationEvents =
+        [
+            new ScriptEvolutionSessionStartedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionProposedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionBuildRequestedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionValidatedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRejectedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionPromotedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRollbackRequestedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRolledBackEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionSessionCompletedEvent { ProposalId = "proposal-1", Status = "promoted" },
+        ];
+
+        var plans = mutationEvents
+            .Select(evt => provider.GetPlans(BuildContext(
+                typeof(ScriptEvolutionSessionGAgent),
+                evt,
+                "script-evolution-session:scope-1:proposal-1")).ToArray())
+            .ToArray();
+
+        plans.Should().OnlyContain(plan => plan.Length == 1);
+        plans.Select(plan => plan[0].LeaseType)
+            .Should().OnlyContain(leaseType => leaseType == typeof(ScriptEvolutionMaterializationRuntimeLease));
+        plans.Select(plan => plan[0].StartRequest.RootActorId)
+            .Should().OnlyContain(actorId => actorId == "script-evolution-session:scope-1:proposal-1");
+        plans.Select(plan => plan[0].StartRequest.ProjectionKind)
+            .Should().OnlyContain(kind => kind == "script-evolution-read-model");
+        plans.Select(plan => plan[0].StartRequest.Mode)
+            .Should().OnlyContain(mode => mode == ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
     public void GetPlans_ShouldMapScriptCatalogAuthorityMutationsToAuthorityMaterializationScope()
     {
         var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
@@ -131,6 +189,11 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
                 typeof(ScriptCatalogGAgent),
                 new StringValue { Value = "not-catalog-authority-mutation" },
                 "user-script-catalog:scope-1"))
+            .Should().BeEmpty();
+        provider.GetPlans(BuildContext(
+                typeof(ScriptEvolutionSessionGAgent),
+                new StringValue { Value = "not-evolution-mutation" },
+                "script-evolution-session:scope-1:proposal-1"))
             .Should().BeEmpty();
     }
 

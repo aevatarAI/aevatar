@@ -1,11 +1,13 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,6 +42,13 @@ public static class DeviceServiceCollectionExtensions
         // ─── Retired-actor cleanup contribution ───
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, DeviceRetiredActorSpec>());
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            DeviceRegistrationCommittedStateProjectionActivationPlanProvider>());
 
         // ─── Device Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<

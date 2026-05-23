@@ -16,6 +16,9 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// Follows the <see cref="ICurrentStateProjectionMaterializer{TContext}"/> pattern
 /// from the scripting module.
 /// </summary>
+[ProjectionExempt(
+    Category = ProjectionExemptionCategory.StartupBootstrap,
+    Reason = "Studio actor-backed store current-state readmodels are activated by StudioCurrentStateProjectionPort/StudioActorBootstrap; provider migration is tracked separately from issue #895.")]
 public sealed class UserConfigCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {

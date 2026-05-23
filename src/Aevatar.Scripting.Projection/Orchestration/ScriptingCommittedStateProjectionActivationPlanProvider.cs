@@ -20,6 +20,20 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
         if (context.Published.StateEvent?.EventData == null)
             yield break;
 
+        if (context.ActorType == typeof(ScriptBehaviorGAgent) &&
+            context.Published.StateEvent.EventData.Is(ScriptDomainFactCommitted.Descriptor))
+        {
+            yield return DurableExecutionPlan(context.ActorId);
+            yield break;
+        }
+
+        if (context.ActorType == typeof(ScriptEvolutionSessionGAgent) &&
+            IsEvolutionSessionMutation(context.Published.StateEvent.EventData))
+        {
+            yield return DurableEvolutionPlan(context.ActorId);
+            yield break;
+        }
+
         if (context.ActorType == typeof(ScriptDefinitionGAgent) &&
             context.Published.StateEvent.EventData.Is(ScriptDefinitionUpsertedEvent.Descriptor))
         {
@@ -35,6 +49,30 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
 
         yield return DurableAuthorityPlan(context.ActorId);
     }
+
+    private static ProjectionActivationPlan DurableExecutionPlan(string actorId) =>
+        new()
+        {
+            LeaseType = typeof(ScriptExecutionMaterializationRuntimeLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.ExecutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
+
+    private static ProjectionActivationPlan DurableEvolutionPlan(string actorId) =>
+        new()
+        {
+            LeaseType = typeof(ScriptEvolutionMaterializationRuntimeLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.EvolutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
 
     private static ProjectionActivationPlan DurableAuthorityPlan(string actorId) =>
         new()
@@ -57,6 +95,38 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
             return true;
 
         if (eventData.Is(ScriptCatalogRolledBackEvent.Descriptor))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsEvolutionSessionMutation(Google.Protobuf.WellKnownTypes.Any eventData)
+    {
+        if (eventData.Is(ScriptEvolutionSessionStartedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionProposedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionBuildRequestedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionValidatedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRejectedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionPromotedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRollbackRequestedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRolledBackEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
             return true;
 
         return false;

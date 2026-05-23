@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -86,6 +87,9 @@ public sealed partial class WorkflowCatalogStepReadModel
     }
 }
 
+[ProjectionExempt(
+    Category = ProjectionExemptionCategory.StartupBootstrap,
+    Reason = "Workflow capabilities are materialized by WorkflowCapabilitiesStartupMaterializer from startup module and connector capability sources.")]
 public sealed partial class WorkflowCapabilitiesCurrentStateDocument : IProjectionReadModel<WorkflowCapabilitiesCurrentStateDocument>
 {
     public DateTimeOffset UpdatedAt
