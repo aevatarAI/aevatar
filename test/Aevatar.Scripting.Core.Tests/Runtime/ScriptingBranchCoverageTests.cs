@@ -740,15 +740,13 @@ public sealed class ScriptEvolutionCommandTargetTests
     {
         var projectionPort = new RecordingEvolutionProjectionPort();
 
-        Action nullActor = () => new ScriptEvolutionCommandTarget(null!, "proposal-1", projectionPort, projectionPort);
-        Action blankProposal = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), " ", projectionPort, projectionPort);
-        Action nullPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", null!, projectionPort);
-        Action nullReadModelActivationPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", projectionPort, null!);
+        Action nullActor = () => new ScriptEvolutionCommandTarget(null!, "proposal-1", projectionPort);
+        Action blankProposal = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), " ", projectionPort);
+        Action nullPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", null!);
 
         nullActor.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("actor");
         blankProposal.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("proposalId");
         nullPort.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("projectionPort");
-        nullReadModelActivationPort.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("readModelActivationPort");
     }
 
     [Fact]
@@ -757,7 +755,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
 
         Action nullLease = () => target.BindLiveObservation(null!, new RecordingLiveSinkLease(), new RecordingCompletedEventSink());
@@ -773,7 +770,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
 
         Action act = () => target.RequireLiveSink();
@@ -789,7 +785,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         var lease = new RecordingEvolutionProjectionLease("session-1", "proposal-1");
         var liveSinkLease = new RecordingLiveSinkLease();
@@ -812,7 +807,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
         var sink = new RecordingCompletedEventSink();
         target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), new RecordingLiveSinkLease(), sink);
@@ -833,7 +827,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
@@ -863,7 +856,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
@@ -1177,6 +1169,19 @@ internal sealed class RecordingEvolutionProjectionPort
 
     public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
         await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
+
+    public async Task<EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>?> AttachExistingActorProjectionAsync(
+        string sessionActorId,
+        string proposalId,
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+        CancellationToken ct = default)
+    {
+        var lease = new RecordingEvolutionProjectionLease(sessionActorId, proposalId);
+        var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+        return liveSinkLease == null
+            ? null
+            : new EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>(lease, liveSinkLease);
+    }
 
     public async Task<IAsyncDisposable?> AttachLiveSinkAsync(IScriptEvolutionProjectionLease lease, IEventSink<ScriptEvolutionSessionCompletedEvent> sink, CancellationToken ct = default)
     {

@@ -23,12 +23,10 @@ internal sealed class WorkflowRunObservationLifecycle
         CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter39/cluster-039-draft-run-projection-session-activation):
-        //   Old pattern: BindAsync only attached to an already-active projection session, so a cold
-        //   draft-run stream could fail before the command reached the workflow actor.
-        //   New principle: Live workflow observation may create/lease the actorized projection
-        //   session inside this explicit observation lifecycle before dispatch; PrepareAsync,
-        //   Host endpoints, and query/read paths remain free of projection lifecycle work.
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -38,11 +36,9 @@ internal sealed class WorkflowRunObservationLifecycle
 
         try
         {
-            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.ActorId,
-                    context.CommandId,
-                    token),
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CommandId,
                 sink,
                 ct);
 

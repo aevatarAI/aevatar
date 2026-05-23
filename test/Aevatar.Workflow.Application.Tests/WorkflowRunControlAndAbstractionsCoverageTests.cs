@@ -621,7 +621,9 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var ex = await act.Should().ThrowAsync<AggregateException>();
         ex.Which.Message.Should().Contain("rollback also failed");
         ex.Which.InnerExceptions.Should().HaveCount(2);
-        projectionPort.EnsureCalls.Should().Be(1);
+        projectionPort.EnsureCalls.Should().Be(0);
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
