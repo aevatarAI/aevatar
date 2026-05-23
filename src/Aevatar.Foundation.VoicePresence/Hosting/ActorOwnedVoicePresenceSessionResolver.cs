@@ -51,6 +51,26 @@ public sealed class ActorOwnedVoicePresenceSessionResolver : IVoicePresenceSessi
 
         if (capability.TransportAttached || IsActive(capability.LeaseExpiresAt, capability.ActiveSessionId))
         {
+            if (request.Purpose == VoicePresenceSessionRequestPurpose.Detach)
+            {
+                var attachedSession = VoicePresenceSession.CreateAttachedForDetach(
+                    capability,
+                    new VoicePresenceSessionLeaseHandle(
+                        capability.ActorId,
+                        capability.ModuleName,
+                        capability.ActiveSessionId ?? string.Empty,
+                        HostOwnerId,
+                        capability.StateVersion,
+                        capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
+                        capability.RemoteAudioSupport),
+                    _leasePort,
+                    _transportAttachmentPort);
+
+                return VoicePresenceSessionResolution.LeaseAcceptedAttached(
+                    attachedSession,
+                    capability.StateVersion);
+            }
+
             return VoicePresenceSessionResolution.PreflightFailed(
                 VoicePresencePreflightFailureKind.TransportAlreadyAttached,
                 capability.StateVersion);

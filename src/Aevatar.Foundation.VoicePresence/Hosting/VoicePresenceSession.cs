@@ -72,6 +72,29 @@ public sealed class VoicePresenceSession
         };
     }
 
+    internal static VoicePresenceSession CreateAttachedForDetach(
+        VoicePresenceCapabilitySnapshot capability,
+        VoicePresenceSessionLeaseHandle leaseHandle,
+        IVoicePresenceSessionLeasePort leasePort,
+        IVoicePresenceTransportAttachmentPort transportAttachmentPort)
+    {
+        ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(leaseHandle);
+        ArgumentNullException.ThrowIfNull(leasePort);
+        ArgumentNullException.ThrowIfNull(transportAttachmentPort);
+
+        return new VoicePresenceSession(
+            isInitialized: () => capability.Initialized,
+            isTransportAttached: () => true,
+            attachTransportAsync: static (_, _) => throw new InvalidOperationException("Voice transport already attached."),
+            detachTransportAsync: async (expectedTransport, ct) =>
+            {
+                await transportAttachmentPort.DetachAsync(leaseHandle, expectedTransport, ct);
+                await leasePort.ReleaseAsync(leaseHandle, DetachedReason, ct);
+            },
+            capability.PcmSampleRateHz);
+    }
+
     public VoicePresenceSession(
         Func<bool> isInitialized,
         Func<bool> isTransportAttached,

@@ -312,7 +312,10 @@ public static class VoicePresenceEndpoints
     private static VoicePresenceSessionRequest CreateSessionRequest(HttpContext ctx, string actorId) =>
         new(
             actorId,
-            ResolveRequestedModuleName(ctx));
+            ResolveRequestedModuleName(ctx),
+            string.Equals(ctx.Request.Method, HttpMethods.Delete, StringComparison.OrdinalIgnoreCase)
+                ? VoicePresenceSessionRequestPurpose.Detach
+                : VoicePresenceSessionRequestPurpose.Attach);
 
     private static string? ResolveRequestedModuleName(HttpContext ctx)
     {

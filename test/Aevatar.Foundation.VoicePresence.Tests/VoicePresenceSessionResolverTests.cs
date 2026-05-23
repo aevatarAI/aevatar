@@ -151,6 +151,41 @@ public class VoicePresenceSessionResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_should_return_attached_detach_session_when_transport_is_already_attached_for_detach()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "session-1",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            attachmentPort);
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest(
+            "agent-1",
+            "voice_presence",
+            VoicePresenceSessionRequestPurpose.Detach));
+
+        resolution.Kind.ShouldBe(VoicePresenceSessionResolutionKind.LeaseAcceptedAttached);
+        resolution.ObservedStateVersion.ShouldBe(5);
+        var session = resolution.Session;
+        session.ShouldNotBeNull();
+        session.IsTransportAttached.ShouldBeTrue();
+
+        await session.DetachTransportAsync();
+
+        attachmentPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
+        leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.SessionId.ShouldBe("session-1");
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void VoicePresenceSessionResolution_should_model_four_typed_branches()
     {
         var session = new VoicePresenceSession(

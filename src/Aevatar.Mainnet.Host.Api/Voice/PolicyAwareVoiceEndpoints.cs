@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
 
@@ -109,14 +111,16 @@ public static class PolicyAwareVoiceEndpoints
         if (session is null)
             return;
 
+        var options = http.RequestServices.GetService<IOptions<PolicyAwareVoiceEndpointOptions>>()?.Value
+                      ?? new PolicyAwareVoiceEndpointOptions();
         var ws = await http.WebSockets.AcceptWebSocketAsync();
         var transport = new WebSocketVoiceTransport(ws);
         var attached = false;
         try
         {
-            await session.AttachTransportAsync(transport, http.RequestAborted);
+            await AttachWithTimeoutAsync(session, transport, options.AttachTimeout, http.RequestAborted);
             attached = true;
-            await WaitUntilClosedAsync(ws, http.RequestAborted);
+            await WaitUntilClosedAsync(ws, options.WebSocketCloseWaitTimeout, http.RequestAborted);
         }
         catch when (!attached)
         {
@@ -135,8 +139,9 @@ public static class PolicyAwareVoiceEndpoints
     {
         switch (resolution.Kind)
         {
-            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
             case VoicePresenceSessionResolutionKind.LeaseAcceptedAttached:
+                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
                 return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
             case VoicePresenceSessionResolutionKind.Unsupported:
                 http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
@@ -170,7 +175,7 @@ public static class PolicyAwareVoiceEndpoints
                 await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
                 break;
             case VoicePresencePreflightFailureKind.TransportAlreadyAttached:
-                http.Response.StatusCode = StatusCodes.Status403Forbidden;
+                http.Response.StatusCode = StatusCodes.Status409Conflict;
                 await http.Response.WriteAsync("Voice transport already attached.", http.RequestAborted);
                 break;
             default:
@@ -341,12 +346,38 @@ public static class PolicyAwareVoiceEndpoints
             .Select(static ch => char.ToLowerInvariant(ch))
             .ToArray());
 
-    private static async Task WaitUntilClosedAsync(WebSocket ws, CancellationToken ct)
+    private static async Task AttachWithTimeoutAsync(
+        VoicePresenceSession session,
+        WebSocketVoiceTransport transport,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            await session.AttachTransportAsync(transport, ct);
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        await session.AttachTransportAsync(transport, timeoutCts.Token).WaitAsync(timeoutCts.Token);
+    }
+
+    private static async Task WaitUntilClosedAsync(
+        WebSocket ws,
+        TimeSpan timeout,
+        CancellationToken ct)
     {
         try
         {
-            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
-                await Task.Delay(500, ct);
+            using var timeoutCts = timeout > TimeSpan.Zero
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            timeoutCts?.CancelAfter(timeout);
+            var waitToken = timeoutCts?.Token ?? ct;
+
+            while (ws.State == WebSocketState.Open && !waitToken.IsCancellationRequested)
+                await Task.Delay(500, waitToken);
         }
         catch (OperationCanceledException)
         {
