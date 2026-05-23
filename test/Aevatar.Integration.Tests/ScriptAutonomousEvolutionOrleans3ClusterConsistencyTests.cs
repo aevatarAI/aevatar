@@ -358,6 +358,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     options.TopicPartitionCount = 4;
                 });
                 services.AddScriptCapability(context.Configuration);
+                services.AddAuthorityActivatingScriptEvolutionApplicationService();
             })
             .Build();
 
