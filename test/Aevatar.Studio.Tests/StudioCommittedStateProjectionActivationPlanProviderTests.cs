@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
@@ -14,6 +15,7 @@ using Aevatar.Studio.Workspace;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using SystemType = System.Type;
 
 namespace Aevatar.Studio.Tests;
@@ -53,6 +55,28 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task CommittedStateHook_ShouldDispatchStudioActivationPlanThroughRegisteredLeaseService()
+    {
+        var activation = new RecordingStudioActivationService();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionScopeActivationService<StudioMaterializationRuntimeLease>>(activation)
+            .BuildServiceProvider();
+        var hook = new CommittedStateProjectionActivationHook(
+            [new StudioCommittedStateProjectionActivationPlanProvider()],
+            new ProjectionActivationPlanDispatcher(services));
+
+        await hook.BeforePublishAsync(
+            BuildContext(typeof(UserConfigGAgent), "studio-actor-1"),
+            CancellationToken.None);
+
+        activation.Requests.Should().ContainSingle();
+        activation.Requests[0].RootActorId.Should().Be("studio-actor-1");
+        activation.Requests[0].ProjectionKind.Should().Be(UserConfigGAgent.ProjectionKind);
+        activation.Requests[0].Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+        activation.Requests[0].SessionId.Should().BeEmpty();
+    }
+
     public static TheoryData<SystemType, string> StudioProjectedActors() =>
         new()
         {
@@ -85,4 +109,24 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             },
         };
+
+    private sealed class RecordingStudioActivationService
+        : IProjectionScopeActivationService<StudioMaterializationRuntimeLease>
+    {
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public Task<StudioMaterializationRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(new StudioMaterializationRuntimeLease(
+                new StudioMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                }));
+        }
+    }
 }

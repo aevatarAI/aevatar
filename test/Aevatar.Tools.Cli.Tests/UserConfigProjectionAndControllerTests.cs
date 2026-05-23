@@ -133,9 +133,9 @@ public sealed class UserConfigProjectionAndControllerTests
 
         actorRuntime.GetCalls.Should().ContainSingle().Which.Should().Be("user-config-scope-new");
         actorRuntime.CreateCalls.Should().Contain("user-config-scope-new", "user-config actor must be created before dispatch");
-        actorRuntime.CreateCalls.Should().Contain(
-            x => x.Contains("user-config-scope-new", StringComparison.Ordinal) && x.Contains("projection", StringComparison.Ordinal),
-            "projection scope actor must also be created so the materializer subscribes to the stream");
+        actorRuntime.CreateCalls.Should().NotContain(
+            x => x.Contains("projection", StringComparison.Ordinal),
+            "projection activation is handled by the committed-state hook rather than command-path priming");
         dispatchPort.ActorId.Should().Be("user-config-scope-new", "last dispatch is the UserConfigUpdatedEvent to the user-config actor");
         dispatchPort.Envelope.Should().NotBeNull();
     }
