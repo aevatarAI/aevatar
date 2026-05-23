@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
-using Aevatar.GAgents.Channel.Identity.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,32 +12,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class AevatarOAuthClientBootstrapServiceTests
 {
     [Fact]
-    public async Task EnsureProvisionedAsync_SkipsDispatch_WhenSnapshotAlreadyMatchesResolvedClient()
+    public async Task StartAsync_DispatchesOneBootstrapIntent()
     {
         using var environment = new OAuthBootstrapEnvironment();
         var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
             static _ => OAuthClientReceipt());
-        var service = NewService(
-            new StaticClientProvider(Snapshot(
-                authority: environment.Authority,
-                redirectUri: environment.RedirectUri,
-                oauthScope: AevatarOAuthClientScopes.AuthorizationScope)),
-            dispatch);
+        var service = NewService(dispatch);
 
-        await service.EnsureProvisionedAsync(CancellationToken.None);
-
-        dispatch.Commands.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task EnsureProvisionedAsync_DispatchesAcceptedCommand_WhenSnapshotIsMissing()
-    {
-        using var environment = new OAuthBootstrapEnvironment();
-        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
-            static _ => OAuthClientReceipt());
-        var service = NewService(new MissingClientProvider(), dispatch);
-
-        await service.EnsureProvisionedAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
 
         dispatch.Commands.Should().ContainSingle();
         var command = dispatch.Commands[0];
@@ -48,19 +29,14 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     }
 
     [Fact]
-    public async Task EnsureProvisionedAsync_DispatchesAcceptedCommand_WhenSnapshotDrifted()
+    public async Task DispatchBootstrapIntentAsync_DispatchesAcceptedCommand()
     {
         using var environment = new OAuthBootstrapEnvironment();
         var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
             static _ => OAuthClientReceipt());
-        var service = NewService(
-            new StaticClientProvider(Snapshot(
-                authority: environment.Authority,
-                redirectUri: "https://old.example.com/api/oauth/nyxid-callback",
-                oauthScope: "openid")),
-            dispatch);
+        var service = NewService(dispatch);
 
-        await service.EnsureProvisionedAsync(CancellationToken.None);
+        await service.DispatchBootstrapIntentAsync(CancellationToken.None);
 
         dispatch.Commands.Should().ContainSingle();
         var command = dispatch.Commands[0];
@@ -70,18 +46,24 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     }
 
     [Fact]
-    public async Task EnsureProvisionedAsync_Throws_WhenDispatchRejects()
+    public async Task DispatchBootstrapIntentAsync_Throws_WhenDispatchRejects()
     {
         using var environment = new OAuthBootstrapEnvironment();
-        var service = NewService(
-            new MissingClientProvider(),
-            new RejectingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>());
+        var service = NewService(new RejectingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>());
 
-        var act = () => service.EnsureProvisionedAsync(CancellationToken.None);
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
 
         await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*InvalidTarget*");
+    }
+
+    [Fact]
+    public async Task StopAsync_IsNoOp()
+    {
+        var service = NewService(new RejectingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>());
+
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -108,28 +90,13 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         combinedSource.Should().NotContain("Rebuild" + "Observation");
         combinedSource.Should().NotContain("WaitForBinding" + "StateAsync");
         combinedSource.Should().NotContain(string.Concat("Task", ".Delay"));
+        combinedSource.Should().NotContain(string.Concat("Task", ".Run"));
+        bootstrapSource.Should().NotContain("IAevatarOAuthClient" + "Provider");
     }
 
     private static AevatarOAuthClientBootstrapService NewService(
-        IAevatarOAuthClientProvider provider,
         ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch) =>
-        new(provider, dispatch, NullLogger<AevatarOAuthClientBootstrapService>.Instance);
-
-    private static AevatarOAuthClientSnapshot Snapshot(
-        string authority,
-        string redirectUri,
-        string oauthScope) =>
-        new(
-            ClientId: "client-1",
-            ClientIdIssuedAt: DateTimeOffset.FromUnixTimeSeconds(1700000000),
-            HmacKid: AevatarOAuthClientGAgent.InitialHmacKid,
-            HmacKey: new byte[32],
-            HmacKeyRotatedAt: DateTimeOffset.UtcNow,
-            NyxIdAuthority: authority,
-            BrokerCapabilityObserved: true,
-            BrokerCapabilityObservedAt: DateTimeOffset.UtcNow,
-            RedirectUri: redirectUri,
-            OauthScope: oauthScope);
+        new(dispatch, NullLogger<AevatarOAuthClientBootstrapService>.Instance);
 
     private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>
         new(
@@ -164,7 +131,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
 
     private static string ExtractEnsureProvisionedSource(string source)
     {
-        const string marker = "internal async Task EnsureProvisionedAsync";
+        const string marker = "internal async Task DispatchBootstrapIntentAsync";
         var start = source.IndexOf(marker, StringComparison.Ordinal);
         start.Should().BeGreaterThanOrEqualTo(0, "bootstrap source should keep the dispatch completion method");
         return source[start..];
@@ -192,18 +159,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, _oldAuthority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _oldRedirectBaseUrl);
         }
-    }
-
-    private sealed class StaticClientProvider(AevatarOAuthClientSnapshot snapshot) : IAevatarOAuthClientProvider
-    {
-        public Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default) =>
-            Task.FromResult(snapshot);
-    }
-
-    private sealed class MissingClientProvider : IAevatarOAuthClientProvider
-    {
-        public Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default) =>
-            throw new AevatarOAuthClientNotProvisionedException();
     }
 
 }

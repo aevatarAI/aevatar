@@ -1,11 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Identity;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -28,10 +30,12 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private AevatarOAuthClientGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
     private RecordingDcrClient _registrar = null!;
+    private IdentityGAgentTestHarness.NoopCallbackScheduler _callbackScheduler = null!;
 
     public async Task InitializeAsync()
     {
         _registrar = new RecordingDcrClient();
+        _callbackScheduler = new IdentityGAgentTestHarness.NoopCallbackScheduler();
 
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, IdentityGAgentTestHarness.InMemoryEventStore>();
@@ -39,8 +43,8 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
-        services.AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler,
-            IdentityGAgentTestHarness.NoopCallbackScheduler>();
+        services.AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>(
+            _callbackScheduler);
         // The actor resolves the registrar by abstract NyxIdDynamicClientRegistrationClient
         // type; tests inject a recording stub so HandleEnsureProvisioned exercises the
         // full code path without a real HTTP call.
@@ -54,6 +58,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             EventSourcingBehaviorFactory =
                 _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<AevatarOAuthClientState>>(),
         };
+        SetActorId(_agent, AevatarOAuthClientGAgent.WellKnownId);
         await _agent.ActivateAsync();
     }
 
@@ -80,6 +85,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         _agent.State.HmacKey.Length.Should().Be(32);
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
     }
 
     [Fact]
@@ -138,6 +144,9 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ClientId.Should().Be("client-after-redirect-fix");
         _agent.State.ClientId.Should().NotBe(firstClientId);
         _agent.State.RedirectUri.Should().Be("https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback");
+        (await ReadEventsAsync<AevatarOAuthClientDriftReconciledEvent>())
+            .Should()
+            .ContainSingle(e => e.DriftKind == "redirect_uri");
     }
 
     [Fact]
@@ -203,6 +212,127 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             "legacy clients without proxy scope cannot mint NyxID LLM API tokens");
         _agent.State.ClientId.Should().Be("client-after-scope-heal");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        (await ReadEventsAsync<AevatarOAuthClientDriftReconciledEvent>())
+            .Should()
+            .ContainSingle(e => e.DriftKind == "oauth_scope");
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_SchedulesDurableRetry_WhenDcrFails()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+
+        _agent.State.ClientId.Should().BeEmpty();
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
+        _agent.State.ProvisioningRetryAuthority.Should().Be("https://nyxid.test");
+        _agent.State.ProvisioningRetryRedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _agent.State.ProvisioningRetryClientName.Should().Be("aevatar");
+        _agent.State.ProvisioningRetryDueUnixMs.Should().BeGreaterThan(0);
+        _agent.State.ProvisioningRetryCallbackGeneration.Should().Be(1);
+        _agent.State.ProvisioningRetryLastError.Should().Contain("nyxid unavailable");
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
+        _callbackScheduler.TimeoutRequests[0].DueTime.Should().Be(AevatarOAuthClientGAgent.InitialRetryDelay);
+        (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryScheduledEvent>())
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_RetriesAndClearsRetry_WhenCallbackMatches()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "client-after-retry";
+        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        _registrar.Calls.Should().HaveCount(2);
+        _agent.State.ClientId.Should().Be("client-after-retry");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
+        _agent.State.ProvisioningRetryCallbackId.Should().BeEmpty();
+        (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryClearedEvent>())
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_IgnoresStaleCallback()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+        });
+
+        _registrar.ThrowOnRegister = null;
+        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt + 1,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+        });
+
+        _registrar.Calls.Should().ContainSingle("stale callback must not re-enter DCR");
+        _agent.State.ClientId.Should().BeEmpty();
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_DoublesBackoff_WhenRetryFailsAgain()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("first failure");
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+        });
+
+        _registrar.ThrowOnRegister = new InvalidOperationException("second failure");
+        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+        });
+
+        _agent.State.ProvisioningRetryAttempt.Should().Be(2);
+        _callbackScheduler.TimeoutRequests.Should().HaveCount(2);
+        _callbackScheduler.TimeoutRequests[1].DueTime.Should().Be(TimeSpan.FromSeconds(10));
+        (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryScheduledEvent>())
+            .Should()
+            .HaveCount(2);
     }
 
     [Fact]
@@ -493,13 +623,13 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleEnsureProvisioned_RethrowsOcc_WhenPeerCommitDoesNotHealDrift()
+    public async Task HandleEnsureProvisioned_SchedulesRetry_WhenPeerCommitDoesNotHealDrift()
     {
         // The OCC absorber must NOT swallow conflicts where the peer's
         // commit was something unrelated (e.g. a future schema event the
-        // actor doesn't know about). In that case the bootstrap retry
-        // path must observe the failure and re-evaluate against fresh
-        // state, otherwise we'd silently leave drift unhealed.
+        // actor doesn't know about). In the actor-owned retry model this
+        // schedules a durable callback so the actor re-evaluates against
+        // fresh state on a later turn.
         await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = "https://nyxid.test",
@@ -511,7 +641,8 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             // Peer's commit is a rebuild request — Apply is identity, so
             // it does NOT update RedirectUri. State stays drifted after
-            // refresh, the absorber returns false, OCC propagates.
+            // refresh, the absorber returns false, and actor-owned retry
+            // captures the failed attempt.
             var store = _serviceProvider.GetRequiredService<IEventStore>();
             var actorId = _agent.Id;
             var current = await store.GetVersionAsync(actorId);
@@ -536,13 +667,17 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                 current);
         };
 
-        var act = () => _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback",
         });
 
-        await act.Should().ThrowAsync<EventStoreOptimisticConcurrencyException>();
+        _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
+        _agent.State.ProvisioningRetryRedirectUri.Should()
+            .Be("https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback");
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
     }
 
     [Fact]
@@ -566,6 +701,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     {
         public string NextClientId { get; set; } = "client-first";
         public List<(string Authority, string ClientName, string RedirectUri)> Calls { get; } = new();
+        public Exception? ThrowOnRegister { get; set; }
 
         /// <summary>
         /// Hook that runs after the DCR call records the request but before
@@ -593,6 +729,8 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                 _owner.Calls.Add((authority, clientName, redirectUri));
                 if (_owner.OnRegistered is not null)
                     await _owner.OnRegistered().ConfigureAwait(false);
+                if (_owner.ThrowOnRegister is not null)
+                    throw _owner.ThrowOnRegister;
                 return new RegistrationResult(_owner.NextClientId, DateTimeOffset.UtcNow);
             }
         }
@@ -602,5 +740,25 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
                 throw new InvalidOperationException("HTTP client must not be invoked in unit tests");
         }
+    }
+
+    private async Task<IReadOnlyList<T>> ReadEventsAsync<T>()
+        where T : class, Google.Protobuf.IMessage<T>, new()
+    {
+        var store = _serviceProvider.GetRequiredService<IEventStore>();
+        var events = await store.GetEventsAsync(_agent.Id);
+        return events
+            .Select(e => e.EventData)
+            .OfType<Any>()
+            .Where(any => any.Is(new T().Descriptor))
+            .Select(any => any.Unpack<T>())
+            .ToList();
+    }
+
+    private static void SetActorId(GAgentBase agent, string id)
+    {
+        var method = typeof(GAgentBase).GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("SetId not found on GAgentBase");
+        method.Invoke(agent, new object[] { id });
     }
 }
