@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
@@ -41,6 +42,7 @@ public sealed class SubWorkflowOrchestratorStateCoverageTests
                 TimeoutCallbackActorId = " owner-1 ",
                 TimeoutCallbackGeneration = 7,
                 TimeoutCallbackBackend = (int)WorkflowRuntimeCallbackBackendState.Dedicated,
+                TimeoutCallbackSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
                 TimeoutMs = 12_000,
             });
 
@@ -56,6 +58,7 @@ public sealed class SubWorkflowOrchestratorStateCoverageTests
         pending.TimeoutLease.Should().NotBeNull();
         pending.TimeoutLease!.ActorId.Should().Be("owner-1");
         pending.TimeoutLease.Backend.Should().Be(WorkflowRuntimeCallbackBackendState.Dedicated);
+        pending.TimeoutLease.SlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
         pending.TimeoutMs.Should().Be(12_000);
     }
 
