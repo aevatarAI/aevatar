@@ -1,7 +1,4 @@
 using Aevatar.Configuration;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -9,7 +6,6 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Tests.Shared;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -46,13 +42,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task DeleteDraftAsync_ShouldNotCallRuntimePorts()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var runtimePorts = new RuntimePortSpies();
         var service = environment.CreateService(
-            workflowQueryPort: runtimePorts.QueryPort,
-            workflowCommandPort: runtimePorts.CommandPort,
-            workflowActorBindingReader: runtimePorts.BindingReader,
-            artifactStore: runtimePorts.ArtifactStore,
-            serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
             workspaceQueryPort: new RecordingStudioWorkspacePorts(new[]
             {
                 new ScopedDraft(
@@ -67,21 +57,15 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
-        runtimePorts.TotalInvocations.Should().Be(0);
+        // Runtime ports are not part of AppScopedWorkflowService anymore; draft deletion stays on workspace ports.
     }
 
     [Fact]
     public async Task CreateDraftAsync_ShouldPersistScopedDraftWithoutCallingRuntimePorts()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var runtimePorts = new RuntimePortSpies();
         var workspacePort = new RecordingStudioWorkspacePorts();
         var service = environment.CreateService(
-            workflowQueryPort: runtimePorts.QueryPort,
-            workflowCommandPort: runtimePorts.CommandPort,
-            workflowActorBindingReader: runtimePorts.BindingReader,
-            artifactStore: runtimePorts.ArtifactStore,
-            serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
             workspaceQueryPort: workspacePort,
             workspaceCommandPort: workspacePort);
 
@@ -93,7 +77,6 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 FileName: null,
                 Yaml: "name: workflow-1\nsteps: []\n"));
 
-        runtimePorts.TotalInvocations.Should().Be(0);
         workspacePort.SavedDrafts.Should().ContainSingle();
         workspacePort.SavedDrafts[0].ScopeId.Should().Be("scope-1");
         workspacePort.SavedDrafts[0].ExpectedVersion.Should().Be(11);
@@ -104,9 +87,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task ListDraftsAsync_WhenDraftHasTypedLayout_ShouldDeriveDraftSummaryWithoutLayoutBadge()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var runtimePorts = new RuntimePortSpies();
         var service = environment.CreateService(
-            workflowQueryPort: runtimePorts.QueryPort,
             workspaceQueryPort: new RecordingStudioWorkspacePorts(new[]
             {
                 new ScopedDraft(
@@ -264,21 +245,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         public string HomeDirectory { get; }
 
         public AppScopedWorkflowService CreateService(
-            IScopeWorkflowQueryPort? workflowQueryPort = null,
-            IScopeWorkflowCommandPort? workflowCommandPort = null,
-            IWorkflowActorBindingReader? workflowActorBindingReader = null,
-            IServiceRevisionArtifactStore? artifactStore = null,
-            IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null,
             IStudioWorkspaceQueryPort? workspaceQueryPort = null,
             IStudioWorkspaceCommandPort? workspaceCommandPort = null)
         {
             return new AppScopedWorkflowService(
-                new StubHttpClientFactory(),
                 new StubWorkflowYamlDocumentService(),
-                workflowQueryPort,
-                workflowActorBindingReader,
-                artifactStore,
-                serviceLifecycleQueryPort,
                 workspaceQueryPort,
                 workspaceCommandPort);
         }
@@ -298,12 +269,6 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 Directory.Delete(HomeDirectory, recursive: true);
             }
         }
-    }
-
-    private sealed class StubHttpClientFactory : IHttpClientFactory
-    {
-        public HttpClient CreateClient(string name) =>
-            throw new InvalidOperationException("HTTP backend should not be called.");
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
@@ -381,145 +346,4 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             updatedAtUtc,
             1);
 
-    private sealed class RuntimePortSpies
-    {
-        public RuntimePortSpies()
-        {
-            QueryPort = new RecordingScopeWorkflowQueryPort(this);
-            CommandPort = new RecordingScopeWorkflowCommandPort(this);
-            BindingReader = new RecordingWorkflowActorBindingReader(this);
-            ArtifactStore = new RecordingServiceRevisionArtifactStore(this);
-            ServiceLifecycleQueryPort = new RecordingServiceLifecycleQueryPort(this);
-        }
-
-        public int TotalInvocations { get; private set; }
-
-        public IScopeWorkflowQueryPort QueryPort { get; }
-
-        public IScopeWorkflowCommandPort CommandPort { get; }
-
-        public IWorkflowActorBindingReader BindingReader { get; }
-
-        public IServiceRevisionArtifactStore ArtifactStore { get; }
-
-        public IServiceLifecycleQueryPort ServiceLifecycleQueryPort { get; }
-
-        public void RecordInvocation() => TotalInvocations += 1;
-    }
-
-    private sealed class RecordingScopeWorkflowQueryPort : IScopeWorkflowQueryPort
-    {
-        private readonly RuntimePortSpies _owner;
-
-        public RecordingScopeWorkflowQueryPort(RuntimePortSpies owner)
-        {
-            _owner = owner;
-        }
-
-        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>([]);
-        }
-
-        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(string scopeId, string workflowId, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<ScopeWorkflowSummary?>(null);
-        }
-
-        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(string scopeId, string actorId, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<ScopeWorkflowSummary?>(null);
-        }
-    }
-
-    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
-    {
-        private readonly RuntimePortSpies _owner;
-
-        public RecordingScopeWorkflowCommandPort(RuntimePortSpies owner)
-        {
-            _owner = owner;
-        }
-
-        public Task<ScopeWorkflowUpsertResult> UpsertAsync(ScopeWorkflowUpsertRequest request, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            throw new InvalidOperationException("Runtime command port should not be called.");
-        }
-    }
-
-    private sealed class RecordingWorkflowActorBindingReader : IWorkflowActorBindingReader
-    {
-        private readonly RuntimePortSpies _owner;
-
-        public RecordingWorkflowActorBindingReader(RuntimePortSpies owner)
-        {
-            _owner = owner;
-        }
-
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<WorkflowActorBinding?>(null);
-        }
-    }
-
-    private sealed class RecordingServiceRevisionArtifactStore : IServiceRevisionArtifactStore
-    {
-        private readonly RuntimePortSpies _owner;
-
-        public RecordingServiceRevisionArtifactStore(RuntimePortSpies owner)
-        {
-            _owner = owner;
-        }
-
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.CompletedTask;
-        }
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<PreparedServiceRevisionArtifact?>(null);
-        }
-    }
-
-    private sealed class RecordingServiceLifecycleQueryPort : IServiceLifecycleQueryPort
-    {
-        private readonly RuntimePortSpies _owner;
-
-        public RecordingServiceLifecycleQueryPort(RuntimePortSpies owner)
-        {
-            _owner = owner;
-        }
-
-        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<ServiceCatalogSnapshot?>(null);
-        }
-
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
-        }
-
-        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
-        }
-
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            _owner.RecordInvocation();
-            return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
-        }
-    }
 }

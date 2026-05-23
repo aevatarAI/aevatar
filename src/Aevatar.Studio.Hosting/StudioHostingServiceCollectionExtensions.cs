@@ -42,12 +42,7 @@ internal static class StudioHostingServiceCollectionExtensions
     internal static IServiceCollection AddStudioBridgeServices(this IServiceCollection services)
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
-            sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
-            sp.GetService<IScopeWorkflowQueryPort>(),
-            sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
-            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
-            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));

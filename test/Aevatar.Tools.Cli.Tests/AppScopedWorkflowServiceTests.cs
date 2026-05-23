@@ -1,118 +1,41 @@
-using System.Net;
-using System.Text;
+using System.Text.RegularExpressions;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Tests.Shared;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
-using System.Text.RegularExpressions;
 
 namespace Aevatar.Tools.Cli.Tests;
 
-#pragma warning disable CS0618
 public sealed class AppScopedWorkflowServiceTests
 {
     [Fact]
-    public async Task ListAsync_WhenBackendRedirectsToLogin_ShouldThrowAuthRequiredException()
+    public void PublicSurface_ShouldNotExposeObsoleteCompatWrappers()
     {
-        var service = CreateService(_ => new HttpResponseMessage(HttpStatusCode.Found)
-        {
-            Headers =
-            {
-                Location = new Uri("https://login.example/sign-in", UriKind.Absolute),
-            },
-        });
+        var publicInstanceMethods = typeof(AppScopedWorkflowService)
+            .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Where(method => method.DeclaringType == typeof(AppScopedWorkflowService))
+            .Select(static method => method.Name)
+            .ToList();
 
-        var act = () => service.ListAsync("scope-1");
-
-        var exception = await Assert.ThrowsAsync<AppApiException>(act);
-        exception.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
-        exception.Code.Should().Be(AppApiErrors.BackendAuthRequiredCode);
-        exception.LoginUrl.Should().Be("https://login.example/sign-in");
+        publicInstanceMethods.Should().NotContain("ListAsync");
+        publicInstanceMethods.Should().NotContain("GetAsync");
+        publicInstanceMethods.Should().NotContain("SaveDraftAsync");
     }
 
     [Fact]
-    public async Task ListAsync_WhenBackendReturnsHtml_ShouldThrowInvalidResponseException()
-    {
-        var service = CreateService(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
-                "<!DOCTYPE html><html><body>sign in</body></html>",
-                Encoding.UTF8,
-                "text/html"),
-        });
-
-        var act = () => service.ListAsync("scope-1");
-
-        var exception = await Assert.ThrowsAsync<AppApiException>(act);
-        exception.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
-        exception.Code.Should().Be(AppApiErrors.BackendInvalidResponseCode);
-        exception.Message.Should().Be("Workflow backend returned a non-JSON response.");
-    }
-
-    [Fact]
-    public async Task GetAsync_WhenLifecycleQueryPortIsUnavailable_ShouldSkipRevisionFallback()
-    {
-        var workflow = new ScopeWorkflowSummary(
-            ScopeId: "scope-1",
-            WorkflowId: "workflow-1",
-            DisplayName: "Workflow 1",
-            ServiceKey: "scope-1:default:default:workflow-1",
-            WorkflowName: "Workflow 1",
-            ActorId: "actor-1",
-            ActiveRevisionId: string.Empty,
-            DeploymentId: string.Empty,
-            DeploymentStatus: "active",
-            UpdatedAt: DateTimeOffset.UtcNow);
-
-        var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
-            new StubWorkflowYamlDocumentService(),
-            new StubScopeWorkflowQueryPort(workflow),
-            workflowActorBindingReader: new StubWorkflowActorBindingReader(
-                new WorkflowActorBinding(
-                    WorkflowActorKind.Definition,
-                    "actor-1",
-                    "actor-1",
-                    string.Empty,
-                    "Workflow 1",
-                    string.Empty,
-                    new Dictionary<string, string>(StringComparer.Ordinal))),
-            artifactStore: new StubArtifactStore());
-
-        var response = await service.GetAsync("scope-1", "workflow-1");
-
-        response.Should().NotBeNull();
-        response!.Yaml.Should().BeEmpty();
-        response.Findings.Should().ContainSingle();
-        response.Findings[0].Message.Should().Be("Workflow YAML is not available yet.");
-    }
-
-    [Fact]
-    public async Task SaveAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
+    public async Task CreateDraftAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
     {
         var workspacePort = new RecordingStudioWorkspacePorts();
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
             workspaceQueryPort: workspacePort,
             workspaceCommandPort: workspacePort);
 
-        var response = await service.SaveDraftAsync(
+        var response = await service.CreateDraftAsync(
             "scope-1",
-            new SaveWorkflowFileRequest(
-                WorkflowId: null,
+            new SaveWorkflowDraftRequest(
                 DirectoryId: "scope:scope-1",
                 WorkflowName: "renamed-workflow",
                 FileName: null,
@@ -128,15 +51,44 @@ public sealed class AppScopedWorkflowServiceTests
     }
 
     [Fact]
-    public async Task ListAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
+    public async Task UpdateDraftAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
+    {
+        var originalCreatedAt = new DateTimeOffset(2026, 4, 9, 8, 0, 0, TimeSpan.Zero);
+        var workspacePort = new RecordingStudioWorkspacePorts(
+            NewDraft(
+                "renamed-workflow",
+                "old-name",
+                "name: old-name\nsteps: []\n",
+                originalCreatedAt));
+        var service = new AppScopedWorkflowService(
+            new StubWorkflowYamlDocumentService(),
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
+
+        var response = await service.UpdateDraftAsync(
+            "scope-1",
+            "renamed-workflow",
+            new SaveWorkflowDraftRequest(
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "renamed-workflow",
+                FileName: null,
+                Yaml: "name: draft\nsteps: []\n"));
+
+        workspacePort.LastUpload.Should().NotBeNull();
+        workspacePort.LastUpload!.ScopeId.Should().Be("scope-1");
+        workspacePort.LastUpload.WorkflowId.Should().Be("renamed-workflow");
+        workspacePort.LastUpload.WorkflowName.Should().Be("renamed-workflow");
+        workspacePort.LastUpload.Yaml.Should().StartWith("name: renamed-workflow");
+        response.WorkflowId.Should().Be("renamed-workflow");
+        response.Name.Should().Be("renamed-workflow");
+        response.Yaml.Should().StartWith("name: renamed-workflow");
+    }
+
+    [Fact]
+    public async Task ListDraftsAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
     {
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(new[]
             {
                 new ScopedDraft(
@@ -148,22 +100,16 @@ public sealed class AppScopedWorkflowServiceTests
                         new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))),
             }));
 
-        var workflows = await service.ListAsync("scope-1");
+        var workflows = await service.ListDraftsAsync("scope-1");
 
         workflows.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GetAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
+    public async Task GetDraftAsync_WhenStoredDraftExistsUnderDifferentScope_ShouldNotLeakAcrossScopes()
     {
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(),
-            workflowActorBindingReader: new StubWorkflowActorBindingReader(null),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(new[]
             {
                 new ScopedDraft(
@@ -175,21 +121,16 @@ public sealed class AppScopedWorkflowServiceTests
                         new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))),
             }));
 
-        var workflow = await service.GetAsync("scope-1", "hello-chat");
+        var workflow = await service.GetDraftAsync("scope-1", "hello-chat");
 
         workflow.Should().BeNull();
     }
 
     [Fact]
-    public async Task ListAsync_WhenRuntimeListIsEmpty_ShouldFallbackToWorkflowDraft()
+    public async Task ListDraftsAsync_WhenWorkspaceContainsDraft_ShouldReturnDraftSummary()
     {
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(
                 NewDraft(
                     "hello-chat",
@@ -197,7 +138,7 @@ public sealed class AppScopedWorkflowServiceTests
                     "name: hello-chat\ndescription: stored workflow\nsteps: []\n",
                     new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))));
 
-        var workflows = await service.ListAsync("scope-1");
+        var workflows = await service.ListDraftsAsync("scope-1");
 
         workflows.Should().ContainSingle();
         workflows[0].WorkflowId.Should().Be("hello-chat");
@@ -206,28 +147,11 @@ public sealed class AppScopedWorkflowServiceTests
     }
 
     [Fact]
-    public async Task ListAsync_WhenRuntimeWorkflowExists_ShouldUseStoredYamlToPopulateStepCount()
+    public async Task ListDraftsAsync_ShouldUseStoredYamlToPopulateStepCount()
     {
         var storedUpdatedAt = new DateTimeOffset(2026, 4, 16, 10, 53, 48, TimeSpan.Zero);
-        var workflow = new ScopeWorkflowSummary(
-            ScopeId: "scope-1",
-            WorkflowId: "test03",
-            DisplayName: "test03",
-            ServiceKey: "scope-1:default:default:test03",
-            WorkflowName: "test03",
-            ActorId: "actor-1",
-            ActiveRevisionId: "rev-1",
-            DeploymentId: "deploy-1",
-            DeploymentStatus: "active",
-            UpdatedAt: storedUpdatedAt.AddMinutes(-10));
-
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(
                 NewDraft(
                     "test03",
@@ -235,7 +159,7 @@ public sealed class AppScopedWorkflowServiceTests
                     "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
                     storedUpdatedAt)));
 
-        var workflows = await service.ListAsync("scope-1");
+        var workflows = await service.ListDraftsAsync("scope-1");
 
         workflows.Should().ContainSingle();
         workflows[0].WorkflowId.Should().Be("test03");
@@ -245,16 +169,10 @@ public sealed class AppScopedWorkflowServiceTests
     }
 
     [Fact]
-    public async Task GetAsync_WhenRuntimeWorkflowMissing_ShouldFallbackToWorkflowDraft()
+    public async Task GetDraftAsync_WhenWorkspaceContainsDraft_ShouldReturnDraft()
     {
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(),
-            workflowActorBindingReader: new StubWorkflowActorBindingReader(null),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(
                 NewDraft(
                     "hello-chat",
@@ -262,93 +180,19 @@ public sealed class AppScopedWorkflowServiceTests
                     "name: hello-chat\ndescription: restored from storage\nsteps: []\n",
                     new DateTimeOffset(2026, 4, 10, 9, 0, 0, TimeSpan.Zero))));
 
-        var workflow = await service.GetAsync("scope-1", "hello-chat");
+        var workflow = await service.GetDraftAsync("scope-1", "hello-chat");
 
         workflow.Should().NotBeNull();
         workflow!.WorkflowId.Should().Be("hello-chat");
         workflow.Name.Should().Be("hello-chat");
         workflow.Yaml.Should().Contain("restored from storage");
-        workflow.Findings.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GetAsync_WhenRuntimeWorkflowExistsButBindingYamlIsEmpty_ShouldFallbackToWorkflowDraft()
+    public async Task GetDraftAsync_WhenStoredDraftExists_ShouldPreferWorkflowDraftData()
     {
-        var workflow = new ScopeWorkflowSummary(
-            ScopeId: "scope-1",
-            WorkflowId: "test03",
-            DisplayName: "test03",
-            ServiceKey: "scope-1:default:default:test03",
-            WorkflowName: "test03",
-            ActorId: "actor-1",
-            ActiveRevisionId: "rev-1",
-            DeploymentId: "deploy-1",
-            DeploymentStatus: "active",
-            UpdatedAt: DateTimeOffset.UtcNow);
-
         var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
             new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
-            workflowActorBindingReader: new StubWorkflowActorBindingReader(
-                new WorkflowActorBinding(
-                    WorkflowActorKind.Definition,
-                    "actor-1",
-                    "actor-1",
-                    string.Empty,
-                    "test03",
-                    string.Empty,
-                    new Dictionary<string, string>(StringComparer.Ordinal))),
-            workspaceQueryPort: new RecordingStudioWorkspacePorts(
-                NewDraft(
-                    "test03",
-                    "test03",
-                    "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
-                    new DateTimeOffset(2026, 4, 16, 10, 53, 48, TimeSpan.Zero))));
-
-        var result = await service.GetAsync("scope-1", "test03");
-
-        result.Should().NotBeNull();
-        result!.Yaml.Should().Contain("llm_call");
-        result.Document.Should().NotBeNull();
-        result.Document!.Steps.Should().ContainSingle();
-        result.Findings.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task GetAsync_WhenStoredDraftExists_ShouldPreferWorkflowDraftOverRuntimeBindingYaml()
-    {
-        var workflow = new ScopeWorkflowSummary(
-            ScopeId: "scope-1",
-            WorkflowId: "test03",
-            DisplayName: "test03",
-            ServiceKey: "scope-1:default:default:test03",
-            WorkflowName: "test03",
-            ActorId: "actor-1",
-            ActiveRevisionId: "rev-1",
-            DeploymentId: "deploy-1",
-            DeploymentStatus: "active",
-            UpdatedAt: DateTimeOffset.UtcNow);
-
-        var service = new AppScopedWorkflowService(
-            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
-            {
-                BaseAddress = new Uri("https://backend.example"),
-            }),
-            new StubWorkflowYamlDocumentService(),
-            workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
-            workflowActorBindingReader: new StubWorkflowActorBindingReader(
-                new WorkflowActorBinding(
-                    WorkflowActorKind.Definition,
-                    "actor-1",
-                    "actor-1",
-                    string.Empty,
-                    "test03",
-                    "name: runtime-version\nsteps: []\n",
-                    new Dictionary<string, string>(StringComparer.Ordinal))),
             workspaceQueryPort: new RecordingStudioWorkspacePorts(
                 NewDraft(
                     "test03",
@@ -356,60 +200,12 @@ public sealed class AppScopedWorkflowServiceTests
                     "name: draft-version\ndescription: prefer stored draft\nsteps:\n  - id: llm_call\n",
                     new DateTimeOffset(2026, 4, 16, 10, 53, 48, TimeSpan.Zero))));
 
-        var result = await service.GetAsync("scope-1", "test03");
+        var result = await service.GetDraftAsync("scope-1", "test03");
 
         result.Should().NotBeNull();
         result!.Name.Should().Be("draft-version");
         result.Yaml.Should().Contain("draft-version");
-        result.Yaml.Should().NotContain("runtime-version");
-        result.Document.Should().NotBeNull();
-        result.Document!.Steps.Should().ContainSingle();
-        result.Findings.Should().BeEmpty();
-    }
-
-    private static AppScopedWorkflowService CreateService(
-        Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
-    {
-        var handler = new StubHttpMessageHandler(responseFactory);
-        var httpClient = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://backend.example"),
-        };
-
-        return new AppScopedWorkflowService(
-            new StubHttpClientFactory(httpClient),
-            new StubWorkflowYamlDocumentService());
-    }
-
-    private sealed class StubHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpClient _httpClient;
-
-        public StubHttpClientFactory(HttpClient httpClient)
-        {
-            _httpClient = httpClient;
-        }
-
-        public HttpClient CreateClient(string name) => _httpClient;
-    }
-
-    private sealed class StubHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
-
-        public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
-        {
-            _responseFactory = responseFactory;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            var response = _responseFactory(request);
-            response.RequestMessage ??= request;
-            return Task.FromResult(response);
-        }
+        result.Yaml.Should().Contain("llm_call");
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
@@ -449,60 +245,6 @@ public sealed class AppScopedWorkflowServiceTests
         public string Serialize(WorkflowDocument document) => $"name: {document.Name}\nsteps: []\n";
     }
 
-    private sealed class StubScopeWorkflowQueryPort : IScopeWorkflowQueryPort
-    {
-        private readonly ScopeWorkflowSummary? _workflow;
-
-        public StubScopeWorkflowQueryPort()
-        {
-        }
-
-        public StubScopeWorkflowQueryPort(ScopeWorkflowSummary workflow)
-        {
-            _workflow = workflow;
-        }
-
-        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(_workflow == null ? [] : [_workflow]);
-
-        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(string scopeId, string workflowId, CancellationToken ct = default) =>
-            Task.FromResult<ScopeWorkflowSummary?>(
-                _workflow != null && string.Equals(workflowId, _workflow.WorkflowId, StringComparison.Ordinal)
-                    ? _workflow
-                    : null);
-
-        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(string scopeId, string actorId, CancellationToken ct = default) =>
-            Task.FromResult<ScopeWorkflowSummary?>(
-                _workflow != null && string.Equals(actorId, _workflow.ActorId, StringComparison.Ordinal)
-                    ? _workflow
-                    : null);
-    }
-
-    private sealed class StubWorkflowActorBindingReader : IWorkflowActorBindingReader
-    {
-        private readonly WorkflowActorBinding? _binding;
-
-        public StubWorkflowActorBindingReader(WorkflowActorBinding? binding)
-        {
-            _binding = binding;
-        }
-
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorBinding?>(
-                _binding != null && string.Equals(actorId, _binding.ActorId, StringComparison.Ordinal)
-                    ? _binding
-                    : null);
-    }
-
-    private sealed class StubArtifactStore : IServiceRevisionArtifactStore
-    {
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default) =>
-            Task.FromResult<PreparedServiceRevisionArtifact?>(null);
-    }
-
     private static StudioWorkflowDraftRecord NewDraft(
         string workflowId,
         string name,
@@ -522,4 +264,3 @@ public sealed class AppScopedWorkflowServiceTests
             updatedAtUtc,
             1);
 }
-#pragma warning restore CS0618
