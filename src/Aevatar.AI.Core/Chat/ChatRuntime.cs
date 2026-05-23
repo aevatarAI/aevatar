@@ -22,6 +22,9 @@ public sealed record ContextCompressionConfig(
     bool EnableSummarization = false);
 
 /// <summary>Chat 执行运行时。调 LLM，管理历史，集成 Middleware。</summary>
+// Refactor (iter39/cluster-039-public-chatasync-adapter):
+//   Old pattern: ChatRuntime 暴露 public ChatAsync 方法作为 non-streaming adapter,callers 可以选 non-streaming conversation API。
+//   New principle: Public runtime surface 仅暴露 ChatStreamAsync;explicit offline aggregation 放到 narrowly named offline/test adapter(明确不能与 realtime chat 混淆)。Provider contract stream-only。
 // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
 //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
 //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
@@ -65,35 +68,6 @@ public sealed class ChatRuntime
         _agentId = string.IsNullOrWhiteSpace(agentId) ? null : agentId;
         _agentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName;
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
-    }
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环），显式离线聚合 adapter。</summary>
-    public Task<string?> ChatAsync(string userMessage, int maxToolRounds = DefaultMaxToolRounds, CancellationToken ct = default) =>
-        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata（文本快捷方式）。</summary>
-    public Task<string?> ChatAsync(
-        string userMessage,
-        int maxToolRounds,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default) =>
-        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId, metadata, ct);
-
-    /// <summary>单轮 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
-    public async Task<string?> ChatAsync(
-        IReadOnlyList<ContentPart> userContent,
-        int maxToolRounds,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default)
-    {
-        // Refactor (iter15/cluster-024):
-        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
-        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-        return await ChatStreamContentAggregator.AggregateContentAsync(
-            ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, ct),
-            ct: ct);
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
