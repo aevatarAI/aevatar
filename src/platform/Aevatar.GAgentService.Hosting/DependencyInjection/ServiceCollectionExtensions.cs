@@ -28,6 +28,8 @@ using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Projection.Metadata;
+using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -122,6 +124,13 @@ public static class ServiceCollectionExtensions
         if (HasAllGAgentServiceProjectionReaders(services, selectedDocumentProvider))
             return services;
 
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
+            WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowCapabilitiesCurrentStateDocument>,
+            WorkflowCapabilitiesCurrentStateDocumentMetadataProvider>();
+
         if (elasticsearchEnabled)
         {
             TryAddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel>(services, configuration, static readModel => readModel.Id);
@@ -136,6 +145,8 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowCapabilitiesCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -151,6 +162,8 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowCapabilitiesCurrentStateDocument>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -171,7 +184,9 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<WorkflowCapabilitiesCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
