@@ -206,6 +206,19 @@ public sealed class ScriptServiceAguiProjectionPortTests
         hub.SubscribeCalls.Should().Be(0);
     }
 
+    [Fact]
+    public void ScriptServiceAguiProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new ScriptServiceAguiProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            new RecordingSessionEventHub(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
+    }
+
     private static string BuildScopeActorId(
         string actorId,
         string projectionKind,

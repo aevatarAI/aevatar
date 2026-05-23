@@ -158,6 +158,67 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task ProjectionScopeAttachExistingLeaseLookup_ShouldValidateInputsAndCancellation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var lookup = new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            static request => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            static (_, context) => new TestSessionScopedMaterializationLease(context));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Func<Task> nullRequest = () => lookup.TryGetAsync(null!);
+        Func<Task> canceledRequest = () => lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = "actor-canceled",
+            ProjectionKind = "projection-canceled",
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        }, cts.Token);
+
+        await nullRequest.Should().ThrowAsync<ArgumentNullException>();
+        await canceledRequest.Should().ThrowAsync<OperationCanceledException>();
+        runtime.CreatedActorIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProjectionScopeAttachExistingLeaseLookup_ShouldValidateConstructorDependencies()
+    {
+        var runtime = new RecordingActorRuntime();
+        Func<ProjectionScopeStartRequest, TestSessionScopedMaterializationContext> contextFactory =
+            static request => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            };
+        Func<ProjectionRuntimeScopeKey, TestSessionScopedMaterializationContext, TestSessionScopedMaterializationLease> leaseFactory =
+            static (_, context) => new TestSessionScopedMaterializationLease(context);
+
+        var nullRuntime = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            null!,
+            contextFactory,
+            leaseFactory);
+        var nullContextFactory = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            null!,
+            leaseFactory);
+        var nullLeaseFactory = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            contextFactory,
+            null!);
+
+        nullRuntime.Should().Throw<ArgumentNullException>().WithParameterName("runtime");
+        nullContextFactory.Should().Throw<ArgumentNullException>().WithParameterName("contextFactory");
+        nullLeaseFactory.Should().Throw<ArgumentNullException>().WithParameterName("leaseFactory");
+    }
+
+    [Fact]
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterSessionLifecycleAndSessionScopeContext()
     {
         var runtime = new RecordingActorRuntime();

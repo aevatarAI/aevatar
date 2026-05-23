@@ -168,6 +168,19 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         hub.SubscribeCalls.Should().Be(0);
     }
 
+    [Fact]
+    public void ProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new GAgentDraftRunProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            new RecordingSessionEventHub(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
+    }
+
     private static IProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease> CreateAttachExistingLookup(
         IActorRuntime runtime) =>
         new ProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease, GAgentDraftRunProjectionContext>(

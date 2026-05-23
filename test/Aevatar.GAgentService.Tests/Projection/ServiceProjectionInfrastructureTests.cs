@@ -353,6 +353,25 @@ public sealed class ServiceProjectionInfrastructureTests
     }
 
     [Fact]
+    public void GAgentRunTerminalProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
+                static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
+                    CorrelationId = "corr-1",
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
+                }),
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
+    }
+
+    [Fact]
     public void GAgentRunTerminalModels_ShouldExposeStableSessionContextAndSnapshotShape()
     {
         var context = new GAgentRunTerminalProjectionContext
