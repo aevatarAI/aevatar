@@ -163,6 +163,77 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenTypedTelegramFieldsProvided_ShouldMapPayloadParametersAndResponses()
+    {
+        var connector = new RecordingConnector(
+            "telegram_custom",
+            new ConnectorResponse
+            {
+                Success = true,
+                Output = "raw-telegram-output",
+            });
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            registry)
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "fallback prompt",
+            SessionId = "session-typed-send",
+            TimeoutMs = 10000,
+            Telegram = new TelegramBridgeRequest
+            {
+                ConnectorName = " telegram_custom ",
+                ChatId = " 10001 ",
+                Operation = TelegramBridgeOperation.EnsureLogin,
+                Text = " typed text ",
+                MessageThreadId = 42,
+                ParseMode = " Markdown ",
+                DisableWebPagePreview = false,
+                ReplyToMessageId = 99,
+                HttpMethod = " GET ",
+                ContentType = " application/custom ",
+                TimeoutMs = 0,
+                RunId = " run-1 ",
+                StepId = " step-1 ",
+                EmitChatResponse = true,
+            },
+        };
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        connector.Received.Should().ContainSingle();
+        var connectorRequest = connector.Received[0];
+        connectorRequest.RunId.Should().Be("run-1");
+        connectorRequest.StepId.Should().Be("step-1");
+        connectorRequest.Connector.Should().Be("telegram_custom");
+        connectorRequest.Operation.Should().Be("/ensureLogin");
+        connectorRequest.Parameters["method"].Should().Be("GET");
+        connectorRequest.Parameters["content_type"].Should().Be("application/custom");
+        connectorRequest.Parameters["timeout_ms"].Should().Be("0");
+
+        var payload = JsonDocument.Parse(connectorRequest.Payload).RootElement;
+        payload.GetProperty("chat_id").GetString().Should().Be("10001");
+        payload.GetProperty("text").GetString().Should().Be("typed text");
+        payload.GetProperty("message_thread_id").GetInt64().Should().Be(42);
+        payload.GetProperty("parse_mode").GetString().Should().Be("Markdown");
+        payload.GetProperty("disable_web_page_preview").GetBoolean().Should().BeFalse();
+        payload.GetProperty("reply_to_message_id").GetInt64().Should().Be(99);
+
+        publisher.Published.Select(x => x.evt).OfType<ChatResponseEvent>().Should().ContainSingle()
+            .Which.Content.Should().Be("raw-telegram-output");
+        publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().ContainSingle()
+            .Which.Content.Should().Be("raw-telegram-output");
+    }
+
+    [Fact]
     public async Task HandleChatRequest_WhenTelegramUserRuntimeLoginMetadataProvided_ShouldForwardToConnectorParameters()
     {
         var connector = new RecordingConnector(
@@ -248,6 +319,72 @@ public sealed class TelegramBridgeGAgentTests
         command.ExpectedFromUsername.Should().Be("openclaw_bot");
         command.WaitTimeoutMs.Should().Be(5000);
         command.PollTimeoutSeconds.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenTypedWaitReplyFieldsProvided_ShouldMapCommandControls()
+    {
+        var runtime = new NoopActorRuntime();
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            runtime,
+            new InMemoryConnectorRegistry())
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "wait",
+            SessionId = "session-wait-typed",
+            Telegram = new TelegramBridgeRequest
+            {
+                ConnectorName = " custom_wait ",
+                ChatId = " 10001 ",
+                Operation = TelegramBridgeOperation.WaitReply,
+                ExpectedFromUserId = " 2002 ",
+                ExpectedFromUsername = " @openclaw_bot ",
+                CorrelationContains = " reply-token ",
+                WaitTimeoutMs = 5000,
+                PollTimeoutSeconds = 99,
+                SettlePollsAfterMatch = 99,
+                CollectAllReplies = true,
+                StartFromLatest = false,
+                Offset = 123,
+                HttpMethod = " GET ",
+                ContentType = " application/custom ",
+                TimeoutMs = 7000,
+                EmitChatResponse = true,
+                RunId = "Run 1",
+                StepId = "Step 1",
+            },
+        };
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        runtime.CreatedActorTypes.Should().ContainSingle().Which.Should().Be(typeof(TelegramWaitReplyGAgent));
+        publisher.Sent.Should().ContainSingle();
+        publisher.Sent[0].targetActorId.Should().Be("telegram-wait-reply-run-1-step-1");
+
+        var command = publisher.Sent[0].evt.Should().BeOfType<TelegramWaitForReplyCommand>().Subject;
+        command.CommandId.Should().Be("telegram-wait-reply-run-1-step-1");
+        command.SessionId.Should().Be("session-wait-typed");
+        command.ConnectorName.Should().Be("custom_wait");
+        command.ExpectedChatId.Should().Be("10001");
+        command.ExpectedFromUserId.Should().Be("2002");
+        command.ExpectedFromUsername.Should().Be("openclaw_bot");
+        command.CorrelationContains.Should().Be("reply-token");
+        command.WaitTimeoutMs.Should().Be(5000);
+        command.PollTimeoutSeconds.Should().Be(25);
+        command.SettlePollsAfterMatch.Should().Be(5);
+        command.CollectAllReplies.Should().BeTrue();
+        command.StartFromLatest.Should().BeFalse();
+        command.EmitChatResponse.Should().BeTrue();
+        command.Offset.Should().Be(123);
+        command.ConnectorParameters["method"].Should().Be("GET");
+        command.ConnectorParameters["content_type"].Should().Be("application/custom");
+        command.ConnectorParameters["timeout_ms"].Should().Be("7000");
     }
 
     [Fact]
