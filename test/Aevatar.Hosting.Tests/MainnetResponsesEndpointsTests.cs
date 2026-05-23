@@ -1948,6 +1948,9 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        response.Headers.GetValues("Deprecation").Should().ContainSingle().Which.Should().Be("true");
+        response.Headers.GetValues("Warning").Should().ContainSingle()
+            .Which.Should().Contain("chat_route_legacy_action_used: legacy_forward_to_gagent");
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_text.delta");
         body.Should().Contain("\"delta\":\"alpha \"");

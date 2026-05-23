@@ -1,6 +1,8 @@
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.ChatRouting.Core;
 
@@ -10,10 +12,14 @@ namespace Aevatar.ChatRouting.Core;
 public sealed class ChatRouteResolver
 {
     private readonly IChatRouteFallbackProvider _fallbackProvider;
+    private readonly ILogger<ChatRouteResolver> _logger;
 
-    public ChatRouteResolver(IChatRouteFallbackProvider fallbackProvider)
+    public ChatRouteResolver(
+        IChatRouteFallbackProvider fallbackProvider,
+        ILogger<ChatRouteResolver>? logger = null)
     {
         _fallbackProvider = fallbackProvider ?? throw new ArgumentNullException(nameof(fallbackProvider));
+        _logger = logger ?? NullLogger<ChatRouteResolver>.Instance;
     }
 
     // Implement (issue #693):
@@ -46,10 +52,10 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
-            return NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false);
+            return BuildDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false);
         }
 
-        return NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false);
+        return BuildDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false);
     }
 
     private static bool HasAction(ChatRouteAction? action) =>
@@ -89,6 +95,64 @@ public sealed class ChatRouteResolver
             UsedFallback = usedFallback,
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+    private ChatRouteDecision BuildDecision(
+        ChatRouteAction action,
+        string matchedRuleId,
+        bool usedFallback)
+    {
+        var decision = NewDecision(action, matchedRuleId, usedFallback);
+        if (TryBuildLegacyDeprecation(action, matchedRuleId, out var deprecation))
+        {
+            decision.Deprecations.Add(deprecation);
+            _logger.LogWarning(
+                "chat_route_legacy_action_used matched_rule_id={MatchedRuleId} action_kind={ActionKind} translated_target={TranslatedTarget} suggestion={Suggestion}",
+                deprecation.MatchedRuleId,
+                deprecation.ActionKind,
+                deprecation.TranslatedTarget,
+                "Use ChatRoutePolicyMigrator or POST /api/scopes/{scopeId}/chat-route-policy/migrate to migrate legacy route actions.");
+        }
+
+        return decision;
+    }
+
+    private static bool TryBuildLegacyDeprecation(
+        ChatRouteAction action,
+        string matchedRuleId,
+        out ChatRouteDeprecation deprecation)
+    {
+        deprecation = new ChatRouteDeprecation();
+        var actionKind = action.ActionCase switch
+        {
+            ChatRouteAction.ActionOneofCase.ForwardToGagent => "ForwardToGAgent",
+            ChatRouteAction.ActionOneofCase.ForwardToTeam => "ForwardToTeam",
+            ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "ForwardToWorkflow",
+            _ => string.Empty,
+        };
+        if (string.IsNullOrEmpty(actionKind))
+        {
+            return false;
+        }
+
+        var code = action.ActionCase switch
+        {
+            ChatRouteAction.ActionOneofCase.ForwardToGagent => "legacy_forward_to_gagent",
+            ChatRouteAction.ActionOneofCase.ForwardToTeam => "legacy_forward_to_team",
+            ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "legacy_forward_to_workflow",
+            _ => string.Empty,
+        };
+        var translatedTarget = ChatRouteActionTranslator.DescribeRuntimeTarget(action);
+        deprecation = new ChatRouteDeprecation
+        {
+            Code = code,
+            Message =
+                $"{actionKind} route action is deprecated; migrate this policy with ChatRoutePolicyMigrator or POST /api/scopes/{{scopeId}}/chat-route-policy/migrate.",
+            ActionKind = actionKind,
+            MatchedRuleId = matchedRuleId,
+            TranslatedTarget = translatedTarget,
+        };
+        return true;
+    }
 }
 
 internal static class ChatRouteActionTranslator
@@ -134,6 +198,24 @@ internal static class ChatRouteActionTranslator
 
     public static ChatRouteAction ToCanonicalPolicyAction(ChatRouteAction action) =>
         ToRuntimeDecisionAction(action);
+
+    internal static string DescribeRuntimeTarget(ChatRouteAction action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        return action.ActionCase switch
+        {
+            ChatRouteAction.ActionOneofCase.ForwardToGagent =>
+                $"{InvokeGAgentToolName}({ActorIdArgument}={action.ForwardToGagent.ActorId})",
+            ChatRouteAction.ActionOneofCase.ForwardToTeam =>
+                $"{InvokeTeamToolName}({TeamIdArgument}={action.ForwardToTeam.TeamId}, {EndpointIdArgument}={action.ForwardToTeam.EndpointId}, {ScopeIdArgument}={action.ForwardToTeam.ScopeId})",
+            ChatRouteAction.ActionOneofCase.ForwardToWorkflow =>
+                $"{StartWorkflowToolName}({WorkflowIdArgument}={action.ForwardToWorkflow.WorkflowId})",
+            ChatRouteAction.ActionOneofCase.ForwardToModel when action.ForwardToModel?.ToolChoiceHint is { } hint =>
+                string.IsNullOrWhiteSpace(hint.ToolName) ? "ForwardToModel" : hint.ToolName,
+            _ => action.ActionCase.ToString(),
+        };
+    }
 
     private static ChatRouteAction ForwardToToolModel(
         string toolName,

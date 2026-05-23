@@ -270,6 +270,14 @@ message ChatRoutePolicyUpdated {
 // Resolver-level telemetry MAY record matched_rule_id + used_fallback +
 // resolved_at for observability, but the structured fields below stay
 // transient at the ingress boundary.
+message ChatRouteDeprecation {
+  string code = 1;
+  string message = 2;
+  string action_kind = 3;
+  string matched_rule_id = 4;
+  string translated_target = 5;
+}
+
 message ChatRouteDecision {
   ChatRouteAction action = 1;
   // rule_id of the matching ChatRouteRule. Empty when used_fallback=true
@@ -279,4 +287,5 @@ message ChatRouteDecision {
   // True iff resolver fell back to env-driven default because the
   // policy actor didn't exist or readmodel snapshot was unavailable.
   bool used_fallback = 4;
+  repeated ChatRouteDeprecation deprecations = 5;
 }

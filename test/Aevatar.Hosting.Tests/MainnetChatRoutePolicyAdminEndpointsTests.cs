@@ -167,6 +167,87 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("\"actorId\": \"agent-x\"");
     }
 
+    [Fact]
+    public async Task MigratePolicy_DryRun_ReturnsMigratedSnapshotWithoutDispatching()
+    {
+        var snapshot = new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToGagent = new ForwardToGAgent { ActorId = "default-agent" },
+            },
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "legacy-team",
+                    Priority = 50,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToTeam = new ForwardToTeam
+                        {
+                            TeamId = "team-1",
+                            EndpointId = "chat",
+                            ScopeId = Scope,
+                        },
+                    },
+                },
+            ]);
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, new StaticPolicyQueryPort(snapshot));
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate", content: null);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"forwardToModel\"");
+        body.Should().Contain("\"toolSetRef\"");
+        body.Should().Contain("aevatar_invoke_gagent");
+        body.Should().Contain("aevatar_invoke_team");
+        body.Should().NotContain("\"forwardToGagent\"");
+        body.Should().NotContain("\"forwardToTeam\"");
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MigratePolicy_Apply_DispatchesSingleUpsertCommandWithMigratedActions()
+    {
+        var snapshot = new ChatRoutePolicySnapshot(
+            new ChatRouteAction { ForwardToModel = new ForwardToModel { ModelName = "deepseek/deepseek-chat" } },
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "legacy-workflow",
+                    Priority = 50,
+                    Match = new ChatRouteMatch { CommandName = "/run" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
+                    },
+                },
+            ]);
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, new StaticPolicyQueryPort(snapshot));
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate?apply=true", content: null);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, body);
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var command = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
+        command.OwnerScope.NyxUserId.Should().Be(Scope);
+        command.Rules.Should().ContainSingle();
+        var migratedAction = command.Rules[0].Action;
+        migratedAction.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToModel);
+        migratedAction.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_start_workflow");
+        migratedAction.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["workflow_id"].StringValue
+            .Should()
+            .Be("workflow-1");
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(

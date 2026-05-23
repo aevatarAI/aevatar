@@ -100,6 +100,7 @@ internal static class MessagesApiEndpoints
             ResponsesApiEndpoints.ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
             ResponsesApiEndpoints.BuildContentHint(BuildRouteContentHint(normalized)),
             ct);
+        ResponsesApiEndpoints.ApplyChatRouteDeprecationHeaders(http.Response, routeDecision);
         if (routeDecision.Action.Reject is not null)
             return ToErrorResult(
                 StatusCodes.Status403Forbidden,

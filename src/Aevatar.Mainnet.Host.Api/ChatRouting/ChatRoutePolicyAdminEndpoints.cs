@@ -50,6 +50,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         group.MapPut("", HandleUpsertAsync);
         group.MapDelete("/rules/{ruleId}", HandleRemoveRuleAsync);
         group.MapGet("", HandleGetAsync);
+        group.MapPost("/migrate", HandleMigrateAsync);
 
         return app;
     }
@@ -190,6 +191,50 @@ internal static class ChatRoutePolicyAdminEndpoints
         return Results.Content(ResponseFormatter.Format(view), "application/json");
     }
 
+    /// <summary>
+    /// POST /api/scopes/{scopeId}/chat-route-policy/migrate?apply=true
+    ///
+    /// Dry-run by default: returns protobuf-JSON of the policy after
+    /// <see cref="ChatRoutePolicyMigrator.MigrateLegacyActions"/>. With
+    /// apply=true it dispatches the migrated shape as one upsert command.
+    /// </summary>
+    private static async Task<IResult> HandleMigrateAsync(
+        HttpContext http,
+        string scopeId,
+        [FromServices] IChatRoutePolicyQueryPort queryPort,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] ChatRoutePolicyProjectionPort projectionPort,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        var snapshot = await queryPort.LookupForCallerAsync(
+            OwnerScope.ForNyxIdNative(scopeId),
+            ct);
+        if (snapshot is null)
+            return JsonError(StatusCodes.Status404NotFound, "policy_not_found",
+                $"No chat route policy materialized for scope '{scopeId}'. PUT one to create.");
+
+        var migrated = ChatRoutePolicyMigrator.MigrateLegacyActions(snapshot);
+        var command = ToUpsertView(scopeId, migrated);
+        var apply = ParseApply(http);
+        if (!apply)
+        {
+            return Results.Content(ResponseFormatter.Format(command), "application/json");
+        }
+
+        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, projectionPort, ct);
+        return Results.Accepted(value: new
+        {
+            actor_id = actorId,
+            command_id = commandId,
+            note = "Migrated policy upsert dispatched. Re-query GET to observe materialized state.",
+            migrated = ResponseFormatter.Format(command),
+        });
+    }
+
     private static async Task<(string ActorId, string CommandId)> DispatchAsync(
         IMessage command,
         string scopeId,
@@ -228,6 +273,30 @@ internal static class ChatRoutePolicyAdminEndpoints
         };
         await actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
         return (actor.Id, commandId);
+    }
+
+    private static UpsertChatRoutePolicyRequested ToUpsertView(string scopeId, ChatRoutePolicySnapshot snapshot)
+    {
+        var view = new UpsertChatRoutePolicyRequested
+        {
+            OwnerScope = new ChatRouteCallerScope
+            {
+                NyxUserId = scopeId,
+                Platform = OwnerScope.NyxIdPlatform,
+            },
+            DefaultTarget = snapshot.DefaultTarget.Clone(),
+        };
+        foreach (var rule in snapshot.Rules)
+            view.Rules.Add(rule.Clone());
+
+        return view;
+    }
+
+    private static bool ParseApply(HttpContext http)
+    {
+        var value = http.Request.Query["apply"].ToString();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "1", StringComparison.Ordinal);
     }
 
     private static IResult JsonError(int status, string error, string detail) =>

@@ -125,6 +125,7 @@ internal static class ResponsesApiEndpoints
             ResolveToolMode(normalized.DeclaredTools.Count, normalized.ToolResults.Count),
             BuildContentHint(normalized.Prompt),
             ct);
+        ApplyChatRouteDeprecationHeaders(http.Response, routeDecision);
         if (routeDecision.Action.Reject is not null)
             return ToErrorResult(
                 StatusCodes.Status403Forbidden,
@@ -1784,6 +1785,34 @@ internal static class ResponsesApiEndpoints
             return ToolMode.Inline;
         return declaredToolCount > 0 ? ToolMode.Declared : ToolMode.None;
     }
+
+    internal static void ApplyChatRouteDeprecationHeaders(HttpResponse response, ChatRouteDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(decision);
+        if (decision.Deprecations.Count == 0)
+            return;
+
+        response.Headers["Deprecation"] = "true";
+        foreach (var deprecation in decision.Deprecations)
+        {
+            response.Headers.Append(
+                "Warning",
+                $"299 - \"chat_route_legacy_action_used: {EscapeWarningText(BuildWarningDetail(deprecation))}\"");
+        }
+    }
+
+    private static string BuildWarningDetail(ChatRouteDeprecation deprecation)
+    {
+        var matchedRuleId = string.IsNullOrWhiteSpace(deprecation.MatchedRuleId)
+            ? "default_target"
+            : deprecation.MatchedRuleId;
+        return $"{deprecation.Code}; matched_rule_id={matchedRuleId}; action_kind={deprecation.ActionKind}; translated_target={deprecation.TranslatedTarget}; migrate_with=ChatRoutePolicyMigrator";
+    }
+
+    private static string EscapeWarningText(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     internal static string BuildContentHint(string? content)
     {
