@@ -67,7 +67,6 @@ public sealed class ScriptServiceRunInteractionTests
         runtimeRequest.ScopeId.Should().Be("scope-a");
         runtimeRequest.Metadata.Should().ContainKey("trace-id")
             .WhoseValue.Should().Be("trace-1");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.ReleaseCalls.Should().ContainSingle(call =>
             call.ActorId == "runtime-1" && call.RunId == "run-1");
         emitted.Should().ContainSingle(evt => evt.EventCase == AGUIEvent.EventOneofCase.RunFinished);
@@ -89,7 +88,6 @@ public sealed class ScriptServiceRunInteractionTests
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.RuntimeActorUnavailable);
         result.Error.FieldName.Should().Be("runtimeActorId");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         runtimePort.Invocations.Should().BeEmpty();
     }
 
@@ -109,7 +107,6 @@ public sealed class ScriptServiceRunInteractionTests
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.InvalidArgument);
         result.Error.FieldName.Should().Be("runId");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         runtimePort.Invocations.Should().BeEmpty();
     }
 
@@ -128,7 +125,6 @@ public sealed class ScriptServiceRunInteractionTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.ProjectionUnavailable);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().BeEmpty();
         projectionPort.ReleaseCalls.Should().BeEmpty();
         runtimePort.Invocations.Should().BeEmpty();
@@ -155,7 +151,6 @@ public sealed class ScriptServiceRunInteractionTests
         runtimePort.Invocations.Should().ContainSingle(invocation =>
             invocation.RuntimeActorId == "runtime-1" &&
             invocation.RunId == "run-1");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().ContainSingle(call =>
             call.ActorId == "runtime-1" && call.RunId == "run-1");
         projectionPort.ReleaseCalls.Should().ContainSingle(call =>
@@ -373,23 +368,11 @@ public sealed class ScriptServiceRunInteractionTests
     private sealed class RecordingScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
     {
         public List<AGUIEvent> Messages { get; } = [];
-        public List<(string ActorId, string RunId)> EnsureCalls { get; } = [];
         public List<(string ActorId, string RunId)> AttachCalls { get; } = [];
         public List<(string ActorId, string RunId)> ReleaseCalls { get; } = [];
         public bool ReturnNullLease { get; init; }
         public bool CompleteAfterMessages { get; init; }
         public bool ProjectionEnabled => true;
-
-        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
-            string actorId,
-            string runId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            EnsureCalls.Add((actorId, runId));
-            return Task.FromResult<IScriptServiceAguiProjectionLease?>(
-                ReturnNullLease ? null : new Lease(actorId, runId));
-        }
 
         public async Task<EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>?> AttachExistingRunProjectionAsync(
             string actorId,

@@ -28,55 +28,46 @@ public sealed class StreamingProxyRoomSessionProjectionPort
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    public async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureRoomProjectionAsync(
-        string actorId,
-        string sessionId,
-        CancellationToken ct = default)
-    {
-        return await EnsureChatProjectionAsync(actorId, sessionId, ct);
-    }
-
-    public async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
-        string actorId,
-        string sessionId,
-        CancellationToken ct = default)
-    {
-        return await EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
-    }
-
-    public async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
-        string actorId,
-        string subscriptionId,
-        CancellationToken ct = default)
-    {
-        return await EnsureProjectionAsync(actorId, subscriptionId, StreamingProxyProjectionKinds.RoomSubscriptionSession, ct);
-    }
-
-    private async Task<IStreamingProxyRoomSessionProjectionLease?> EnsureProjectionAsync(
-        string actorId,
-        string sessionId,
-        string projectionKind,
-        CancellationToken ct)
-    {
-        return await EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = projectionKind,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = sessionId,
-            },
-            ct);
-    }
-
-    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
-    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
-    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     public async Task<EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>?> AttachExistingChatProjectionAsync(
         string actorId,
         string sessionId,
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         CancellationToken ct = default)
+    {
+        return await AttachExistingProjectionAsync(
+            actorId,
+            sessionId,
+            StreamingProxyProjectionKinds.RoomChatSession,
+            sink,
+            ct).ConfigureAwait(false);
+    }
+
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
+    public async Task<EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>?> AttachExistingSubscriptionProjectionAsync(
+        string actorId,
+        string subscriptionId,
+        IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+        CancellationToken ct = default)
+    {
+        return await AttachExistingProjectionAsync(
+            actorId,
+            subscriptionId,
+            StreamingProxyProjectionKinds.RoomSubscriptionSession,
+            sink,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>?> AttachExistingProjectionAsync(
+        string actorId,
+        string sessionId,
+        string projectionKind,
+        IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
@@ -90,7 +81,7 @@ public sealed class StreamingProxyRoomSessionProjectionPort
 
         var scopeKey = new ProjectionRuntimeScopeKey(
             actorId,
-            StreamingProxyProjectionKinds.RoomChatSession,
+            projectionKind,
             ProjectionRuntimeMode.SessionObservation,
             sessionId);
         if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
@@ -99,7 +90,7 @@ public sealed class StreamingProxyRoomSessionProjectionPort
         var lease = new StreamingProxyRoomSessionRuntimeLease(new StreamingProxyRoomSessionProjectionContext
         {
             RootActorId = actorId,
-            ProjectionKind = StreamingProxyProjectionKinds.RoomChatSession,
+            ProjectionKind = projectionKind,
             SessionId = sessionId,
         });
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);

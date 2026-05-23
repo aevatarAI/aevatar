@@ -995,19 +995,8 @@ public sealed class ScopeServiceEndpointsStreamTests
     private sealed class StubScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
     {
         public List<AGUIEvent> Messages { get; } = [];
-        public List<(string ActorId, string RunId)> EnsureCalls { get; } = [];
 
         public bool ProjectionEnabled => true;
-
-        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
-            string actorId,
-            string runId,
-            CancellationToken ct = default)
-        {
-            _ = ct;
-            EnsureCalls.Add((actorId, runId));
-            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new StubScriptServiceAguiProjectionLease(actorId, runId));
-        }
 
         public async Task<EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>?> AttachExistingRunProjectionAsync(
             string actorId,

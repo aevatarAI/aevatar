@@ -4,7 +4,7 @@ namespace Aevatar.GAgents.StreamingProxy;
 
 public interface IStreamingProxyRoomSubscriptionObservationPort
 {
-    Task<StreamingProxyRoomSubscriptionObservationAttachment> AttachAsync(
+    Task<StreamingProxyRoomSubscriptionObservationAttachment?> AttachAsync(
         string roomId,
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         CancellationToken ct = default);
@@ -39,26 +39,27 @@ internal sealed class StreamingProxyRoomSubscriptionObservationPort
     public static string RoomSubscriptionSessionId(string roomId) =>
         $"room:{NormalizeRoomId(roomId)}:subscription";
 
-    public async Task<StreamingProxyRoomSubscriptionObservationAttachment> AttachAsync(
+    public async Task<StreamingProxyRoomSubscriptionObservationAttachment?> AttachAsync(
         string roomId,
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         CancellationToken ct = default)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter45/issue-867-session-projection-ensure-surface):
+        //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+        //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
         ArgumentNullException.ThrowIfNull(sink);
 
         var normalizedRoomId = NormalizeRoomId(roomId);
-        var lease = new StreamingProxyRoomSessionRuntimeLease(
-            new StreamingProxyRoomSessionProjectionContext
-            {
-                RootActorId = normalizedRoomId,
-                SessionId = RoomSubscriptionSessionId(normalizedRoomId),
-                ProjectionKind = StreamingProxyProjectionKinds.RoomSubscriptionSession,
-            });
-        var liveSinkLease = await _projectionPort.AttachLiveSinkAsync(lease, sink, ct);
-        return new StreamingProxyRoomSubscriptionObservationAttachment(lease, liveSinkLease);
+        var attachment = await _projectionPort.AttachExistingSubscriptionProjectionAsync(
+            normalizedRoomId,
+            RoomSubscriptionSessionId(normalizedRoomId),
+            sink,
+            ct).ConfigureAwait(false);
+        return attachment == null
+            ? null
+            : new StreamingProxyRoomSubscriptionObservationAttachment(
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease);
     }
 
     public async Task DetachAndDisposeAsync(
