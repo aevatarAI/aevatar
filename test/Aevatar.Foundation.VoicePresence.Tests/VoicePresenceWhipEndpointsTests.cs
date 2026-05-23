@@ -232,6 +232,42 @@ public class VoicePresenceWhipEndpointsTests
     }
 
     [Fact]
+    public async Task Delete_should_detach_transport_already_attached_typed_preflight_session()
+    {
+        var attachCalls = 0;
+        var detachCalls = 0;
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => true,
+            attachTransportAsync: (_, _) =>
+            {
+                attachCalls++;
+                return Task.CompletedTask;
+            },
+            detachTransportAsync: (_, _) =>
+            {
+                detachCalls++;
+                return Task.CompletedTask;
+            },
+            pcmSampleRateHz: 24000);
+        var resolver = new RecordingSessionResolver(new VoicePresenceSessionResolution(
+            VoicePresenceSessionResolutionKind.PreflightFailed,
+            session,
+            VoicePresencePreflightFailureKind.TransportAlreadyAttached));
+        using var app = CreateApp(resolver);
+        var context = CreateContext(app, HttpMethods.Delete, string.Empty);
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status204NoContent);
+        resolver.Requests.ShouldHaveSingleItem().Purpose.ShouldBe(VoicePresenceSessionRequestPurpose.Detach);
+        attachCalls.ShouldBe(0);
+        detachCalls.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Post_should_dispose_transport_when_attach_fails()
     {
         var transport = new StubVoiceTransport();
