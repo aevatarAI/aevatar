@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.Presentation.AGUI;
@@ -12,21 +11,21 @@ public sealed class GAgentDraftRunProjectionPort
     : EventSinkProjectionLifecyclePortBase<IGAgentDraftRunProjectionLease, GAgentDraftRunRuntimeLease, AGUIEvent>,
       IGAgentDraftRunProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease> _attachExistingLeaseLookup;
 
     public GAgentDraftRunProjectionPort(
         ServiceProjectionOptions options,
         IProjectionScopeActivationService<GAgentDraftRunRuntimeLease> activationService,
         IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
             sessionEventHub)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
     public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
@@ -68,15 +67,21 @@ public sealed class GAgentDraftRunProjectionPort
             ServiceProjectionKinds.DraftRunSession,
             ProjectionRuntimeMode.SessionObservation,
             commandId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
+        // Refactor (iter49/cluster-049-gagentservice-runtime-attach-existing-side-read):
+        //   Old pattern: Capability projection ports duplicated runtime existence checks via IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()).
+        //   New principle: Projection Core exposes typed attach-existing lease/session lookup contract; capability ports delegate to contract instead of runtime actor-id side reads.
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                Mode = scopeKey.Mode,
+                SessionId = scopeKey.SessionId,
+            },
+            ct).ConfigureAwait(false);
+        if (lease == null)
             return null;
 
-        var lease = new GAgentDraftRunRuntimeLease(new GAgentDraftRunProjectionContext
-        {
-            RootActorId = actorId,
-            ProjectionKind = ServiceProjectionKinds.DraftRunSession,
-            SessionId = commandId,
-        });
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null
