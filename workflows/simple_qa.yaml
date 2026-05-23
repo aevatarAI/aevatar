@@ -1,0 +1,9 @@
+name: simple_qa
+roles:
+  - id: assistant
+    name: Assistant
+    system_prompt: "You are a helpful assistant."
+steps:
+  - id: answer
+    type: llm_call
+    role: assistant
