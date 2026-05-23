@@ -13,6 +13,7 @@ using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -186,6 +187,74 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public async Task Terminate_ShouldRemoveRelayAsync_ForEachActiveSubscription()
+    {
+        var streamProvider = new RecordingStreamProvider();
+        var actor = await StartedActorAsync("resp_relay_cleanup", streamProvider);
+
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_first",
+            runId: "run_first",
+            actorId: "actor-1"));
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_second",
+            runId: "run_second",
+            actorId: "actor-2"));
+
+        streamProvider.Upserts
+            .Select(static call => (call.StreamId, call.Binding.TargetStreamId))
+            .Should()
+            .Equal(("actor-1", actor.Id), ("actor-2", actor.Id));
+        actor.State.ActiveSubRunSubscriptions.Should().HaveCount(2);
+
+        await actor.HandleTerminateAsync(new TerminateChatRunRequested
+        {
+            Reason = "client_closed",
+        });
+
+        streamProvider.Removes.Should().Equal(
+            ("actor-1", actor.Id),
+            ("actor-2", actor.Id));
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Terminate_WhenRemoveRelayThrows_ShouldStillClearState()
+    {
+        var streamProvider = new RecordingStreamProvider
+        {
+            ThrowOnRemove = true,
+        };
+        var logger = new RecordingLogger();
+        var actor = await StartedActorAsync("resp_relay_cleanup_throw", streamProvider);
+        actor.Logger = logger;
+
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_first",
+            runId: "run_first",
+            actorId: "actor-1"));
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_second",
+            runId: "run_second",
+            actorId: "actor-2"));
+
+        await actor.HandleTerminateAsync(new TerminateChatRunRequested
+        {
+            Reason = "client_closed",
+        });
+
+        streamProvider.Removes.Should().Equal(
+            ("actor-1", actor.Id),
+            ("actor-2", actor.Id));
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        logger.Entries.Should().HaveCount(2);
+        logger.Entries.Should().OnlyContain(entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.Exception is InvalidOperationException &&
+            entry.Message.Contains("Failed to remove chat run sub-run observation relay", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task DispatchPortPath_ShouldPublishToolResultReadyOnSelfStream()
     {
         await using var services = new ServiceCollection()
@@ -250,6 +319,24 @@ public sealed class ChatRunActorTests
     private static async Task<ChatRunActor> StartedActorAsync(string responseId)
     {
         var actor = CreateActor(responseId);
+        await StartActorAsync(actor, responseId);
+        return actor;
+    }
+
+    private static async Task<ChatRunActor> StartedActorAsync(
+        string responseId,
+        RecordingStreamProvider streamProvider)
+    {
+        var actor = CreateActor(responseId);
+        actor.Services = new ServiceCollection()
+            .AddSingleton<IStreamProvider>(streamProvider)
+            .BuildServiceProvider();
+        await StartActorAsync(actor, responseId);
+        return actor;
+    }
+
+    private static async Task StartActorAsync(ChatRunActor actor, string responseId)
+    {
         await actor.HandleStartAsync(new StartChatRunRequested
         {
             ResponseId = responseId,
@@ -263,7 +350,6 @@ public sealed class ChatRunActorTests
                 },
             },
         });
-        return actor;
     }
 
     private static SubmitChatRunToolCallRequested BuildSubmit(
@@ -296,6 +382,27 @@ public sealed class ChatRunActorTests
         };
     }
 
+    private static PrepareChatRunSubRunObservationRequested BuildPrepareObservation(
+        string toolCallId,
+        string runId,
+        string actorId)
+    {
+        var streamTopic = $"aevatar://actors/{actorId}/runs/{runId}";
+        return new PrepareChatRunSubRunObservationRequested
+        {
+            ToolCallId = toolCallId,
+            ToolName = "aevatar_invoke_gagent",
+            Arguments = BuildArguments(ChatRunSubRunWaitMode.Complete),
+            RunId = runId,
+            TargetKind = ChatRunSubRunTargetKind.Gagent,
+            TargetId = actorId,
+            WaitMode = ChatRunSubRunWaitMode.Complete,
+            StreamTopic = streamTopic,
+            ActorId = actorId,
+            LlmRound = 1,
+        };
+    }
+
     private static Struct BuildArguments(ChatRunSubRunWaitMode waitMode)
     {
         var arguments = new Struct();
@@ -311,4 +418,84 @@ public sealed class ChatRunActorTests
             ChatRunSubRunWaitMode.Complete => "complete",
             _ => "stream",
         };
+
+    private sealed class RecordingStreamProvider : IStreamProvider
+    {
+        public List<(string StreamId, StreamForwardingBinding Binding)> Upserts { get; } = [];
+
+        public List<(string StreamId, string TargetStreamId)> Removes { get; } = [];
+
+        public bool ThrowOnRemove { get; init; }
+
+        public IStream GetStream(string actorId) => new RecordingStream(actorId, this);
+
+        private sealed class RecordingStream(string streamId, RecordingStreamProvider owner) : IStream
+        {
+            public string StreamId { get; } = streamId;
+
+            public Task ProduceAsync<T>(T message, CancellationToken ct = default)
+                where T : IMessage =>
+                Task.CompletedTask;
+
+            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+                where T : IMessage, new() =>
+                Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+
+            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+            {
+                owner.Upserts.Add((StreamId, CloneBinding(binding)));
+                return Task.CompletedTask;
+            }
+
+            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+            {
+                owner.Removes.Add((StreamId, targetStreamId));
+                if (owner.ThrowOnRemove)
+                    throw new InvalidOperationException("relay remove failed");
+
+                return Task.CompletedTask;
+            }
+
+            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+                Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+        }
+
+        private static StreamForwardingBinding CloneBinding(StreamForwardingBinding binding) =>
+            new()
+            {
+                SourceStreamId = binding.SourceStreamId,
+                TargetStreamId = binding.TargetStreamId,
+                ForwardingMode = binding.ForwardingMode,
+                DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
+                EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+                Version = binding.Version,
+                LeaseId = binding.LeaseId,
+            };
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<(LogLevel Level, Exception? Exception, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, exception, formatter(state, exception)));
+        }
+    }
+
+    private sealed class NoopAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }

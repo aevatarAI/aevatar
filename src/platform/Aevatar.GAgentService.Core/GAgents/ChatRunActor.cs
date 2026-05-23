@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
@@ -199,11 +200,19 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         if (State.Terminated)
             return;
 
+        var activeObservationTargets = State.ActiveSubRunSubscriptions
+            .Select(static subscription => FirstNonEmpty(subscription.ActorId, subscription.TargetId))
+            .Where(static targetActorId => !string.IsNullOrWhiteSpace(targetActorId))
+            .ToArray();
+
         await PersistDomainEventAsync(new ChatRunTerminatedEvent
         {
             Reason = command.Reason ?? string.Empty,
             ObservedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
+
+        foreach (var targetActorId in activeObservationTargets)
+            await RemoveObservationRelayBestEffortAsync(targetActorId, CancellationToken.None);
     }
 
     protected override ChatRunState TransitionState(ChatRunState current, IMessage evt) =>
@@ -395,6 +404,28 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             .GetRequiredService<IStreamProvider>()
             .GetStream(targetActorId)
             .UpsertRelayAsync(BuildCommittedEventObservationRelayBinding(targetActorId), ct);
+    }
+
+    private async Task RemoveObservationRelayBestEffortAsync(string? targetActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(targetActorId))
+            return;
+
+        try
+        {
+            await Services
+                .GetRequiredService<IStreamProvider>()
+                .GetStream(targetActorId)
+                .RemoveRelayAsync(Id, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(
+                ex,
+                "Failed to remove chat run sub-run observation relay. actorId={ActorId} targetActorId={TargetActorId}",
+                Id,
+                targetActorId);
+        }
     }
 
     private StreamForwardingBinding BuildCommittedEventObservationRelayBinding(string targetActorId)
