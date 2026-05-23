@@ -39,27 +39,27 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     }
 
     [Fact]
-    public async Task ProjectionPort_ShouldStartAttachDetachAndReleaseDraftRunSession()
+    public async Task ProjectionPort_ShouldAttachDetachAndReleaseExistingDraftRunSession()
     {
         var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            "actor-1",
+            "service-draft-run-session",
+            ProjectionRuntimeMode.SessionObservation,
+            "cmd-1")));
         var port = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
             activation,
             release,
             hub,
-            CreateAttachExistingLookup(new RecordingActorRuntime()));
-        var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1", CancellationToken.None);
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
-        lease.Should().BeSameAs(activation.LeaseToReturn);
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].RootActorId.Should().Be("actor-1");
-        activation.Requests[0].ProjectionKind.Should().Be("service-draft-run-session");
-        activation.Requests[0].SessionId.Should().Be("cmd-1");
-
-        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var attachment = await port.AttachExistingActorProjectionAsync("actor-1", "cmd-1", sink, CancellationToken.None);
+        var lease = attachment!.ProjectionLease;
         await hub.Handler!(new AGUIEvent
         {
             RunFinished = new RunFinishedEvent
@@ -68,9 +68,10 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
                 RunId = "cmd-1",
             },
         });
-        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
+        await port.DetachLiveSinkAsync(attachment.LiveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease, CancellationToken.None);
 
+        activation.Requests.Should().BeEmpty();
         hub.SubscribeCalls.Should().Be(1);
         hub.LastScopeId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");

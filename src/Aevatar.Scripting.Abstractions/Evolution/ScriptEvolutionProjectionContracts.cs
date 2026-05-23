@@ -13,11 +13,6 @@ public interface IScriptEvolutionProjectionLease
 public interface IScriptEvolutionProjectionPort
     : IEventSinkProjectionLifecyclePort<IScriptEvolutionProjectionLease, ScriptEvolutionSessionCompletedEvent>
 {
-    Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
-        string sessionActorId,
-        string proposalId,
-        CancellationToken ct = default);
-
     // Refactor (iter41/cluster-041-command-observation-projection-activation):
     //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
     //   New principle: observation binders attach only to existing projection-owned sessions;

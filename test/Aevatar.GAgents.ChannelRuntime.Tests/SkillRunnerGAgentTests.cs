@@ -196,7 +196,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             new UserAgentCatalogMaterializationContext
             {
                 RootActorId = "skill-runner-projection-regression",
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
             },
             new EventEnvelope
             {

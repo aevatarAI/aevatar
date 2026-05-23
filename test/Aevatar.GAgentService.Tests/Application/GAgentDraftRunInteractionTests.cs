@@ -99,12 +99,6 @@ public sealed class GAgentDraftRunInteractionTests
     {
         public bool ProjectionEnabled => true;
 
-        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
-            string actorId,
-            string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IGAgentDraftRunProjectionLease?>(null);
-
         public Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
             string actorId,
             string commandId,
@@ -131,14 +125,6 @@ public sealed class GAgentDraftRunInteractionTests
 
     private sealed class NoOpGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {
-        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
-            string actorId,
-            string correlationId,
-            GAgentRunTerminalInteractionKind interactionKind,
-            CancellationToken ct = default) =>
-            Task.FromResult<IGAgentRunTerminalProjectionLease?>(
-                new NoOpGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
-
         public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
             string actorId,
             string correlationId,

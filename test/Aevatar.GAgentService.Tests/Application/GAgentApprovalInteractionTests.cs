@@ -76,7 +76,6 @@ public sealed class GAgentApprovalInteractionTests
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
         target.LiveSinkLease.Should().BeSameAs(projectionPort.LiveSinkLeaseToReturn);
         target.LiveSink.Should().NotBeNull();
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().ContainSingle();
         terminalPort.Calls.Should().ContainSingle(x =>
             x.actorId == "actor-1" &&
@@ -434,19 +433,9 @@ public sealed class GAgentApprovalInteractionTests
         public ApprovalProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
         public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
-        public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
         public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
-
-        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
-            string actorId,
-            string commandId,
-            CancellationToken ct = default)
-        {
-            EnsureCalls.Add((actorId, commandId));
-            return Task.FromResult<IGAgentDraftRunProjectionLease?>(LeaseToReturn);
-        }
 
         public async Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
             string actorId,
@@ -510,7 +499,7 @@ public sealed class GAgentApprovalInteractionTests
         public List<(string actorId, string correlationId, GAgentRunTerminalInteractionKind interactionKind)> Calls { get; } = [];
         public List<IGAgentRunTerminalProjectionLease> ReleaseCalls { get; } = [];
 
-        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
             string actorId,
             string correlationId,
             GAgentRunTerminalInteractionKind interactionKind,
@@ -520,13 +509,6 @@ public sealed class GAgentApprovalInteractionTests
             return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
                 new ApprovalTerminalProjectionLease(actorId, correlationId, interactionKind));
         }
-
-        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
-            string actorId,
-            string correlationId,
-            GAgentRunTerminalInteractionKind interactionKind,
-            CancellationToken ct = default) =>
-            EnsureProjectionAsync(actorId, correlationId, interactionKind, ct);
 
         public Task ReleaseProjectionAsync(
             IGAgentRunTerminalProjectionLease lease,

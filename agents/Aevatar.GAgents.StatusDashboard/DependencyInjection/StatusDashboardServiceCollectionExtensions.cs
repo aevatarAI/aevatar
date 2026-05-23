@@ -58,7 +58,6 @@ public static class StatusDashboardServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>,
             HealthProbeTargetDocumentMetadataProvider>();
         services.TryAddSingleton<IHealthStatusQueryPort, HealthStatusQueryPort>();
-        services.TryAddSingleton<HealthProbeProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,

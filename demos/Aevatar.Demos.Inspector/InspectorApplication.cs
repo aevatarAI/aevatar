@@ -11,6 +11,7 @@ using Aevatar.Demos.Inspector.Demo;
 using Aevatar.Demos.Inspector.ReadModels;
 using Aevatar.Demos.Inspector.Telemetry;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -95,6 +96,7 @@ public static class InspectorApplication
             },
             context => new StudioMaterializationRuntimeLease(context));
         services.TryAddSingleton<StudioProjectionPort>();
+        services.TryAddSingleton<IStudioActorBootstrap, InspectorStudioActorBootstrap>();
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<GAgentRegistryCurrentStateDocument>,
             GAgentRegistryCurrentStateDocumentMetadataProvider>();

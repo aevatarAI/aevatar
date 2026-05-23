@@ -97,7 +97,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
-        services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
+        services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         if (useElasticsearch)

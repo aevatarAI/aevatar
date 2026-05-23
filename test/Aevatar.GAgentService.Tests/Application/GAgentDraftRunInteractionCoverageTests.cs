@@ -331,7 +331,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             x.correlationId == "corr-1" &&
             x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
         terminalPort.ReleaseCalls.Should().BeEmpty();
-        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().BeEmpty();
         target.TerminalProjectionLease.Should().BeNull();
     }
@@ -581,7 +581,6 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             x.actorId == "actor-1" &&
             x.correlationId == "corr-1" &&
             x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().ContainSingle();
     }
 
@@ -605,7 +604,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         terminalPort.Calls.Should().ContainSingle(x =>
             x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
         terminalPort.ReleaseCalls.Should().BeEmpty();
-        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().BeEmpty();
     }
 
@@ -629,7 +628,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         terminalPort.Calls.Should().ContainSingle(x =>
             x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
         terminalPort.ReleaseCalls.Should().ContainSingle();
-        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().BeEmpty();
     }
 
@@ -681,19 +680,9 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         public DraftRunProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
         public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
-        public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
         public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
-
-        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
-            string actorId,
-            string commandId,
-            CancellationToken ct = default)
-        {
-            EnsureCalls.Add((actorId, commandId));
-            return Task.FromResult<IGAgentDraftRunProjectionLease?>(LeaseToReturn);
-        }
 
         public async Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
             string actorId,
@@ -758,7 +747,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         public List<IGAgentRunTerminalProjectionLease> ReleaseCalls { get; } = [];
         public bool ReturnNullLease { get; init; }
 
-        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
             string actorId,
             string correlationId,
             GAgentRunTerminalInteractionKind interactionKind,
@@ -771,13 +760,6 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
                 new RecordingGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
         }
-
-        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
-            string actorId,
-            string correlationId,
-            GAgentRunTerminalInteractionKind interactionKind,
-            CancellationToken ct = default) =>
-            EnsureProjectionAsync(actorId, correlationId, interactionKind, ct);
 
         public Task ReleaseProjectionAsync(
             IGAgentRunTerminalProjectionLease lease,

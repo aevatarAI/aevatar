@@ -18,7 +18,7 @@ public sealed class HealthProbeTargetProjectorTests
         var context = new HealthProbeMaterializationContext
         {
             RootActorId = "health-probe::nyxid-auth",
-            ProjectionKind = HealthProbeProjectionPort.ProjectionKind,
+            ProjectionKind = HealthProbeTargetGAgent.ProjectionKind,
         };
         var state = new HealthProbeTargetState
         {
@@ -73,7 +73,7 @@ public sealed class HealthProbeTargetProjectorTests
         var context = new HealthProbeMaterializationContext
         {
             RootActorId = "health-probe::orphan",
-            ProjectionKind = HealthProbeProjectionPort.ProjectionKind,
+            ProjectionKind = HealthProbeTargetGAgent.ProjectionKind,
         };
 
         await projector.ProjectAsync(context, new EventEnvelope());
