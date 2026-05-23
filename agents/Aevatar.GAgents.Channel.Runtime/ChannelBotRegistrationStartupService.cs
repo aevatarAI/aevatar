@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <summary>
 /// Activates the projection scope for the channel bot registration store
 /// at application startup, then re-emits the authoritative state root so the
-/// query-side read model can be rebuilt after a restart.
+/// query-side read model can be refreshed after a restart.
 ///
 /// StartAsync awaits the activation with retries so the host does not
 /// accept HTTP requests until the registration projection binder is active and
@@ -16,6 +16,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </summary>
 internal sealed class ChannelBotRegistrationStartupService : IHostedService
 {
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh surface, new=startup-owned actor inbox dispatch
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=operator-triggered rebuild, new=host startup refresh after projection activation
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 

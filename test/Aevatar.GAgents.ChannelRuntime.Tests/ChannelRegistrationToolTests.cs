@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
@@ -22,8 +21,10 @@ public sealed class ChannelRegistrationToolTests
 
         tool.Name.Should().Be("channel_registrations");
         tool.Description.Should().Contain("register_lark_via_nyx");
-        tool.Description.Should().Contain("rebuild_projection");
+        tool.Description.Should().NotContain("rebuild_projection");
         tool.Description.Should().NotContain("repair_lark_mirror");
+        tool.ParametersSchema.Should().NotContain("rebuild_projection");
+        tool.ParametersSchema.Should().NotContain("reason");
         JsonDocument.Parse(tool.ParametersSchema).RootElement
             .GetProperty("properties")
             .GetProperty("action")
@@ -31,7 +32,7 @@ public sealed class ChannelRegistrationToolTests
             .EnumerateArray()
             .Select(static value => value.GetString())
             .Should()
-            .Equal("list", "register_lark_via_nyx", "rebuild_projection", "delete");
+            .Equal("list", "register_lark_via_nyx", "delete");
     }
 
     [Fact]
@@ -127,18 +128,9 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RebuildProjection_DispatchesRefreshCommand()
+    public async Task ExecuteAsync_RebuildProjection_ReturnsRetiredAction_AndDoesNotDispatch()
     {
-        List<EventEnvelope> capturedEnvelopes = [];
-        var actor = Substitute.For<IActor>();
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
 
         using var serviceProvider = new ServiceCollection()
@@ -151,43 +143,13 @@ public sealed class ChannelRegistrationToolTests
         var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","registration_id":"reg-1","force":true}""");
         using var doc = JsonDocument.Parse(json);
 
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.TryGetProperty("backfill_status", out _).Should().BeFalse();
-        capturedEnvelopes.Should().ContainSingle();
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
+        doc.RootElement.GetProperty("error_code").GetString().Should().Be("retired_action");
+        doc.RootElement.GetProperty("error").GetString().Should().Contain("internal startup maintenance");
         await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RebuildProjection_DispatchesEvenWhenQueryObservationFails()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
-
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        EventEnvelope? capturedEnvelope = null;
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        capturedEnvelope.Should().NotBeNull();
-        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

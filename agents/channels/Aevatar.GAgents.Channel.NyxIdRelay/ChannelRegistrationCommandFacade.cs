@@ -22,17 +22,17 @@ public enum ChannelRegistrationCommandStartError
 //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
 public sealed class ChannelRegistrationCommandFacade
 {
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=facade RebuildProjectionAsync, new=facade handles register/unregister only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=relay-local rebuild command DI, new=runtime startup dispatch only
     private readonly ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _registerDispatchService;
-    private readonly ICommandDispatchService<ChannelBotRebuildProjectionCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _rebuildDispatchService;
     private readonly ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _unregisterDispatchService;
 
     public ChannelRegistrationCommandFacade(
         ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> registerDispatchService,
-        ICommandDispatchService<ChannelBotRebuildProjectionCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> rebuildDispatchService,
         ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> unregisterDispatchService)
     {
         _registerDispatchService = registerDispatchService ?? throw new ArgumentNullException(nameof(registerDispatchService));
-        _rebuildDispatchService = rebuildDispatchService ?? throw new ArgumentNullException(nameof(rebuildDispatchService));
         _unregisterDispatchService = unregisterDispatchService ?? throw new ArgumentNullException(nameof(unregisterDispatchService));
     }
 
@@ -45,22 +45,6 @@ public sealed class ChannelRegistrationCommandFacade
         //   New principle: local mirror writes 只进入 typed command facade 和 standard command skeleton。
         ArgumentNullException.ThrowIfNull(command);
         var result = await _registerDispatchService.DispatchAsync(command, ct);
-        return ResolveReceipt(result);
-    }
-
-    public async Task<ChannelRegistrationCommandAcceptedReceipt> RebuildProjectionAsync(
-        string reason,
-        CancellationToken ct = default)
-    {
-        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-        //   Old pattern: Host/tool 直接通过 static helper 组 envelope 触发 rebuild。
-        //   New principle: rebuild 作为 typed command 经 facade 进入 CQRS command skeleton。
-        var result = await _rebuildDispatchService.DispatchAsync(
-            new ChannelBotRebuildProjectionCommand
-            {
-                Reason = reason ?? string.Empty,
-            },
-            ct);
         return ResolveReceipt(result);
     }
 
@@ -213,15 +197,11 @@ internal sealed class ChannelBotRegistrationCommandTargetResolver<TCommand>
 
 internal sealed class ChannelBotRegistrationCommandEnvelopeFactory :
     ICommandEnvelopeFactory<ChannelBotRegisterCommand>,
-    ICommandEnvelopeFactory<ChannelBotRebuildProjectionCommand>,
     ICommandEnvelopeFactory<ChannelBotUnregisterCommand>
 {
     private const string PublisherActorId = "channel-runtime.registration-store";
 
     public EventEnvelope CreateEnvelope(ChannelBotRegisterCommand command, CommandContext context) =>
-        CreateEnvelopeCore(command, context);
-
-    public EventEnvelope CreateEnvelope(ChannelBotRebuildProjectionCommand command, CommandContext context) =>
         CreateEnvelopeCore(command, context);
 
     public EventEnvelope CreateEnvelope(ChannelBotUnregisterCommand command, CommandContext context) =>

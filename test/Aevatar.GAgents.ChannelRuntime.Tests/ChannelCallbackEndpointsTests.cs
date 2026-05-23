@@ -62,6 +62,7 @@ public sealed class ChannelCallbackEndpointsTests
             .Should().BeFalse();
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
+        routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
     }
 
     [Fact]
@@ -217,115 +218,6 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
-    }
-
-    [Fact]
-    public async Task HandleRebuildRegistrationsAsync_DispatchesProjectionOnlyRefreshCommand()
-    {
-        EventEnvelope? capturedEnvelope = null;
-        var actor = Substitute.For<IActor>();
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var http = CreateJsonHttpContext("""{"reason":"manual-debug","registration_id":"ignored","force":true}""", "scope-1");
-        http.Request.Headers.Authorization = "Bearer test-token";
-
-        var result = await InvokeAsync(
-            "HandleRebuildRegistrationsAsync",
-            http,
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        response.Body.Should().Contain("\"status\":\"accepted\"");
-        response.Body.Should().Contain("\"actor_id\":\"channel-bot-registration-store\"");
-        response.Body.Should().NotContain("backfill_status");
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
-    }
-
-    [Fact]
-    public async Task HandleRebuildRegistrationsAsync_ReturnsBadRequestForUnsupportedContentType()
-    {
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var http = CreateHttpContext("scope-1");
-        http.Request.ContentType = "text/plain";
-        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("registration_id=reg-1"));
-
-        var result = await InvokeAsync(
-            "HandleRebuildRegistrationsAsync",
-            http,
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        response.Body.Should().Contain("Unsupported content type");
-        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
-            Arg.Any<string>(),
-            Arg.Any<EventEnvelope>(),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task HandleRebuildRegistrationsAsync_IgnoresDiagnosticScopeFields()
-    {
-        EventEnvelope? capturedEnvelope = null;
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var result = await InvokeAsync(
-            "HandleRebuildRegistrationsAsync",
-            CreateJsonHttpContext("""{"scope_id":"scope-2","registration_id":"reg-1"}""", "scope-1"),
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        capturedEnvelope.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task HandleRebuildRegistrationsAsync_DispatchesRefreshCommand_WhenReadModelIsUnavailable()
-    {
-        EventEnvelope? capturedEnvelope = null;
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var result = await InvokeAsync(
-            "HandleRebuildRegistrationsAsync",
-            CreateHttpContext("scope-1"),
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        response.Body.Should().Contain("\"status\":\"accepted\"");
-        response.Body.Should().NotContain("observed_registrations_before_rebuild");
-        response.Body.Should().NotContain("backfill_status");
-        capturedEnvelope.Should().NotBeNull();
     }
 
     [Fact]

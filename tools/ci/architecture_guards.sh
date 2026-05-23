@@ -136,6 +136,47 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+# Refactor (iter56/cluster-933-channel-registration-rebuild-narrow):
+#   Old: channel registration projection rebuild was exposed through HTTP, tool,
+#   prompts, docs, facade, and relay-local DI.
+#   New: rebuild is only the internal Runtime startup refresh path.
+set +e
+channel_registration_public_rebuild_report="$(
+  rg -n "rebuild_projection|/registrations/rebuild|RebuildProjectionAsync|ChannelBotRebuildProjectionCommand" \
+    src/Aevatar.AI.ToolProviders.ChannelAdmin \
+    agents/channels/Aevatar.GAgents.Channel.NyxIdRelay \
+    agents/Aevatar.GAgents.NyxidChat \
+    docs/operations \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /Refactor \(iter56\/cluster-933-channel-registration-rebuild-narrow\)/)
+    next;
+  if (file == "src/Aevatar.AI.ToolProviders.ChannelAdmin/ChannelRegistrationTool.cs" && text ~ /RetiredActionError/)
+    next;
+
+  print $0;
+}'
+)"
+channel_registration_public_rebuild_status=$?
+set -e
+
+if [[ ${channel_registration_public_rebuild_status} -ne 0 && ${channel_registration_public_rebuild_status} -ne 1 ]]; then
+  echo "Channel registration public rebuild guard execution failed."
+  exit "${channel_registration_public_rebuild_status}"
+fi
+
+if [ -n "${channel_registration_public_rebuild_report}" ]; then
+  echo "${channel_registration_public_rebuild_report}"
+  echo "Channel registration projection rebuild must not be exposed through public/tool/prompt/docs/facade/relay DI surfaces."
+  exit 1
+fi
+
 if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   echo "Legacy GAgent actor store is forbidden. Use registry command/query/admission ports."
   exit 1

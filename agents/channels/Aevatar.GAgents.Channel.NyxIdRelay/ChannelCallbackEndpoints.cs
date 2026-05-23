@@ -2,7 +2,6 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,15 +12,15 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public static class ChannelCallbackEndpoints
 {
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=/registrations/rebuild HTTP surface, new=no public rebuild route
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh endpoint, new=startup-owned projection refresh
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
     //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 直接读 process-local list。
     //   New principle: Channel diagnostics 改为 logs/metrics only(observability path)OR actor/projection-backed diagnostic events with readmodel query。**禁止** public endpoint 读 singleton process memory 作 diagnostic fact source。
-    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
-    //   Old pattern: ChannelBotRegistrationScopeBackfill used readmodels to infer write candidates plus live repair_lark_mirror HTTP/tool surface and RepairLocalMirrorAsync.
-    //   New principle: remove backfill/repair_lark_mirror live recovery; rebuild_projection is projection-only; keep ChannelBotScopeIdRepairedEvent replay compatibility.
     public static IEndpointRouteBuilder MapChannelCallbackEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
@@ -29,7 +28,6 @@ public static class ChannelCallbackEndpoints
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
-        group.MapPost("/registrations/rebuild", HandleRebuildRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -153,46 +151,6 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> HandleRebuildRegistrationsAsync(
-        HttpContext http,
-        [FromServices] ChannelRegistrationCommandFacade commandFacade,
-        [FromServices] ILoggerFactory loggerFactory,
-        CancellationToken ct)
-    {
-        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-        //   Old pattern: rebuild endpoint called raw runtime/dispatch helper.
-        //   New principle: rebuild enters the channel registration command facade; Host only maps HTTP.
-        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
-        ChannelRegistrationRebuildRequest? request;
-        try
-        {
-            request = await ReadOptionalRebuildRequestAsync(http, ct);
-        }
-        catch (JsonException ex)
-        {
-            logger.LogWarning(ex, "Invalid channel registration rebuild request payload");
-            return Results.BadRequest(new { error = "Invalid JSON" });
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Unsupported channel registration rebuild request content type");
-            return Results.BadRequest(new { error = "Unsupported content type. Use application/json for rebuild request payloads." });
-        }
-
-        await commandFacade.RebuildProjectionAsync(
-            string.IsNullOrWhiteSpace(request?.Reason)
-                ? "http_api_manual_rebuild"
-                : request.Reason.Trim(),
-            ct);
-
-        return Results.Accepted(value: new
-        {
-            status = "accepted",
-            actor_id = ChannelBotRegistrationGAgent.WellKnownId,
-            note = "Projection rebuild dispatched from authoritative channel-bot-registration-store state. Query-side registrations may take a moment to refresh.",
-        });
-    }
-
     private static string? ResolveBearerAccessToken(HttpContext http)
     {
         var accessToken = http.Request.Headers.Authorization.ToString();
@@ -263,19 +221,6 @@ public static class ChannelCallbackEndpoints
         };
     }
 
-    private static async Task<ChannelRegistrationRebuildRequest?> ReadOptionalRebuildRequestAsync(
-        HttpContext http,
-        CancellationToken ct)
-    {
-        if (http.Request.ContentLength == 0)
-            return null;
-        if (http.Request.Body.CanSeek && http.Request.Body.Length == http.Request.Body.Position)
-            return null;
-
-        // ReadFromJsonAsync throws InvalidOperationException for unsupported content types.
-        return await http.Request.ReadFromJsonAsync<ChannelRegistrationRebuildRequest>(RegistrationJsonOptions, ct);
-    }
-
     private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
     {
         var explicitNormalized = NormalizeOptional(explicitScopeId);
@@ -301,9 +246,6 @@ public static class ChannelCallbackEndpoints
     }
 
     private sealed record ScopeIdResolution(string? ScopeId, string? Error);
-
-    private sealed record ChannelRegistrationRebuildRequest(
-        string? Reason);
 
     private sealed record RegistrationRequest(
         string? Platform,
