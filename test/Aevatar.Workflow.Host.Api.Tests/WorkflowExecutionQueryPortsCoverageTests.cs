@@ -4,6 +4,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -37,6 +38,62 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.CompletionStatus.Should().Be(expected);
         snapshot.LastOutput.Should().Be("done");
         snapshot.LastError.Should().Be("err");
+    }
+
+    [Fact]
+    public void WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+        {
+            Item = BuildCatalogDocument("alpha", updatedAt),
+            Items =
+            [
+                BuildCatalogDocument("beta", updatedAt.AddMinutes(1), sortOrder: 2),
+                BuildCatalogDocument("alpha", updatedAt, sortOrder: 1),
+            ],
+        };
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>
+        {
+            Item = new WorkflowCapabilitiesCurrentStateDocument
+            {
+                Id = "workflow-capabilities",
+                ActorId = "workflow-capabilities",
+                StateVersion = 3,
+                LastEventId = "startup-materialization",
+                UpdatedAt = updatedAt.AddMinutes(2),
+                SchemaVersion = "capabilities.v1",
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapabilityReadModel
+                    {
+                        Name = "assign",
+                        Category = "data",
+                    },
+                ],
+            },
+        };
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            capabilitiesReader,
+            new WorkflowCatalogReadModelMapper());
+
+        var catalog = port.ListWorkflowCatalog();
+        var detail = port.GetWorkflowDetail("alpha");
+        var capabilities = port.GetCapabilities();
+
+        catalog.Select(x => x.Name).Should().Equal("alpha", "beta");
+        catalog[0].AuthorityStateVersion.Should().Be(11);
+        catalog[0].ProjectionWatermark.Should().Be(updatedAt);
+        detail.Should().NotBeNull();
+        detail!.Definition.Steps.Should().ContainSingle(step => step.Id == "start");
+        capabilities.Workflows.Should().HaveCount(2);
+        capabilities.AuthorityStateVersion.Should().Be(12);
+        capabilities.ProjectionWatermark.Should().Be(updatedAt.AddMinutes(2));
+        catalogReader.QueryCalls.Should().Be(2);
+        catalogReader.GetCalls.Should().Be(1);
+        capabilitiesReader.GetCalls.Should().Be(1);
+        capabilitiesReader.QueryCalls.Should().Be(0);
     }
 
     [Fact]
@@ -376,6 +433,38 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
         RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
         RecordingProjectionGraphStore GraphStore);
+
+    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(
+        string workflowName,
+        DateTimeOffset updatedAt,
+        int sortOrder = 1) =>
+        new()
+        {
+            Id = workflowName,
+            ActorId = $"workflow-definition:{workflowName}",
+            WorkflowName = workflowName,
+            WorkflowYaml = $"name: {workflowName}",
+            Description = "Workflow description",
+            Category = "deterministic",
+            Group = "starter-workflows",
+            GroupLabel = "Starter Workflows",
+            SortOrder = sortOrder,
+            Source = "repo",
+            SourceLabel = "Starter",
+            ShowInLibrary = true,
+            StateVersion = 10 + sortOrder,
+            LastEventId = $"evt-{sortOrder}",
+            UpdatedAt = updatedAt,
+            Primitives = ["assign"],
+            Steps =
+            [
+                new WorkflowCatalogStepReadModel
+                {
+                    Id = "start",
+                    Type = "assign",
+                },
+            ],
+        };
 
     private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
         where TReadModel : class, IProjectionReadModel

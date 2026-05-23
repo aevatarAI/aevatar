@@ -97,6 +97,50 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldProjectDefinitionReadModelWithFreshness()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:repo_install",
+            ProjectionKind = "workflow-binding",
+        };
+
+        await projector.ProjectAsync(context, new EventEnvelope());
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                7,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "repo_install",
+                    WorkflowYaml = BuildDefinitionYaml("repo_install"),
+                    SourceKind = "repo",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "repo_install",
+                    WorkflowYaml = BuildDefinitionYaml("repo_install"),
+                    SourceKind = "repo",
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(1);
+        store.Stored.Should().ContainKey("repo_install");
+        var document = store.Stored["repo_install"];
+        document.ActorId.Should().Be("workflow-definition:repo_install");
+        document.StateVersion.Should().Be(7);
+        document.LastEventId.Should().Be("definition-evt-7");
+        document.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-03-17T11:07:00+00:00"));
+        document.Source.Should().Be("repo");
+        document.Primitives.Should().Contain("assign");
+        document.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
@@ -493,6 +537,46 @@ public sealed class WorkflowProjectionMaterializationTests
             }),
         };
     }
+
+    private static EventEnvelope BuildDefinitionCommittedEnvelope(
+        long version,
+        IMessage payload,
+        WorkflowState state)
+    {
+        var timestamp = DateTimeOffset.Parse($"2026-03-17T11:{version:00}:00+00:00");
+        return new EventEnvelope
+        {
+            Id = $"definition-outer-{version}",
+            Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = $"definition-evt-{version}",
+                    Version = version,
+                    Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+                    EventData = Any.Pack(payload),
+                },
+                StateRoot = Any.Pack(state),
+            }),
+        };
+    }
+
+    private static string BuildDefinitionYaml(string name) =>
+        $"""
+        name: {name}
+        description: Bootstrap runtime.
+        roles:
+          - id: operator
+            name: Operator
+            system_prompt: ""
+        steps:
+          - id: bootstrap
+            type: assign
+            parameters:
+              target: result
+              value: "ok"
+        """;
 
     private static WorkflowRunState BuildState(
         string status,

@@ -1,7 +1,10 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration;
 using Aevatar.Hosting;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -14,6 +17,9 @@ using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
+using Google.Protobuf;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -69,16 +75,11 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x => x.ServiceType == typeof(FileBackedWorkflowCatalogPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCatalogPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCapabilitiesPort));
+        services.Should().Contain(x => x.ImplementationFactory != null &&
+            x.ServiceType == typeof(IWorkflowCatalogPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
-
-        using var provider = services.BuildServiceProvider();
-        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
-        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
-        catalogPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
-        capabilitiesPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
-        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
@@ -100,57 +101,30 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void FileBackedWorkflowCatalogPort_ShouldReturnCatalogAndDetail()
+    public async Task FileBackedWorkflowCatalogPort_ShouldMaterializeStartupDefinitions()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-catalog-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-        try
-        {
-            var yamlPath = Path.Combine(tempDir, "repo_install.yaml");
-            File.WriteAllText(yamlPath, """
-            name: repo_install
-            description: Bootstrap runtime.
-            roles:
-              - id: operator
-                name: Operator
-                system_prompt: ""
-            steps:
-              - id: bootstrap
-                type: assign
-                parameters:
-                  target: result
-                  value: "ok"
-            """);
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new FileBackedWorkflowCatalogPort(
+            runtime,
+            dispatch,
+            NullLogger<FileBackedWorkflowCatalogPort>.Instance);
 
-            var options = new WorkflowDefinitionFileSourceOptions();
-            options.WorkflowDirectories.Add(tempDir);
+        await port.MaterializeAsync(
+        [
+            new WorkflowDefinitionRegistration(
+                "repo_install",
+                "name: repo_install",
+                "workflow-definition:repo_install",
+                "repo"),
+        ]);
 
-            var registry = new WorkflowDefinitionCatalog();
-            registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
-            registry.Register("repo_install", File.ReadAllText(yamlPath));
-
-            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
-
-            var catalog = port.ListWorkflowCatalog();
-            catalog.Should().Contain(item => item.Name == "repo_install" && item.Source == "file");
-            catalog.Should().Contain(item => item.Name == "direct" && item.Source == "builtin");
-
-            var detail = port.GetWorkflowDetail("repo_install");
-            detail.Should().NotBeNull();
-            detail!.Catalog.Name.Should().Be("repo_install");
-            detail.Catalog.RequiresLlmProvider.Should().BeFalse();
-            detail.Definition.Description.Should().Be("Bootstrap runtime.");
-            detail.Definition.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
-
-            var capabilities = port.GetCapabilities();
-            capabilities.SchemaVersion.Should().Be("capabilities.v1");
-            capabilities.Workflows.Should().Contain(item => item.Name == "repo_install");
-            capabilities.Primitives.Should().Contain(item => item.Name == "assign");
-        }
-        finally
-        {
-            TryDeleteDirectory(tempDir);
-        }
+        runtime.Created.Should().ContainSingle(x => x.ActorId == "workflow-definition:repo_install" && x.AgentType == typeof(Aevatar.Workflow.Core.WorkflowGAgent));
+        dispatch.Envelopes.Should().ContainSingle();
+        var request = dispatch.Envelopes[0].Envelope.Payload!.Unpack<Aevatar.Workflow.Abstractions.BindWorkflowDefinitionEvent>();
+        request.WorkflowName.Should().Be("repo_install");
+        request.WorkflowYaml.Should().Be("name: repo_install");
+        request.SourceKind.Should().Be("repo");
     }
 
     [Fact]
@@ -306,6 +280,13 @@ public sealed class WorkflowInfrastructureCoverageTests
             var service = new WorkflowDefinitionBootstrapHostedService(
                 registry,
                 new WorkflowDefinitionFileLoader(),
+                new FileBackedWorkflowCatalogPort(
+                    new RecordingActorRuntime(),
+                    new RecordingActorDispatchPort(),
+                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
+                new WorkflowCapabilitiesStartupMaterializer(
+                    new RecordingCapabilitiesWriteDispatcher(),
+                    []),
                 Options.Create(options),
                 NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
 
@@ -333,6 +314,72 @@ public sealed class WorkflowInfrastructureCoverageTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public List<(string ActorId, Type AgentType)> Created { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            Created.Add((actorId, agentType));
+            return Task.FromResult<IActor>(new RecordingActor(actorId));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Envelopes.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingActor : IActor
+    {
+        public RecordingActor(string id)
+        {
+            Id = id;
+        }
+
+        public string Id { get; }
+        public IAgent Agent => throw new NotSupportedException();
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingCapabilitiesWriteDispatcher
+        : IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>
+    {
+        public WorkflowCapabilitiesCurrentStateDocument? LastWritten { get; private set; }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            WorkflowCapabilitiesCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            LastWritten = readModel;
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     private static WorkflowRunReport BuildReport()
