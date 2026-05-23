@@ -115,7 +115,15 @@ public sealed class ServiceProjectionInfrastructureTests
             new ServiceProjectionOptions(),
             activationService,
             releaseService,
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                new RecordingActorRuntime(),
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
         var draftLease = await service.EnsureProjectionAsync(
             "actor-1",
@@ -161,12 +169,28 @@ public sealed class ServiceProjectionInfrastructureTests
             new ServiceProjectionOptions { Enabled = false },
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                new RecordingActorRuntime(),
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
         IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                new RecordingActorRuntime(),
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
         (await disabledService.EnsureProjectionAsync(
             "actor-1",
@@ -205,7 +229,15 @@ public sealed class ServiceProjectionInfrastructureTests
             new ServiceProjectionOptions(),
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            runtime);
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
         var lease = await service.AttachExistingProjectionAsync(
             "actor-1",
@@ -237,12 +269,28 @@ public sealed class ServiceProjectionInfrastructureTests
             new ServiceProjectionOptions { Enabled = false },
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            runtime);
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
         IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            runtime);
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                runtime,
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
         (await disabledService.AttachExistingProjectionAsync(
             "actor-1",
@@ -280,7 +328,15 @@ public sealed class ServiceProjectionInfrastructureTests
             new ServiceProjectionOptions(),
             activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
-            new RecordingActorRuntime());
+            CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
+                new RecordingActorRuntime(),
+                static scopeKey => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    CorrelationId = scopeKey.SessionId,
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
+                }));
 
         Func<Task> releaseNull = () => service.ReleaseProjectionAsync(null!);
         Func<Task> releaseForeignLease = () => service.ReleaseProjectionAsync(new ForeignGAgentRunTerminalProjectionLease());
@@ -294,6 +350,25 @@ public sealed class ServiceProjectionInfrastructureTests
         await releaseForeignLease.Should().ThrowAsync<InvalidOperationException>();
         await ensureUnknownKind.Should().ThrowAsync<ArgumentOutOfRangeException>();
         resolveUnknownProjection.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void GAgentRunTerminalProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
+                static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
+                {
+                    RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
+                    CorrelationId = "corr-1",
+                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
+                }),
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
     }
 
     [Fact]
@@ -640,4 +715,17 @@ public sealed class ServiceProjectionInfrastructureTests
 
         public GAgentRunTerminalInteractionKind InteractionKind => GAgentRunTerminalInteractionKind.DraftRun;
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<TContext>> CreateAttachExistingLookup<TContext>(
+        IActorRuntime runtime,
+        Func<ProjectionRuntimeScopeKey, TContext> contextFactory)
+        where TContext : class, IProjectionMaterializationContext =>
+        new ProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<TContext>, TContext>(
+            runtime,
+            request => contextFactory(new ProjectionRuntimeScopeKey(
+                request.RootActorId,
+                request.ProjectionKind,
+                request.Mode,
+                request.SessionId)),
+            static (_, context) => new ServiceProjectionRuntimeLease<TContext>(context.RootActorId, context));
 }
