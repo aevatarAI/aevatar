@@ -1513,7 +1513,6 @@ agents/                                ← production code
 ├── Aevatar.GAgents.Registry/          ← 平台级 registry
 ├── Aevatar.GAgents.RoleCatalog/
 ├── Aevatar.GAgents.StreamingProxy/
-├── Aevatar.GAgents.StreamingProxyParticipant/
 ├── Aevatar.GAgents.UserConfig/
 └── Aevatar.GAgents.UserMemory/        ← ConversationGAgent 与其集成
 
@@ -2420,7 +2419,7 @@ public interface ICredentialProvider {
 
 ### 17.5 Orleans grain-based cluster-singleton primitive（P2 — 第二 long-conn 场景触发）
 
-**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `StreamingProxyParticipantGAgent.cs:13` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
+**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
 
 现有 hosted service（`UserAgentCatalogStartupService.cs:22-60` / `ChannelBotRegistrationStartupService.cs:33-72`）是 **node-local startup/warmup**——host 启动时 poke 一下 grain 让它 activate，不是 cluster-wide supervisor。
 

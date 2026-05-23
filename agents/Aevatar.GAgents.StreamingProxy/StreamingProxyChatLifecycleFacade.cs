@@ -3,7 +3,6 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
@@ -51,26 +50,29 @@ internal sealed class StreamingProxyChatLifecycleFacade
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IStreamingProxyRoomCommandService _roomCommandService;
+    private readonly IStreamingProxyRoomParticipantService _participantService;
     private readonly ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> _interactionService;
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
-    private readonly IStreamingProxyParticipantStore _participantStore;
+    private readonly StreamingProxyChatDurableCompletionResolver _durableCompletionResolver;
     private readonly IStreamingProxyRoomSubscriptionObservationPort _subscriptionObservationPort;
     private readonly ILogger<StreamingProxyChatLifecycleFacade> _logger;
 
     public StreamingProxyChatLifecycleFacade(
         IActorRuntime actorRuntime,
         IStreamingProxyRoomCommandService roomCommandService,
+        IStreamingProxyRoomParticipantService participantService,
         ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         IGAgentActorRegistryCommandPort registryCommandPort,
-        IStreamingProxyParticipantStore participantStore,
+        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         IStreamingProxyRoomSubscriptionObservationPort subscriptionObservationPort,
         ILogger<StreamingProxyChatLifecycleFacade> logger)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _roomCommandService = roomCommandService ?? throw new ArgumentNullException(nameof(roomCommandService));
+        _participantService = participantService ?? throw new ArgumentNullException(nameof(participantService));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
-        _participantStore = participantStore ?? throw new ArgumentNullException(nameof(participantStore));
+        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
         _subscriptionObservationPort = subscriptionObservationPort ?? throw new ArgumentNullException(nameof(subscriptionObservationPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -83,18 +85,46 @@ internal sealed class StreamingProxyChatLifecycleFacade
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        return await _interactionService.ExecuteAsync(
-            new StreamingProxyRoomChatCommand(
-                request.RoomId,
-                request.ScopeId,
-                request.Prompt,
+        string? acceptedRoomId = null;
+        try
+        {
+            return await _interactionService.ExecuteAsync(
+                new StreamingProxyRoomChatCommand(
+                    request.RoomId,
+                    request.ScopeId,
+                    request.Prompt,
+                    request.SessionId,
+                    request.AccessToken,
+                    request.PreferredRoute,
+                    request.DefaultModel),
+                emitAsync,
+                async (receipt, token) =>
+                {
+                    acceptedRoomId = receipt.ActorId;
+                    await ContinueParticipantLifecycleAsync(request, receipt.ActorId, token);
+                },
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            await TryPublishTerminalStateAsync(
+                acceptedRoomId,
                 request.SessionId,
-                request.AccessToken,
-                request.PreferredRoute,
-                request.DefaultModel),
-            emitAsync,
-            null,
-            ct);
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                "StreamingProxy chat was cancelled before completion.",
+                CancellationToken.None);
+            throw;
+        }
+        catch
+        {
+            await TryPublishTerminalStateAsync(
+                acceptedRoomId,
+                request.SessionId,
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                "StreamingProxy chat failed before completion.",
+                CancellationToken.None);
+            throw;
+        }
     }
 
     public async Task<StreamingProxyJoinLifecycleReceipt> JoinAsync(
@@ -110,17 +140,6 @@ internal sealed class StreamingProxyChatLifecycleFacade
             return new StreamingProxyJoinLifecycleReceipt(StreamingProxyJoinLifecycleStatus.RoomNotFound, null);
 
         var normalizedAgentId = result.AgentId ?? agentId.Trim();
-        var normalizedDisplayName = result.DisplayName ?? normalizedAgentId;
-        try
-        {
-            await _participantStore.AddAsync(roomId, normalizedAgentId, normalizedDisplayName, ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to persist participant {AgentId} in room {RoomId}", normalizedAgentId, roomId);
-        }
-
         return new StreamingProxyJoinLifecycleReceipt(
             StreamingProxyJoinLifecycleStatus.Joined,
             normalizedAgentId);
@@ -139,7 +158,6 @@ internal sealed class StreamingProxyChatLifecycleFacade
                     StreamingProxyDefaults.GAgentTypeName,
                     roomId),
                 ct);
-            await _participantStore.RemoveRoomAsync(roomId, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -151,10 +169,10 @@ internal sealed class StreamingProxyChatLifecycleFacade
         return StreamingProxyRoomDeleteLifecycleStatus.Accepted;
     }
 
-    public Task<IReadOnlyList<Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant>> ListParticipantsAsync(
+    public async Task<StreamingProxyRoomParticipantListResult> ListParticipantsAsync(
         string roomId,
         CancellationToken ct = default) =>
-        _participantStore.ListAsync(roomId, ct);
+        await _participantService.ListAsync(new StreamingProxyRoomParticipantListQuery(roomId), ct);
 
     public async Task<StreamingProxySubscriptionLifecycleReceipt> AttachSubscriptionAsync(
         string roomId,
@@ -183,4 +201,77 @@ internal sealed class StreamingProxyChatLifecycleFacade
         CancellationToken ct = default) =>
         _subscriptionObservationPort.DetachAndDisposeAsync(attachment, sink, ct);
 
+    private async Task ContinueParticipantLifecycleAsync(
+        StreamingProxyChatLifecycleRequest request,
+        string acceptedRoomId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return;
+
+        var participants = await _participantService.EnsureNyxParticipantsJoinedAsync(
+            new StreamingProxyRoomNyxParticipantJoinCommand(
+                request.ScopeId,
+                acceptedRoomId,
+                request.AccessToken,
+                request.PreferredRoute,
+                request.DefaultModel),
+            ct);
+        if (participants.Count == 0)
+            return;
+
+        var successfulReplies = await _participantService.GenerateNyxRepliesAsync(
+            new StreamingProxyRoomNyxReplyCommand(
+                acceptedRoomId,
+                request.Prompt,
+                request.SessionId,
+                request.AccessToken,
+                participants),
+            ct);
+
+        var terminalState = DetermineParticipantTerminalState(successfulReplies);
+        await _roomCommandService.PublishTerminalStateAsync(
+            new StreamingProxyRoomTerminalStateCommand(
+                acceptedRoomId,
+                request.SessionId,
+                terminalState.Status,
+                terminalState.ErrorMessage),
+            ct);
+    }
+
+    private async Task TryPublishTerminalStateAsync(
+        string? roomId,
+        string? sessionId,
+        StreamingProxyChatSessionTerminalStatus status,
+        string errorMessage,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(roomId) || string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        try
+        {
+            var durableCompletion = await _durableCompletionResolver.ResolveAsync(roomId, sessionId, ct);
+            if (durableCompletion is StreamingProxyProjectionCompletionStatus.Completed or StreamingProxyProjectionCompletionStatus.Failed)
+                return;
+
+            await _roomCommandService.PublishTerminalStateAsync(
+                new StreamingProxyRoomTerminalStateCommand(roomId, sessionId, status, errorMessage),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish terminal fallback state for room {RoomId}, session {SessionId}",
+                roomId,
+                sessionId);
+        }
+    }
+
+    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
+        int successfulReplies) =>
+        successfulReplies > 0
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 }

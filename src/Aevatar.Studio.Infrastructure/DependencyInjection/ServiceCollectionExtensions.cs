@@ -44,7 +44,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
-        services.AddSingleton<IStreamingProxyParticipantStore, ActorBackedStreamingProxyParticipantStore>();
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IUserMemoryStore, ActorBackedUserMemoryStore>();
         services.AddSingleton<IConnectorCatalogStore, ActorBackedConnectorCatalogStore>();
