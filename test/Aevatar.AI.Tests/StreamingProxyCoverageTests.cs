@@ -1,4 +1,5 @@
 using System.IO;
+using System.Collections;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text;
@@ -32,6 +33,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Time.Testing;
 using static Aevatar.GAgents.StreamingProxy.StreamingProxyEndpoints;
 
 namespace Aevatar.AI.Tests;
@@ -786,6 +788,99 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public void StreamingProxyRoomCredentialHandleStore_ShouldResolveOnlyOnce_ForMatchingScope()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var store = new StreamingProxyRoomCredentialHandleStore(cache);
+        var scope = new StreamingProxyRoomCredentialHandleScope(" room-a ", " scope-a ", " session-1 ");
+
+        var handleId = store.Create("  token-1  ", scope);
+
+        handleId.Should().NotBeNullOrWhiteSpace();
+        handleId.Should().NotContain("token-1");
+        store.Consume(handleId, new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-1"))
+            .Should().Be("token-1");
+        store.Consume(handleId, new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-1"))
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void StreamingProxyRoomCredentialHandleStore_ShouldNotRedeemHandleForDifferentRoomScopeOrSession()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var store = new StreamingProxyRoomCredentialHandleStore(cache);
+        var scope = new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-1");
+
+        var handleId = store.Create("token-1", scope);
+
+        store.Consume(handleId, new StreamingProxyRoomCredentialHandleScope("room-b", "scope-a", "session-1"))
+            .Should().BeNull();
+        store.Consume(handleId, new StreamingProxyRoomCredentialHandleScope("room-a", "scope-b", "session-1"))
+            .Should().BeNull();
+        store.Consume(handleId, new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-2"))
+            .Should().BeNull();
+        store.Consume(handleId, scope).Should().Be("token-1");
+    }
+
+    [Fact]
+    public void StreamingProxyRoomCredentialHandleStore_ShouldReturnNullForBlankOrMissingCredentials()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var store = new StreamingProxyRoomCredentialHandleStore(cache);
+        var scope = new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-1");
+
+        store.Consume(null, scope).Should().BeNull();
+        store.Consume("missing-handle", scope).Should().BeNull();
+
+        var blankHandle = store.Create("   ", scope);
+        store.Consume(blankHandle, scope).Should().BeNull();
+        store.Consume(blankHandle, scope).Should().BeNull();
+    }
+
+    [Fact]
+    public void StreamingProxyRoomCredentialHandleStore_ShouldExpireHandleDeterministically()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-23T08:00:00Z"));
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var store = new StreamingProxyRoomCredentialHandleStore(cache, TimeSpan.FromMinutes(2), clock);
+        var scope = new StreamingProxyRoomCredentialHandleScope("room-a", "scope-a", "session-1");
+
+        var handleId = store.Create("token-1", scope);
+
+        clock.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromTicks(1)));
+
+        store.Consume(handleId, scope).Should().BeNull();
+    }
+
+    [Fact]
+    public void StreamingProxyRoomCredentialHandleStore_ShouldExposeNoEnumerationOrDurableStateSurface()
+    {
+        typeof(IStreamingProxyRoomCredentialHandleStore)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Select(method => method.Name)
+            .Should().BeEquivalentTo(["Create", "Consume"]);
+        typeof(IStreamingProxyRoomCredentialHandleStore)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Should().BeEmpty();
+        typeof(IStreamingProxyRoomCredentialHandleStore)
+            .GetEvents(BindingFlags.Instance | BindingFlags.Public)
+            .Should().BeEmpty();
+
+        var fieldTypes = typeof(StreamingProxyRoomCredentialHandleStore)
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Select(field => field.FieldType)
+            .ToArray();
+
+        fieldTypes.Should().OnlyContain(type =>
+            type == typeof(IMemoryCache) ||
+            type == typeof(TimeSpan) ||
+            type == typeof(TimeProvider));
+        fieldTypes.Should().NotContain(type =>
+            type != typeof(string) &&
+            typeof(IEnumerable).IsAssignableFrom(type));
+    }
+
+    [Fact]
     public async Task StreamingProxyRoomChatFinalizeEmitter_ShouldEmitFailedTerminalOnlyWhenCompletionMissing()
     {
         var emitter = new StreamingProxyRoomChatFinalizeEmitter();
@@ -917,7 +1012,9 @@ public class StreamingProxyCoverageTests
         var publisher = new TestRecordingEventPublisher();
         agent.EventPublisher = publisher;
         var credentialHandles = services.GetRequiredService<IStreamingProxyRoomCredentialHandleStore>();
-        var credentialHandleId = credentialHandles.Create("token-1");
+        var credentialHandleId = credentialHandles.Create(
+            "token-1",
+            new StreamingProxyRoomCredentialHandleScope("streaming-proxy-agent", "scope-a", "session-123"));
 
         await agent.ActivateAsync();
         await agent.HandleRoomChatRequested(new StreamingProxyRoomChatRequested
@@ -1731,18 +1828,22 @@ public class StreamingProxyCoverageTests
     private sealed class StubStreamingProxyRoomCredentialHandleStore(string handleId = "credential-handle")
         : IStreamingProxyRoomCredentialHandleStore
     {
-        public List<string?> CreatedBearerTokens { get; } = [];
-        public List<string?> ConsumedHandleIds { get; } = [];
+        public List<(string? BearerToken, StreamingProxyRoomCredentialHandleScope Scope)> CreatedCredentials { get; } = [];
+        public List<(string? HandleId, StreamingProxyRoomCredentialHandleScope Scope)> ConsumedHandles { get; } = [];
 
-        public string Create(string? bearerToken)
+        public string Create(
+            string? bearerToken,
+            StreamingProxyRoomCredentialHandleScope scope)
         {
-            CreatedBearerTokens.Add(bearerToken);
+            CreatedCredentials.Add((bearerToken, scope));
             return handleId;
         }
 
-        public string? Consume(string? consumedHandleId)
+        public string? Consume(
+            string? consumedHandleId,
+            StreamingProxyRoomCredentialHandleScope scope)
         {
-            ConsumedHandleIds.Add(consumedHandleId);
+            ConsumedHandles.Add((consumedHandleId, scope));
             return consumedHandleId == handleId ? "resolved-token" : null;
         }
     }

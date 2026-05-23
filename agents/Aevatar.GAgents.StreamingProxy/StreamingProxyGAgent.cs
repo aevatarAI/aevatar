@@ -56,7 +56,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
         var topic = await PublishTopicAsync(prompt, sessionId);
         var credentialHandles = Services.GetService<IStreamingProxyRoomCredentialHandleStore>();
-        var accessToken = credentialHandles?.Consume(request.CredentialHandleId);
+        var accessToken = credentialHandles?.Consume(
+            request.CredentialHandleId,
+            new StreamingProxyRoomCredentialHandleScope(Id, request.ScopeId, sessionId));
         if (string.IsNullOrWhiteSpace(accessToken))
         {
             await PublishTerminalStateAsync(

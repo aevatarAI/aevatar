@@ -202,7 +202,9 @@ public static class StreamingProxyEndpoints
             // Set up SSE response
             await writer.StartAsync(ct);
 
-            var credentialHandleId = credentialHandles.Create(ExtractBearerToken(http));
+            var credentialHandleId = credentialHandles.Create(
+                ExtractBearerToken(http),
+                new StreamingProxyRoomCredentialHandleScope(roomId, scopeId, sessionId));
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
             var result = await interactionService.ExecuteAsync(
