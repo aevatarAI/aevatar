@@ -24,9 +24,9 @@ public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IW
     // Refactor (iter46/issue-871-workflow-file-catalog-query-port):
     //   Old pattern: Workflow catalog/capabilities query port discovered files, parsed YAML, loaded connector config, and cached results in singleton process memory during query execution.
     //   New principle: WorkflowGAgent per-definition authority; query ports only read freshness-bearing readmodels; file discovery/parsing happens at startup/import time, not in query path.
-    public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog()
+    public async Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default)
     {
-        var documents = QueryCatalogDocuments();
+        var documents = await QueryCatalogDocumentsAsync(ct);
         return documents
             .Select(_mapper.ToCatalogItem)
             .OrderBy(item => item.Group, StringComparer.OrdinalIgnoreCase)
@@ -35,35 +35,37 @@ public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IW
             .ToList();
     }
 
-    public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+    public async Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+        string workflowName,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(workflowName))
             return null;
 
-        var document = _catalogReader.GetAsync(workflowName.Trim()).Result;
+        var document = await _catalogReader.GetAsync(workflowName.Trim(), ct);
         return document == null
             ? null
             : _mapper.ToCatalogItemDetail(document);
     }
 
-    public WorkflowCapabilitiesDocument GetCapabilities()
+    public async Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
-        var capabilities = _capabilitiesReader.GetAsync(CapabilitiesDocumentId).Result
+        var capabilities = await _capabilitiesReader.GetAsync(CapabilitiesDocumentId, ct)
             ?? new WorkflowCapabilitiesCurrentStateDocument
             {
                 Id = CapabilitiesDocumentId,
                 ActorId = CapabilitiesDocumentId,
                 SchemaVersion = "capabilities.v1",
             };
-        return _mapper.ToCapabilitiesDocument(capabilities, QueryCatalogDocuments());
+        return _mapper.ToCapabilitiesDocument(capabilities, await QueryCatalogDocumentsAsync(ct));
     }
 
-    private IReadOnlyList<WorkflowCatalogCurrentStateDocument> QueryCatalogDocuments()
+    private async Task<IReadOnlyList<WorkflowCatalogCurrentStateDocument>> QueryCatalogDocumentsAsync(CancellationToken ct)
     {
-        var result = _catalogReader.QueryAsync(new ProjectionDocumentQuery
+        var result = await _catalogReader.QueryAsync(new ProjectionDocumentQuery
         {
             Take = 1000,
-        }).Result;
+        }, ct);
         return result.Items;
     }
 }

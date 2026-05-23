@@ -8,11 +8,11 @@ public interface IWorkflowExecutionQueryApplicationService
 
     IReadOnlyList<string> ListWorkflows();
 
-    IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog();
+    Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default);
 
-    WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName);
+    Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default);
 
-    WorkflowCapabilitiesDocument GetCapabilities();
+    Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default);
 
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
 

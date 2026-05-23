@@ -175,6 +175,63 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
+    public async Task WorkflowStatusTool_CatalogAndDetail_ShouldAwaitAsyncQueryMethods()
+    {
+        var query = new RecordingWorkflowExecutionQueryService
+        {
+            Catalog =
+            [
+                new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                    Description = "Direct workflow.",
+                    Category = "deterministic",
+                    Group = "starter-workflows",
+                    Source = "builtin",
+                },
+            ],
+            Detail = new WorkflowCatalogItemDetail
+            {
+                Catalog = new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                    Description = "Direct workflow.",
+                },
+                Definition = new WorkflowCatalogDefinition
+                {
+                    Roles =
+                    [
+                        new WorkflowCatalogRole
+                        {
+                            Id = "assistant",
+                            Name = "Assistant",
+                        },
+                    ],
+                    Steps =
+                    [
+                        new WorkflowCatalogStep
+                        {
+                            Id = "start",
+                            Type = "llm",
+                            TargetRole = "assistant",
+                        },
+                    ],
+                },
+            },
+        };
+        var tool = new WorkflowStatusTool(query, new WorkflowToolOptions());
+
+        var catalogResult = await tool.ExecuteAsync("""{"action":"catalog"}""");
+        var detailResult = await tool.ExecuteAsync("""{"action":"detail","workflow_name":"direct"}""");
+
+        using var catalogDocument = JsonDocument.Parse(catalogResult);
+        catalogDocument.RootElement.GetProperty("workflows")[0].GetProperty("name").GetString().Should().Be("direct");
+        using var detailDocument = JsonDocument.Parse(detailResult);
+        detailDocument.RootElement.GetProperty("name").GetString().Should().Be("direct");
+        query.Calls.Should().Equal("ListWorkflowCatalog", "GetWorkflowDetail:direct");
+    }
+
+    [Fact]
     public async Task WorkflowStatusTool_WhenWorkflowRunIdMissing_ShouldReturnNewErrors()
     {
         var query = new RecordingWorkflowExecutionQueryService();
@@ -250,6 +307,8 @@ public sealed class WorkflowRunToolContractTests
         public bool ActorQueryEnabled { get; init; } = true;
         public List<string> Calls { get; } = [];
         public WorkflowRunReport? Report { get; init; }
+        public IReadOnlyList<WorkflowCatalogItem> Catalog { get; init; } = [];
+        public WorkflowCatalogItemDetail? Detail { get; init; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> GraphEdges { get; init; } = [];
         public WorkflowRunGraphExportSubgraph GraphSubgraph { get; init; } = new();
@@ -259,11 +318,22 @@ public sealed class WorkflowRunToolContractTests
 
         public IReadOnlyList<string> ListWorkflows() => [];
 
-        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => [];
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default)
+        {
+            Calls.Add("ListWorkflowCatalog");
+            return Task.FromResult(Catalog);
+        }
 
-        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) => null;
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+            string workflowName,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"GetWorkflowDetail:{workflowName}");
+            return Task.FromResult(Detail);
+        }
 
-        public WorkflowCapabilitiesDocument GetCapabilities() => new();
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowCapabilitiesDocument());
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorSnapshot?>(null);

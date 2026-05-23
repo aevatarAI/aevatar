@@ -41,7 +41,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
-    public void WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
+    public async Task WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
     {
         var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
         var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
@@ -107,9 +107,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             capabilitiesReader,
             new WorkflowCatalogReadModelMapper());
 
-        var catalog = port.ListWorkflowCatalog();
-        var detail = port.GetWorkflowDetail("alpha");
-        var capabilities = port.GetCapabilities();
+        var catalog = await port.ListWorkflowCatalogAsync();
+        var detail = await port.GetWorkflowDetailAsync("alpha");
+        var capabilities = await port.GetCapabilitiesAsync();
 
         catalog.Select(x => x.Name).Should().Equal("alpha", "beta");
         catalog[0].AuthorityStateVersion.Should().Be(11);
@@ -136,7 +136,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
-    public void WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
+    public async Task WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
     {
         var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>();
         var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>();
@@ -145,9 +145,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             capabilitiesReader,
             new WorkflowCatalogReadModelMapper());
 
-        port.GetWorkflowDetail("   ").Should().BeNull();
-        port.GetWorkflowDetail("missing").Should().BeNull();
-        var capabilities = port.GetCapabilities();
+        (await port.GetWorkflowDetailAsync("   ")).Should().BeNull();
+        (await port.GetWorkflowDetailAsync("missing")).Should().BeNull();
+        var capabilities = await port.GetCapabilitiesAsync();
 
         capabilities.SchemaVersion.Should().Be("capabilities.v1");
         capabilities.AuthorityStateVersion.Should().Be(0);
@@ -156,6 +156,25 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         catalogReader.GetCalls.Should().Be(1);
         catalogReader.QueryCalls.Should().Be(1);
         capabilitiesReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogReadModelQueryPort_ShouldAwaitReadModelReadersWithoutBlocking()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new DeferredQueryDocumentReader<WorkflowCatalogCurrentStateDocument>(
+            [BuildCatalogDocument("alpha", updatedAt)]);
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>(),
+            new WorkflowCatalogReadModelMapper());
+
+        var catalogTask = port.ListWorkflowCatalogAsync();
+
+        catalogTask.IsCompleted.Should().BeFalse();
+        catalogReader.CompleteQuery();
+        var catalog = await catalogTask;
+        catalog.Should().ContainSingle(item => item.Name == "alpha");
     }
 
     [Theory]
@@ -626,6 +645,43 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
             {
                 Items = Items,
+            });
+        }
+    }
+
+    private sealed class DeferredQueryDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        private readonly TaskCompletionSource<ProjectionDocumentQueryResult<TReadModel>> _query =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly IReadOnlyList<TReadModel> _items;
+
+        public DeferredQueryDocumentReader(IReadOnlyList<TReadModel> items)
+        {
+            _items = items;
+        }
+
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
+        {
+            _ = key;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TReadModel?>(null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            _ = query;
+            ct.ThrowIfCancellationRequested();
+            return _query.Task;
+        }
+
+        public void CompleteQuery()
+        {
+            _query.SetResult(new ProjectionDocumentQueryResult<TReadModel>
+            {
+                Items = _items,
             });
         }
     }

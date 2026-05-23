@@ -91,7 +91,8 @@ public sealed class ChatQueryEndpointsTests
             ],
         };
 
-        var result = ChatQueryEndpoints.ListPrimitives(service);
+        using var cts = new CancellationTokenSource();
+        var result = await ChatQueryEndpoints.ListPrimitives(service, cts.Token);
 
         var body = await ExecuteAsync(result);
         body.Should().Contain("workflow_call");
@@ -99,6 +100,47 @@ public sealed class ChatQueryEndpointsTests
         body.Should().Contain("child_example");
         body.Should().NotContain("ignored_non_example");
         service.Calls.Should().ContainInOrder("GetCapabilities", "ListWorkflowCatalog");
+        service.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
+    }
+
+    [Fact]
+    public async Task CatalogEndpoints_ShouldAwaitAsyncQueryServiceAndPassCancellationToken()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            WorkflowCatalog =
+            [
+                new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                },
+            ],
+            WorkflowDetail = new WorkflowCatalogItemDetail
+            {
+                Catalog = new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                },
+            },
+            Capabilities = new WorkflowCapabilitiesDocument
+            {
+                SchemaVersion = "capabilities.v1",
+            },
+        };
+        using var cts = new CancellationTokenSource();
+
+        var catalog = await ChatQueryEndpoints.ListWorkflowCatalog(service, cts.Token);
+        var capabilities = await ChatQueryEndpoints.GetCapabilities(service, cts.Token);
+        var detail = await ChatQueryEndpoints.GetWorkflowDetail("direct", service, cts.Token);
+
+        (await ExecuteAsync(catalog)).Should().Contain("direct");
+        (await ExecuteAsync(capabilities)).Should().Contain("capabilities.v1");
+        (await ExecuteAsync(detail)).Should().Contain("direct");
+        service.Calls.Should().ContainInOrder(
+            "ListWorkflowCatalog",
+            "GetCapabilities",
+            "GetWorkflowDetail:direct");
+        service.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
     }
 
     [Fact]
@@ -370,22 +412,29 @@ public sealed class ChatQueryEndpointsTests
             return Workflows;
         }
 
-        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog()
+        public List<CancellationToken> CancellationTokens { get; } = [];
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default)
         {
             Calls.Add("ListWorkflowCatalog");
-            return WorkflowCatalog;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(WorkflowCatalog);
         }
 
-        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+            string workflowName,
+            CancellationToken ct = default)
         {
             Calls.Add($"GetWorkflowDetail:{workflowName}");
-            return WorkflowDetail;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(WorkflowDetail);
         }
 
-        public WorkflowCapabilitiesDocument GetCapabilities()
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
         {
             Calls.Add("GetCapabilities");
-            return Capabilities;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(Capabilities);
         }
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)

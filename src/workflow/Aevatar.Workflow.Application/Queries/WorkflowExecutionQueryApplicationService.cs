@@ -50,19 +50,21 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
     public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();
 
-    public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() =>
-        _workflowCatalogPort.ListWorkflowCatalog();
+    public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default) =>
+        _workflowCatalogPort.ListWorkflowCatalogAsync(ct);
 
-    public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+    public async Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+        string workflowName,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(workflowName))
             return null;
 
-        return _workflowCatalogPort.GetWorkflowDetail(workflowName);
+        return await _workflowCatalogPort.GetWorkflowDetailAsync(workflowName, ct);
     }
 
-    public WorkflowCapabilitiesDocument GetCapabilities() =>
-        _workflowCapabilitiesPort.GetCapabilities();
+    public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+        _workflowCapabilitiesPort.GetCapabilitiesAsync(ct);
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {

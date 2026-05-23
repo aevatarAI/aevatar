@@ -54,6 +54,54 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+# Refactor (iter56/cluster-920-workflow-catalog-async-query):
+#   Old pattern: production workflow query ports could hide async readmodel I/O behind sync .Result/.Wait calls.
+#   New principle: catalog/capabilities query seams are async end-to-end, and query ports await readmodel readers.
+workflow_query_port_files=()
+while IFS= read -r query_port_file; do
+  workflow_query_port_files+=("${query_port_file}")
+done < <(
+  find src/workflow \
+    -type f \
+    \( -name '*QueryPort.cs' -o -path '*/Queries/*.cs' -o -path '*/Workflows/*ReadModelQueryPort.cs' \) \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if (( ${#workflow_query_port_files[@]} > 0 )); then
+  set +e
+  workflow_query_port_sync_blocking_report="$(
+    rg -n "\.Result|\.Wait[[:space:]]*\(|GetAwaiter\(\)\.GetResult\(\)" "${workflow_query_port_files[@]}" \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+  )"
+  workflow_query_port_sync_blocking_status=$?
+  set -e
+
+  if [[ ${workflow_query_port_sync_blocking_status} -ne 0 && ${workflow_query_port_sync_blocking_status} -ne 1 ]]; then
+    echo "Workflow query-port sync-blocking guard execution failed."
+    exit "${workflow_query_port_sync_blocking_status}"
+  fi
+
+  if [ -n "${workflow_query_port_sync_blocking_report}" ]; then
+    echo "${workflow_query_port_sync_blocking_report}"
+    echo "Workflow production query ports must not sync-block async reads. Use async query seams and await readmodel readers."
+    exit 1
+  fi
+fi
+
 # Refactor (iter18/cluster-001):
 #   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
 #   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter

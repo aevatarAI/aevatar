@@ -79,8 +79,8 @@ public sealed class WorkflowStatusTool : IAgentTool
             return action switch
             {
                 "list" => ListWorkflows(),
-                "catalog" => ListCatalog(),
-                "detail" => GetDetail(args),
+                "catalog" => await ListCatalogAsync(ct),
+                "detail" => await GetDetailAsync(args, ct),
                 "timeline" => await GetTimelineAsync(args, ct),
                 _ => await GetStatusAsync(args, ct),
             };
@@ -98,9 +98,9 @@ public sealed class WorkflowStatusTool : IAgentTool
         return JsonSerializer.Serialize(new { workflows, count = workflows.Count }, s_json);
     }
 
-    private string ListCatalog()
+    private async Task<string> ListCatalogAsync(CancellationToken ct)
     {
-        var catalog = _queryService.ListWorkflowCatalog();
+        var catalog = await _queryService.ListWorkflowCatalogAsync(ct);
         var items = catalog.Select(c => new
         {
             name = c.Name, description = c.Description, category = c.Category,
@@ -109,13 +109,13 @@ public sealed class WorkflowStatusTool : IAgentTool
         return JsonSerializer.Serialize(new { workflows = items, count = items.Length }, s_json);
     }
 
-    private string GetDetail(ToolArgs args)
+    private async Task<string> GetDetailAsync(ToolArgs args, CancellationToken ct)
     {
         var name = args.Str("workflow_name");
         if (string.IsNullOrWhiteSpace(name))
             return """{"error":"'workflow_name' is required for 'detail' action"}""";
 
-        var detail = _queryService.GetWorkflowDetail(name);
+        var detail = await _queryService.GetWorkflowDetailAsync(name, ct);
         if (detail == null)
             return JsonSerializer.Serialize(new { error = $"Workflow '{name}' not found" });
 
