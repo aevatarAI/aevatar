@@ -49,15 +49,9 @@ internal sealed class StreamingProxyRoomParticipantService : IStreamingProxyRoom
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
-        var snapshot = await _participantsQueryPort.GetAsync(roomId, cancellationToken);
-        var existingParticipantIds = snapshot?.Participants
-            .Select(participant => participant.AgentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
-
         return await _nyxParticipantCoordinator.EnsureParticipantsJoinedAsync(
             command.ScopeId,
             roomId,
-            existingParticipantIds,
             NormalizeRequiredValue(command.AccessToken, nameof(command.AccessToken)),
             cancellationToken,
             command.PreferredRoute,

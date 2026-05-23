@@ -44,7 +44,6 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
         string scopeId,
         string roomId,
-        IReadOnlySet<string> existingParticipantIds,
         string accessToken,
         CancellationToken ct,
         string? preferredRoute = null,
@@ -56,9 +55,6 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
         foreach (var participant in participants)
         {
-            if (existingParticipantIds.Contains(participant.ParticipantId))
-                continue;
-
             await DispatchAsync(roomId, new GroupChatParticipantJoinedEvent
             {
                 AgentId = participant.ParticipantId,
@@ -68,6 +64,22 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
         return participants;
     }
+
+    public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
+        string scopeId,
+        string roomId,
+        IReadOnlySet<string> ignoredParticipantIds,
+        string accessToken,
+        CancellationToken ct,
+        string? preferredRoute = null,
+        string? defaultModel = null) =>
+        EnsureParticipantsJoinedAsync(
+            scopeId,
+            roomId,
+            accessToken,
+            ct,
+            preferredRoute,
+            defaultModel);
 
     public async Task<int> GenerateRepliesAsync(
         IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,

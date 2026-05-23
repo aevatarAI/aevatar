@@ -79,6 +79,12 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler(EndpointName = "joinRoom")]
     public async Task HandleGroupChatParticipantJoined(GroupChatParticipantJoinedEvent evt)
     {
+        if (HasParticipant(evt.AgentId))
+        {
+            Logger.LogInformation("[StreamingProxy] Participant already joined: {Name} ({Id})", evt.DisplayName, evt.AgentId);
+            return;
+        }
+
         await PersistDomainEventAsync(evt);
 
         // Broadcast join notification
@@ -203,11 +209,15 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         return next;
     }
 
+    private bool HasParticipant(string agentId) =>
+        State.Participants.Any(participant =>
+            string.Equals(participant.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
+
     private static void RemoveParticipant(StreamingProxyGAgentState state, string agentId)
     {
         for (var i = state.Participants.Count - 1; i >= 0; i--)
         {
-            if (string.Equals(state.Participants[i].AgentId, agentId, StringComparison.Ordinal))
+            if (string.Equals(state.Participants[i].AgentId, agentId, StringComparison.OrdinalIgnoreCase))
                 state.Participants.RemoveAt(i);
         }
     }

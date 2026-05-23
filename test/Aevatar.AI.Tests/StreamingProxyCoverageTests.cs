@@ -1558,7 +1558,8 @@ public class StreamingProxyCoverageTests
         state.Messages[1].SenderName.Should().Be("Bob");
         state.Participants.Should().BeEmpty();
 
-        publisher.Published.OfType<GroupChatParticipantJoinedEvent>().Should().HaveCount(2);
+        // iter50 cluster-050: actor-owned idempotent join — duplicate same-id joins no longer publish
+        publisher.Published.OfType<GroupChatParticipantJoinedEvent>().Should().HaveCount(1);
         publisher.Published.OfType<GroupChatTopicEvent>()
             .Should()
             .ContainSingle(x => x.Prompt == "Discuss the webhook setup" && x.SessionId == "room-session");
