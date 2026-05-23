@@ -176,8 +176,8 @@ describe('ScriptResultsPanel', () => {
     );
 
     expect(screen.getByText('Actor: runtime-1')).toBeTruthy();
-    expect(screen.getByText('Output: HELLO')).toBeTruthy();
-    expect(screen.getByText(/"status": "ok"/)).toBeTruthy();
+    expect(screen.getAllByText('Output: HELLO')).toHaveLength(2);
+    expect(screen.getByText('Status: ok')).toBeTruthy();
   });
 
   it('renders scope and promotion details in their respective tabs', () => {

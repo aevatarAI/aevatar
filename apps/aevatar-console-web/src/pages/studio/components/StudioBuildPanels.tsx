@@ -3078,6 +3078,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 ['Run', lastRunResult.runId],
                 ['Runtime', lastRunResult.runtimeActorId],
                 ['Definition', lastRunResult.definitionActorId],
+                ['Command type', lastRunResult.commandTypeUrl],
                 ['Source hash', lastRunResult.sourceHash],
                 ['Activity', lastRunResult.activityUrl],
               ].map(([label, value]) => (
