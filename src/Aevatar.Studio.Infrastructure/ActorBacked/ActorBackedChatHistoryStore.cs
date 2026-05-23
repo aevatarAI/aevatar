@@ -8,15 +8,17 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
-/// Actor-backed implementation of <see cref="IChatHistoryStore"/>.
+/// Actor-backed implementation of chat history query and command ports.
 /// Reads from the projection document store (CQRS read model).
 /// Writes send commands only to <see cref="ChatConversationGAgent"/>
-/// (index updates are handled internally by the conversation actor).
+/// through CQRS Core dispatch.
 /// </summary>
-internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
+internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChatHistoryCommandPort
 {
+    private const string PublisherId = "aevatar.studio.infrastructure.chat-history";
+
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;
     private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
@@ -24,14 +26,14 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 
     public ActorBackedChatHistoryStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IChatHistoryIndexTopologyPort indexTopologyPort,
         IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
         IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _indexTopologyPort = indexTopologyPort ?? throw new ArgumentNullException(nameof(indexTopologyPort));
         _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
@@ -85,7 +87,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         foreach (var msg in messages)
             replaceEvt.Messages.Add(ToStoredChatMessageProto(msg));
 
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, replaceEvt, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, replaceEvt, PublisherId, ct);
     }
 
     public async Task DeleteConversationAsync(
@@ -98,7 +100,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
             ConversationId = conversationId,
             ScopeId = scopeId,
         };
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, conversationActor, deleteEvt, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
     }
 
     // ── Actor resolution ───────────────────────────────────────

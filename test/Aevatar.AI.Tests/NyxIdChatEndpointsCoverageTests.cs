@@ -587,7 +587,7 @@ public class NyxIdChatEndpointsCoverageTests
     public async Task HandleDeleteConversationAsync_ShouldReturnOk_AndRemoveActor()
     {
         var actorStore = new StubGAgentActorStore();
-        var historyStore = new StubChatHistoryStore();
+        var historyCommandPort = new StubChatHistoryCommandPort();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
         var result = await InvokeResultAsync(
@@ -598,7 +598,7 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -607,7 +607,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == "actor-1");
-        historyStore.DeletedConversations.Should().ContainSingle(entry =>
+        historyCommandPort.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.ConversationId == "actor-1");
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
@@ -622,7 +622,7 @@ public class NyxIdChatEndpointsCoverageTests
     public async Task HandleDeleteConversationAsync_ShouldRejectScopeMismatch_BeforeAdmission()
     {
         var actorStore = new StubGAgentActorStore();
-        var historyStore = new StubChatHistoryStore();
+        var historyCommandPort = new StubChatHistoryCommandPort();
 
         var result = await InvokeResultAsync(
             "HandleDeleteConversationAsync",
@@ -631,7 +631,7 @@ public class NyxIdChatEndpointsCoverageTests
             "actor-1",
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -639,7 +639,7 @@ public class NyxIdChatEndpointsCoverageTests
         response.Body.Should().Contain("SCOPE_ACCESS_DENIED");
         actorStore.AdmissionTargets.Should().BeEmpty();
         actorStore.RemovedActors.Should().BeEmpty();
-        historyStore.DeletedConversations.Should().BeEmpty();
+        historyCommandPort.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
@@ -649,7 +649,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
         };
-        var historyStore = new StubChatHistoryStore();
+        var historyCommandPort = new StubChatHistoryCommandPort();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-missing"] = new StubActor("actor-missing");
 
@@ -661,7 +661,7 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -673,7 +673,7 @@ public class NyxIdChatEndpointsCoverageTests
             target.ActorId == "actor-missing" &&
             target.Operation == ScopeResourceOperation.Delete);
         actorStore.RemovedActors.Should().BeEmpty();
-        historyStore.DeletedConversations.Should().BeEmpty();
+        historyCommandPort.DeletedConversations.Should().BeEmpty();
     }
 
     [Theory]
@@ -688,7 +688,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             AdmissionResult = new ScopeResourceAdmissionResult(admissionStatus),
         };
-        var historyStore = new StubChatHistoryStore();
+        var historyCommandPort = new StubChatHistoryCommandPort();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-denied"] = new StubActor("actor-denied");
 
@@ -700,7 +700,7 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -715,7 +715,7 @@ public class NyxIdChatEndpointsCoverageTests
             .Should().NotBeNull();
         runtime.DeleteDispatches.Should().BeEmpty();
         actorStore.RemovedActors.Should().BeEmpty();
-        historyStore.DeletedConversations.Should().BeEmpty();
+        historyCommandPort.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
@@ -725,7 +725,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             RemoveActorException = new InvalidOperationException("registry unavailable"),
         };
-        var historyStore = new StubChatHistoryStore();
+        var historyCommandPort = new StubChatHistoryCommandPort();
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
 
@@ -737,19 +737,19 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.Which.Message.Should().Be("registry unavailable");
-        historyStore.DeletedConversations.Should().BeEmpty();
+        historyCommandPort.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleDeleteConversationAsync_ShouldRestoreActorRegistration_WhenHistoryDeleteFails()
     {
         var actorStore = new StubGAgentActorStore();
-        var historyStore = new StubChatHistoryStore
+        var historyCommandPort = new StubChatHistoryCommandPort
         {
             DeleteConversationException = new InvalidOperationException("history unavailable"),
         };
@@ -764,7 +764,7 @@ public class NyxIdChatEndpointsCoverageTests
             runtime,
             actorStore,
             actorStore,
-            historyStore,
+            historyCommandPort,
             CancellationToken.None);
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
@@ -2562,11 +2562,11 @@ public class NyxIdChatEndpointsCoverageTests
         var admissionPort = args.OfType<IScopeResourceAdmissionPort>().FirstOrDefault()
             ?? registryCommandPort as IScopeResourceAdmissionPort
             ?? new StubGAgentActorStore();
-        var historyStore = args.OfType<IChatHistoryStore>().FirstOrDefault() ?? new StubChatHistoryStore();
+        var historyCommandPort = args.OfType<IChatHistoryCommandPort>().FirstOrDefault() ?? new StubChatHistoryCommandPort();
         var runtime = args.OfType<IActorRuntime>().FirstOrDefault()
-            ?? new StubActorRuntime(registryCommandPort, outcomeChannel, historyStore);
+            ?? new StubActorRuntime(registryCommandPort, outcomeChannel, historyCommandPort);
         if (runtime is StubActorRuntime stubRuntime)
-            stubRuntime.ConfigureNyxIdChatServices(registryCommandPort, outcomeChannel, historyStore);
+            stubRuntime.ConfigureNyxIdChatServices(registryCommandPort, outcomeChannel, historyCommandPort);
         var dispatchPort = new StubActorDispatchPort(runtime);
         var facade = new NyxIdChatLifecycleFacade(
             new DefaultCommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome>(
@@ -2960,19 +2960,19 @@ public class NyxIdChatEndpointsCoverageTests
         private ServiceProvider? _nyxIdChatServices;
         private IGAgentActorRegistryCommandPort? _registryCommandPort;
         private IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>? _outcomeChannel;
-        private IChatHistoryStore? _historyStore;
+        private IChatHistoryCommandPort? _historyCommandPort;
 
         public StubActorRuntime(
             IGAgentActorRegistryCommandPort? registryCommandPort = null,
             IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>? outcomeChannel = null,
-            IChatHistoryStore? historyStore = null)
+            IChatHistoryCommandPort? historyCommandPort = null)
         {
-            if (registryCommandPort is not null || outcomeChannel is not null || historyStore is not null)
+            if (registryCommandPort is not null || outcomeChannel is not null || historyCommandPort is not null)
             {
                 ConfigureNyxIdChatServices(
                     registryCommandPort ?? new StubGAgentActorStore(),
                     outcomeChannel ?? new StreamActorOutcomeChannel<NyxIdChatConversationCreationOutcome>(new InMemoryStreamProvider()),
-                    historyStore ?? new StubChatHistoryStore());
+                    historyCommandPort ?? new StubChatHistoryCommandPort());
             }
         }
 
@@ -2985,18 +2985,18 @@ public class NyxIdChatEndpointsCoverageTests
         public void ConfigureNyxIdChatServices(
             IGAgentActorRegistryCommandPort registryCommandPort,
             IActorOutcomeChannel<NyxIdChatConversationCreationOutcome> outcomeChannel,
-            IChatHistoryStore? historyStore = null)
+            IChatHistoryCommandPort? historyCommandPort = null)
         {
-            historyStore ??= new StubChatHistoryStore();
+            historyCommandPort ??= new StubChatHistoryCommandPort();
             if (ReferenceEquals(_registryCommandPort, registryCommandPort) &&
                 ReferenceEquals(_outcomeChannel, outcomeChannel) &&
-                ReferenceEquals(_historyStore, historyStore) &&
+                ReferenceEquals(_historyCommandPort, historyCommandPort) &&
                 _nyxIdChatServices is not null)
                 return;
 
             _registryCommandPort = registryCommandPort;
             _outcomeChannel = outcomeChannel;
-            _historyStore = historyStore;
+            _historyCommandPort = historyCommandPort;
             _nyxIdChatServices?.Dispose();
             _nyxIdChatServices = new ServiceCollection()
                 .AddLogging()
@@ -3005,7 +3005,7 @@ public class NyxIdChatEndpointsCoverageTests
                 .AddSingleton<IActorRuntime>(this)
                 .AddSingleton(registryCommandPort)
                 .AddSingleton(outcomeChannel)
-                .AddSingleton(historyStore)
+                .AddSingleton(historyCommandPort)
                 .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
@@ -3446,29 +3446,10 @@ public class NyxIdChatEndpointsCoverageTests
             new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
-    private sealed class StubChatHistoryStore : IChatHistoryStore
+    private sealed class StubChatHistoryCommandPort : IChatHistoryCommandPort
     {
-        public ChatHistoryIndex IndexToReturn { get; init; } = new([]);
-        public List<(string ScopeId, string ConversationId, ConversationMeta Meta)> SavedConversations { get; } = [];
         public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
-        public Exception? SaveMessagesException { get; init; }
         public Exception? DeleteConversationException { get; init; }
-
-        public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
-        {
-            _ = scopeId;
-            return Task.FromResult(IndexToReturn);
-        }
-
-        public Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
-            string scopeId,
-            string conversationId,
-            CancellationToken ct = default)
-        {
-            _ = scopeId;
-            _ = conversationId;
-            return Task.FromResult<IReadOnlyList<StoredChatMessage>>([]);
-        }
 
         public Task SaveMessagesAsync(
             string scopeId,
@@ -3477,10 +3458,10 @@ public class NyxIdChatEndpointsCoverageTests
             IReadOnlyList<StoredChatMessage> messages,
             CancellationToken ct = default)
         {
+            _ = scopeId;
+            _ = conversationId;
+            _ = meta;
             _ = messages;
-            if (SaveMessagesException is not null)
-                throw SaveMessagesException;
-            SavedConversations.Add((scopeId, conversationId, meta));
             return Task.CompletedTask;
         }
 

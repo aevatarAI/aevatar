@@ -19,7 +19,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -51,8 +51,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     public async Task CreateAsync_WithoutTeamId_ShouldNotDispatchReassignment()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -73,7 +72,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         await service.ReassignTeamAsync(
             ScopeId, "m-1",
@@ -96,8 +95,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     public async Task ReassignTeamAsync_PureAssign_ShouldDispatchToMemberAndDestTeam()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.ReassignTeamAsync(
             ScopeId, "m-1",
@@ -118,8 +116,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     public async Task ReassignTeamAsync_PureUnassign_ShouldDispatchToMemberAndSourceTeam()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.ReassignTeamAsync(
             ScopeId, "m-1",
@@ -139,8 +136,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     [Fact]
     public void ReassignTeamAsync_BothNull_ShouldReject()
     {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), new RecordingDispatchPort());
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: null, toTeamId: null);
@@ -152,8 +148,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     [Fact]
     public void ReassignTeamAsync_BothEqual_ShouldReject()
     {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), new RecordingDispatchPort());
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: "t-same", toTeamId: "t-same");
@@ -198,5 +193,25 @@ public sealed class ActorDispatchStudioMemberReassignTests
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
+    }
+
+    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
+    {
+        var service = new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchService<
+            StudioProjectionActorCommand,
+            StudioProjectionActorCommandTarget,
+            StudioProjectionActorCommandReceipt,
+            StudioProjectionActorCommandStartError>(
+            new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchPipeline<
+                StudioProjectionActorCommand,
+                StudioProjectionActorCommandTarget,
+                StudioProjectionActorCommandReceipt,
+                StudioProjectionActorCommandStartError>(
+                new StudioProjectionActorCommandTargetResolver(),
+                new Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy(),
+                new StudioProjectionActorCommandEnvelopeFactory(),
+                new Aevatar.CQRS.Core.Commands.ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
+                new StudioProjectionActorCommandReceiptFactory()));
+        return new StudioProjectionActorCommandDispatch(service);
     }
 }

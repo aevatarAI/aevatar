@@ -10,8 +10,8 @@ public sealed class ConnectorServiceTests
     [Fact]
     public async Task SaveCatalogAsync_WhenRemoteMcpConnectorUsesUrl_ShouldAcceptConfiguration()
     {
-        var store = new RecordingConnectorCatalogStore();
-        var service = new ConnectorService(store, new StubConnectorCatalogImportParser());
+        var store = new RecordingConnectorCatalogPorts();
+        var service = new ConnectorService(store, store, new StubConnectorCatalogImportParser());
 
         var response = await service.SaveCatalogAsync(new SaveConnectorCatalogRequest(
             [
@@ -55,7 +55,8 @@ public sealed class ConnectorServiceTests
     [Fact]
     public async Task SaveCatalogAsync_WhenMcpAuthConfiguredWithoutUrl_ShouldReject()
     {
-        var service = new ConnectorService(new RecordingConnectorCatalogStore(), new StubConnectorCatalogImportParser());
+        var store = new RecordingConnectorCatalogPorts();
+        var service = new ConnectorService(store, store, new StubConnectorCatalogImportParser());
 
         var act = async () => await service.SaveCatalogAsync(new SaveConnectorCatalogRequest(
             [
@@ -107,7 +108,7 @@ public sealed class ConnectorServiceTests
             WorkingDirectory: string.Empty,
             Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
-    private sealed class RecordingConnectorCatalogStore : IConnectorCatalogStore
+    private sealed class RecordingConnectorCatalogPorts : IConnectorCatalogQueryPort, IConnectorCatalogCommandPort
     {
         public StoredConnectorCatalog? LastSavedCatalog { get; private set; }
 

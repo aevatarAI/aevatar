@@ -161,7 +161,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     public async Task HandleChatSessionTerminalStateChanged(StreamingProxyChatSessionTerminalStateChanged evt)
     {
         // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
         //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
         await PersistDomainEventAsync(evt);
 

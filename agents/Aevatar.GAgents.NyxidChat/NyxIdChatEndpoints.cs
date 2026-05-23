@@ -92,7 +92,7 @@ public static partial class NyxIdChatEndpoints
             return denied;
 
         // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
         //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
         var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ct);
         return receipt.Status switch
@@ -154,7 +154,7 @@ public static partial class NyxIdChatEndpoints
             return denied;
 
         // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
         //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
         var receipt = await lifecycleFacade.DeleteConversationAsync(scopeId, actorId, ct);
         return receipt.Status switch

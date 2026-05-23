@@ -21,7 +21,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Get_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingRoleCatalogStore { CatalogVersion = 12 };
+        var store = new RecordingRoleCatalogPorts { CatalogVersion = 12 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.Get(CancellationToken.None);
@@ -33,7 +33,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task GetDraft_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingRoleCatalogStore { DraftVersion = 7 };
+        var store = new RecordingRoleCatalogPorts { DraftVersion = 7 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.GetDraft(CancellationToken.None);
@@ -45,7 +45,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "W/\"3\"");
 
         var result = await controller.Save(
@@ -59,7 +59,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
@@ -74,7 +74,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
@@ -88,7 +88,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task Save_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingRoleCatalogPorts
         {
             ThrowOnWrite = new EventStoreOptimisticConcurrencyException("role-catalog-test", 3, 5),
         };
@@ -104,7 +104,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "W/\"5\"");
 
         var result = await controller.SaveDraft(
@@ -119,7 +119,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -134,7 +134,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WithoutIfMatch_DoesNotEmitETag()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.SaveDraft(
@@ -149,7 +149,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -164,7 +164,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenIfMatchHeaderAgreesWithBodyExpectedVersion_HeaderWinsAndStoreReceivesIt()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -178,7 +178,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingRoleCatalogPorts
         {
             ThrowOnWrite = new EventStoreOptimisticConcurrencyException("role-catalog-test", 5, 7),
         };
@@ -194,7 +194,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "*");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
@@ -206,7 +206,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithValidIfMatch_PassesExpectedVersionToStore()
     {
-        var store = new RecordingRoleCatalogStore();
+        var store = new RecordingRoleCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"9\"");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
@@ -219,7 +219,7 @@ public sealed class RolesControllerETagTests
     [Fact]
     public async Task DeleteDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingRoleCatalogStore
+        var store = new RecordingRoleCatalogPorts
         {
             ThrowOnDelete = new EventStoreOptimisticConcurrencyException("role-catalog-test", 9, 11),
         };
@@ -230,9 +230,9 @@ public sealed class RolesControllerETagTests
         result.Should().BeOfType<ConflictObjectResult>();
     }
 
-    private static RolesController CreateController(IRoleCatalogStore store, string? ifMatch)
+    private static RolesController CreateController(RecordingRoleCatalogPorts store, string? ifMatch)
     {
-        var service = new RoleCatalogService(store, new StubRoleCatalogImportParser());
+        var service = new RoleCatalogService(store, store, new StubRoleCatalogImportParser());
         var controller = new RolesController(service);
         var httpContext = new DefaultHttpContext();
         if (ifMatch is not null)
@@ -244,7 +244,7 @@ public sealed class RolesControllerETagTests
     private static RoleDefinitionDto SampleRole() =>
         new(Id: "r1", Name: "Test", SystemPrompt: "p", Provider: "anthropic", Model: "claude", Connectors: []);
 
-    private sealed class RecordingRoleCatalogStore : IRoleCatalogStore
+    private sealed class RecordingRoleCatalogPorts : IRoleCatalogQueryPort, IRoleCatalogCommandPort
     {
         public StoredRoleCatalog? SavedCatalog { get; private set; }
         public long? SavedCatalogExpectedVersion { get; private set; }

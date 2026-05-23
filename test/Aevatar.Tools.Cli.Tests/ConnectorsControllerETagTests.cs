@@ -20,7 +20,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task Get_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingConnectorCatalogStore { CatalogVersion = 12 };
+        var store = new RecordingConnectorCatalogPorts { CatalogVersion = 12 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.Get(CancellationToken.None);
@@ -32,7 +32,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task GetDraft_EmitsETagFromStoreVersion()
     {
-        var store = new RecordingConnectorCatalogStore { DraftVersion = 7 };
+        var store = new RecordingConnectorCatalogPorts { DraftVersion = 7 };
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.GetDraft(CancellationToken.None);
@@ -44,7 +44,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task Save_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "W/\"3\"");
 
         var result = await controller.Save(
@@ -58,7 +58,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task Save_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
@@ -73,7 +73,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task Save_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"3\"");
 
         var result = await controller.Save(
@@ -87,7 +87,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task Save_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingConnectorCatalogStore
+        var store = new RecordingConnectorCatalogPorts
         {
             ThrowOnWrite = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 3, 5),
         };
@@ -103,7 +103,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "*");
 
         var result = await controller.SaveDraft(
@@ -118,7 +118,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WithValidIfMatch_PassesExpectedVersion_AndEmitsDeterministicETag()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -133,7 +133,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WithoutIfMatch_DoesNotEmitETag()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: null);
 
         var result = await controller.SaveDraft(
@@ -148,7 +148,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenIfMatchHeaderDisagreesWithBodyExpectedVersion_Returns400()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -163,7 +163,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenIfMatchHeaderAgreesWithBodyExpectedVersion_HeaderWinsAndStoreReceivesIt()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"5\"");
 
         var result = await controller.SaveDraft(
@@ -177,7 +177,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task SaveDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingConnectorCatalogStore
+        var store = new RecordingConnectorCatalogPorts
         {
             ThrowOnWrite = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 5, 7),
         };
@@ -193,7 +193,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithMalformedIfMatch_Returns400_AndDoesNotInvokeStore()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "not-a-number");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
@@ -205,7 +205,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task DeleteDraft_WithValidIfMatch_PassesExpectedVersionToStore()
     {
-        var store = new RecordingConnectorCatalogStore();
+        var store = new RecordingConnectorCatalogPorts();
         var controller = CreateController(store, ifMatch: "\"9\"");
 
         var result = await controller.DeleteDraft(CancellationToken.None);
@@ -218,7 +218,7 @@ public sealed class ConnectorsControllerETagTests
     [Fact]
     public async Task DeleteDraft_WhenStoreThrowsOptimisticConflict_Returns409()
     {
-        var store = new RecordingConnectorCatalogStore
+        var store = new RecordingConnectorCatalogPorts
         {
             ThrowOnDelete = new EventStoreOptimisticConcurrencyException("connector-catalog-test", 9, 11),
         };
@@ -229,9 +229,9 @@ public sealed class ConnectorsControllerETagTests
         result.Should().BeOfType<ConflictObjectResult>();
     }
 
-    private static ConnectorsController CreateController(IConnectorCatalogStore store, string? ifMatch)
+    private static ConnectorsController CreateController(RecordingConnectorCatalogPorts store, string? ifMatch)
     {
-        var service = new ConnectorService(store, new StubConnectorCatalogImportParser());
+        var service = new ConnectorService(store, store, new StubConnectorCatalogImportParser());
         var controller = new ConnectorsController(service);
         var httpContext = new DefaultHttpContext();
         if (ifMatch is not null)
@@ -282,7 +282,7 @@ public sealed class ConnectorsControllerETagTests
             AllowedTools: [],
             AllowedInputKeys: []);
 
-    private sealed class RecordingConnectorCatalogStore : IConnectorCatalogStore
+    private sealed class RecordingConnectorCatalogPorts : IConnectorCatalogQueryPort, IConnectorCatalogCommandPort
     {
         public StoredConnectorCatalog? SavedCatalog { get; private set; }
         public long? SavedCatalogExpectedVersion { get; private set; }

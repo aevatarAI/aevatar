@@ -4,9 +4,9 @@ using System.Text.Json;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: connector catalog import/save paths were centered on local catalog files as the durable catalog.
-//   New principle: this service validates DTOs and delegates catalog facts to the injected catalog store; local files are import sources only.
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
 public sealed class ConnectorService
 {
     private static readonly HashSet<string> SupportedTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -16,26 +16,29 @@ public sealed class ConnectorService
         "mcp",
     };
 
-    private readonly IConnectorCatalogStore _store;
+    private readonly IConnectorCatalogQueryPort _queryPort;
+    private readonly IConnectorCatalogCommandPort _commandPort;
     private readonly IConnectorCatalogImportParser _importParser;
 
     public ConnectorService(
-        IConnectorCatalogStore store,
+        IConnectorCatalogQueryPort queryPort,
+        IConnectorCatalogCommandPort commandPort,
         IConnectorCatalogImportParser importParser)
     {
-        _store = store;
+        _queryPort = queryPort;
+        _commandPort = commandPort;
         _importParser = importParser;
     }
 
     public async Task<ConnectorCatalogResponse> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var catalog = await _store.GetConnectorCatalogAsync(cancellationToken);
+        var catalog = await _queryPort.GetConnectorCatalogAsync(cancellationToken);
         return ToResponse(catalog);
     }
 
     public async Task<ConnectorDraftResponse> GetDraftAsync(CancellationToken cancellationToken = default)
     {
-        var draft = await _store.GetConnectorDraftAsync(cancellationToken);
+        var draft = await _queryPort.GetConnectorDraftAsync(cancellationToken);
         return ToDraftResponse(draft);
     }
 
@@ -46,7 +49,7 @@ public sealed class ConnectorService
         var connectors = request.Connectors ?? [];
         EnsureUniqueNames(connectors);
 
-        var saved = await _store.SaveConnectorCatalogAsync(
+        var saved = await _commandPort.SaveConnectorCatalogAsync(
             new StoredConnectorCatalog(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
@@ -63,7 +66,7 @@ public sealed class ConnectorService
 
     public async Task<ImportConnectorCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
+        var imported = await _queryPort.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
     }
 
@@ -107,11 +110,11 @@ public sealed class ConnectorService
     {
         if (request.Draft is null)
         {
-            await _store.DeleteConnectorDraftAsync(request.ExpectedVersion, cancellationToken);
+            await _commandPort.DeleteConnectorDraftAsync(request.ExpectedVersion, cancellationToken);
             return await GetDraftAsync(cancellationToken);
         }
 
-        var saved = await _store.SaveConnectorDraftAsync(
+        var saved = await _commandPort.SaveConnectorDraftAsync(
             new StoredConnectorDraft(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
@@ -125,7 +128,7 @@ public sealed class ConnectorService
     }
 
     public Task DeleteDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
-        _store.DeleteConnectorDraftAsync(expectedVersion, cancellationToken);
+        _commandPort.DeleteConnectorDraftAsync(expectedVersion, cancellationToken);
 
     private static void EnsureUniqueNames(IEnumerable<ConnectorDefinitionDto> connectors)
     {
