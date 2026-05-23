@@ -833,6 +833,112 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
+    public async Task HandleListGAgentTypesAsync_ShouldSkipServicesWithoutRevisionCatalog()
+    {
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services =
+            [
+                CreateServiceCatalogSnapshot("svc-missing-revisions"),
+            ],
+        };
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader();
+
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        body.Should().Be("[]");
+        revisionReader.RequestedIdentities.Should().ContainSingle(identity =>
+            identity.ServiceId == "svc-missing-revisions" &&
+            identity.TenantId == "scope-a");
+    }
+
+    [Fact]
+    public async Task HandleListGAgentTypesAsync_ShouldIgnoreNonStaticAndBlankStaticRevisionFacts()
+    {
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services =
+            [
+                CreateServiceCatalogSnapshot("svc-filtered-revisions"),
+            ],
+        };
+        var identity = CreateServiceIdentity("svc-filtered-revisions");
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader
+        {
+            Revisions =
+            {
+                [ServiceKeys.Build(identity)] = new ServiceRevisionCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        CreateWorkflowRevisionSnapshot("rev-workflow", "workflow-endpoint"),
+                        CreateStaticRevisionSnapshot("rev-blank-static", " ", "blank-static-endpoint"),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+        };
+
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        body.Should().Be("[]");
+        body.Should().NotContain("workflow-endpoint");
+        body.Should().NotContain("blank-static-endpoint");
+        revisionReader.RequestedIdentities.Should().ContainSingle(identity =>
+            identity.ServiceId == "svc-filtered-revisions" &&
+            identity.TenantId == "scope-a");
+    }
+
+    [Fact]
+    public async Task HandleListGAgentTypesAsync_ShouldMergeDuplicateStaticActorTypeEndpoints()
+    {
+        var staticActorTypeName = "Tests.SharedStaticGAgent, Tests.Assembly";
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Services =
+            [
+                CreateServiceCatalogSnapshot("svc-duplicate-actor-type"),
+            ],
+        };
+        var identity = CreateServiceIdentity("svc-duplicate-actor-type");
+        var revisionReader = new FakeServiceRevisionCatalogQueryReader
+        {
+            Revisions =
+            {
+                [ServiceKeys.Build(identity)] = new ServiceRevisionCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        CreateStaticRevisionSnapshot("rev-a", staticActorTypeName, "chat", "run"),
+                        CreateStaticRevisionSnapshot("rev-b", staticActorTypeName, "chat", "status"),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+        };
+
+        var result = await InvokeHandleListGAgentTypesAsync(catalogReader, revisionReader);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        statusCode.Should().Be((int)HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(body);
+        var gAgentType = document.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        gAgentType.GetProperty("typeName").GetString().Should().Be("SharedStaticGAgent");
+        gAgentType.GetProperty("fullName").GetString().Should().Be(staticActorTypeName);
+        gAgentType.GetProperty("assemblyName").GetString().Should().Be("Tests.Assembly");
+        gAgentType.GetProperty("endpoints")
+            .EnumerateArray()
+            .Select(endpoint => endpoint.GetProperty("endpointId").GetString())
+            .Should()
+            .BeEquivalentTo(["chat", "run", "status"]);
+        gAgentType.GetProperty("endpoints")
+            .EnumerateArray()
+            .Count(endpoint => endpoint.GetProperty("endpointId").GetString() == "chat")
+            .Should()
+            .Be(1);
+    }
+
+    [Fact]
     public async Task HandleListGAgentTypesAsync_ShouldNotDiscoverLoadedClrAgentClasses()
     {
         var catalogReader = new FakeServiceCatalogQueryReader();
@@ -1053,6 +1159,52 @@ public sealed class ScopeGAgentEndpointsTests
             Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
             ServiceId = serviceId,
         };
+
+    private static ServiceRevisionSnapshot CreateStaticRevisionSnapshot(
+        string revisionId,
+        string actorTypeName,
+        params string[] endpointIds) =>
+        new(
+            revisionId,
+            ServiceImplementationKind.Static.ToString(),
+            ServiceRevisionStatus.Published.ToString(),
+            $"{revisionId}-hash",
+            string.Empty,
+            endpointIds.Select(CreateEndpointSnapshot).ToList(),
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null,
+            new ServiceRevisionImplementationSnapshot(
+                Static: new ServiceRevisionStaticSnapshot(actorTypeName, "preferred-actor")));
+
+    private static ServiceRevisionSnapshot CreateWorkflowRevisionSnapshot(
+        string revisionId,
+        params string[] endpointIds) =>
+        new(
+            revisionId,
+            ServiceImplementationKind.Workflow.ToString(),
+            ServiceRevisionStatus.Published.ToString(),
+            $"{revisionId}-hash",
+            string.Empty,
+            endpointIds.Select(CreateEndpointSnapshot).ToList(),
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null,
+            new ServiceRevisionImplementationSnapshot(
+                Workflow: new ServiceRevisionWorkflowSnapshot("workflow-a", "definition-actor", 1)));
+
+    private static ServiceEndpointSnapshot CreateEndpointSnapshot(string endpointId) =>
+        new(
+            endpointId,
+            endpointId,
+            endpointId == "chat"
+                ? ServiceEndpointKind.Chat.ToString()
+                : ServiceEndpointKind.Command.ToString(),
+            $"type.googleapis.com/tests.{endpointId}",
+            string.Empty,
+            $"{endpointId} endpoint.");
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {
