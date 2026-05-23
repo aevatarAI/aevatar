@@ -33,28 +33,31 @@ internal static class ScriptEvolutionIntegrationTestKit
         services.AddAevatarRuntime();
         configure?.Invoke(services);
         services.AddScriptCapability();
-        services.AddAuthorityActivatingScriptEvolutionApplicationService();
+        services.AddAttachOnlyScriptEvolutionApplicationService();
         return services.BuildServiceProvider();
     }
 
-    public static IServiceCollection AddAuthorityActivatingScriptEvolutionApplicationService(
+    public static IServiceCollection AddAttachOnlyScriptEvolutionApplicationService(
         this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionApplicationService>(sp =>
-            new AuthorityActivatingScriptEvolutionApplicationService(
+            new AttachOnlyScriptEvolutionApplicationService(
                 new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
-                sp.GetRequiredService<IScriptAuthorityReadModelActivationPort>(),
                 sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
                 sp.GetRequiredService<IScriptingActorAddressResolver>())));
         services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionProposalPort>(sp =>
-            new AuthorityActivatingScriptEvolutionProposalPort(
+            new AttachOnlyScriptEvolutionProposalPort(
                 sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>(),
                 sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
                 sp.GetRequiredService<IScriptingActorAddressResolver>())));
         return services;
     }
+
+    public static IServiceCollection AddAuthorityActivatingScriptEvolutionApplicationService(
+        this IServiceCollection services) =>
+        services.AddAttachOnlyScriptEvolutionApplicationService();
 
     public static async Task<string> UpsertDefinitionAsync(
         IServiceProvider provider,
@@ -83,8 +86,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         var resolvedDefinitionActorId = string.IsNullOrWhiteSpace(definitionActorId)
             ? addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
-        await ActivateAuthorityReadModelAsync(provider, resolvedDefinitionActorId, ct);
-
         var result = await provider.GetRequiredService<IScriptDefinitionCommandPort>()
             .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
@@ -118,7 +119,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         ScriptDefinitionSnapshot? definitionSnapshot,
         CancellationToken ct)
     {
-        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var resolvedSnapshot = definitionSnapshot
             ?? ResolveDefinitionSnapshot(definitionActorId, revision)
             ?? await provider.GetRequiredService<IScriptDefinitionSnapshotPort>()
@@ -366,8 +366,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         CancellationToken ct,
         string? expectedRevision = null)
     {
-        var addressResolver = provider.GetRequiredService<IScriptingActorAddressResolver>();
-        await ActivateAuthorityReadModelAsync(provider, addressResolver.GetCatalogActorId(), ct);
         var queryPort = provider.GetRequiredService<IScriptCatalogQueryPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -400,7 +398,6 @@ internal static class ScriptEvolutionIntegrationTestKit
         string revision,
         CancellationToken ct)
     {
-        await ActivateAuthorityReadModelAsync(provider, definitionActorId, ct);
         var snapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ObservationTimeout);
@@ -433,23 +430,12 @@ internal static class ScriptEvolutionIntegrationTestKit
             if (string.IsNullOrWhiteSpace(actorId))
                 continue;
 
-            await ActivateAuthorityReadModelAsync(provider, actorId, ct);
+            _ = actorId;
         }
     }
 
-    private static async Task ActivateAuthorityReadModelAsync(
-        IServiceProvider provider,
-        string actorId,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        await provider.GetRequiredService<IScriptAuthorityReadModelActivationPort>()
-            .ActivateAsync(actorId, ct);
-    }
-
-    private sealed class AuthorityActivatingScriptEvolutionApplicationService(
+    private sealed class AttachOnlyScriptEvolutionApplicationService(
         IScriptEvolutionApplicationService inner,
-        IScriptAuthorityReadModelActivationPort activationPort,
         IScriptEvolutionProjectionPort evolutionProjectionPort,
         IScriptingActorAddressResolver addressResolver)
         : IScriptEvolutionApplicationService
@@ -475,10 +461,6 @@ internal static class ScriptEvolutionIntegrationTestKit
                 ProposalId = normalizedProposalId,
             };
 
-            await activationPort.ActivateAsync(addressResolver.GetCatalogActorId(normalizedScopeId), ct);
-            await activationPort.ActivateAsync(
-                addressResolver.GetDefinitionActorId(request.ScriptId, normalizedScopeId),
-                ct);
             var sessionActorId = addressResolver.GetEvolutionSessionActorId(
                 normalizedProposalId,
                 normalizedScopeId);
@@ -496,7 +478,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         }
     }
 
-    private sealed class AuthorityActivatingScriptEvolutionProposalPort(
+    private sealed class AttachOnlyScriptEvolutionProposalPort(
         IScriptEvolutionProposalPort inner,
         IScriptEvolutionProjectionPort evolutionProjectionPort,
         IScriptingActorAddressResolver addressResolver)

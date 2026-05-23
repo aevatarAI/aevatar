@@ -953,8 +953,7 @@ internal sealed class RecordingAICapability : IAICapability
 }
 
 internal sealed class RecordingExecutionProjectionPort
-    : IScriptExecutionProjectionPort,
-      IScriptExecutionReadModelActivationPort
+    : IScriptExecutionProjectionPort
 {
     public bool ProjectionEnabled => true;
 
@@ -963,9 +962,6 @@ internal sealed class RecordingExecutionProjectionPort
         ct.ThrowIfCancellationRequested();
         return Task.FromResult<IScriptExecutionProjectionLease?>(new RecordingExecutionProjectionLease(actorId));
     }
-
-    public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-        await EnsureActorProjectionAsync(actorId, ct) != null;
 
     public Task<IScriptExecutionProjectionLease?> EnsureProjectionAsync(string actorId, string projectionName, string input, string commandId, CancellationToken ct = default)
     {
@@ -1149,8 +1145,7 @@ internal sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
 }
 
 internal sealed class RecordingEvolutionProjectionPort
-    : IScriptEvolutionProjectionPort,
-      IScriptEvolutionReadModelActivationPort
+    : IScriptEvolutionProjectionPort
 {
     public bool ProjectionEnabled => true;
     public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
@@ -1163,9 +1158,6 @@ internal sealed class RecordingEvolutionProjectionPort
         ct.ThrowIfCancellationRequested();
         return Task.FromResult<IScriptEvolutionProjectionLease?>(new RecordingEvolutionProjectionLease(sessionActorId, proposalId));
     }
-
-    public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-        await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
     public async Task<EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>?> AttachExistingActorProjectionAsync(
         string sessionActorId,

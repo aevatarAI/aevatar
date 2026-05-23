@@ -136,6 +136,10 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
         where TEvent : IMessage
     {
         var actorId = StudioWorkspaceConventions.BuildActorId(scopeId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   workspace commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioWorkspaceGAgent>(actorId, ct);
         SetWorkspace(evt, actorId, scopeId);
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);

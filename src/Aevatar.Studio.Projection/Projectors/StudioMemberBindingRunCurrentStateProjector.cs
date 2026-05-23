@@ -14,9 +14,6 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// Materializes StudioMemberBindingRunGAgent committed state into the run-owned
 /// status read model consumed by the binding-run status API.
 /// </summary>
-[ProjectionExempt(
-    Category = ProjectionExemptionCategory.StartupBootstrap,
-    Reason = "Studio actor-backed store current-state readmodels are activated by StudioCurrentStateProjectionPort/StudioActorBootstrap; provider migration is tracked separately from issue #895.")]
 public sealed class StudioMemberBindingRunCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {

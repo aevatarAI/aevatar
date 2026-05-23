@@ -18,8 +18,8 @@ namespace Aevatar.Studio.Tests;
 ///   typed implementation_ref the actor expects.
 /// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
-///   IActorDispatchPort, so the projection scope is active before the
-///   command lands on the inbox.
+///   IActorDispatchPort, so actor provisioning happens before the command
+///   lands on the inbox.
 /// </summary>
 public sealed class ActorDispatchStudioMemberCommandServiceTests
 {

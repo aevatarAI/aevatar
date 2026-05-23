@@ -525,8 +525,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     private sealed class RecordingExecutionProjectionPort
-        : IScriptExecutionProjectionPort,
-          IScriptExecutionReadModelActivationPort
+        : IScriptExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<string> EnsureCalls { get; } = [];
@@ -539,9 +538,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             EnsureCalls.Add(actorId);
             return Task.FromResult<IScriptExecutionProjectionLease?>(new RecordingLease(actorId));
         }
-
-        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-            await EnsureActorProjectionAsync(actorId, ct) != null;
 
         public Task<IScriptExecutionProjectionLease?> EnsureProjectionAsync(
             string actorId,

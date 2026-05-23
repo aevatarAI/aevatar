@@ -17,9 +17,6 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// implementation_ref, denormalized last_binding — so the query port never
 /// has to <see cref="Any.Unpack"/> the actor's internal state.
 /// </summary>
-[ProjectionExempt(
-    Category = ProjectionExemptionCategory.StartupBootstrap,
-    Reason = "Studio actor-backed store current-state readmodels are activated by StudioCurrentStateProjectionPort/StudioActorBootstrap; provider migration is tracked separately from issue #895.")]
 public sealed class StudioMemberCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {
