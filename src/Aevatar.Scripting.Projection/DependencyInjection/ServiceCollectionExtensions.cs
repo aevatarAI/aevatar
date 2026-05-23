@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Abstractions.Evolution;
@@ -110,6 +111,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
         services.TryAddSingleton<IScriptAuthorityReadModelActivationPort>(sp =>
             sp.GetRequiredService<ScriptAuthorityProjectionPort>());
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ScriptingCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();
         services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>
