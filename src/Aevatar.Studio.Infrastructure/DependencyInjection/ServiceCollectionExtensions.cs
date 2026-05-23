@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgents.ChatHistory.DependencyInjection;
 using Aevatar.Studio.Infrastructure.Authoring;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
@@ -21,6 +22,7 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddChatHistoryGAgents();
         services.Configure<StudioStorageOptions>(configuration.GetSection("Studio:Storage"));
         services.Configure<ConnectorCatalogStorageOptions>(configuration.GetSection(ConnectorCatalogStorageOptions.SectionName));
         services.AddSingleton(WorkflowCompatibilityProfile.AevatarV1);

@@ -17,6 +17,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 {
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;
     private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
     private readonly ILogger<ActorBackedChatHistoryStore> _logger;
@@ -24,12 +25,14 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
     public ActorBackedChatHistoryStore(
         IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
+        IChatHistoryIndexTopologyPort indexTopologyPort,
         IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
         IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _indexTopologyPort = indexTopologyPort ?? throw new ArgumentNullException(nameof(indexTopologyPort));
         _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -37,7 +40,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 
     public async Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
     {
-        var actorId = IndexActorId(scopeId);
+        var actorId = _indexTopologyPort.GetIndexActorId(scopeId);
         var document = await _indexDocumentReader.GetAsync(actorId, ct);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(ChatHistoryIndexState.Descriptor))
@@ -106,14 +109,13 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         // The conversation actor forwards events to the per-scope index
         // actor internally, so we bootstrap both so their projections
         // materialize. Ordering doesn't matter; each call is idempotent.
-        await _bootstrap.EnsureAsync<ChatHistoryIndexGAgent>(IndexActorId(scopeId), ct);
+        await _bootstrap.EnsureAsync<ChatHistoryIndexGAgent>(_indexTopologyPort.GetIndexActorId(scopeId), ct);
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
             ConversationActorId(scopeId, conversationId), ct);
     }
 
     // ── Actor ID conventions ───────────────────────────────────
 
-    private static string IndexActorId(string scopeId) => $"chat-index-{scopeId}";
     private static string ConversationActorId(string scopeId, string conversationId) => $"chat-{scopeId}-{conversationId}";
 
     // ── Mapping helpers ────────────────────────────────────────
