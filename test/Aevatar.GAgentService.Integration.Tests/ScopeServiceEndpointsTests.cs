@@ -2466,7 +2466,8 @@ public sealed class ScopeServiceEndpointsTests
             userInput = "approved",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-default-1");
@@ -2545,7 +2546,8 @@ public sealed class ScopeServiceEndpointsTests
             payload = "window=open",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-2");
         host.SignalDispatchService.LastCommand.RunId.Should().Be("run-default-2");
@@ -2592,7 +2594,8 @@ public sealed class ScopeServiceEndpointsTests
             actorId = "run-actor-default-2",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-2");
     }
@@ -2621,7 +2624,8 @@ public sealed class ScopeServiceEndpointsTests
             reason = "manual",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.StopDispatchService.LastCommand.Should().NotBeNull();
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-3");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-default-3");
@@ -3039,7 +3043,8 @@ public sealed class ScopeServiceEndpointsTests
             metadata = new Dictionary<string, string> { ["source"] = "test" },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-1");
@@ -3073,7 +3078,8 @@ public sealed class ScopeServiceEndpointsTests
             payload = "window=open",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-2");
         host.SignalDispatchService.LastCommand.RunId.Should().Be("run-2");
@@ -3111,7 +3117,8 @@ public sealed class ScopeServiceEndpointsTests
             reason = "manual",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.StopDispatchService.LastCommand.Should().NotBeNull();
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-3");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-3");
@@ -3455,7 +3462,8 @@ public sealed class ScopeServiceEndpointsTests
             approved = true,
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
@@ -3487,7 +3495,8 @@ public sealed class ScopeServiceEndpointsTests
             stepId = "wait-1",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-signal-1");
         host.SignalDispatchService.LastCommand.RunId.Should().Be("run-member-signal-1");
@@ -3518,7 +3527,8 @@ public sealed class ScopeServiceEndpointsTests
             reason = "manual",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
         host.StopDispatchService.LastCommand.Should().NotBeNull();
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-stop-1");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-member-stop-1");

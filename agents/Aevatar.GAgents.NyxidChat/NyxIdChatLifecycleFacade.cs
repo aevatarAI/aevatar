@@ -13,7 +13,9 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed record NyxIdChatConversationCreateReceipt(
     NyxIdChatConversationCreateStatus Status,
     string? ActorId,
-    Reject? Reject);
+    Reject? Reject,
+    string? CommandId = null,
+    string? CorrelationId = null);
 
 public enum NyxIdChatConversationCreateStatus
 {
@@ -77,7 +79,9 @@ public sealed class NyxIdChatLifecycleFacade
             return new NyxIdChatConversationCreateReceipt(
                 MapCreateOutcome(result.Outcome.Status),
                 result.Receipt.ActorId,
-                result.Receipt.Reject);
+                result.Receipt.Reject,
+                result.Receipt.CommandId,
+                result.Receipt.CorrelationId);
         }
 
         return result.Error switch

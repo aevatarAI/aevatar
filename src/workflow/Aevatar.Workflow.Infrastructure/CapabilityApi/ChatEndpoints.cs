@@ -205,14 +205,19 @@ public static class WorkflowCapabilityEndpoints
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Resume dispatch only proves inbox admission for the workflow actor, not applied continuation state.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 stepId,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -264,15 +269,20 @@ public static class WorkflowCapabilityEndpoints
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Signal dispatch only proves inbox admission for the workflow actor, not applied signal handling.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 signalName,
                 stepId,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -320,14 +330,19 @@ public static class WorkflowCapabilityEndpoints
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Stop dispatch only proves inbox admission for the workflow actor, not terminal run state.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 reason,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -340,6 +355,9 @@ public static class WorkflowCapabilityEndpoints
             throw;
         }
     }
+
+    private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
+        $"/api/actors/{Uri.EscapeDataString(receipt.ActorId)}";
 
     private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()

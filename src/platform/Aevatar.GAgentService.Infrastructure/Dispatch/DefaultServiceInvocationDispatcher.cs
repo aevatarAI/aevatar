@@ -57,7 +57,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Static, ct);
         var envelope = CreateEnvelope(target.Service.PrimaryActorId, request.Payload, commandId, correlationId);
         await _dispatchPort.DispatchAsync(target.Service.PrimaryActorId, envelope, ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId);
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchScriptingAsync(
@@ -79,7 +79,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             request.Payload?.TypeUrl ?? string.Empty,
             request.Identity?.TenantId,
             ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId);
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchWorkflowAsync(
@@ -104,7 +104,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(chatRequest), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
-        return CreateReceipt(target, run.ActorId, commandId, correlationId);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
     }
 
     private async Task RegisterRunAsync(
@@ -171,7 +171,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string targetActorId,
         string commandId,
-        string correlationId)
+        string correlationId,
+        string runId)
     {
         return new ServiceInvocationAcceptedReceipt
         {
@@ -182,6 +183,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             EndpointId = target.Endpoint.EndpointId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            RunId = runId,
         };
     }
 

@@ -139,7 +139,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
             });
 
         await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
-        return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Joined, agentId, displayName);
+        return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Accepted, agentId, displayName);
     }
 
     public async Task<StreamingProxyRoomLeaveResult> LeaveAsync(

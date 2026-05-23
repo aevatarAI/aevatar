@@ -185,9 +185,14 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Location.Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         using var doc = JsonDocument.Parse(response.Body);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.TryGetProperty("actorId", out var actorId).Should().BeTrue();
+        doc.RootElement.GetProperty("acceptedCommandId").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("correlationId").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         doc.RootElement.TryGetProperty("createdAt", out _).Should().BeFalse();
         var createdActorId = actorId.GetString();
         createdActorId.Should().NotBeNullOrWhiteSpace();
@@ -221,9 +226,13 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Location.Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         using var doc = JsonDocument.Parse(response.Body);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("actorId").GetString().Should().Be("existing-agent-1");
+        doc.RootElement.GetProperty("acceptedCommandId").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
@@ -251,9 +260,13 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Location.Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         using var doc = JsonDocument.Parse(response.Body);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         var actorId = doc.RootElement.GetProperty("actorId").GetString();
+        doc.RootElement.GetProperty("acceptedCommandId").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         actorId.Should().NotBeNullOrWhiteSpace();
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
@@ -2719,7 +2732,7 @@ public class NyxIdChatEndpointsCoverageTests
             ?? throw new InvalidOperationException("Repository root could not be resolved.");
     }
 
-    private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
+    private static async Task<(int StatusCode, string Body, string? Location)> ExecuteResultAsync(IResult result)
     {
         var context = new DefaultHttpContext
         {
@@ -2732,7 +2745,10 @@ public class NyxIdChatEndpointsCoverageTests
 
         await result.ExecuteAsync(context);
         context.Response.Body.Position = 0;
-        return (context.Response.StatusCode, await new StreamReader(context.Response.Body).ReadToEndAsync());
+        return (
+            context.Response.StatusCode,
+            await new StreamReader(context.Response.Body).ReadToEndAsync(),
+            context.Response.Headers.Location.ToString());
     }
 
     private static RouteEndpoint BuildRouteEndpoint(string routePattern)

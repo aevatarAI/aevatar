@@ -406,8 +406,18 @@ public static partial class ServiceEndpoints
             Payload = payload,
             Caller = ResolveInvocationCaller(identityResolver, request),
         }, ct);
-        return Results.Accepted($"/api/services/{serviceId}", receipt);
+        // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+        //   Service invoke is accepted for dispatch; the run resource is the status surface for outcome.
+        //   Never point Location at the service definition root because that is not the command/run status.
+        receipt.StatusUrl = BuildServiceRunStatusUrl(identity, receipt);
+        return Results.Accepted(receipt.StatusUrl, receipt);
     }
+
+    private static string BuildServiceRunStatusUrl(ServiceIdentity identity, ServiceInvocationAcceptedReceipt receipt) =>
+        $"/api/scopes/{Uri.EscapeDataString(identity.TenantId)}/services/{Uri.EscapeDataString(identity.ServiceId)}/runs/{Uri.EscapeDataString(ResolveAcceptedRunId(receipt))}";
+
+    private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
     private static async Task<(Any Payload, string RevisionId)> ResolveInvocationPayloadAsync(
         InvokeServiceHttpRequest request,

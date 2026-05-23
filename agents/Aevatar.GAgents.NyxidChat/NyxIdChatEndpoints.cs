@@ -94,10 +94,22 @@ public static partial class NyxIdChatEndpoints
         // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
         //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
         //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+        // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+        //   The create facade returns accepted/admission-visible command trace, not read-model-observed conversation state.
+        //   Clients must poll the conversation list or observe the stream/status path instead of treating this body as committed.
         var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ct);
         return receipt.Status switch
         {
-            NyxIdChatConversationCreateStatus.Accepted => Results.Ok(new { actorId = receipt.ActorId }),
+            NyxIdChatConversationCreateStatus.Accepted => Results.Accepted(
+                $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations",
+                new
+                {
+                    status = "accepted",
+                    actorId = receipt.ActorId,
+                    acceptedCommandId = receipt.CommandId,
+                    correlationId = receipt.CorrelationId,
+                    statusUrl = $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations",
+                }),
             NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject),
             NyxIdChatConversationCreateStatus.RegistrationUnavailable => Results.Json(
                 new { error = "Conversation registration is not admission-visible" },

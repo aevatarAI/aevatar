@@ -1287,7 +1287,10 @@ public class StreamingProxyCoverageTests
             CancellationToken.None);
 
         response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Location.Should().Be("/api/scopes/scope-a/streaming-proxy/rooms/room-a/stream");
+        response.Body.Should().Contain("\"status\":\"accepted\"");
+        response.Body.Should().Contain("\"statusUrl\":\"/api/scopes/scope-a/streaming-proxy/rooms/room-a/stream\"");
         roomCommandService.PostMessageCommands.Should().ContainSingle(x => x.RoomId == "room-a");
     }
 
@@ -1344,7 +1347,11 @@ public class StreamingProxyCoverageTests
             CancellationToken.None);
 
         response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Location.Should().Be("/api/scopes/scope-a/streaming-proxy/rooms/room-a/participants");
+        response.Body.Should().Contain("\"status\":\"accepted\"");
+        response.Body.Should().Contain("\"agentId\":\"agent-1\"");
+        response.Body.Should().Contain("\"statusUrl\":\"/api/scopes/scope-a/streaming-proxy/rooms/room-a/participants\"");
         roomCommandService.JoinCommands.Should().ContainSingle(x => x.RoomId == "room-a");
     }
 
@@ -1723,7 +1730,7 @@ public class StreamingProxyCoverageTests
         };
     }
 
-    private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
+    private static async Task<(int StatusCode, string Body, string? Location)> ExecuteResultAsync(IResult result)
     {
         var context = new DefaultHttpContext
         {
@@ -1737,7 +1744,10 @@ public class StreamingProxyCoverageTests
 
         await result.ExecuteAsync(context);
         context.Response.Body.Position = 0;
-        return (context.Response.StatusCode, await new StreamReader(context.Response.Body).ReadToEndAsync());
+        return (
+            context.Response.StatusCode,
+            await new StreamReader(context.Response.Body).ReadToEndAsync(),
+            context.Response.Headers.Location.ToString());
     }
 
     private static DefaultHttpContext CreateScopedHttpContext(string claimedScopeId = "scope-a")
@@ -2426,7 +2436,7 @@ public class StreamingProxyCoverageTests
             cancellationToken.ThrowIfCancellationRequested();
             JoinCommands.Add(command);
             return Task.FromResult(JoinResult ?? new StreamingProxyRoomJoinResult(
-                StreamingProxyRoomJoinStatus.Joined,
+                StreamingProxyRoomJoinStatus.Accepted,
                 command.AgentId?.Trim(),
                 command.DisplayName?.Trim()));
         }
