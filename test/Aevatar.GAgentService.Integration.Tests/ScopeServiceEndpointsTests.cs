@@ -1483,6 +1483,24 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ScopeInvokeDefaultChatStreamEndpoint_ShouldReturnBadRequest_WhenDefaultServiceIsUnbound()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        {
+            prompt = "hello",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
+        body["message"].Should().Contain("Service 'scope-a:default:default:default' was not found.");
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenStaticActorTypeCannotBeResolved()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1556,6 +1574,160 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
         body["message"].Should().Contain("could not be resolved");
+    }
+
+    [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldDelegateStaticServiceToInvocationPort_AndEmitAguiFrames()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "default", "definition-actor-1");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-1",
+                            "rev-1",
+                            "definition-actor-1",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "default",
+                },
+                RevisionId = "rev-1",
+                ImplementationKind = ServiceImplementationKind.Static,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    StaticPlan = new StaticServiceDeploymentPlan
+                    {
+                        ActorTypeName = "Test.StaticAgent, Tests",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.StaticGAgentStreamInvocationPort.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new StaticGAgentStreamAcceptedReceipt(
+                new ServiceInvocationAcceptedReceipt
+                {
+                    ServiceKey = service.ServiceKey,
+                    DeploymentId = "dep-1",
+                    TargetActorId = "actor-static-1",
+                    EndpointId = request.EndpointId,
+                    CommandId = "cmd-static-1",
+                    CorrelationId = "corr-static-1",
+                },
+                new GAgentDraftRunAcceptedReceipt("actor-static-1", "TestStaticGAgent", "cmd-static-1", "corr-static-1"));
+
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            await emitAsync(
+                new AGUIEvent
+                {
+                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hello from static",
+                    },
+                },
+                ct);
+
+            return new StaticGAgentStreamInvocationResult(
+                receipt,
+                GAgentDraftRunStartError.None,
+                GAgentDraftRunCompletionStatus.RunFinished,
+                CompletionObserved: true);
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        {
+            prompt = " hello static ",
+            actorId = " actor-static-1 ",
+            sessionId = "session-1",
+            revisionId = "rev-1",
+            headers = new Dictionary<string, string> { ["source"] = "tests" },
+            inputParts = new[]
+            {
+                new
+                {
+                    type = "text",
+                    text = (string?)"attachment text",
+                    dataBase64 = (string?)null,
+                    mediaType = (string?)null,
+                    name = (string?)null,
+                },
+                new
+                {
+                    type = "image",
+                    text = (string?)null,
+                    dataBase64 = (string?)"aW1hZ2U=",
+                    mediaType = (string?)"image/png",
+                    name = (string?)"image.png",
+                },
+            },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        response.Headers.GetValues("X-Correlation-Id").Should().ContainSingle().Which.Should().Be("corr-static-1");
+        body.Should().Contain("runStarted");
+        body.Should().Contain("textMessageContent");
+        body.Should().Contain("hello from static");
+        host.StaticGAgentStreamInvocationPort.Requests.Should().ContainSingle();
+        var delegated = host.StaticGAgentStreamInvocationPort.Requests[0];
+        delegated.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "default",
+        });
+        delegated.EndpointId.Should().Be("chat");
+        delegated.Input.Prompt.Should().Be("hello static");
+        delegated.Input.PreferredActorId.Should().Be(" actor-static-1 ");
+        delegated.Input.SessionId.Should().Be("session-1");
+        delegated.Input.RevisionId.Should().Be("rev-1");
+        delegated.Input.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        delegated.Input.Caller.Should().NotBeNull();
+        delegated.Input.Caller!.ServiceKey.Should().BeEmpty();
+        delegated.Input.Timeout.Should().Be(TimeSpan.FromMinutes(2));
+        delegated.Input.InputParts.Should().NotBeNull();
+        delegated.Input.InputParts!.Should().HaveCount(2);
+        delegated.Input.InputParts[0].Kind.Should().Be(GAgentDraftRunInputPartKind.Text);
+        delegated.Input.InputParts[0].Text.Should().Be("attachment text");
+        delegated.Input.InputParts[1].Kind.Should().Be(GAgentDraftRunInputPartKind.Image);
+        delegated.Input.InputParts[1].DataBase64.Should().Be("aW1hZ2U=");
+        delegated.Input.InputParts[1].MediaType.Should().Be("image/png");
+        delegated.Input.InputParts[1].Name.Should().Be("image.png");
     }
 
     [Fact]
@@ -4352,6 +4524,7 @@ public sealed class ScopeServiceEndpointsTests
             FakeServiceRevisionArtifactStore artifactStore,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
+            FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
             FakeWorkflowExecutionQueryApplicationService workflowQueryService,
             FakeWorkflowRunBindingReader runBindingReader,
             RecordingResumeDispatchService resumeDispatchService,
@@ -4374,6 +4547,7 @@ public sealed class ScopeServiceEndpointsTests
             ArtifactStore = artifactStore;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
+            StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
             WorkflowQueryService = workflowQueryService;
             RunBindingReader = runBindingReader;
             ResumeDispatchService = resumeDispatchService;
@@ -4417,6 +4591,8 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeCommandInteractionService InteractionService { get; }
 
+        public FakeStaticGAgentStreamInvocationPort StaticGAgentStreamInvocationPort { get; }
+
         public FakeWorkflowExecutionQueryApplicationService WorkflowQueryService { get; }
 
         public FakeWorkflowRunBindingReader RunBindingReader { get; }
@@ -4454,6 +4630,8 @@ public sealed class ScopeServiceEndpointsTests
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptServiceRunInteractionService = new FakeScriptServiceRunInteractionService();
+            var staticGAgentStreamInvocationPort = new FakeStaticGAgentStreamInvocationPort(
+                gagentDraftRunInteractionService);
             var workflowQueryService = new FakeWorkflowExecutionQueryApplicationService();
             var runBindingReader = new FakeWorkflowRunBindingReader();
             var resumeDispatchService = new RecordingResumeDispatchService();
@@ -4492,6 +4670,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
             builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(scriptServiceRunInteractionService);
+            builder.Services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(staticGAgentStreamInvocationPort);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
             builder.Services.AddSingleton<IWorkflowRunBindingReader>(runBindingReader);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
@@ -4605,6 +4784,7 @@ public sealed class ScopeServiceEndpointsTests
                 artifactStore,
                 teamEntryMemberResolver,
                 interactionService,
+                staticGAgentStreamInvocationPort,
                 workflowQueryService,
                 runBindingReader,
                 resumeDispatchService,
@@ -5226,19 +5406,86 @@ public sealed class ScopeServiceEndpointsTests
     private sealed class FakeGAgentDraftRunInteractionService
         : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
     {
+        public GAgentDraftRunCommand? LastRequest { get; private set; }
+
         public Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
             GAgentDraftRunCommand request,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
             Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
-            _ = request;
+            LastRequest = request;
             _ = emitAsync;
             _ = onAcceptedAsync;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
                     .Failure(GAgentDraftRunStartError.UnknownActorType));
+        }
+    }
+
+    private sealed class FakeStaticGAgentStreamInvocationPort(
+        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService)
+        : IStaticGAgentStreamInvocationPort<AGUIEvent>
+    {
+        public List<StaticGAgentStreamInvocationRequest> Requests { get; } = [];
+
+        public Func<StaticGAgentStreamInvocationRequest, Func<AGUIEvent, CancellationToken, ValueTask>, Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<StaticGAgentStreamInvocationResult>>? ResultFactory { get; set; }
+
+        public async Task<StaticGAgentStreamInvocationResult> InvokeAsync(
+            StaticGAgentStreamInvocationRequest request,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (ResultFactory != null)
+                return await ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+
+            var input = request.Input;
+            var result = await interactionService.ExecuteAsync(
+                new GAgentDraftRunCommand(
+                    ScopeId: request.Identity.TenantId,
+                    ActorTypeName: "TestStaticGAgent",
+                    Prompt: input.Prompt,
+                    PreferredActorId: input.PreferredActorId,
+                    SessionId: input.SessionId,
+                    Headers: input.Headers,
+                    InputParts: input.InputParts),
+                emitAsync,
+                async (receipt, token) =>
+                {
+                    if (onAcceptedAsync == null)
+                        return;
+
+                    var serviceReceipt = new ServiceInvocationAcceptedReceipt
+                    {
+                        CommandId = receipt.CommandId,
+                        CorrelationId = receipt.CorrelationId,
+                        TargetActorId = receipt.ActorId,
+                        EndpointId = request.EndpointId,
+                    };
+                    await onAcceptedAsync(
+                        new StaticGAgentStreamAcceptedReceipt(serviceReceipt, receipt),
+                        token);
+                },
+                ct);
+
+            return new StaticGAgentStreamInvocationResult(
+                result.Receipt == null
+                    ? null
+                    : new StaticGAgentStreamAcceptedReceipt(
+                        new ServiceInvocationAcceptedReceipt
+                        {
+                            CommandId = result.Receipt.CommandId,
+                            CorrelationId = result.Receipt.CorrelationId,
+                            TargetActorId = result.Receipt.ActorId,
+                            EndpointId = request.EndpointId,
+                        },
+                        result.Receipt),
+                result.Error,
+                result.FinalizeResult?.Completion ?? GAgentDraftRunCompletionStatus.Unknown,
+                result.FinalizeResult?.Completed ?? false);
         }
     }
 
