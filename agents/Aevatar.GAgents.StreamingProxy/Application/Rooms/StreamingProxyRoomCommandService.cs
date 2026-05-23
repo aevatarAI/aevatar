@@ -6,9 +6,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy.Application.Rooms;
 
-// Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-//   Old pattern: endpoints built room envelopes and dispatched post-message, join, and terminal-state events directly.
-//   New principle: the existing room command service owns room command normalization, envelope construction, and dispatch.
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// The service is the existing application write boundary for room effects.
+// It dispatches command/request payloads to StreamingProxyGAgent, never committed room facts for mutable room effects.
+// The room actor validates state and commits the existing domain events.
 public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomCommandService
 {
     private const string DefaultRoomName = "Group Chat";
@@ -88,6 +89,10 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomPostMessageCommand command,
         CancellationToken cancellationToken = default)
     {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Post-message callers now submit a typed request payload to the room actor.
+        // The application service normalizes transport input but does not mint committed message facts.
+        // StreamingProxyGAgent owns the final persisted/published room message.
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
@@ -97,7 +102,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         var agentId = NormalizeRequiredValue(command.AgentId, nameof(command.AgentId));
         var envelope = BuildRoomEnvelope(
             actor.Id,
-            new GroupChatMessageEvent
+            new StreamingProxyParticipantMessageRequested
             {
                 AgentId = agentId,
                 AgentName = NormalizeOptionalValue(command.AgentName) ?? agentId,
@@ -113,6 +118,10 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomJoinCommand command,
         CancellationToken cancellationToken = default)
     {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Join callers now submit a typed request payload to the room actor.
+        // Idempotency and participant authority stay with StreamingProxyGAgent state.
+        // This service returns dispatch acceptance, not committed participant visibility.
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
@@ -123,7 +132,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         var displayName = NormalizeOptionalValue(command.DisplayName) ?? agentId;
         var envelope = BuildRoomEnvelope(
             actor.Id,
-            new GroupChatParticipantJoinedEvent
+            new StreamingProxyParticipantJoinRequested
             {
                 AgentId = agentId,
                 DisplayName = displayName,
@@ -133,20 +142,50 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Joined, agentId, displayName);
     }
 
+    public async Task<StreamingProxyRoomLeaveResult> LeaveAsync(
+        StreamingProxyRoomLeaveCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Leave callers now send a typed request payload through the existing room command service.
+        // The room actor decides whether that request becomes a committed participant-left event.
+        // This prevents Nyx/application adapters from minting committed room lifecycle facts.
+        ArgumentNullException.ThrowIfNull(command);
+
+        var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
+        if (actor is null)
+            return new StreamingProxyRoomLeaveResult(StreamingProxyRoomLeaveStatus.RoomNotFound, null);
+
+        var agentId = NormalizeRequiredValue(command.AgentId, nameof(command.AgentId));
+        var envelope = BuildRoomEnvelope(
+            actor.Id,
+            new StreamingProxyParticipantLeaveRequested
+            {
+                AgentId = agentId,
+                Reason = NormalizeOptionalValue(command.Reason) ?? string.Empty,
+            });
+
+        await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
+        return new StreamingProxyRoomLeaveResult(StreamingProxyRoomLeaveStatus.Accepted, agentId);
+    }
+
     public Task PublishTerminalStateAsync(
         StreamingProxyRoomTerminalStateCommand command,
         CancellationToken cancellationToken = default)
     {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Terminal publication is a request to the room actor, not an application-owned committed fact.
+        // The actor stamps commit time and persists the existing terminal state event.
+        // Callers only learn that dispatch was attempted through the existing command boundary.
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
         var envelope = BuildRoomEnvelope(
             roomId,
-            new StreamingProxyChatSessionTerminalStateChanged
+            new StreamingProxySessionTerminalStateRequested
             {
                 SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
                 Status = command.Status,
-                TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 ErrorMessage = command.ErrorMessage ?? string.Empty,
             });
 

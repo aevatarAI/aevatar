@@ -204,6 +204,11 @@ public class StreamingProxyCoverageTests
         roomCommandService.Should().NotContain(".HandleEventAsync(");
         nyxCoordinator.Should().NotContain("actor.HandleEventAsync(");
         nyxCoordinator.Should().NotContain(".HandleEventAsync(");
+        nyxCoordinator.Should().NotContain("IActorDispatchPort", "Nyx participant coordination must stay adapter-only.");
+        nyxCoordinator.Should().NotContain("GroupChatParticipantJoinedEvent", "Nyx adapter must forward join commands only.");
+        nyxCoordinator.Should().NotContain("GroupChatMessageEvent", "Nyx adapter must forward message commands only.");
+        nyxCoordinator.Should().NotContain("GroupChatParticipantLeftEvent", "Nyx adapter must forward leave commands only.");
+        nyxCoordinator.Should().NotContain("StreamingProxyChatSessionTerminalStateChanged", "Nyx adapter must not mint terminal facts.");
     }
 
     [Fact]
@@ -1572,6 +1577,68 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task GAgent_RequestPayloads_ShouldCommitExistingRoomFacts()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "streaming-proxy-agent");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.HandleParticipantJoinRequested(new StreamingProxyParticipantJoinRequested
+        {
+            AgentId = "agent-1",
+            DisplayName = "Alice",
+        });
+        await agent.HandleParticipantJoinRequested(new StreamingProxyParticipantJoinRequested
+        {
+            AgentId = "agent-1",
+            DisplayName = "Alice Again",
+        });
+        await agent.HandleParticipantMessageRequested(new StreamingProxyParticipantMessageRequested
+        {
+            AgentId = "agent-1",
+            AgentName = "Alice",
+            Content = "room-owned message",
+            SessionId = "session-1",
+        });
+        await agent.HandleParticipantLeaveRequested(new StreamingProxyParticipantLeaveRequested
+        {
+            AgentId = "agent-1",
+            Reason = "done",
+        });
+        await agent.HandleParticipantLeaveRequested(new StreamingProxyParticipantLeaveRequested
+        {
+            AgentId = "missing",
+            Reason = "stale",
+        });
+        await agent.HandleSessionTerminalStateRequested(new StreamingProxySessionTerminalStateRequested
+        {
+            SessionId = "session-1",
+            Status = StreamingProxyChatSessionTerminalStatus.Completed,
+        });
+
+        agent.State.Participants.Should().BeEmpty();
+        agent.State.Messages.Should().ContainSingle(message =>
+            message.SenderAgentId == "agent-1" &&
+            message.Content == "room-owned message");
+        agent.State.TerminalSessions["session-1"].Status
+            .Should()
+            .Be(StreamingProxyChatSessionTerminalStatus.Completed);
+        agent.State.TerminalSessions["session-1"].TerminalAt.Should().NotBeNull();
+
+        publisher.Published.OfType<GroupChatParticipantJoinedEvent>()
+            .Should()
+            .ContainSingle(x => x.AgentId == "agent-1" && x.DisplayName == "Alice");
+        publisher.Published.OfType<GroupChatMessageEvent>()
+            .Should()
+            .ContainSingle(x => x.AgentId == "agent-1" && x.Content == "room-owned message");
+        publisher.Published.OfType<GroupChatParticipantLeftEvent>()
+            .Should()
+            .ContainSingle(x => x.AgentId == "agent-1");
+    }
+
+    [Fact]
     public async Task StreamingProxySseWriter_ShouldStartStream_AndSerializeRoomFrames()
     {
         var context = new DefaultHttpContext();
@@ -2325,6 +2392,7 @@ public class StreamingProxyCoverageTests
         public List<StreamingProxyRoomCreateCommand> Commands { get; } = [];
         public List<StreamingProxyRoomPostMessageCommand> PostMessageCommands { get; } = [];
         public List<StreamingProxyRoomJoinCommand> JoinCommands { get; } = [];
+        public List<StreamingProxyRoomLeaveCommand> LeaveCommands { get; } = [];
         public List<StreamingProxyRoomTerminalStateCommand> TerminalCommands { get; } = [];
         public StreamingProxyRoomPostMessageResult PostMessageResult { get; init; } =
             new(StreamingProxyRoomPostMessageStatus.Accepted);
@@ -2361,6 +2429,17 @@ public class StreamingProxyCoverageTests
                 StreamingProxyRoomJoinStatus.Joined,
                 command.AgentId?.Trim(),
                 command.DisplayName?.Trim()));
+        }
+
+        public Task<StreamingProxyRoomLeaveResult> LeaveAsync(
+            StreamingProxyRoomLeaveCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LeaveCommands.Add(command);
+            return Task.FromResult(new StreamingProxyRoomLeaveResult(
+                StreamingProxyRoomLeaveStatus.Accepted,
+                command.AgentId?.Trim()));
         }
 
         public Task PublishTerminalStateAsync(
