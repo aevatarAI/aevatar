@@ -251,6 +251,75 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenWaitReplyPollControlsAbsent_ShouldUseLegacyDefaults()
+    {
+        var runtime = new NoopActorRuntime();
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            runtime,
+            new InMemoryConnectorRegistry())
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "wait",
+            SessionId = "session-wait-defaults",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+                Operation = TelegramBridgeOperation.WaitReply,
+            },
+        };
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        var command = publisher.Sent.Should().ContainSingle().Subject.evt
+            .Should().BeOfType<TelegramWaitForReplyCommand>().Subject;
+        command.PollTimeoutSeconds.Should().Be(8);
+        command.SettlePollsAfterMatch.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenWaitReplyPollControlsExplicitZero_ShouldPreserveZero()
+    {
+        var runtime = new NoopActorRuntime();
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            runtime,
+            new InMemoryConnectorRegistry())
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "wait",
+            SessionId = "session-wait-zero",
+            Telegram = new TelegramBridgeRequest
+            {
+                ChatId = "10001",
+                Operation = TelegramBridgeOperation.WaitReply,
+                PollTimeoutSeconds = 0,
+                SettlePollsAfterMatch = 0,
+            },
+        };
+
+        request.Telegram.HasPollTimeoutSeconds.Should().BeTrue();
+        request.Telegram.HasSettlePollsAfterMatch.Should().BeTrue();
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        var command = publisher.Sent.Should().ContainSingle().Subject.evt
+            .Should().BeOfType<TelegramWaitForReplyCommand>().Subject;
+        command.PollTimeoutSeconds.Should().Be(0);
+        command.SettlePollsAfterMatch.Should().Be(0);
+    }
+
+    [Fact]
     public async Task TelegramWaitReplyGAgent_WhenWaitReplyGetsEditedMessage_ShouldReturnLatestMatchedContent()
     {
         var connector = new RecordingConnector(

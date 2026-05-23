@@ -223,19 +223,21 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private static int ResolveWaitReplyTimeoutMs(TelegramBridgeRequest? telegram)
     {
-        return telegram?.WaitTimeoutMs > 0 ? telegram.WaitTimeoutMs : DefaultWaitReplyTimeoutMs;
+        return telegram?.HasWaitTimeoutMs == true && telegram.WaitTimeoutMs > 0
+            ? telegram.WaitTimeoutMs
+            : DefaultWaitReplyTimeoutMs;
     }
 
     private static int ResolvePollTimeoutSeconds(TelegramBridgeRequest? telegram)
     {
-        return telegram?.PollTimeoutSeconds >= 0
-            ? Math.Clamp(telegram.PollTimeoutSeconds, 1, MaxPollTimeoutSeconds)
+        return telegram?.HasPollTimeoutSeconds == true
+            ? Math.Clamp(telegram.PollTimeoutSeconds, 0, MaxPollTimeoutSeconds)
             : DefaultPollTimeoutSeconds;
     }
 
     private static int ResolveSettlePollsAfterMatch(TelegramBridgeRequest? telegram)
     {
-        return telegram?.SettlePollsAfterMatch >= 0
+        return telegram?.HasSettlePollsAfterMatch == true
             ? Math.Clamp(telegram.SettlePollsAfterMatch, 0, MaxSettlePollsAfterMatch)
             : DefaultSettlePollsAfterMatch;
     }
@@ -287,7 +289,10 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private static int? ResolveConnectorTimeoutMs(ChatRequestEvent request)
     {
-        var explicitConnectorTimeout = request.Telegram?.TimeoutMs > 0 ? request.Telegram.TimeoutMs : (int?)null;
+        var explicitConnectorTimeout =
+            request.Telegram?.HasTimeoutMs == true && request.Telegram.TimeoutMs > 0
+                ? request.Telegram.TimeoutMs
+                : (int?)null;
         var llmTimeout = request.TimeoutMs > 0 ? request.TimeoutMs : (int?)null;
         var candidate = explicitConnectorTimeout ?? llmTimeout;
         if (!candidate.HasValue)
