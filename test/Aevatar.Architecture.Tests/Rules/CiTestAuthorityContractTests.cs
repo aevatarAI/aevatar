@@ -290,6 +290,7 @@ public class CiTestAuthorityContractTests
                 RedirectStandardError = true,
             };
             startInfo.Environment["PATH"] = _fakeBin + Path.PathSeparator + startInfo.Environment["PATH"];
+            startInfo.Environment["AEVATAR_CI_RG_BIN"] = "__aevatar_missing_rg__";
 
             using var process = Process.Start(startInfo)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
