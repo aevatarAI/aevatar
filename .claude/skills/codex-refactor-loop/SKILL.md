@@ -1671,6 +1671,41 @@ Concretely, this means:
 - iter16 implement / verify / Phase 8 review runs in parallel with iter15 rollup PR being reviewed.
 - If iter15 rollup PR gets rejected by human, iter16 work stays on auto-refact-dev (which now contains iter15 + iter16 deltas); we re-do iter15 rework on top and ship combined.
 
+### Concurrency-driven 提前派下一轮 audit(强制,per Auric 2026-05-23 "如果并行codex太少则应该开启下一轮次")
+
+**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的 4-6。
+
+**规则**:**并发不足时主动提前派下一 iter audit**,不等 last cluster merge。
+
+| 条件 | 动作 |
+|---|---|
+| 活跃 codex `<= 2` AND 上一 iter audit 已完成(`audit-iter-N.log` 有 `AUDIT_DONE`)| 立即派下一 iter audit(N+1),独立于 iter N 的 cluster PR merge 进度 |
+| 活跃 codex `>= 3` | 不抢资源,保持现状 |
+| 上一 iter audit 仍在跑 | 不重派,等当前 audit done |
+
+**判定脚本**(controller wakeup step 1.5):
+
+```bash
+ACTIVE=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
+NEXT_ITER=$((LAST_ITER + 1))
+NEXT_LOG=".refactor-loop/logs/audit-iter-${NEXT_ITER}.log"
+
+if (( ACTIVE <= 2 )) && [ -f ".refactor-loop/runs/audit-iter-${LAST_ITER}.md" ] && [ ! -f "$NEXT_LOG" ]; then
+  # 派 iter N+1 audit,即使 iter N 的 cluster PR 还没全 merge
+  ITERATION=${NEXT_ITER} envsubst < .claude/skills/codex-refactor-loop/prompts/audit.md > .refactor-loop/prompts/audit-iter-${NEXT_ITER}.md
+  spawn-audit-codex
+fi
+```
+
+**反面禁止**:
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派 audit 提升并发
+- ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
+- ❌ "iter N 还没完"作为不派 N+1 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
+
+事故记录:2026-05-23 cluster-044 fix-r2 期间只剩 1 codex,Auric 直接指令"如果并行codex太少则应该开启下一轮次"。原 skill "merge-driven iteration boundary" 是不够的——concurrency-driven trigger 才是 INFINITE loop 应有的并行优化。
+
 ### Sync to remote in time (强制)
 
 Per Auric (2026-05-19): "及时与远程同步."
