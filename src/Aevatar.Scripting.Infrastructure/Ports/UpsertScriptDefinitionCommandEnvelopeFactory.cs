@@ -27,16 +27,8 @@ public sealed class UpsertScriptDefinitionCommandEnvelopeFactory
                 ScriptId = command.ScriptId ?? string.Empty,
                 ScriptRevision = command.ScriptRevision ?? string.Empty,
                 SourceHash = command.SourceHash ?? string.Empty,
-                ScriptPackage = ResolvePackage(command),
+                ScriptPackage = command.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
                 ScopeId = command.ScopeId ?? string.Empty,
             });
-    }
-
-    private static ScriptPackageSpec ResolvePackage(UpsertScriptDefinitionCommand command)
-    {
-        if ((command.ScriptPackage?.CsharpSources.Count ?? 0) > 0)
-            return command.ScriptPackage!.Clone();
-
-        return ScriptPackageSpecExtensions.CreateSingleSource(command.SourceText ?? string.Empty);
     }
 }

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
@@ -240,8 +241,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         var result = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(sourceText ?? string.Empty),
             definitionActorId,
             _scopeId,
             ct);

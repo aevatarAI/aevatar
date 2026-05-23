@@ -632,8 +632,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var result = await service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            ScriptSources.StructuredProfileBehavior,
-            string.Empty,
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
             null,
             CancellationToken.None);
 
@@ -648,7 +647,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
     }
 
     [Fact]
-    public async Task UpsertDefinitionWithSnapshotAsync_ShouldUseProvidedActorIdAndSourceHash()
+    public async Task UpsertDefinitionWithSnapshotAsync_ShouldUseProvidedActorIdAndCanonicalPackageHash()
     {
         var dispatch = new RecordingDispatchService<UpsertScriptDefinitionCommand>(
             _ => CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
@@ -661,15 +660,16 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var result = await service.UpsertDefinitionWithSnapshotAsync(
             "script-2",
             "rev-2",
-            ScriptSources.UppercaseBehavior,
-            "hash-custom",
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             "definition-custom",
             CancellationToken.None);
 
+        var expectedHash = ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior));
         result.ActorId.Should().Be("definition-custom");
-        result.Snapshot.SourceHash.Should().Be("hash-custom");
+        result.Snapshot.SourceHash.Should().Be(expectedHash);
         dispatch.CapturedCommand!.DefinitionActorId.Should().Be("definition-custom");
-        dispatch.CapturedCommand.SourceHash.Should().Be("hash-custom");
+        dispatch.CapturedCommand.SourceHash.Should().Be(expectedHash);
     }
 
     [Fact]
@@ -685,8 +685,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var act = () => service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            ScriptSources.UppercaseBehavior,
-            ScriptSources.UppercaseBehaviorHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             null,
             CancellationToken.None);
 
@@ -706,8 +705,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var act = () => service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            "if (true {",
-            ScriptSources.UppercaseBehaviorHash,
+            ScriptPackageSpecExtensions.CreateSingleSource("if (true {"),
             null,
             CancellationToken.None);
 
@@ -1060,19 +1058,19 @@ internal sealed class RecordingDefinitionCommandPort : IScriptDefinitionCommandP
     public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
         return Task.FromResult(new ScriptDefinitionUpsertResult(
             definitionActorId ?? "definition-created",
             new ScriptDefinitionSnapshot(
                 scriptId,
                 scriptRevision,
-                sourceText,
                 sourceHash,
+                scriptPackage,
                 ScriptSources.UppercaseStateTypeUrl,
                 ScriptSources.UppercaseReadModelTypeUrl,
                 "1",

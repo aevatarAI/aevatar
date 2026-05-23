@@ -72,7 +72,8 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             definition.State.ScriptId.Should().Be(script.ScriptId);
             definition.State.Revision.Should().Be(script.Revision);
             definition.State.ScriptPackage.GetPrimaryCSharpSource().Should().Be(script.Source);
-            definition.State.SourceHash.Should().Be(script.SourceHash);
+            definition.State.SourceHash.Should().Be(
+                ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(script.Source)));
         }
     }
 

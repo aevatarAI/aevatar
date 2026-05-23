@@ -7,6 +7,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
@@ -119,8 +120,7 @@ public sealed class HybridServiceUpgradeContinuityTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "text-normalization-protocol-script",
             "rev-1",
-            TextNormalizationProtocolSampleActors.Source,
-            TextNormalizationProtocolSampleActors.SourceHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(TextNormalizationProtocolSampleActors.Source),
             definitionActorId,
             ct);
         await provisioningPort.EnsureRuntimeAsync(

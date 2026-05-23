@@ -28,15 +28,13 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
     public async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct) =>
         await UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             scopeId: null,
             ct);
@@ -44,8 +42,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
     public async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         string? scopeId,
         CancellationToken ct)
@@ -56,15 +53,13 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
         var snapshot = await BuildDefinitionSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash);
+            scriptPackage);
 
         var result = await _dispatchService.DispatchAsync(
             new UpsertScriptDefinitionCommand(
                 scriptId,
                 scriptRevision,
-                sourceText,
-                sourceHash,
+                snapshot.SourceHash,
                 actorId,
                 scopeId,
                 snapshot.ScriptPackage?.Clone() ?? new ScriptPackageSpec()),
@@ -81,18 +76,15 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
     private async Task<ScriptDefinitionSnapshot> BuildDefinitionSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash)
+        ScriptPackageSpec scriptPackage)
     {
-        var scriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(sourceText ?? string.Empty);
-        var packageHash = string.IsNullOrWhiteSpace(sourceHash)
-            ? ScriptPackageModel.ComputePackageHash(scriptPackage)
-            : sourceHash;
+        var normalizedPackage = ScriptPackageModel.ToPackageSpec(ScriptPackageModel.ToSourcePackage(scriptPackage));
+        var packageHash = ScriptPackageModel.ComputePackageHash(normalizedPackage);
         var compilation = _compiler.Compile(
             new ScriptBehaviorCompilationRequest(
                 scriptId ?? string.Empty,
                 scriptRevision ?? string.Empty,
-                scriptPackage,
+                normalizedPackage,
                 packageHash));
         try
         {
@@ -116,7 +108,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
                 scriptId ?? string.Empty,
                 scriptRevision ?? string.Empty,
                 packageHash,
-                scriptPackage,
+                normalizedPackage,
                 compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,
                 compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
                 readModelSchemaVersion,

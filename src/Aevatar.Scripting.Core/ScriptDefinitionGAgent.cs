@@ -47,14 +47,13 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         }
 
         var scriptPackage = RequireScriptPackage(evt.ScriptPackage);
-        var packageHash = string.IsNullOrWhiteSpace(evt.SourceHash)
-            ? ScriptPackageModel.ComputePackageHash(scriptPackage)
-            : evt.SourceHash;
+        var normalizedPackage = ScriptPackageModel.ToPackageSpec(ScriptPackageModel.ToSourcePackage(scriptPackage));
+        var packageHash = ScriptPackageModel.ComputePackageHash(normalizedPackage);
         var compilation = _compiler.Compile(
             new ScriptBehaviorCompilationRequest(
                 evt.ScriptId ?? string.Empty,
                 evt.ScriptRevision ?? string.Empty,
-                scriptPackage,
+                normalizedPackage,
                 packageHash));
         try
         {
@@ -93,7 +92,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 CommandTypeUrls = { compilation.Artifact.Contract.CommandTypeUrls },
                 DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
                 InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
-                ScriptPackage = scriptPackage,
+                ScriptPackage = normalizedPackage,
                 ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
                 StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
                 ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,

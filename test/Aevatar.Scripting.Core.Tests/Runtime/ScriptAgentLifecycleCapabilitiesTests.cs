@@ -1,9 +1,11 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
@@ -712,21 +714,21 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add((scriptId, scriptRevision, definitionActorId));
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             var actorId = definitionActorId ?? "definition-created";
             return Task.FromResult(new ScriptDefinitionUpsertResult(
                 actorId,
                 new ScriptDefinitionSnapshot(
                     scriptId,
                     scriptRevision,
-                    sourceText,
                     sourceHash,
+                    scriptPackage,
                     "type.googleapis.com/example.State",
                     "type.googleapis.com/example.ReadModel",
                     "1",
@@ -740,15 +742,13 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             _ = scriptId;
             _ = scriptRevision;
-            _ = sourceText;
-            _ = sourceHash;
+            _ = scriptPackage;
             _ = definitionActorId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);

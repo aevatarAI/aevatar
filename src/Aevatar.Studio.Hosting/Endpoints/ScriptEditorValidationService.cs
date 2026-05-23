@@ -11,6 +11,9 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal sealed class ScriptEditorValidationService
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: host validation treated source text as the reusable scripting source fact.
+    //   New principle: host source text is a one-file adapter input and is converted to ScriptPackageSpec before compilation.
     private readonly ScriptSandboxPolicy _sandboxPolicy;
     private readonly IScriptProtoCompiler _protoCompiler;
 

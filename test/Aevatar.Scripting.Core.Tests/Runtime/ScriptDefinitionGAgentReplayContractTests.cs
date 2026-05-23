@@ -34,7 +34,8 @@ public class ScriptDefinitionGAgentReplayContractTests
         agent.State.ScriptId.Should().Be("script-1");
         agent.State.Revision.Should().Be("rev-1");
         agent.State.ScriptPackage.GetPrimaryCSharpSource().Should().Contain("DefinitionReplayBehavior");
-        agent.State.SourceHash.Should().Be("hash-1");
+        agent.State.SourceHash.Should().Be(ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource(DefinitionBehaviorSource)));
         agent.State.StateTypeUrl.Should().Be(Any.Pack(new ScriptProfileState()).TypeUrl);
         agent.State.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
         agent.State.CommandTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl);

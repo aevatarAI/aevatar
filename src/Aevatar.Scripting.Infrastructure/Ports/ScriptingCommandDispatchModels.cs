@@ -56,11 +56,10 @@ public sealed record ScriptingCommandStartError(
 public sealed record UpsertScriptDefinitionCommand(
     string ScriptId,
     string ScriptRevision,
-    string SourceText,
     string SourceHash,
     string? DefinitionActorId,
     string? ScopeId,
-    ScriptPackageSpec? ScriptPackage = null) : ICommandContextSeed
+    ScriptPackageSpec ScriptPackage) : ICommandContextSeed
 {
     // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
     //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.

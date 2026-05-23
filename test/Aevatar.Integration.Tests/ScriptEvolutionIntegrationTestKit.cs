@@ -71,8 +71,7 @@ internal static class ScriptEvolutionIntegrationTestKit
             .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                sourceText,
-                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sourceText),
+                ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
                 resolvedDefinitionActorId,
                 ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot);

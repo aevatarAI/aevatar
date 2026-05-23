@@ -33,9 +33,9 @@ public sealed class UpsertScriptDefinitionCommandTargetResolver
         if (string.IsNullOrWhiteSpace(command.ScriptRevision))
             return CommandTargetResolution<ScriptingActorCommandTarget, ScriptingCommandStartError>.Failure(
                 ScriptingCommandStartError.InvalidArgument("scriptRevision", "Script revision is required."));
-        if ((command.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(command.SourceText))
+        if ((command.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
             return CommandTargetResolution<ScriptingActorCommandTarget, ScriptingCommandStartError>.Failure(
-                ScriptingCommandStartError.InvalidArgument("sourceText", "Source text is required."));
+                ScriptingCommandStartError.InvalidArgument("scriptPackage", "Script package must contain at least one C# source."));
 
         var actorId = string.IsNullOrWhiteSpace(command.DefinitionActorId)
             ? _addressResolver.GetDefinitionActorId(command.ScriptId, command.ScopeId)

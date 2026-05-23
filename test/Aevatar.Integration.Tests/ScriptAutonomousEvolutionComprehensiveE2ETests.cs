@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Compilation;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -457,7 +459,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         sendToDefinition.ScriptId.Should().Be("interaction-sendto-script");
         sendToDefinition.Revision.Should().Be("rev-sendto-1");
-        sendToDefinition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sendToSource).ToUpperInvariant());
+        sendToDefinition.SourceHash.Should().Be(
+            ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(sendToSource)));
 
         var upsertDefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
@@ -466,6 +469,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         upsertDefinition.ScriptId.Should().Be("interaction-invoke-script");
         upsertDefinition.Revision.Should().Be("rev-invoke-1");
-        upsertDefinition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(invokeSource).ToUpperInvariant());
+        upsertDefinition.SourceHash.Should().Be(
+            ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(invokeSource)));
     }
 }
