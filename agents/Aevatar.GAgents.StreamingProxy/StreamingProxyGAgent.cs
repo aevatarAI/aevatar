@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -42,12 +43,13 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             SessionId = request.SessionId,
             ScopeId = request.ScopeId,
         };
-        if (request.Metadata.TryGetValue(StreamingProxyRoomChatCommandEnvelopeFactory.AccessTokenHeader, out var accessToken))
-            lifecycleEvent.AccessToken = accessToken;
-        if (request.Metadata.TryGetValue(StreamingProxyRoomChatCommandEnvelopeFactory.PreferredRouteHeader, out var preferredRoute))
-            lifecycleEvent.PreferredRoute = preferredRoute;
-        if (request.Metadata.TryGetValue(StreamingProxyRoomChatCommandEnvelopeFactory.DefaultModelHeader, out var defaultModel))
-            lifecycleEvent.DefaultModel = defaultModel;
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        if (!string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken))
+            lifecycleEvent.AccessToken = toolContext.Credentials.NyxIdAccessToken;
+        if (!string.IsNullOrWhiteSpace(toolContext.Routing.NyxIdRoutePreference))
+            lifecycleEvent.PreferredRoute = toolContext.Routing.NyxIdRoutePreference;
+        if (!string.IsNullOrWhiteSpace(toolContext.Routing.ModelOverride))
+            lifecycleEvent.DefaultModel = toolContext.Routing.ModelOverride;
 
         var topicEvent = new GroupChatTopicEvent
         {

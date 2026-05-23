@@ -464,7 +464,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 return true;
             case "telegram.wait_timeout_ms":
             case "wait_timeout_ms":
-                if (TryParsePositiveInt32(value, out var waitTimeoutMs))
+                if (TryParseInt32(value, out var waitTimeoutMs))
                     telegram.WaitTimeoutMs = waitTimeoutMs;
                 return true;
             case "telegram.poll_timeout_sec":
@@ -504,17 +504,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 telegram.ContentType = value;
                 return true;
             case "telegram.timeout_ms":
-                if (TryParsePositiveInt32(value, out var connectorTimeoutMs))
+                if (TryParseInt32(value, out var connectorTimeoutMs))
                     telegram.TimeoutMs = connectorTimeoutMs;
                 return true;
             case "timeout_ms":
             case "llm_timeout_ms":
             case "aevatar.llm_timeout_ms":
-                if (TryParsePositiveInt32(value, out var requestTimeoutMs))
+                if (TryParseInt32(value, out var requestTimeoutMs))
                 {
                     if (key == "timeout_ms" || key == "aevatar.llm_timeout_ms")
                     {
-                        telegram.TimeoutMs = timeoutMs is > 0
+                        telegram.TimeoutMs = requestTimeoutMs == 0
+                            ? 0
+                            : timeoutMs is > 0
                             ? Math.Max(100, Math.Min(requestTimeoutMs, timeoutMs.Value) - 1000)
                             : requestTimeoutMs;
                     }

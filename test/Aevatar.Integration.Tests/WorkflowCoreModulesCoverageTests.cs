@@ -893,6 +893,51 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task LLMCallModule_WhenTelegramTimeoutParameterIsZero_ShouldPromoteTypedPresence()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-telegram-zero",
+                StepType = "llm_call",
+                RunId = "run-telegram-zero",
+                Input = "wait",
+                Parameters =
+                {
+                    ["telegram.wait_timeout_ms"] = "0",
+                    ["telegram.timeout_ms"] = "0",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var zeroRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        zeroRequest.Telegram.HasWaitTimeoutMs.Should().BeTrue();
+        zeroRequest.Telegram.WaitTimeoutMs.Should().Be(0);
+        zeroRequest.Telegram.HasTimeoutMs.Should().BeTrue();
+        zeroRequest.Telegram.TimeoutMs.Should().Be(0);
+
+        ctx = CreateContext();
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-telegram-absent",
+                StepType = "llm_call",
+                RunId = "run-telegram-absent",
+                Input = "wait",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var absentRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        absentRequest.Telegram.HasWaitTimeoutMs.Should().BeFalse();
+        absentRequest.Telegram.HasTimeoutMs.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
