@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Hosting;
 using Aevatar.Studio.Application.Scripts.Contracts;
@@ -283,21 +284,21 @@ public sealed class AppStudioScriptDraftRunEndpointTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct) =>
-            UpsertDefinitionWithSnapshotAsync(scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, null, ct);
+            UpsertDefinitionWithSnapshotAsync(scriptId, scriptRevision, scriptPackage, definitionActorId, null, ct);
 
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             string? scopeId,
             CancellationToken ct)
         {
+            var sourceText = scriptPackage.GetPrimaryCSharpSource();
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             LastCall = (scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, scopeId);
             var actorId = definitionActorId ?? $"definition:{scriptId}:{scriptRevision}";
             return Task.FromResult(new ScriptDefinitionUpsertResult(
@@ -305,8 +306,8 @@ public sealed class AppStudioScriptDraftRunEndpointTests
                 new ScriptDefinitionSnapshot(
                     scriptId,
                     scriptRevision,
-                    sourceText,
                     sourceHash,
+                    scriptPackage,
                     StateTypeUrl: string.Empty,
                     ReadModelTypeUrl: string.Empty,
                     ReadModelSchemaVersion: string.Empty,

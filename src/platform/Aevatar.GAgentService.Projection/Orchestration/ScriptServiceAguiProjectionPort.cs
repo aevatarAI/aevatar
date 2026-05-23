@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.Presentation.AGUI;
@@ -17,41 +16,26 @@ public sealed class ScriptServiceAguiProjectionPort
     : EventSinkProjectionLifecyclePortBase<IScriptServiceAguiProjectionLease, ScriptServiceAguiRuntimeLease, AGUIEvent>,
       IScriptServiceAguiProjectionPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease> _attachExistingLeaseLookup;
 
     public ScriptServiceAguiProjectionPort(
         ServiceProjectionOptions options,
         IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptServiceAguiRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
-        IActorRuntime runtime)
+        IProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
             sessionEventHub)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
-    public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
-        string actorId,
-        string runId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = ServiceProjectionKinds.ScriptServiceAguiSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = runId,
-            },
-            ct);
-
-    // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
-    //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
-    //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
-    //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
     public async Task<EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>?> AttachExistingRunProjectionAsync(
         string actorId,
         string runId,
@@ -73,15 +57,21 @@ public sealed class ScriptServiceAguiProjectionPort
             ServiceProjectionKinds.ScriptServiceAguiSession,
             ProjectionRuntimeMode.SessionObservation,
             runId);
-        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
+        // Refactor (iter49/cluster-049-gagentservice-runtime-attach-existing-side-read):
+        //   Old pattern: Capability projection ports duplicated runtime existence checks via IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()).
+        //   New principle: Projection Core exposes typed attach-existing lease/session lookup contract; capability ports delegate to contract instead of runtime actor-id side reads.
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                Mode = scopeKey.Mode,
+                SessionId = scopeKey.SessionId,
+            },
+            ct).ConfigureAwait(false);
+        if (lease == null)
             return null;
 
-        var lease = new ScriptServiceAguiRuntimeLease(new ScriptServiceAguiProjectionContext
-        {
-            RootActorId = actorId,
-            ProjectionKind = ServiceProjectionKinds.ScriptServiceAguiSession,
-            SessionId = runId,
-        });
         var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null

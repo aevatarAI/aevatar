@@ -407,11 +407,13 @@ public class StreamingProxyCoverageTests
         await using var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
 
         var attachment = await observationPort.AttachAsync(" room-a ", sink, CancellationToken.None);
-        await observationPort.DetachAndDisposeAsync(attachment, sink, CancellationToken.None);
+        attachment.Should().NotBeNull();
+        await observationPort.DetachAndDisposeAsync(attachment!, sink, CancellationToken.None);
 
-        attachment.ProjectionLease.ActorId.Should().Be("room-a");
+        attachment!.ProjectionLease.ActorId.Should().Be("room-a");
         attachment.ProjectionLease.SessionId.Should().Be("room:room-a:subscription");
-        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachExistingSubscriptionCalls.Should().ContainSingle()
+            .Which.Should().Be(("room-a", "room:room-a:subscription"));
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.AttachedLeases.Should().ContainSingle(x =>
             x.ActorId == "room-a" &&
@@ -459,6 +461,16 @@ public class StreamingProxyCoverageTests
 
         attachment.Should().BeNull();
         hub.SubscribeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public void StreamingProxyRoomSessionProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
+    {
+        typeof(IStreamingProxyRoomSessionProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -717,7 +729,6 @@ public class StreamingProxyCoverageTests
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(StreamingProxyProjectionCompletionStatus.Completed);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.actorId == actor.Id &&
             x.sessionId == "session-123");
@@ -757,7 +768,6 @@ public class StreamingProxyCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(StreamingProxyRoomChatStartError.ProjectionUnavailable);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.actorId == actor.Id &&
             x.sessionId == "session-123");
@@ -789,7 +799,6 @@ public class StreamingProxyCoverageTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.actorId == actor.Id &&
             x.sessionId == "session-123");
@@ -1796,7 +1805,7 @@ public class StreamingProxyCoverageTests
         public TaskCompletionSource<bool> Attached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<StreamingProxyRoomSubscriptionObservationAttachment> AttachAsync(
+        public Task<StreamingProxyRoomSubscriptionObservationAttachment?> AttachAsync(
             string roomId,
             IEventSink<StreamingProxyRoomSessionEnvelope> sink,
             CancellationToken ct = default)
@@ -1805,7 +1814,7 @@ public class StreamingProxyCoverageTests
             _sink = sink;
             AttachCalls.Add((roomId, sink));
             Attached.TrySetResult(true);
-            return Task.FromResult(new StreamingProxyRoomSubscriptionObservationAttachment(
+            return Task.FromResult<StreamingProxyRoomSubscriptionObservationAttachment?>(new StreamingProxyRoomSubscriptionObservationAttachment(
                 new StubRoomSessionProjectionLease(
                     roomId,
                     $"room:{roomId}:subscription"),
@@ -1845,8 +1854,8 @@ public class StreamingProxyCoverageTests
         public bool ProjectionEnabled => true;
         public bool ReturnNullLease { get; init; }
 
-        public List<(string actorId, string sessionId, string projectionKind)> EnsureCalls { get; } = [];
         public List<(string actorId, string sessionId)> AttachExistingCalls { get; } = [];
+        public List<(string actorId, string subscriptionId)> AttachExistingSubscriptionCalls { get; } = [];
         public List<StreamingProxyRoomSessionEnvelope> Messages { get; } = [];
         public List<IStreamingProxyRoomSessionProjectionLease> AttachedLeases { get; } = [];
         public int AttachCount { get; private set; }
@@ -1855,46 +1864,6 @@ public class StreamingProxyCoverageTests
 
         public TaskCompletionSource<bool> Attached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureRoomProjectionAsync(
-            string actorId,
-            string sessionId,
-            CancellationToken ct = default)
-        {
-            return EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
-        }
-
-        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
-            string actorId,
-            string sessionId,
-            CancellationToken ct = default)
-        {
-            return EnsureProjectionAsync(actorId, sessionId, StreamingProxyProjectionKinds.RoomChatSession, ct);
-        }
-
-        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
-            string actorId,
-            string subscriptionId,
-            CancellationToken ct = default)
-        {
-            return EnsureProjectionAsync(actorId, subscriptionId, StreamingProxyProjectionKinds.RoomSubscriptionSession, ct);
-        }
-
-        private Task<IStreamingProxyRoomSessionProjectionLease?> EnsureProjectionAsync(
-            string actorId,
-            string sessionId,
-            string projectionKind,
-            CancellationToken ct)
-        {
-            _ = ct;
-
-            EnsureCalls.Add((actorId, sessionId, projectionKind));
-            if (ReturnNullLease)
-                return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(null);
-
-            _lease = new StubRoomSessionProjectionLease(actorId, sessionId);
-            return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(_lease);
-        }
 
         public async Task<EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>?> AttachExistingChatProjectionAsync(
             string actorId,
@@ -1908,6 +1877,22 @@ public class StreamingProxyCoverageTests
                 return null;
 
             _lease = new StubRoomSessionProjectionLease(actorId, sessionId);
+            var liveSinkLease = await AttachLiveSinkAsync(_lease, sink, ct);
+            return new EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>(_lease, liveSinkLease);
+        }
+
+        public async Task<EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>?> AttachExistingSubscriptionProjectionAsync(
+            string actorId,
+            string subscriptionId,
+            IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingSubscriptionCalls.Add((actorId, subscriptionId));
+            if (ReturnNullLease)
+                return null;
+
+            _lease = new StubRoomSessionProjectionLease(actorId, subscriptionId);
             var liveSinkLease = await AttachLiveSinkAsync(_lease, sink, ct);
             return new EventSinkProjectionAttachment<IStreamingProxyRoomSessionProjectionLease>(_lease, liveSinkLease);
         }

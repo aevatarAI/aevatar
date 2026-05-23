@@ -21,16 +21,17 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdChatProjectionSessionTests
 {
     [Fact]
-    public async Task ProjectionPort_ShouldStartAttachDetachAndReleaseChatSession()
+    public async Task ProjectionPort_ShouldAttachExistingDetachAndReleaseChatSession()
     {
         var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
-        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, new RecordingActorRuntime());
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, runtime);
         var sink = new RecordingEventSink();
 
-        var lease = await port.EnsureChatProjectionAsync("chat-actor-1", "session-1", CancellationToken.None);
-        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var attachment = await port.AttachExistingChatProjectionAsync("chat-actor-1", "session-1", sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
@@ -39,28 +40,32 @@ public sealed class NyxIdChatProjectionSessionTests
                 Delta = "hello",
             },
         });
-        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
-        await port.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
+        await port.DetachLiveSinkAsync(attachment!.LiveSinkLease, CancellationToken.None);
+        await port.ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None);
 
-        var request = activation.Requests.Should().ContainSingle().Subject;
-        request.RootActorId.Should().Be("chat-actor-1");
-        request.SessionId.Should().Be("session-1");
-        request.ProjectionKind.Should().Be("nyxid-chat-session");
-        request.Mode.Should().Be(ProjectionRuntimeMode.SessionObservation);
-
-        var runtimeLease = lease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
+        activation.Requests.Should().BeEmpty();
+        var runtimeLease = attachment.ProjectionLease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
         runtimeLease.ActorId.Should().Be("chat-actor-1");
         runtimeLease.RootEntityId.Should().Be("chat-actor-1");
         runtimeLease.ScopeId.Should().Be("chat-actor-1");
         runtimeLease.SessionId.Should().Be("session-1");
-        runtimeLease.Context.Should().BeSameAs(activation.LeaseToReturn.Context);
 
         hub.SubscribeCalls.Should().Be(1);
         hub.LastScopeId.Should().Be("chat-actor-1");
         hub.LastSessionId.Should().Be("session-1");
         sink.Events.Should().ContainSingle().Which.TextMessageContent.Delta.Should().Be("hello");
         hub.DisposedSubscriptions.Should().Be(1);
-        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(attachment.ProjectionLease);
+    }
+
+    [Fact]
+    public void ProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
+    {
+        typeof(INyxIdChatSessionProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
     }
 
     [Fact]

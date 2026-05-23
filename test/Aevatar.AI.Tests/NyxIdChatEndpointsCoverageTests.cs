@@ -1146,7 +1146,6 @@ public class NyxIdChatEndpointsCoverageTests
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x => x.ActorId == actor.Id && x.SessionId == "session-1");
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(1);
@@ -1190,7 +1189,6 @@ public class NyxIdChatEndpointsCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(NyxIdChatStartError.ProjectionUnavailable);
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x => x.ActorId == actor.Id && x.SessionId == "session-1");
         projectionPort.AttachCount.Should().Be(0);
         projectionPort.DetachCount.Should().Be(0);
@@ -1220,7 +1218,6 @@ public class NyxIdChatEndpointsCoverageTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
-        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachExistingCalls.Should().ContainSingle(x => x.ActorId == actor.Id && x.SessionId == "session-1");
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(1);
@@ -2855,27 +2852,12 @@ public class NyxIdChatEndpointsCoverageTests
         private INyxIdChatSessionProjectionLease? _lease;
 
         public List<AGUIEvent> Messages { get; } = [];
-        public List<(string ActorId, string SessionId)> EnsureCalls { get; } = [];
         public List<(string ActorId, string SessionId)> AttachExistingCalls { get; } = [];
         public bool ProjectionEnabled => true;
         public bool ReturnNullLease { get; init; }
         public int AttachCount { get; private set; }
         public int DetachCount { get; private set; }
         public int ReleaseCount { get; private set; }
-
-        public async Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
-            string actorId,
-            string sessionId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            EnsureCalls.Add((actorId, sessionId));
-            if (ReturnNullLease)
-                return null;
-
-            _lease = new StubNyxIdChatSessionProjectionLease(actorId, sessionId);
-            return _lease;
-        }
 
         public async Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
             string actorId,
@@ -2970,17 +2952,6 @@ public class NyxIdChatEndpointsCoverageTests
     private sealed class ThrowingNyxIdChatSessionProjectionPort(Exception exception) : INyxIdChatSessionProjectionPort
     {
         public bool ProjectionEnabled => true;
-
-        public Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
-            string actorId,
-            string sessionId,
-            CancellationToken ct = default)
-        {
-            _ = actorId;
-            _ = sessionId;
-            _ = ct;
-            throw exception;
-        }
 
         public Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
             string actorId,

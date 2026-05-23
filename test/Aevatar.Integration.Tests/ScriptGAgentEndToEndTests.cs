@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -37,8 +38,7 @@ public sealed class ScriptGAgentEndToEndTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "e2e-script",
             scriptRevision: revision,
-            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
-            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 

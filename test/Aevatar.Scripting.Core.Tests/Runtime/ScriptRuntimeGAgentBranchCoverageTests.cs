@@ -139,8 +139,10 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = definitionActorId,
             ScriptId = scriptId,
             Revision = revision,
-            SourceText = sourceText,
             SourceHash = "hash-1",
+            ScriptPackage = string.IsNullOrWhiteSpace(sourceText)
+                ? new ScriptPackageSpec()
+                : ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
         }));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -157,7 +159,6 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = string.Empty,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
@@ -168,20 +169,18 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
 
         harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
         harness.Agent.State.ScriptPackage.CsharpSources.Should().NotBeEmpty();
-        harness.Agent.State.SourceText.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleEnvelopeAsync_ShouldBind_WhenOnlySourceTextIsProvided()
+    public async Task HandleEnvelopeAsync_ShouldRejectBinding_WhenScriptPackageIsMissing()
     {
         var harness = CreateHarness();
 
-        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
         {
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
             ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
@@ -189,9 +188,8 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             ReadModelSchemaHash = "schema-hash",
         }));
 
-        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
-        harness.Agent.State.SourceText.Should().Be(ScriptSources.UppercaseBehavior);
-        harness.Agent.State.ScriptPackage.CsharpSources.Should().BeEmpty();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ScriptPackage must contain at least one C# source*");
     }
 
     [Fact]
@@ -515,7 +513,6 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,

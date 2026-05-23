@@ -18,6 +18,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
@@ -381,8 +382,9 @@ internal static class StudioEndpoints
             });
         }
 
-        var source = AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.Source);
-        if (string.IsNullOrWhiteSpace(source))
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.Source);
+        var primarySource = scriptPackage.GetPrimaryCSharpSource();
+        if (string.IsNullOrWhiteSpace(primarySource))
         {
             return Results.BadRequest(new
             {
@@ -400,15 +402,13 @@ internal static class StudioEndpoints
         var runtimeActorId = string.IsNullOrWhiteSpace(request.RuntimeActorId)
             ? $"app-script-runtime:{scopeToken}:{scriptId}:{revision}"
             : request.RuntimeActorId.Trim();
-        var sourceHash = AppScriptPackagePayloads.ComputeSourceHash(request.Package, source);
 
         try
         {
             var upsert = await definitionPort.UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                source,
-                sourceHash,
+                scriptPackage,
                 definitionActorId,
                 normalizedScopeId,
                 ct);
@@ -445,7 +445,7 @@ internal static class StudioEndpoints
                 definitionActorId = upsert.ActorId,
                 runtimeActorId = resolvedRuntimeActorId,
                 runId,
-                sourceHash,
+                sourceHash = upsert.Snapshot.SourceHash,
                 commandTypeUrl = payload.TypeUrl,
                 readModelUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
             });
