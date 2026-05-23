@@ -43,7 +43,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         joinedEvents.Should().HaveCount(3);
         joinedEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
 
-        store.ListParticipants("room-1").Should().HaveCount(3);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
         leftEvents.Should().HaveCount(1);
         leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
         leftEvents.Should().HaveCount(1);
         leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -226,8 +226,13 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         participants.Should().ContainSingle();
         participants.Single().RoutePreference.Should().Be("/api/v1/proxy/s/openclaw/legacy");
         participants.Single().Model.Should().Be("legacy-model");
-        store.ListParticipants("room-1").Should().ContainSingle(entry =>
-            entry.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
+        var joinedEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantJoinedEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantJoinedEvent>())
+            .ToList();
+        joinedEvents.Should().ContainSingle(evt =>
+            evt.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()

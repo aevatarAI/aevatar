@@ -1,6 +1,9 @@
 using System.Reflection;
 using System.Security.Claims;
 using System.Text;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
@@ -210,9 +213,24 @@ public sealed class StreamingProxyEndpointsCoverageTests
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var roomCommandService = new RecordingRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.Created,
+                roomId,
+                roomId));
+        var runtime = new RecordingActorRuntime([], new RecordingActor(roomId));
+        var facade = new StreamingProxyChatLifecycleFacade(
+            runtime,
+            roomCommandService,
+            new NoOpStreamingProxyRoomChatInteractionService(),
+            new RecordingGAgentActorStore([]),
+            participantStore,
+            new NoOpSubscriptionObservationPort(),
+            loggerFactory.CreateLogger<StreamingProxyChatLifecycleFacade>());
+
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), facade, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -391,6 +409,113 @@ public sealed class StreamingProxyEndpointsCoverageTests
         {
             _ = roomId;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpStreamingProxyRoomChatInteractionService
+        : ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>
+    {
+        public Task<CommandInteractionResult<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyProjectionCompletionStatus>> ExecuteAsync(
+            StreamingProxyRoomChatCommand command,
+            Func<StreamingProxyRoomSessionEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<StreamingProxyRoomChatAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            _ = emitAsync;
+            _ = onAcceptedAsync;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                CommandInteractionResult<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyProjectionCompletionStatus>
+                    .Failure(StreamingProxyRoomChatStartError.RoomNotFound));
+        }
+    }
+
+    private sealed class NoOpTerminalQueryPort : IStreamingProxyChatSessionTerminalQueryPort
+    {
+        public Task<StreamingProxyChatSessionTerminalSnapshot?> GetAsync(
+            string roomId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = roomId;
+            _ = sessionId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<StreamingProxyChatSessionTerminalSnapshot?>(null);
+        }
+    }
+
+    private sealed class NoOpSubscriptionObservationPort : IStreamingProxyRoomSubscriptionObservationPort
+    {
+        public Task<StreamingProxyRoomSubscriptionObservationAttachment?> AttachAsync(
+            string roomId,
+            IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = roomId;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<StreamingProxyRoomSubscriptionObservationAttachment?>(null);
+        }
+
+        public Task DetachAndDisposeAsync(
+            StreamingProxyRoomSubscriptionObservationAttachment attachment,
+            IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = attachment;
+            ct.ThrowIfCancellationRequested();
+            return sink.DisposeAsync().AsTask();
+        }
+    }
+
+    private sealed class NoOpActorDispatchPort : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpLlmProviderFactory : ILLMProviderFactory
+    {
+        private static readonly NoOpLlmProvider Provider = new();
+
+        public ILLMProvider GetProvider(string name)
+        {
+            _ = name;
+            return Provider;
+        }
+
+        public ILLMProvider GetDefault() => Provider;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class NoOpLlmProvider : ILLMProvider
+    {
+        public string Name => "noop";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
+
+    private sealed class NoOpHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name)
+        {
+            _ = name;
+            return new HttpClient();
         }
     }
 
