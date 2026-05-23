@@ -21,12 +21,8 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var transport = CreateTransport(registry);
-        var received = new List<TelegramGetUpdatesResult>();
-        transport.OnMessageReceived = (payload, ct) =>
-        {
-            received.Add(TelegramGetUpdatesResult.Parser.ParseFrom(payload.Span));
-            return Task.CompletedTask;
-        };
+        var sink = new RecordingExternalLinkSignalSink();
+        transport.SignalSink = sink;
         var request = BuildRequest();
 
         await transport.SendAsync(request.ToByteArray(), CancellationToken.None);
@@ -45,29 +41,25 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
         connector.Received[0].Parameters["method"].Should().Be("POST");
         connector.Received[0].Parameters["content_type"].Should().Be("application/json");
         connector.Received[0].Parameters["timeout_ms"].Should().Be("4000");
-        received.Should().ContainSingle();
-        received[0].CommandId.Should().Be("cmd-1");
-        received[0].Generation.Should().Be(7);
-        received[0].RequestId.Should().Be("request-1");
-        received[0].Success.Should().BeTrue();
-        received[0].Output.Should().Be("""{"ok":true,"result":[]}""");
-        received[0].RequestedOffset.Should().Be(42);
+        var result = ParseSingleMessage(sink);
+        result.CommandId.Should().Be("cmd-1");
+        result.Generation.Should().Be(7);
+        result.RequestId.Should().Be("request-1");
+        result.Success.Should().BeTrue();
+        result.Output.Should().Be("""{"ok":true,"result":[]}""");
+        result.RequestedOffset.Should().Be(42);
     }
 
     [Fact]
     public async Task SendAsync_WhenConnectorMissing_ShouldPublishFailureResult()
     {
         var transport = CreateTransport(new InMemoryConnectorRegistry());
-        var received = new List<TelegramGetUpdatesResult>();
-        transport.OnMessageReceived = (payload, ct) =>
-        {
-            received.Add(TelegramGetUpdatesResult.Parser.ParseFrom(payload.Span));
-            return Task.CompletedTask;
-        };
+        var sink = new RecordingExternalLinkSignalSink();
+        transport.SignalSink = sink;
 
         await transport.SendAsync(BuildRequest().ToByteArray(), CancellationToken.None);
 
-        var result = received.Should().ContainSingle().Subject;
+        var result = ParseSingleMessage(sink);
         result.Success.Should().BeFalse();
         result.Error.Should().Be("telegram connector 'telegram' not found");
     }
@@ -78,16 +70,12 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(new ThrowingConnector(new InvalidOperationException("sync broke")));
         var transport = CreateTransport(registry);
-        var received = new List<TelegramGetUpdatesResult>();
-        transport.OnMessageReceived = (payload, ct) =>
-        {
-            received.Add(TelegramGetUpdatesResult.Parser.ParseFrom(payload.Span));
-            return Task.CompletedTask;
-        };
+        var sink = new RecordingExternalLinkSignalSink();
+        transport.SignalSink = sink;
 
         await transport.SendAsync(BuildRequest().ToByteArray(), CancellationToken.None);
 
-        var result = received.Should().ContainSingle().Subject;
+        var result = ParseSingleMessage(sink);
         result.Success.Should().BeFalse();
         result.Error.Should().Be("telegram getUpdates execution failed: sync broke");
     }
@@ -98,16 +86,12 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(new FaultingConnector(new InvalidOperationException("async broke")));
         var transport = CreateTransport(registry);
-        var received = new List<TelegramGetUpdatesResult>();
-        transport.OnMessageReceived = (payload, ct) =>
-        {
-            received.Add(TelegramGetUpdatesResult.Parser.ParseFrom(payload.Span));
-            return Task.CompletedTask;
-        };
+        var sink = new RecordingExternalLinkSignalSink();
+        transport.SignalSink = sink;
 
         await transport.SendAsync(BuildRequest().ToByteArray(), CancellationToken.None);
 
-        var result = received.Should().ContainSingle().Subject;
+        var result = ParseSingleMessage(sink);
         result.Success.Should().BeFalse();
         result.Error.Should().Be("telegram getUpdates execution failed: async broke");
     }
@@ -116,21 +100,17 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
     public async Task ConnectAndDisconnect_ShouldPublishStateCallbacks()
     {
         var transport = CreateTransport(new InMemoryConnectorRegistry());
-        var states = new List<(ExternalLinkStateChange State, string? Reason)>();
-        transport.OnStateChanged = (state, reason, ct) =>
-        {
-            states.Add((state, reason));
-            return Task.CompletedTask;
-        };
+        var sink = new RecordingExternalLinkSignalSink();
+        transport.SignalSink = sink;
 
         await transport.ConnectAsync(
             new ExternalLinkDescriptor("telegram-get-updates", "telegram-get-updates", "telegram://get-updates"),
             CancellationToken.None);
         await transport.DisconnectAsync(CancellationToken.None);
 
-        states.Should().Equal(
-            (ExternalLinkStateChange.Connected, null),
-            (ExternalLinkStateChange.Closed, "closed"));
+        sink.StateSignals.Select(x => (x.State, x.Reason)).Should().Equal(
+            (ExternalLinkTransportStateSignalKind.Connected, string.Empty),
+            (ExternalLinkTransportStateSignalKind.Closed, "closed"));
     }
 
     [Fact]
@@ -148,6 +128,31 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
 
     private static TelegramGetUpdatesExternalLinkTransport CreateTransport(IConnectorRegistry registry) =>
         new(registry, NullLogger<TelegramGetUpdatesExternalLinkTransport>.Instance);
+
+    private static TelegramGetUpdatesResult ParseSingleMessage(RecordingExternalLinkSignalSink sink)
+    {
+        var signal = sink.MessageSignals.Should().ContainSingle().Subject;
+        signal.ReceivedAt.Should().NotBeNull();
+        return TelegramGetUpdatesResult.Parser.ParseFrom(signal.RawPayload);
+    }
+
+    private sealed class RecordingExternalLinkSignalSink : IExternalLinkSignalSink
+    {
+        public List<ExternalLinkMessageReceivedSignal> MessageSignals { get; } = [];
+        public List<ExternalLinkTransportStateChangedSignal> StateSignals { get; } = [];
+
+        public Task PublishMessageReceivedAsync(ExternalLinkMessageReceivedSignal signal, CancellationToken ct)
+        {
+            MessageSignals.Add(signal);
+            return Task.CompletedTask;
+        }
+
+        public Task PublishStateChangedAsync(ExternalLinkTransportStateChangedSignal signal, CancellationToken ct)
+        {
+            StateSignals.Add(signal);
+            return Task.CompletedTask;
+        }
+    }
 
     private static TelegramGetUpdatesRequest BuildRequest()
     {

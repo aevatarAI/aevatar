@@ -13,6 +13,10 @@ namespace Aevatar.Foundation.ExternalLinks.WebSocket;
 /// - No custom HTTP headers for the handshake.
 /// - Receive buffer is fixed at 8 KB.
 /// </summary>
+// Refactor (iter56/cluster-912-external-link-signal-contract):
+// old=transport direct callback, new=typed signal sink.
+// The WebSocket I/O loop publishes typed internal signals only.
+// Actor/module turns consume those signals and reconcile link state.
 internal sealed class WebSocketTransport : IExternalLinkTransport
 {
     private const int ReceiveBufferSize = 8192;
@@ -24,8 +28,7 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
 
     public string TransportType => "websocket";
 
-    public Func<ReadOnlyMemory<byte>, CancellationToken, Task>? OnMessageReceived { private get; set; }
-    public Func<ExternalLinkStateChange, string?, CancellationToken, Task>? OnStateChanged { private get; set; }
+    public IExternalLinkSignalSink? SignalSink { private get; set; }
 
     public WebSocketTransport(ILogger logger)
     {
@@ -93,6 +96,10 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
+        // Refactor (iter56/cluster-912-external-link-signal-contract):
+        // old=transport direct callback, new=typed signal sink.
+        // Received frames become ExternalLinkMessageReceivedSignal only.
+        // Caller business handlers are never invoked from this I/O loop.
         var buffer = new byte[ReceiveBufferSize];
         using var ms = new MemoryStream();
 
@@ -117,10 +124,16 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
                     endOfMessage = vResult.EndOfMessage;
                 } while (!endOfMessage);
 
-                if (ms.Length > 0 && OnMessageReceived != null)
+                if (ms.Length > 0 && SignalSink != null)
                 {
                     var data = ms.ToArray();
-                    await OnMessageReceived(data, ct);
+                    await SignalSink.PublishMessageReceivedAsync(
+                        new ExternalLinkMessageReceivedSignal
+                        {
+                            RawPayload = Google.Protobuf.ByteString.CopyFrom(data),
+                            ReceivedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                        },
+                        ct);
                 }
             }
         }
@@ -140,6 +153,26 @@ internal sealed class WebSocketTransport : IExternalLinkTransport
         }
     }
 
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // State transitions are serialized as ExternalLinkTransportStateChangedSignal.
+    // The owning actor/module turn decides the resulting business event.
     private Task NotifyStateChangedAsync(ExternalLinkStateChange state, string? reason, CancellationToken ct) =>
-        OnStateChanged?.Invoke(state, reason, ct) ?? Task.CompletedTask;
+        SignalSink?.PublishStateChangedAsync(
+            new ExternalLinkTransportStateChangedSignal
+            {
+                State = ToSignalKind(state),
+                Reason = reason ?? string.Empty,
+            },
+            ct) ?? Task.CompletedTask;
+
+    private static ExternalLinkTransportStateSignalKind ToSignalKind(ExternalLinkStateChange state) =>
+        state switch
+        {
+            ExternalLinkStateChange.Connected => ExternalLinkTransportStateSignalKind.Connected,
+            ExternalLinkStateChange.Disconnected => ExternalLinkTransportStateSignalKind.Disconnected,
+            ExternalLinkStateChange.Error => ExternalLinkTransportStateSignalKind.Error,
+            ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
+            _ => ExternalLinkTransportStateSignalKind.Unspecified,
+        };
 }
