@@ -3,13 +3,17 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,6 +62,8 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
+        AssertProjectionActivationProviderRegistered<ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
         // Refactor (iter20/cluster-003):
         //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
         //   New principle: delete orphan path,NyxID relay 唯一 ingress
@@ -97,6 +103,30 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ICommandDispatchService<DeviceCallbackDispatchCommand, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>));
+        AssertProjectionActivationProviderRegistered<DeviceRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddScheduledAgents_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddScheduledAgents();
+
+        AssertProjectionActivationProviderRegistered<UserAgentCatalogCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelIdentity(new ConfigurationBuilder().Build());
+
+        AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
+            services);
     }
 
     [Fact]
@@ -196,4 +226,17 @@ public sealed class ServiceCollectionExtensionsTests
 
     private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
         name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
+
+    private static void AssertProjectionActivationProviderRegistered<TProvider>(IServiceCollection services)
+        where TProvider : IProjectionActivationPlanProvider
+    {
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ProjectionActivationPlanDispatcher));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            descriptor.ImplementationType == typeof(CommittedStateProjectionActivationHook));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionActivationPlanProvider) &&
+            descriptor.ImplementationType == typeof(TProvider));
+    }
 }

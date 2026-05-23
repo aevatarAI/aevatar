@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -61,6 +62,13 @@ public static class IdentityServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton(sp => TimeProvider.System);
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ChannelIdentityCommittedStateProjectionActivationPlanProvider>());
 
         // ─── Per-binding projection (one document per ExternalSubjectRef) ───
         services.AddProjectionMaterializationRuntimeCore<

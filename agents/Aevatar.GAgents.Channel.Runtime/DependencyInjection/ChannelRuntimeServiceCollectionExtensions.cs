@@ -6,6 +6,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +69,13 @@ public static class ChannelRuntimeServiceCollectionExtensions
         // ─── Projection pipeline shared infrastructure ───
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>());
 
         // Detect projection store provider from configuration. The helper logs a
         // misconfiguration warning (Console.Error during SCE composition; structured

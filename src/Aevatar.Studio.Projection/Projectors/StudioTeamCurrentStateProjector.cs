@@ -20,6 +20,9 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// (ADR-0017 §Non-Goals). Listing members for a team goes through the member
 /// read model filtered by <c>team_id</c>.
 /// </summary>
+[ProjectionExempt(
+    Category = ProjectionExemptionCategory.StartupBootstrap,
+    Reason = "Studio actor-backed store current-state readmodels are activated by StudioCurrentStateProjectionPort/StudioActorBootstrap; provider migration is tracked separately from issue #895.")]
 public sealed class StudioTeamCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {

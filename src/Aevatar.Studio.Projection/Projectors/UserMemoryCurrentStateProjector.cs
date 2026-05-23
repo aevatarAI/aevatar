@@ -13,6 +13,9 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// Materializes <see cref="UserMemoryState"/> committed events into
 /// <see cref="UserMemoryCurrentStateDocument"/> in the projection document store.
 /// </summary>
+[ProjectionExempt(
+    Category = ProjectionExemptionCategory.StartupBootstrap,
+    Reason = "Studio actor-backed store current-state readmodels are activated by StudioCurrentStateProjectionPort/StudioActorBootstrap; provider migration is tracked separately from issue #895.")]
 public sealed class UserMemoryCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {
