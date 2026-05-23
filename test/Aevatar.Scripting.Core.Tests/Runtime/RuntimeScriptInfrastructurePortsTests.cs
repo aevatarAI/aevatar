@@ -777,6 +777,7 @@ public class RuntimeScriptInfrastructurePortsTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*projection is disabled*");
+        runtime.DispatchRequests.Should().BeEmpty();
         projectionPort.DetachCount.Should().Be(0);
         projectionPort.ReleaseCount.Should().Be(0);
     }

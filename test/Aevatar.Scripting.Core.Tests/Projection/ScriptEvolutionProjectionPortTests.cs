@@ -18,10 +18,11 @@ public sealed class ScriptEvolutionProjectionPortTests
     {
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
+        var activationService = new RecordingActivationService();
         runtime.MarkExists("projection.session.scope:script-evolution-session:session-1:proposal-1");
         var port = new ScriptEvolutionProjectionPort(
             new ScriptEvolutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
+            activationService,
             new RecordingReleaseService(),
             hub,
             runtime);
@@ -37,6 +38,7 @@ public sealed class ScriptEvolutionProjectionPortTests
         hub.LastSessionId.Should().Be("proposal-1");
         runtime.ExistsCalls.Should().ContainSingle()
             .Which.Should().Be("projection.session.scope:script-evolution-session:session-1:proposal-1");
+        activationService.EnsureCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -98,11 +100,14 @@ public sealed class ScriptEvolutionProjectionPortTests
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>
     {
+        public int EnsureCallCount { get; private set; }
+
         public Task<ScriptEvolutionRuntimeLease> EnsureAsync(
             ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            EnsureCallCount++;
             return Task.FromResult(new ScriptEvolutionRuntimeLease(new ScriptEvolutionSessionProjectionContext
             {
                 RootActorId = request.RootActorId,
