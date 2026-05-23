@@ -72,4 +72,42 @@ public class VoicePresenceProtoTests
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceToolDefinition));
     }
+
+    [Fact]
+    public void VoiceCapabilityAndLeaseMessages_ShouldRoundtripAndExposeReflection()
+    {
+        var leaseRequested = new VoicePresenceSessionLeaseRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            SessionLeaseRequested = leaseRequested,
+        };
+        var capability = new VoicePresenceCapabilityReadModel
+        {
+            Id = "agent-1:voice_presence",
+            ActorId = "agent-1",
+            ModuleName = "voice_presence",
+            StateVersion = 3,
+            LastEventId = "event-3",
+            UpdatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Initialized = true,
+            PcmSampleRateHz = 24000,
+            ActiveSessionId = "lease-1",
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+        };
+
+        VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray()).ShouldBe(signal);
+        VoicePresenceCapabilityReadModel.Parser.ParseFrom(capability.ToByteArray()).ShouldBe(capability);
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested);
+        capability.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceCapabilityReadModel));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceSessionLeaseRequested));
+    }
 }

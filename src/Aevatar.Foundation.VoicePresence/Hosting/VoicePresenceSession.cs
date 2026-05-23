@@ -1,4 +1,5 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
 using Aevatar.Foundation.VoicePresence.Transport;
@@ -10,10 +11,12 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// </summary>
 public sealed class VoicePresenceSession
 {
+    private const string DetachedReason = "host_transport_detached";
     private readonly Func<bool> _isInitialized;
     private readonly Func<bool> _isTransportAttached;
     private readonly Func<IVoiceTransport, CancellationToken, Task> _attachTransportAsync;
     private readonly Func<IVoiceTransport?, CancellationToken, Task> _detachTransportAsync;
+    private readonly VoicePresenceSessionLeaseHandle? _leaseHandle;
 
     public VoicePresenceSession(
         VoicePresenceModule module,
@@ -26,6 +29,7 @@ public sealed class VoicePresenceSession
         Module = module;
         SelfEventDispatcher = selfEventDispatcher;
         PcmSampleRateHz = pcmSampleRateHz;
+        _leaseHandle = null;
         _isInitialized = () => module.IsInitialized;
         _isTransportAttached = () => module.IsTransportAttached;
         _attachTransportAsync = (transport, _) =>
@@ -34,6 +38,33 @@ public sealed class VoicePresenceSession
             return Task.CompletedTask;
         };
         _detachTransportAsync = (expectedTransport, _) => module.DetachTransportAsync(expectedTransport);
+    }
+
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+    public VoicePresenceSession(
+        VoicePresenceCapabilitySnapshot capability,
+        VoicePresenceSessionLeaseHandle leaseHandle,
+        IVoicePresenceSessionLeasePort leasePort,
+        IVoicePresenceTransportAttachmentPort transportAttachmentPort)
+    {
+        ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(leaseHandle);
+        ArgumentNullException.ThrowIfNull(leasePort);
+        ArgumentNullException.ThrowIfNull(transportAttachmentPort);
+
+        PcmSampleRateHz = capability.PcmSampleRateHz;
+        _leaseHandle = leaseHandle;
+        _isInitialized = () => capability.Initialized;
+        _isTransportAttached = () => capability.TransportAttached;
+        _attachTransportAsync = (transport, ct) =>
+            transportAttachmentPort.AttachAsync(leaseHandle, transport, ct);
+        _detachTransportAsync = async (expectedTransport, ct) =>
+        {
+            await transportAttachmentPort.DetachAsync(leaseHandle, expectedTransport, ct);
+            await leasePort.ReleaseAsync(leaseHandle, DetachedReason, ct);
+        };
     }
 
     public VoicePresenceSession(
@@ -57,6 +88,8 @@ public sealed class VoicePresenceSession
     public VoicePresenceModule? Module { get; }
 
     public Func<IMessage, CancellationToken, Task>? SelfEventDispatcher { get; }
+
+    public VoicePresenceSessionLeaseHandle? LeaseHandle => _leaseHandle;
 
     public int PcmSampleRateHz { get; }
 

@@ -5,6 +5,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
+// Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+//   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+//   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
 internal static class VoicePresenceSessionDispatch
 {
     public const string HostPublisherId = "voice-presence.host";
@@ -69,6 +72,12 @@ internal static class VoicePresenceSessionDispatch
             //   Raw audio chunks must never be wrapped as VoiceModuleSignal payloads.
             case VoiceRemoteControlInputReceived controlInput:
                 signal.RemoteControlInputReceived = controlInput.Clone();
+                break;
+            case VoicePresenceSessionLeaseRequested leaseRequested:
+                signal.SessionLeaseRequested = leaseRequested.Clone();
+                break;
+            case VoicePresenceSessionLeaseReleased leaseReleased:
+                signal.SessionLeaseReleased = leaseReleased.Clone();
                 break;
             default:
                 throw new InvalidOperationException(

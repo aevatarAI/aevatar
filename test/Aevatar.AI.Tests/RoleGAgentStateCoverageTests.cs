@@ -138,6 +138,11 @@ public sealed class RoleGAgentStateCoverageTests
             CurrentResponseId = 3,
             NextResponseId = 4,
             ActiveProviderResponseId = "provider-response-1",
+            Initialized = true,
+            TransportAttached = true,
+            PcmSampleRateHz = 24000,
+            ActiveSessionId = "lease-1",
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
         };
 
         var next = InvokePrivateStatic<RoleGAgentState>(
@@ -153,6 +158,11 @@ public sealed class RoleGAgentStateCoverageTests
         next.VoicePresence.Should().ContainKey("voice_presence");
         next.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(3);
         next.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-1");
+        next.VoicePresence["voice_presence"].ActiveSessionId.Should().Be("lease-1");
+        next.VoicePresence["voice_presence"].Initialized.Should().BeTrue();
+        next.VoicePresence["voice_presence"].TransportAttached.Should().BeTrue();
+        next.VoicePresence["voice_presence"].PcmSampleRateHz.Should().Be(24000);
+        next.VoicePresence["voice_presence"].RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.LocalOnly);
     }
 
     [Fact]

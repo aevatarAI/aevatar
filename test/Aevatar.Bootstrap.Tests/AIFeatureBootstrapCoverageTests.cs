@@ -2,6 +2,7 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Voice;
@@ -14,10 +15,12 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using FluentAssertions;
@@ -140,6 +143,9 @@ public class AIFeatureBootstrapCoverageTests
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
         services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -163,7 +169,13 @@ public class AIFeatureBootstrapCoverageTests
         provider.GetRequiredService<IVoiceToolCatalog>()
             .Should().BeOfType<AgentToolVoiceCatalog>();
         provider.GetRequiredService<IVoicePresenceSessionResolver>()
-            .Should().BeOfType<InProcessActorVoicePresenceSessionResolver>();
+            .Should().BeOfType<ActorOwnedVoicePresenceSessionResolver>();
+        provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
+            .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
+            .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceTransportAttachmentPort>()
+            .Should().BeOfType<UnavailableVoicePresenceTransportAttachmentPort>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();
@@ -635,5 +647,23 @@ public class AIFeatureBootstrapCoverageTests
         var json = JsonSerializer.Serialize(values);
         File.WriteAllText(path, json);
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+    }
+
+    private sealed class NoOpActorDispatchPort : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class EmptyVoicePresenceCapabilityReader
+        : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>
+    {
+        public Task<VoicePresenceCapabilityReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<VoicePresenceCapabilityReadModel?>(null);
+
+        public Task<ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>.Empty);
     }
 }
