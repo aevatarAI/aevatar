@@ -25,6 +25,7 @@ public sealed class StatusDashboardManifestTests
             "self-readiness",
             "responses-api-auth-gate",
             "messages-api-auth-gate",
+            "chat-completions-api-auth-gate",
             "models-api-auth-gate",
             "voice-websocket-auth-gate",
             "channel-bot-runtime",
@@ -33,6 +34,14 @@ public sealed class StatusDashboardManifestTests
             "nyxid-channel-bots-auth-gate",
             "nyxid-channel-relay-reply-auth-gate",
         });
+        var chatCompletions = manifest.Descriptors.Single(d => d.Slug == "chat-completions-api-auth-gate");
+        chatCompletions.DisplayName.Should().Be("OpenAI Chat Completions API auth gate");
+        chatCompletions.Category.Should().Be("feature");
+        chatCompletions.ProbeKind.Should().Be("http_status");
+        chatCompletions.Parameters["Url"].Should().Be("http://127.0.0.1:9999/v1/chat/completions");
+        chatCompletions.Parameters["Method"].Should().Be("POST");
+        chatCompletions.Parameters["ExpectedStatuses"].Should().Be("401");
+        chatCompletions.Parameters["Body"].Should().Be("{}");
         manifest.Descriptors.Should().OnlyContain(d => d.IntervalSeconds == 60);
     }
 

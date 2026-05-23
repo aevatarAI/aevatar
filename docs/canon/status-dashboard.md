@@ -188,7 +188,7 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 内置 probe 包括：
 
 1. `self-liveness` / `self-readiness`。
-2. Responses、Messages、Models、Voice、Channel registration 等 auth gate。
+2. Responses、Messages、Chat Completions、Models、Voice、Channel registration 等 auth gate。
 3. `channel-bot-runtime` readmodel freshness。
 4. NyxID LLM status、LLM gateway、channel-bots、channel-relay reply 等上游探测。
 5. 可选的 `ResponsesForwardToTeam` 分阶段探针，用于验证 NyxID proxy 到 `/v1/responses`、chat-route、Studio Team、member binding 与 e2e invoke 链路。

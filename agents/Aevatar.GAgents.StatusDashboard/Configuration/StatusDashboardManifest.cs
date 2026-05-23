@@ -124,6 +124,18 @@ public sealed class StatusDashboardManifest
                 ["Body"] = "{}",
             }),
             HttpTarget(
+            slug: "chat-completions-api-auth-gate",
+            name: "OpenAI Chat Completions API auth gate",
+            category: "feature",
+            url: $"{selfBaseUrl}/v1/chat/completions",
+            method: "POST",
+            expectedStatuses: "401",
+            intervalSeconds: 60,
+            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Body"] = "{}",
+            }),
+            HttpTarget(
             slug: "models-api-auth-gate",
             name: "Models API auth gate",
             category: "feature",
