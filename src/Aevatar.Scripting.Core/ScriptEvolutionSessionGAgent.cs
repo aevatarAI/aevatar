@@ -307,7 +307,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 proposal.BaseRevision ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
                 definitionActorId,
-                proposal.CandidateSourceHash ?? string.Empty,
+                definitionUpsert.Snapshot.SourceHash ?? string.Empty,
                 proposal.ProposalId ?? string.Empty,
                 proposal.ScopeId,
                 ct);

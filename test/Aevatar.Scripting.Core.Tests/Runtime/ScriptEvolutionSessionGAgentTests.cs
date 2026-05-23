@@ -168,7 +168,10 @@ public class ScriptEvolutionSessionGAgentTests
         });
 
         definitionPort.Requests.Should().ContainSingle();
-        catalogCommandPort.PromoteCalls.Should().ContainSingle();
+        var promotedSourceHash = catalogCommandPort.PromoteCalls.Should().ContainSingle().Subject.SourceHash;
+        promotedSourceHash.Should().Be(ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource("source-v2")));
+        promotedSourceHash.Should().NotBe("hash-v2");
         agent.State.ProposalId.Should().Be("proposal-1");
         agent.State.Completed.Should().BeTrue();
         agent.State.Accepted.Should().BeTrue();
@@ -1578,7 +1581,7 @@ public class ScriptEvolutionSessionGAgentTests
 
     private class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
-        public List<(string ScriptId, string Revision, string DefinitionActorId)> PromoteCalls { get; } = [];
+        public List<(string ScriptId, string Revision, string DefinitionActorId, string SourceHash)> PromoteCalls { get; } = [];
         public List<(string ScriptId, string TargetRevision)> RollbackCalls { get; } = [];
 
         public virtual Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
@@ -1593,10 +1596,9 @@ public class ScriptEvolutionSessionGAgentTests
         {
             _ = catalogActorId;
             _ = expectedBaseRevision;
-            _ = sourceHash;
             _ = proposalId;
             ct.ThrowIfCancellationRequested();
-            PromoteCalls.Add((scriptId, revision, definitionActorId));
+            PromoteCalls.Add((scriptId, revision, definitionActorId, sourceHash));
             return Task.FromResult(new ScriptingCommandAcceptedReceipt(
                 catalogActorId ?? "catalog-1",
                 "catalog-command-1",
