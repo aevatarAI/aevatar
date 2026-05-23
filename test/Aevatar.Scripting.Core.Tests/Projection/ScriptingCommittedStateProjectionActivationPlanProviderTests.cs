@@ -15,6 +15,45 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
 {
     [Fact]
+    public void GetPlans_ShouldRejectNullContext()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        var act = () => provider.GetPlans(null!).ToArray();
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void GetPlans_ShouldIgnoreMissingStateEventPayload()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        provider.GetPlans(new CommittedStatePublicationContext
+            {
+                ActorId = "user-script-definition:scope-1:my-script:rev-1",
+                ActorType = typeof(ScriptDefinitionGAgent),
+                Published = new CommittedStateEventPublished(),
+            })
+            .Should().BeEmpty();
+
+        provider.GetPlans(new CommittedStatePublicationContext
+            {
+                ActorId = "user-script-definition:scope-1:my-script:rev-1",
+                ActorType = typeof(ScriptDefinitionGAgent),
+                Published = new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        AgentId = "user-script-definition:scope-1:my-script:rev-1",
+                        EventId = "evt-1",
+                    },
+                },
+            })
+            .Should().BeEmpty();
+    }
+
+    [Fact]
     public void GetPlans_ShouldMapScriptDefinitionUpsertedToAuthorityMaterializationScope()
     {
         var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
@@ -87,6 +126,11 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
                 typeof(string),
                 new ScriptDefinitionUpsertedEvent { ScriptId = "my-script", ScriptRevision = "rev-1" },
                 "user-script-definition:scope-1:my-script:rev-1"))
+            .Should().BeEmpty();
+        provider.GetPlans(BuildContext(
+                typeof(ScriptCatalogGAgent),
+                new StringValue { Value = "not-catalog-authority-mutation" },
+                "user-script-catalog:scope-1"))
             .Should().BeEmpty();
     }
 
