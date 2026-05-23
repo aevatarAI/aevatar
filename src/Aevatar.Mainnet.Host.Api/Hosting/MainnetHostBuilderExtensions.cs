@@ -35,6 +35,7 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
@@ -305,6 +306,7 @@ public static class MainnetHostBuilderExtensions
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
+        app.MapChatCompletionsApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();

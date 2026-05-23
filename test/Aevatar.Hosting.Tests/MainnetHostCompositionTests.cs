@@ -95,6 +95,7 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/v1/responses");
+        routePatterns.Should().Contain("/v1/chat/completions");
 
         // Both Lark and Telegram tool providers must register with IAgentToolSource so the
         // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup

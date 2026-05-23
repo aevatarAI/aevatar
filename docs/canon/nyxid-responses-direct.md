@@ -12,7 +12,7 @@ owner: eanzhao
 
 ## 1. 范围与状态
 
-当前对外入口有四个：
+当前对外入口有五个：
 
 | 入口 | 协议形态 | 状态 | 说明 |
 |---|---|---|---|
@@ -20,6 +20,7 @@ owner: eanzhao
 | `POST /v1/responses` | OpenAI Responses 兼容 | 已上线 | 主入口，支持 streaming、工具声明、`previous_response_id` continuation |
 | `POST /v1/responses/{id}/cancel` | OpenAI Responses cancel | 已上线 | 取消可见的 response session |
 | `POST /v1/messages` | Anthropic Messages facade | 已上线 | 给 Claude Code 这类 Messages-only 客户端使用，能力刻意做窄 |
+| `POST /v1/chat/completions` | OpenAI Chat Completions facade | 已上线 | 给 Chat Completions-only 客户端使用，能力刻意做窄 |
 
 推荐外部客户端统一走：
 
@@ -148,7 +149,28 @@ llm-anthropic/claude-haiku-4-5
 
 需要完整异步编排和 continuation 时，用 `/v1/responses`。
 
-## 7. API Key 要求
+## 7. Chat Completions 窄门面
+
+`POST /v1/chat/completions` 是 OpenAI Chat Completions 兼容窄门面，适合只支持 `OPENAI_BASE_URL` + `/chat/completions` 的客户端通过 NyxID proxy 直连 Aevatar。
+
+当前行为：
+
+- 每个请求注册一个新的 `LlmSession`。
+- 复用 `/v1/responses` / `/v1/messages` 的 caller scope、模型路由和 NyxID bearer 透传。
+- 支持 text `messages`、基础 `tool_calls` / `tool` message、`stream`、`temperature`、`max_tokens` / `max_completion_tokens`、`response_format`。
+- 支持 OpenAI SSE chunk 形态，流结束输出 `data: [DONE]`。
+- 不注入 Aevatar substitute / additive tools，包括 `use_skill` 和 `ornn_search_skills`。
+
+当前限制：
+
+- `n` 只支持 `1`。
+- forced `tool_choice` 不支持；`tool_choice` 只能用于 `auto` 或 `none`。
+- `ForwardToTeam` / `ForwardToGAgent` chat-route action v1 不支持。
+- 不承载 Responses 的 `previous_response_id` continuation、background task 或完整工具可观察性。
+
+需要完整异步编排和 continuation 时，用 `/v1/responses`。
+
+## 8. API Key 要求
 
 NyxID slug proxy 路由是 REST proxy plane：
 
@@ -160,12 +182,13 @@ NyxID slug proxy 路由是 REST proxy plane：
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
-## 8. 代码锚点
+## 9. 代码锚点
 
 主机端入口：
 
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesEndpoints.cs`
 - `src/Aevatar.Mainnet.Host.Api/Messages/MessagesEndpoints.cs`
+- `src/Aevatar.Mainnet.Host.Api/ChatCompletions/ChatCompletionsEndpoints.cs`
 
 模型聚合与路由：
 

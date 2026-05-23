@@ -159,6 +159,7 @@ Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID prox
 - `POST /v1/responses`
 - `POST /v1/responses/{responseId}/cancel`
 - `POST /v1/messages`
+- `POST /v1/chat/completions`
 
 说明：
 
@@ -171,6 +172,7 @@ Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID prox
 - substitute 工具状态归 `ResponsesAgentToolStateGAgent` 拥有：`TodoWrite` 写入 agent-scoped todo state，`Task` 记录可投影的 topology trace，`WebFetch` / `WebSearch` 记录 trace 与简单 cache 命中状态；这些状态通过 ProjectionPipeline 物化为 current-state read model，可供后续会话查询。
 - cancel 端点会复用同一 bearer token scope resolution；可见性通过后，session actor 会把 response 标记为 `cancelled` 并将 pending forwarded tool call 标为 `cancelled`。已过期或已取消的 `previous_response_id` 不能 resume。
 - `/v1/messages` 是 Anthropic Messages 窄门面。它每次请求注册一个新的 `LlmSession`，不支持 `previous_response_id`，`max_tokens` 必填，不注入 Aevatar substitute / additive tools，也不提供 Ornn skill bridge；`top_p`、`top_k`、`stop_sequences` 和 forced `tool_choice` 会被拒绝，image content v1 会被丢弃并记录 warning。
+- `/v1/chat/completions` 是 OpenAI Chat Completions 窄门面。它每次请求注册一个新的 `LlmSession`，复用 NyxID caller scope、模型 route preference 和同一条流式 LLM 主链；支持 text messages、基础 `tool_calls`、`stream`、`temperature`、`max_tokens`、`response_format`，不注入 `/v1/responses` 的 substitute / additive tools，也不提供 Responses continuation。
 
 当前推荐使用的 scope-first 入口：
 
