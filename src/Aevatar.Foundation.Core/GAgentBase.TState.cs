@@ -193,7 +193,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
         if (EventSourcingBehaviorFactory != null)
         {
-            EventSourcing = EventSourcingBehaviorFactory.Create(Id, TransitionState);
+            EventSourcing = EventSourcingBehaviorFactory.Create(Id, GetType(), TransitionState);
             return EventSourcing;
         }
 
