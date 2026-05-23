@@ -28,7 +28,7 @@ public sealed class ScriptEvolutionProjectionPort
         _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
-    public Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
+    internal Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
         string sessionActorId,
         string proposalId,
         CancellationToken ct = default) =>

@@ -14,7 +14,7 @@ public sealed class StudioCurrentStateProjectionPort
     {
     }
 
-    public Task<StudioMaterializationRuntimeLease?> EnsureProjectionForActorAsync(
+    internal Task<StudioMaterializationRuntimeLease?> EnsureProjectionForActorAsync(
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(

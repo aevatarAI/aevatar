@@ -36,9 +36,7 @@ owner: eanzhao
 flowchart LR
     CFG["Aevatar:Status 配置"] --> MAN["StatusDashboardManifest"]
     MAN --> START["HealthProbeStartupService"]
-    START --> PROJ["HealthProbeProjectionPort"]
     START --> DISPATCH["IActorDispatchPort"]
-    PROJ --> SCOPE["ProjectionMaterializationScopeGAgent"]
     DISPATCH --> ACT["HealthProbeTargetGAgent"]
     ACT --> TICK["Self durable timeout"]
     TICK --> ACT
@@ -46,7 +44,10 @@ flowchart LR
     EXEC --> OUT["HealthProbeOutcome"]
     OUT --> EVT["HealthProbeObserved"]
     EVT --> STATE["HealthProbeTargetState"]
+    STATE --> HOOK["Committed-state activation hook"]
+    HOOK --> SCOPE["ProjectionMaterializationScopeGAgent"]
     STATE --> PIPE["Projection Pipeline"]
+    SCOPE --> PIPE
     PIPE --> RM["HealthProbeTargetDocument"]
     RM --> API["/api/status"]
     API --> HTML["/status"]
@@ -63,17 +64,18 @@ flowchart LR
 3. 注册 `IHealthProbeExecutorRegistry`。
 4. 注册 current-state projection materialization runtime。
 5. 注册 `HealthProbeTargetProjector`。
-6. 注册 `IHealthStatusQueryPort` 与 `HealthProbeProjectionPort`。
-7. 注册 `HealthProbeStartupService`。
-8. 按配置选择 `HealthProbeTargetDocument` 的 projection store：Elasticsearch 或 InMemory。
+6. 注册 `IHealthStatusQueryPort`。
+7. 注册 `ProjectionActivationPlanDispatcher`、`CommittedStateProjectionActivationHook` 与 `HealthProbeCommittedStateProjectionActivationPlanProvider`。
+8. 注册 `HealthProbeStartupService`。
+9. 按配置选择 `HealthProbeTargetDocument` 的 projection store：Elasticsearch 或 InMemory。
 
 `HealthProbeStartupService` 在 host 启动时读取 manifest。每个有效 target 会执行：
 
 1. 用 `HealthProbeStoreCommands.BuildActorId(slug)` 得到稳定 actor id。
-2. 通过 `HealthProbeProjectionPort.EnsureProjectionForActorAsync(actorId)` 激活该 actor 的 durable materialization scope。
-3. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`。
+2. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`。
+3. actor 持久化 `HealthProbeConfigured` / `HealthProbeObserved` 后，committed-state publication hook 根据 `HealthProbeCommittedStateProjectionActivationPlanProvider` 生成 `ProjectionScopeStartRequest`，由 projection dispatcher 激活 durable materialization scope。
 
-启动服务只负责激活与配置，不拥有长期调度状态。长期调度由每个 probe actor 自己维护。
+启动服务只负责 startup dispatch，不拥有投影激活或长期调度状态。投影激活由 committed-state hook 触发，长期调度由每个 probe actor 自己维护。
 
 ## 5. Probe Actor
 
