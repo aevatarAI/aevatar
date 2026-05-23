@@ -23,18 +23,5 @@ public abstract class ServiceProjectionPortBase<TContext>
         _projectionName = projectionName ?? throw new ArgumentNullException(nameof(projectionName));
     }
 
-    protected async Task EnsureProjectionCoreAsync(string actorId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(actorId))
-            return;
-
-        _ = await EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = _projectionName,
-                Mode = ProjectionRuntimeMode.DurableMaterialization,
-            },
-            ct);
-    }
+    protected string ProjectionName => _projectionName;
 }

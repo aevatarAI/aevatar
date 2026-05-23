@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
-public sealed class UserAgentCatalogStartupService : IHostedService
+internal sealed class UserAgentCatalogStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
@@ -16,18 +16,18 @@ public sealed class UserAgentCatalogStartupService : IHostedService
             UserAgentCatalogStorageContracts.LegacyDurableProjectionKind,
             ProjectionRuntimeMode.DurableMaterialization));
 
-    private readonly UserAgentCatalogProjectionPort _projectionPort;
+    private readonly UserAgentCatalogProjectionBootstrapActivator _projectionActivator;
     private readonly IActorRuntime _actorRuntime;
     private readonly IStreamProvider _streamProvider;
     private readonly ILogger<UserAgentCatalogStartupService> _logger;
 
     public UserAgentCatalogStartupService(
-        UserAgentCatalogProjectionPort projectionPort,
+        UserAgentCatalogProjectionBootstrapActivator projectionActivator,
         IActorRuntime actorRuntime,
         IStreamProvider streamProvider,
         ILogger<UserAgentCatalogStartupService> logger)
     {
-        _projectionPort = projectionPort;
+        _projectionActivator = projectionActivator;
         _actorRuntime = actorRuntime;
         _streamProvider = streamProvider;
         _logger = logger;
@@ -41,7 +41,7 @@ public sealed class UserAgentCatalogStartupService : IHostedService
             try
             {
                 await CleanupLegacyProjectionScopeAsync(ct);
-                await _projectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
+                await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
                 _logger.LogInformation(
                     "User agent catalog projection scope activated for {ActorId} (attempt {Attempt})",
                     UserAgentCatalogGAgent.WellKnownId,

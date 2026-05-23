@@ -14,23 +14,23 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// the refresh command has been accepted. Request paths must not activate or
 /// prime this projection themselves.
 /// </summary>
-public sealed class ChannelBotRegistrationStartupService : IHostedService
+internal sealed class ChannelBotRegistrationStartupService : IHostedService
 {
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
-    private readonly ChannelBotRegistrationProjectionPort _projectionPort;
+    private readonly ChannelBotRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
-        ChannelBotRegistrationProjectionPort projectionPort,
+        ChannelBotRegistrationProjectionBootstrapActivator projectionActivator,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
-        _projectionPort = projectionPort;
+        _projectionActivator = projectionActivator;
         _actorRuntime = actorRuntime;
         _dispatchPort = dispatchPort;
         _logger = logger;
@@ -43,8 +43,7 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
         {
             try
             {
-                await _projectionPort.EnsureProjectionForActorAsync(
-                    ChannelBotRegistrationGAgent.WellKnownId, ct);
+                await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
                 await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
                     _actorRuntime,
                     _dispatchPort,

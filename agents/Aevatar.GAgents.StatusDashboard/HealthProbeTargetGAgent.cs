@@ -22,7 +22,7 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// </summary>
 public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
 {
-    public static string ProjectionKind => HealthProbeProjectionPort.ProjectionKind;
+    public static string ProjectionKind => "health-probe-target";
 
     internal const string TickCallbackId = "health-probe-tick";
     internal const int RetainedOutcomeCount = 120;
