@@ -56,7 +56,7 @@ import type {
   ScriptDraft,
   ScriptPackage,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScopeScriptSaveObservationRequest,
   ScopeScriptSaveObservationResult,
   ScriptValidationDiagnostic,
@@ -454,8 +454,8 @@ function readStoredDrafts(): ScriptDraft[] {
   }
 }
 
-function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotView {
-  if (!snapshot?.readModelPayloadJson) {
+function parseSnapshotView(snapshot: ScriptRuntimeActivitySnapshot | null): SnapshotView {
+  if (!snapshot) {
     return {
       input: '',
       output: '',
@@ -465,39 +465,18 @@ function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotVi
     };
   }
 
-  try {
-    const payload = JSON.parse(snapshot.readModelPayloadJson) as Record<
-      string,
-      unknown
-    >;
-    return {
-      input: typeof payload.input === 'string' ? payload.input : '',
-      output: typeof payload.output === 'string' ? payload.output : '',
-      status: typeof payload.status === 'string' ? payload.status : '',
-      lastCommandId:
-        typeof payload.last_command_id === 'string'
-          ? payload.last_command_id
-          : '',
-      notes: Array.isArray(payload.notes)
-        ? payload.notes.filter(
-            (item): item is string => typeof item === 'string',
-          )
-        : [],
-    };
-  } catch {
-    return {
-      input: '',
-      output: '',
-      status: '',
-      lastCommandId: '',
-      notes: [],
-    };
-  }
+  return {
+    input: snapshot.input || '',
+    output: snapshot.output || '',
+    status: snapshot.status || '',
+    lastCommandId: snapshot.lastCommandId || '',
+    notes: Array.isArray(snapshot.notes) ? snapshot.notes : [],
+  };
 }
 
-function isSameReadModelSnapshot(
-  left: ScriptReadModelSnapshot | null | undefined,
-  right: ScriptReadModelSnapshot | null | undefined,
+function isSameRuntimeActivitySnapshot(
+  left: ScriptRuntimeActivitySnapshot | null | undefined,
+  right: ScriptRuntimeActivitySnapshot | null | undefined,
 ): boolean {
   if (!left && !right) {
     return true;
@@ -512,8 +491,11 @@ function isSameReadModelSnapshot(
     left.scriptId === right.scriptId &&
     left.definitionActorId === right.definitionActorId &&
     left.revision === right.revision &&
-    left.readModelTypeUrl === right.readModelTypeUrl &&
-    left.readModelPayloadJson === right.readModelPayloadJson &&
+    left.input === right.input &&
+    left.output === right.output &&
+    left.status === right.status &&
+    left.lastCommandId === right.lastCommandId &&
+    left.notes.join('\u0000') === right.notes.join('\u0000') &&
     left.stateVersion === right.stateVersion &&
     left.lastEventId === right.lastEventId &&
     left.updatedAt === right.updatedAt
@@ -1021,7 +1003,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     enabled: Boolean(selectedRuntimeActorId),
     retry: 4,
     retryDelay: (attempt) => Math.min(attempt * 800, 2400),
-    queryFn: () => scriptsApi.getRuntimeReadModel(selectedRuntimeActorId),
+    queryFn: () => scriptsApi.getRuntimeActivity(selectedRuntimeActorId),
   });
 
   const selectedProposalQuery = useQuery({
@@ -2338,7 +2320,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         return draft;
       }
 
-      if (isSameReadModelSnapshot(draft.lastSnapshot, selectedRuntimeQuery.data)) {
+      if (isSameRuntimeActivitySnapshot(draft.lastSnapshot, selectedRuntimeQuery.data)) {
         return draft;
       }
 

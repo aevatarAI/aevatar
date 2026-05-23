@@ -1009,7 +1009,7 @@ export const app = {
   getScriptCatalog: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}/catalog`),
   listScriptRuntimes: (take = 24) => request<any>(`/app/scripts/runtimes?take=${take}`),
   getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
-  getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
+  getRuntimeActivity: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/activity`),
   saveScript: (data: any) => request<AppScopeScriptSaveAcceptedResponse>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
   observeScriptSave: (scriptId: string, data: AppScopeScriptSaveObservationRequest) =>
     request<AppScopeScriptSaveObservationResult>(`/app/scripts/${encodeURIComponent(scriptId)}/save-observation`, { method: 'POST', body: JSON.stringify(data) }),
@@ -1017,6 +1017,6 @@ export const app = {
 };
 
 export const scripts = {
-  getReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
+  getActivity: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/activity`),
   proposeEvolution: (data: any) => request<any>('/app/scripts/evolutions/proposals', { method: 'POST', body: JSON.stringify(data) }),
 };

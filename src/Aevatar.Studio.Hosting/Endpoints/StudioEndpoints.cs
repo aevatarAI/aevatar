@@ -10,7 +10,6 @@ using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Storage;
-using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
@@ -131,11 +130,11 @@ internal static class StudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetAppScriptEvolutionDecisionAsync(proposalId, services, ct));
-        app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
+        app.MapGet("/api/app/scripts/runtimes/{actorId}/activity", (
             string actorId,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleGetAppScriptReadModelAsync(actorId, services, ct));
+            HandleGetAppScriptRuntimeActivityAsync(actorId, services, ct));
 
         app.MapPost("/api/scopes/{scopeId}/scripts/draft-run", (
             HttpContext http,
@@ -447,7 +446,7 @@ internal static class StudioEndpoints
                 runId,
                 sourceHash = upsert.Snapshot.SourceHash,
                 commandTypeUrl = payload.TypeUrl,
-                readModelUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
+                activityUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/activity",
             });
         }
         catch (InvalidOperationException ex)
@@ -752,14 +751,14 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
         try
         {
-            return Results.Ok(await service.ListRuntimeSnapshotsAsync(take, ct));
+            return Results.Ok(await service.ListRuntimeActivitiesAsync(take, ct));
         }
         catch (AppApiException ex)
         {
@@ -791,7 +790,7 @@ internal static class StudioEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> HandleGetAppScriptReadModelAsync(
+    private static async Task<IResult> HandleGetAppScriptRuntimeActivityAsync(
         string actorId,
         IServiceProvider services,
         CancellationToken ct)
@@ -801,15 +800,15 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
-        ScriptReadModelSnapshotHttpResponse? snapshot;
+        ScriptRuntimeActivitySnapshot? snapshot;
         try
         {
-            snapshot = await service.GetRuntimeSnapshotAsync(actorId, ct);
+            snapshot = await service.GetRuntimeActivityAsync(actorId, ct);
         }
         catch (AppApiException ex)
         {

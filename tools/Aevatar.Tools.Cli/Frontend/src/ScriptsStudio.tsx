@@ -33,7 +33,7 @@ import type {
   ScriptRunMode,
   StudioEditorView,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
   ScopedScriptDetail,
@@ -328,8 +328,8 @@ function readStoredDrafts(): ScriptDraft[] {
   }
 }
 
-function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotView {
-  if (!snapshot?.readModelPayloadJson) {
+function parseSnapshotView(snapshot: ScriptRuntimeActivitySnapshot | null): SnapshotView {
+  if (!snapshot) {
     return {
       input: '',
       output: '',
@@ -339,26 +339,13 @@ function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotVi
     };
   }
 
-  try {
-    const payload = JSON.parse(snapshot.readModelPayloadJson);
-    return {
-      input: typeof payload?.input === 'string' ? payload.input : '',
-      output: typeof payload?.output === 'string' ? payload.output : '',
-      status: typeof payload?.status === 'string' ? payload.status : '',
-      lastCommandId: typeof payload?.last_command_id === 'string' ? payload.last_command_id : '',
-      notes: Array.isArray(payload?.notes)
-        ? payload.notes.filter((item: unknown) => typeof item === 'string')
-        : [],
-    };
-  } catch {
-    return {
-      input: '',
-      output: '',
-      status: '',
-      lastCommandId: '',
-      notes: [],
-    };
-  }
+  return {
+    input: snapshot.input || '',
+    output: snapshot.output || '',
+    status: snapshot.status || '',
+    lastCommandId: snapshot.lastCommandId || '',
+    notes: Array.isArray(snapshot.notes) ? snapshot.notes : [],
+  };
 }
 
 function buildEditorMarkers(
@@ -421,18 +408,6 @@ function summarizeValidation(validation: ScriptValidationResult | null, pending:
   return 'Clean';
 }
 
-function prettyPrintJson(rawJson: string | null | undefined) {
-  if (!rawJson) {
-    return '-';
-  }
-
-  try {
-    return JSON.stringify(JSON.parse(rawJson), null, 2);
-  } catch {
-    return rawJson;
-  }
-}
-
 function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, existing?: ScriptDraft): ScriptDraft {
   const normalizedPackage = normalizeDraftPackageForAppRuntime(existing?.package || null, detail.source?.sourceText || '');
   const selectedEntry = getSelectedPackageEntry(
@@ -492,7 +467,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [search, setSearch] = useState('');
   const [scopeScripts, setScopeScripts] = useState<ScopedScriptDetail[]>([]);
   const [scopeCatalogsByScriptId, setScopeCatalogsByScriptId] = useState<Record<string, ScriptCatalogSnapshot>>({});
-  const [runtimeSnapshots, setRuntimeSnapshots] = useState<ScriptReadModelSnapshot[]>([]);
+  const [runtimeSnapshots, setRuntimeSnapshots] = useState<ScriptRuntimeActivitySnapshot[]>([]);
   const [proposalDecisionsById, setProposalDecisionsById] = useState<Record<string, ScriptPromotionDecision>>({});
   const [scopeScriptsPending, setScopeScriptsPending] = useState(false);
   const [runtimeSnapshotsPending, setRuntimeSnapshotsPending] = useState(false);
@@ -1096,7 +1071,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   async function loadRuntimeSnapshots(silent = false) {
     setRuntimeSnapshotsPending(true);
     try {
-      const response = await api.app.listScriptRuntimes(24) as ScriptReadModelSnapshot[];
+      const response = await api.app.listScriptRuntimes(24) as ScriptRuntimeActivitySnapshot[];
       const sorted = Array.isArray(response)
         ? [...response].sort((left, right) => {
           const rightStamp = Date.parse(right.updatedAt || '');
@@ -1117,7 +1092,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
   }
 
-  function upsertRuntimeSnapshot(snapshot: ScriptReadModelSnapshot) {
+  function upsertRuntimeSnapshot(snapshot: ScriptRuntimeActivitySnapshot) {
     setRuntimeSnapshots(prev => {
       const next = prev.filter(item => item.actorId !== snapshot.actorId);
       next.unshift(snapshot);
@@ -1159,7 +1134,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     setSnapshotPending(true);
     try {
-      const snapshot = await api.app.getRuntimeReadModel(normalizedActorId) as ScriptReadModelSnapshot;
+      const snapshot = await api.app.getRuntimeActivity(normalizedActorId) as ScriptRuntimeActivitySnapshot;
       setDrafts(prev => prev.map(draft => (
         draft.runtimeActorId === snapshot.actorId
           ? {
@@ -1947,9 +1922,12 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </div>
             </div>
 
-            <pre className="mt-4 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-              {prettyPrintJson(activeRuntimeSnapshot?.readModelPayloadJson)}
-            </pre>
+            <div className="mt-4 rounded-[18px] border border-[#EEEAE4] bg-white p-4 text-[12px] leading-6 text-gray-700">
+              <div>Input: {snapshotView.input || '-'}</div>
+              <div>Output: {snapshotView.output || '-'}</div>
+              <div>Last command: {snapshotView.lastCommandId || '-'}</div>
+              <div>Notes: {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}</div>
+            </div>
           </details>
         </div>
       );
