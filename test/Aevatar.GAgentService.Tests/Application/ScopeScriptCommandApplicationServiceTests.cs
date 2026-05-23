@@ -6,6 +6,7 @@ using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -36,24 +37,36 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldActivateAuthorityReadModelsBeforeWritingDefinitionAndCatalog()
+    public async Task UpsertAsync_ShouldDispatchAcceptedOnlyCommandsWithoutReadModelActivation()
     {
         var executionLog = new List<string>();
         var definitionPort = new RecordingDefinitionCommandPort(executionLog);
         var catalogPort = new RecordingCatalogCommandPort(executionLog);
-        var activationPort = new RecordingScriptAuthorityReadModelActivationPort(executionLog);
-        var service = BuildService(definitionPort, catalogPort, activationPort);
-        var expectedDefinitionActorId = DefaultOptions.BuildDefinitionActorId("scope-1", "my-script", "rev-1");
-        var expectedCatalogActorId = DefaultOptions.BuildCatalogActorId("scope-1");
+        var service = BuildService(definitionPort, catalogPort);
 
-        await service.UpsertAsync(new ScopeScriptUpsertRequest("scope-1", "my-script", SingleSource("source"), "rev-1"));
+        var result = await service.UpsertAsync(
+            new ScopeScriptUpsertRequest("scope-1", "my-script", SingleSource("source"), "rev-1"));
 
-        activationPort.Calls.Should().Equal(expectedDefinitionActorId, expectedCatalogActorId);
-        executionLog.Should().Equal(
-            $"authority-activate:{expectedDefinitionActorId}",
-            $"authority-activate:{expectedCatalogActorId}",
-            "definition-upsert",
-            "catalog-promote");
+        executionLog.Should().Equal("definition-upsert", "catalog-promote");
+        result.DefinitionCommand.CommandId.Should().Be("definition-command-1");
+        result.CatalogCommand.CommandId.Should().Be("catalog-command-1");
+    }
+
+    [Fact]
+    public void Constructor_ShouldNotDependOnAuthorityReadModelActivationPort()
+    {
+        // Refactor (iter49/issue-882-script-command-readmodel-activation):
+        //   Old pattern: ScopeScriptCommandApplicationService.UpsertAsync explicitly activated definition/catalog readmodels via ActivateAsync before write commands.
+        //   New principle: Command service dispatches accepted-only write commands; readmodel activation is owned by scripting committed-state projection activation plan provider.
+        typeof(ScopeScriptCommandApplicationService)
+            .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .GetParameters()
+            .Select(x => x.ParameterType)
+            .Should()
+            .NotContain(typeof(IScriptAuthorityReadModelActivationPort));
     }
 
     [Fact]
@@ -171,34 +184,14 @@ public sealed class ScopeScriptCommandApplicationServiceTests
 
     private static ScopeScriptCommandApplicationService BuildService(
         IScriptDefinitionCommandPort definitionPort,
-        IScriptCatalogCommandPort catalogPort,
-        IScriptAuthorityReadModelActivationPort? authorityReadModelActivationPort = null) =>
+        IScriptCatalogCommandPort catalogPort) =>
         new(
             definitionPort,
             catalogPort,
-            authorityReadModelActivationPort ?? new RecordingScriptAuthorityReadModelActivationPort(),
             Options.Create(DefaultOptions));
 
     private static ScriptPackageSpec SingleSource(string source) =>
         ScriptPackageSpecExtensions.CreateSingleSource(source);
-
-    private sealed class RecordingScriptAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
-    {
-        private readonly List<string>? _executionLog;
-
-        public RecordingScriptAuthorityReadModelActivationPort(List<string>? executionLog = null) =>
-            _executionLog = executionLog;
-
-        public List<string> Calls { get; } = [];
-
-        public Task ActivateAsync(string actorId, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            Calls.Add(actorId);
-            _executionLog?.Add($"authority-activate:{actorId}");
-            return Task.CompletedTask;
-        }
-    }
 
     private sealed class RecordingDefinitionCommandPort : IScriptDefinitionCommandPort
     {
