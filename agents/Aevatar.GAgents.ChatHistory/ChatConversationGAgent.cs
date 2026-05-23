@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -17,6 +16,13 @@ namespace Aevatar.GAgents.ChatHistory;
 /// </summary>
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, IProjectedActor
 {
+    private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;
+
+    public ChatConversationGAgent(IChatHistoryIndexTopologyPort indexTopologyPort)
+    {
+        _indexTopologyPort = indexTopologyPort ?? throw new ArgumentNullException(nameof(indexTopologyPort));
+    }
+
     public static string ProjectionKind => "chat-conversation";
 
     /// <summary>Maximum messages retained per conversation.</summary>
@@ -36,8 +42,10 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
         // Forward index upsert to the index actor
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
         {
-            var indexActorId = IndexActorId(evt.ScopeId);
-            await EnsureIndexActorAsync(indexActorId);
+            // Refactor (iter49/cluster-049-chat-history-index-side-lifecycle):
+            //   Old pattern: ChatConversationGAgent resolved IActorRuntime via Services locator and created index actor inline during event handling.
+            //   New principle: Index actor addressing/provisioning is a constructor-injected narrow domain port; ChatHistoryIndexGAgent created via topology setup, not inline event handling.
+            var indexActorId = _indexTopologyPort.GetIndexActorId(evt.ScopeId);
             var indexMeta = State.Meta?.Clone();
             if (indexMeta is not null)
             {
@@ -62,8 +70,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
         // Forward index removal to the index actor
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
         {
-            var indexActorId = IndexActorId(evt.ScopeId);
-            await EnsureIndexActorAsync(indexActorId);
+            var indexActorId = _indexTopologyPort.GetIndexActorId(evt.ScopeId);
             await SendToAsync(indexActorId, new ConversationRemovedEvent { ConversationId = evt.ConversationId });
         }
     }
@@ -112,13 +119,4 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
     {
         return new ChatConversationState();
     }
-
-    private async Task EnsureIndexActorAsync(string indexActorId)
-    {
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(indexActorId) is null)
-            await runtime.CreateAsync<ChatHistoryIndexGAgent>(indexActorId);
-    }
-
-    private static string IndexActorId(string scopeId) => $"chat-index-{scopeId}";
 }

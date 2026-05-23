@@ -287,6 +287,7 @@ public sealed class ActorBackedStoreAdapterTests
             where TAgent : IAgent, IProjectedActor
         {
             EnsureCalls++;
+            EnsuredActorIds.Add(actorId);
             if (ThrowOnEnsure)
                 throw new InvalidOperationException("Bootstrap should not be used for this path.");
 
@@ -295,6 +296,8 @@ public sealed class ActorBackedStoreAdapterTests
         }
 
         public int EnsureCalls { get; private set; }
+
+        public List<string> EnsuredActorIds { get; } = [];
 
         public bool ThrowOnEnsure { get; set; }
     }
@@ -783,7 +786,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var meta = new ConversationMeta(
             Id: "conv-1", Title: "Test", ServiceId: "svc",
@@ -813,7 +816,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.DeleteConversationAsync("scope-1", "conv-1");
 
@@ -830,7 +833,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -862,7 +865,7 @@ public sealed class ActorBackedStoreAdapterTests
             StateRoot = Any.Pack(state),
         });
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -1524,7 +1527,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var convReader = PackedReader("chat-scope-1-conv-1", state);
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), convReader, logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), convReader, logger);
 
         var messages = await store.GetMessagesAsync("scope-1", "conv-1");
 
@@ -1543,7 +1546,7 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var messages = await store.GetMessagesAsync("scope-1", "conv-1");
 
@@ -1571,7 +1574,7 @@ public sealed class ActorBackedStoreAdapterTests
         });
         var indexReader = PackedReader("chat-index-scope-1", state);
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), indexReader, EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         var index = await store.GetIndexAsync("scope-1");
 
@@ -1585,7 +1588,8 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var bootstrap = new FakeStudioActorBootstrap(runtime);
+        var store = new ActorBackedChatHistoryStore(bootstrap, new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.SaveMessagesAsync(
             "scope-1",
@@ -1611,6 +1615,7 @@ public sealed class ActorBackedStoreAdapterTests
                     Thinking: "reasoning")
             ]);
 
+        bootstrap.EnsuredActorIds.Should().Equal("chat-index-scope-1", "chat-scope-1-conv-1");
         var actor = runtime.Actors["chat-scope-1-conv-1"];
         var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<MessagesReplacedEvent>();
         evt.ScopeId.Should().Be("scope-1");
@@ -1627,10 +1632,12 @@ public sealed class ActorBackedStoreAdapterTests
     {
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
-        var store = new ActorBackedChatHistoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
+        var bootstrap = new FakeStudioActorBootstrap(runtime);
+        var store = new ActorBackedChatHistoryStore(bootstrap, new FakeActorDispatchPort(runtime), new DefaultChatHistoryIndexTopologyPort(), EmptyReader<ChatHistoryIndexCurrentStateDocument>(), EmptyReader<ChatConversationCurrentStateDocument>(), logger);
 
         await store.DeleteConversationAsync("scope-1", "conv-1");
 
+        bootstrap.EnsuredActorIds.Should().Equal("chat-index-scope-1", "chat-scope-1-conv-1");
         var actor = runtime.Actors["chat-scope-1-conv-1"];
         var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<ConversationDeletedEvent>();
         evt.ScopeId.Should().Be("scope-1");
