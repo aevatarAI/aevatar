@@ -40,6 +40,17 @@ public static class VoicePresenceEndpoints
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
     {
         ArgumentNullException.ThrowIfNull(resolveSession);
+        return endpoints.MapVoicePresenceWebSocket(
+            pattern,
+            async (actorId, ctx) => ToResolution(await resolveSession(actorId, ctx)));
+    }
+
+    public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
+        this IEndpointRouteBuilder endpoints,
+        string pattern,
+        Func<string, HttpContext, Task<VoicePresenceSessionResolution>> resolveSession)
+    {
+        ArgumentNullException.ThrowIfNull(resolveSession);
 
         return endpoints.Map(pattern, async (HttpContext ctx) =>
         {
@@ -58,27 +69,10 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var session = await resolveSession(actorId, ctx);
+            var resolution = await resolveSession(actorId, ctx);
+            var session = await WriteNonAcceptedResolutionAsync(ctx, resolution);
             if (session == null)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-                await ctx.Response.WriteAsync("Voice session not found for this agent.");
                 return;
-            }
-
-            if (!session.IsInitialized)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync("Voice module not initialized.");
-                return;
-            }
-
-            if (session.IsTransportAttached)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
-                await ctx.Response.WriteAsync("Voice transport already attached.");
-                return;
-            }
 
             var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             var transport = new WebSocketVoiceTransport(ws);
@@ -130,6 +124,19 @@ public static class VoicePresenceEndpoints
         IWebRtcVoiceTransportFactory? transportFactory = null)
     {
         ArgumentNullException.ThrowIfNull(resolveSession);
+        return endpoints.MapVoicePresenceWhip(
+            pattern,
+            async (actorId, ctx) => ToResolution(await resolveSession(actorId, ctx)),
+            transportFactory);
+    }
+
+    public static IEndpointConventionBuilder MapVoicePresenceWhip(
+        this IEndpointRouteBuilder endpoints,
+        string pattern,
+        Func<string, HttpContext, Task<VoicePresenceSessionResolution>> resolveSession,
+        IWebRtcVoiceTransportFactory? transportFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(resolveSession);
 
         transportFactory ??= new SipsorceryWebRtcVoiceTransportFactory();
         var group = endpoints.MapGroup(pattern);
@@ -152,27 +159,10 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var session = await resolveSession(actorId, ctx);
+            var resolution = await resolveSession(actorId, ctx);
+            var session = await WriteNonAcceptedResolutionAsync(ctx, resolution);
             if (session == null)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-                await ctx.Response.WriteAsync("Voice session not found for this agent.");
                 return;
-            }
-
-            if (!session.IsInitialized)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync("Voice module not initialized.");
-                return;
-            }
-
-            if (session.IsTransportAttached)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
-                await ctx.Response.WriteAsync("Voice transport already attached.");
-                return;
-            }
 
             var transportSession = await transportFactory.CreateAsync(
                 offerSdp,
@@ -220,11 +210,20 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var session = await resolveSession(actorId, ctx);
-            if (session == null)
+            var resolution = await resolveSession(actorId, ctx);
+            if (resolution.Kind == VoicePresenceSessionResolutionKind.PreflightFailed &&
+                resolution.PreflightFailure == VoicePresencePreflightFailureKind.NotFound)
             {
                 ctx.Response.StatusCode = StatusCodes.Status404NotFound;
                 await ctx.Response.WriteAsync("Voice session not found for this agent.");
+                return;
+            }
+
+            var session = resolution.Session;
+            if (session == null)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
                 return;
             }
 
@@ -235,12 +234,79 @@ public static class VoicePresenceEndpoints
         return group;
     }
 
-    private static Task<VoicePresenceSession?> ResolveSessionFromServicesAsync(
+    private static Task<VoicePresenceSessionResolution> ResolveSessionFromServicesAsync(
         HttpContext ctx,
         string actorId)
     {
         var resolver = ctx.RequestServices.GetRequiredService<IVoicePresenceSessionResolver>();
         return resolver.ResolveAsync(CreateSessionRequest(ctx, actorId), ctx.RequestAborted);
+    }
+
+    private static VoicePresenceSessionResolution ToResolution(VoicePresenceSession? session)
+    {
+        if (session == null)
+            return VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound);
+
+        if (!session.IsInitialized)
+            return VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotInitialized);
+
+        if (session.IsTransportAttached)
+        {
+            return new VoicePresenceSessionResolution(
+                VoicePresenceSessionResolutionKind.PreflightFailed,
+                session,
+                VoicePresencePreflightFailureKind.TransportAlreadyAttached);
+        }
+
+        return VoicePresenceSessionResolution.LeaseAcceptedAttached(session);
+    }
+
+    private static async Task<VoicePresenceSession?> WriteNonAcceptedResolutionAsync(
+        HttpContext ctx,
+        VoicePresenceSessionResolution resolution)
+    {
+        switch (resolution.Kind)
+        {
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedAttached:
+                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
+            case VoicePresenceSessionResolutionKind.Unsupported:
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
+                return null;
+            case VoicePresenceSessionResolutionKind.PreflightFailed:
+                await WritePreflightFailureAsync(ctx, resolution.PreflightFailure);
+                return null;
+            default:
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync("Voice session resolution failed.");
+                return null;
+        }
+    }
+
+    private static async Task WritePreflightFailureAsync(
+        HttpContext ctx,
+        VoicePresencePreflightFailureKind? failure)
+    {
+        switch (failure)
+        {
+            case VoicePresencePreflightFailureKind.NotFound:
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+                await ctx.Response.WriteAsync("Voice session not found for this agent.");
+                break;
+            case VoicePresencePreflightFailureKind.NotInitialized:
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync("Voice module not initialized.");
+                break;
+            case VoicePresencePreflightFailureKind.TransportAlreadyAttached:
+                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+                await ctx.Response.WriteAsync("Voice transport already attached.");
+                break;
+            default:
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync("Voice session preflight failed.");
+                break;
+        }
     }
 
     private static VoicePresenceSessionRequest CreateSessionRequest(HttpContext ctx, string actorId) =>

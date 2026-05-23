@@ -413,12 +413,16 @@ public class VoicePresenceEndpointsTests
 
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
+        public Task<VoicePresenceSessionResolution> ResolveAsync(
+            VoicePresenceSessionRequest request,
+            CancellationToken ct = default)
         {
             _ = ct;
             Requests.Add(request);
             RequestedActorIds.Add(request.ActorId);
-            return Task.FromResult(session);
+            return Task.FromResult(session == null
+                ? VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound)
+                : VoicePresenceSessionResolution.LeaseAcceptedAttached(session));
         }
     }
 

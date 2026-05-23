@@ -427,11 +427,15 @@ public sealed class PolicyAwareVoiceEndpointsTests
         public List<VoicePresenceSessionRequest> Requests { get; } = [];
         public IReadOnlyList<VoicePresenceState> StateTransitions { get; } = stateTransitions ?? [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
+        public Task<VoicePresenceSessionResolution> ResolveAsync(
+            VoicePresenceSessionRequest request,
+            CancellationToken ct = default)
         {
             _ = ct;
             Requests.Add(request);
-            return Task.FromResult(session);
+            return Task.FromResult(session == null
+                ? VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound)
+                : VoicePresenceSessionResolution.LeaseAcceptedAttached(session));
         }
     }
 
