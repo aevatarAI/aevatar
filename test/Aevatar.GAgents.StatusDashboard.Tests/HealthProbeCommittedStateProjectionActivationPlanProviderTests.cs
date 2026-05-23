@@ -38,6 +38,15 @@ public sealed class HealthProbeCommittedStateProjectionActivationPlanProviderTes
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public void GetPlans_ShouldIgnoreMissingStateEventPayload()
+    {
+        var provider = new HealthProbeCommittedStateProjectionActivationPlanProvider();
+
+        provider.GetPlans(BuildContextWithoutStateEvent()).Should().BeEmpty();
+        provider.GetPlans(BuildContextWithoutEventData()).Should().BeEmpty();
+    }
+
     public static TheoryData<IMessage> HealthProbeEvents() =>
         new()
         {
@@ -80,6 +89,33 @@ public sealed class HealthProbeCommittedStateProjectionActivationPlanProviderTes
                     AgentId = "health-probe::self-liveness",
                     EventId = "evt-1",
                     EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "state" }),
+            },
+        };
+
+    private static CommittedStatePublicationContext BuildContextWithoutStateEvent() =>
+        new()
+        {
+            ActorId = "health-probe::self-liveness",
+            ActorType = typeof(HealthProbeTargetGAgent),
+            Published = new CommittedStateEventPublished
+            {
+                StateRoot = Any.Pack(new StringValue { Value = "state" }),
+            },
+        };
+
+    private static CommittedStatePublicationContext BuildContextWithoutEventData() =>
+        new()
+        {
+            ActorId = "health-probe::self-liveness",
+            ActorType = typeof(HealthProbeTargetGAgent),
+            Published = new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = "health-probe::self-liveness",
+                    EventId = "evt-1",
                 },
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             },
