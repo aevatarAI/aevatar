@@ -23,7 +23,7 @@ public sealed class ChannelBotRegistrationCommittedStateProjectionActivationPlan
             plans[0],
             typeof(ChannelBotRegistrationMaterializationRuntimeLease),
             ChannelBotRegistrationGAgent.WellKnownId,
-            ChannelBotRegistrationProjectionPort.ProjectionKind);
+            ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind);
     }
 
     [Fact]

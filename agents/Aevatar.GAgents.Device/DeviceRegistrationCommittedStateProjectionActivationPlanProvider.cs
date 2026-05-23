@@ -29,7 +29,7 @@ public sealed class DeviceRegistrationCommittedStateProjectionActivationPlanProv
                 StartRequest = new ProjectionScopeStartRequest
                 {
                     RootActorId = context.ActorId,
-                    ProjectionKind = DeviceRegistrationProjectionPort.ProjectionKind,
+                    ProjectionKind = DeviceRegistrationProjectionBootstrapActivator.ProjectionKind,
                     Mode = ProjectionRuntimeMode.DurableMaterialization,
                 },
             },

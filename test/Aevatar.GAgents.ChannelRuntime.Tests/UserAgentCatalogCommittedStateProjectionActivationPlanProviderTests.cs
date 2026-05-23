@@ -22,7 +22,7 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
             plans[0],
             typeof(UserAgentCatalogMaterializationRuntimeLease),
             UserAgentCatalogGAgent.WellKnownId,
-            UserAgentCatalogProjectionPort.ProjectionKind);
+            UserAgentCatalogProjectionBootstrapActivator.ProjectionKind);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
             plans[0],
             typeof(UserAgentCatalogMaterializationRuntimeLease),
             "skill-runner-1",
-            UserAgentCatalogProjectionPort.ProjectionKind);
+            UserAgentCatalogProjectionBootstrapActivator.ProjectionKind);
     }
 
     [Fact]

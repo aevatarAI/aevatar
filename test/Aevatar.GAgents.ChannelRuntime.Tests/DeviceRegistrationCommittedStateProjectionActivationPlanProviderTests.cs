@@ -22,7 +22,7 @@ public sealed class DeviceRegistrationCommittedStateProjectionActivationPlanProv
             plans[0],
             typeof(DeviceRegistrationMaterializationRuntimeLease),
             DeviceRegistrationGAgent.WellKnownId,
-            DeviceRegistrationProjectionPort.ProjectionKind);
+            DeviceRegistrationProjectionBootstrapActivator.ProjectionKind);
     }
 
     [Fact]

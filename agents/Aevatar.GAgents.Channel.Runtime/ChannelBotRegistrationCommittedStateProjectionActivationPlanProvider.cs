@@ -29,7 +29,7 @@ public sealed class ChannelBotRegistrationCommittedStateProjectionActivationPlan
                 StartRequest = new ProjectionScopeStartRequest
                 {
                     RootActorId = context.ActorId,
-                    ProjectionKind = ChannelBotRegistrationProjectionPort.ProjectionKind,
+                    ProjectionKind = ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind,
                     Mode = ProjectionRuntimeMode.DurableMaterialization,
                 },
             },

@@ -53,7 +53,7 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
             StartRequest = new ProjectionScopeStartRequest
             {
                 RootActorId = rootActorId,
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
         };
