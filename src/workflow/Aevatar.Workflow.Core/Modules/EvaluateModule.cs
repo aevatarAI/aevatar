@@ -113,8 +113,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             {
                 Prompt = prompt,
                 SessionId = sessionId,
+                Telegram = new TelegramBridgeRequest(),
             };
-            CopyParametersToChatHeaders(request.Parameters, chatRequest.Headers);
+            CopyParametersToChatRequest(request.Parameters, chatRequest);
             try
             {
                 if (!target.UseSelf)
@@ -218,9 +219,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static void CopyParametersToChatHeaders(
+    private static void CopyParametersToChatRequest(
         MapField<string, string> parameters,
-        MapField<string, string> headers)
+        ChatRequestEvent chatRequest)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
@@ -229,7 +230,14 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            headers[key.Trim()] = value.Trim();
+
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
+                continue;
+
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
         }
     }
 

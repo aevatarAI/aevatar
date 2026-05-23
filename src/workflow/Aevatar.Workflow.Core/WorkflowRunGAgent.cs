@@ -36,7 +36,6 @@ public sealed class WorkflowRunGAgent
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
     private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
-    private const string WorkflowScopeIdMetadataKey = "workflow.scope_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -227,6 +226,9 @@ public sealed class WorkflowRunGAgent
         }
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+            this,
+            AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
 
         await EnsureAgentTreeAsync();
 
@@ -239,7 +241,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
+            ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -984,25 +986,11 @@ public sealed class WorkflowRunGAgent
 
     private static string ResolveScopeId(
         string? requestedScopeId,
-        Google.Protobuf.Collections.MapField<string, string>? metadata,
         string? fallbackScopeId)
     {
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         if (!string.IsNullOrWhiteSpace(requestedScopeId))
             return requestedScopeId.Trim();
-
-        if (metadata != null &&
-            metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
-            !string.IsNullOrWhiteSpace(workflowScopeId))
-        {
-            return workflowScopeId.Trim();
-        }
-
-        if (metadata != null &&
-            metadata.TryGetValue("scope_id", out var legacyScopeId) &&
-            !string.IsNullOrWhiteSpace(legacyScopeId))
-        {
-            return legacyScopeId.Trim();
-        }
 
         return fallbackScopeId?.Trim() ?? string.Empty;
     }

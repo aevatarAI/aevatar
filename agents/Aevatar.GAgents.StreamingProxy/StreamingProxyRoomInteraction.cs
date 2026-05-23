@@ -1,5 +1,7 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -242,10 +244,6 @@ internal sealed class StreamingProxyRoomObservationLifecycle
 internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
     : ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>
 {
-    internal const string AccessTokenHeader = "streaming_proxy.access_token";
-    internal const string PreferredRouteHeader = "streaming_proxy.preferred_route";
-    internal const string DefaultModelHeader = "streaming_proxy.default_model";
-
     public EventEnvelope CreateEnvelope(StreamingProxyRoomChatCommand command, CommandContext context)
     {
         // Refactor (iter21/cluster-002-request-path-projection-session-priming):
@@ -260,9 +258,19 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
         };
-        AddIfNotBlank(chatRequest.Metadata, AccessTokenHeader, command.AccessToken);
-        AddIfNotBlank(chatRequest.Metadata, PreferredRouteHeader, command.PreferredRoute);
-        AddIfNotBlank(chatRequest.Metadata, DefaultModelHeader, command.DefaultModel);
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        chatRequest.ToolContext = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = Normalize(command.AccessToken),
+            },
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                NyxIdRoutePreference = Normalize(command.PreferredRoute),
+                ModelOverride = Normalize(command.DefaultModel),
+            },
+        }).ToPayload();
 
         return new EventEnvelope
         {
@@ -277,14 +285,8 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
         };
     }
 
-    private static void AddIfNotBlank(
-        Google.Protobuf.Collections.MapField<string, string> destination,
-        string key,
-        string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            destination[key] = value.Trim();
-    }
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 internal sealed class StreamingProxyRoomChatAcceptedReceiptFactory

@@ -104,6 +104,15 @@ public sealed class ChatRuntime
         CancellationToken ct = default) =>
         ChatStreamAsync([ContentPart.TextPart(userMessage)], DefaultMaxToolRounds, requestId, metadata, ct);
 
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        int maxToolRounds,
+        string? requestId,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext, ct);
+
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata + tool 轮数。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
@@ -130,6 +139,20 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var chunk in ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext: null, ct))
+        {
+            yield return chunk;
+        }
+    }
+
+    private async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        int maxToolRounds,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata,
+        AgentToolExecutionContext? toolContext,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var normalizedUserContent = NormalizeUserContent(userContent);
         var runToken = ct;
@@ -161,6 +184,7 @@ public sealed class ChatRuntime
                     effectiveMaxToolRounds,
                     requestId,
                     metadata,
+                    toolContext,
                     runContext,
                     runToken)
                 .GetAsyncEnumerator(runToken);
@@ -199,6 +223,7 @@ public sealed class ChatRuntime
         int effectiveMaxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
+        AgentToolExecutionContext? toolContext,
         AgentRunContext runContext,
         [EnumeratorCancellation] CancellationToken runToken)
     {
@@ -214,6 +239,7 @@ public sealed class ChatRuntime
                            effectiveMaxToolRounds,
                            requestId,
                            metadata,
+                           toolContext,
                            runContext,
                            pendingHistoryMessages,
                            wroteOutput,
@@ -228,6 +254,7 @@ public sealed class ChatRuntime
         int effectiveMaxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
+        AgentToolExecutionContext? toolContext,
         AgentRunContext runContext,
         List<ChatMessage> pendingHistoryMessages,
         bool wroteOutput,
@@ -241,7 +268,7 @@ public sealed class ChatRuntime
         //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
         var userMsg = ChatMessage.User(normalizedUserContent, runContext.UserMessage);
         pendingHistoryMessages.Add(userMsg);
-        var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
+        var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata, toolContext);
         var provider = _providerFactory();
         runContext.Items["gen_ai.provider.name"] = provider.Name;
         var messages = BuildMessagesWithPending(baseRequest, userMsg);
@@ -729,24 +756,48 @@ public sealed class ChatRuntime
     private static LLMRequest ApplyRequestIdentity(
         LLMRequest baseRequest,
         string? requestId,
-        IReadOnlyDictionary<string, string>? metadata)
+        IReadOnlyDictionary<string, string>? metadata,
+        AgentToolExecutionContext? toolContext)
     {
-        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
-        //   Old pattern: request identity and routing controls stayed in Metadata.
-        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        var effectiveToolContext = toolContext ?? baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        if (!string.IsNullOrWhiteSpace(requestId))
+        {
+            effectiveToolContext = effectiveToolContext with
+            {
+                Request = effectiveToolContext.Request with { RequestId = requestId.Trim() },
+            };
+        }
+
         return new LLMRequest
         {
             Messages = baseRequest.Messages,
             RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(MergeMetadata(baseRequest.Metadata, metadata)),
             CallerContext = baseRequest.CallerContext,
-            ToolContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.ToolContext?.ToLegacyMetadata() ?? baseRequest.Metadata, metadata)),
-            RoutingContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.Metadata, metadata)).Routing,
+            ToolContext = effectiveToolContext,
+            RoutingContext = MergeRouting(baseRequest.RoutingContext, effectiveToolContext.Routing),
             Tools = baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
+        };
+    }
+
+    private static LLMRequestRoutingContext? MergeRouting(
+        LLMRequestRoutingContext? baseRouting,
+        LLMRequestRoutingContext typedRouting)
+    {
+        if (baseRouting == null)
+            return typedRouting;
+
+        return baseRouting with
+        {
+            ModelOverride = typedRouting.ModelOverride ?? baseRouting.ModelOverride,
+            NyxIdRoutePreference = typedRouting.NyxIdRoutePreference ?? baseRouting.NyxIdRoutePreference,
+            MaxToolRoundsOverride = typedRouting.MaxToolRoundsOverride ?? baseRouting.MaxToolRoundsOverride,
+            UserMemoryPrompt = typedRouting.UserMemoryPrompt ?? baseRouting.UserMemoryPrompt,
         };
     }
 

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Diagnostics.CodeAnalysis;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -337,17 +339,35 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     //                bag for request metadata, LLM overrides, authorization, secure values
     //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
     //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
-    private static void CopyPropagatedMetadata(
+    private static void ApplyTypedToolContext(
         IWorkflowExecutionContext ctx,
-        MapField<string, string> metadata)
+        ChatRequestEvent chatRequest)
     {
         if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
             return;
 
         var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
-        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, overrides.NyxIdAccessToken);
-        CopyOverride(metadata, LLMRequestMetadataKeys.ModelOverride, overrides.ModelOverride);
-        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, overrides.NyxIdRoutePreference);
+        if (string.IsNullOrWhiteSpace(overrides.NyxIdAccessToken) &&
+            string.IsNullOrWhiteSpace(overrides.ModelOverride) &&
+            string.IsNullOrWhiteSpace(overrides.NyxIdRoutePreference))
+        {
+            return;
+        }
+
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = Normalize(overrides.NyxIdAccessToken),
+            },
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = Normalize(overrides.ModelOverride),
+                NyxIdRoutePreference = Normalize(overrides.NyxIdRoutePreference),
+            },
+        };
+        chatRequest.ToolContext = context.ToPayload();
     }
 
     // Refactor (iter16/cluster-031):
@@ -355,27 +375,189 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     //                item values after string-key lookup.
     //   New principle: LLM override metadata is copied from typed runtime
     //                  override fields after blank-value filtering.
-    private static void CopyOverride(
-        MapField<string, string> metadata,
-        string key,
-        string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            metadata[key] = value.Trim();
-    }
-
-    private static void CopyParametersToChatMetadata(
-        MapField<string, string> parameters,
-        MapField<string, string> headers)
+    private static void CopyParametersToChatRequest(
+        StepRequestEvent request,
+        ChatRequestEvent chatRequest,
+        int timeoutMs)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
         //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
-        foreach (var (key, value) in parameters)
+        foreach (var (key, value) in request.Parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            headers[key.Trim()] = value.Trim();
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            if (TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue, timeoutMs))
+                continue;
+
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
+        }
+    }
+
+    [SuppressMessage(
+        "Maintainability",
+        "CA1502:Avoid excessive complexity",
+        Justification = "Mechanical boundary normalization from known workflow step keys into typed Telegram fields; splitting would add indirection without changing behavior.")]
+    internal static bool TryApplyTelegramParameter(
+        TelegramBridgeRequest telegram,
+        string key,
+        string value,
+        int? timeoutMs = null)
+    {
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        switch (key)
+        {
+            case "telegram.connector":
+            case "connector":
+            case "connector_name":
+                telegram.ConnectorName = value;
+                return true;
+            case "telegram.chat_id":
+            case "chat_id":
+                telegram.ChatId = value;
+                return true;
+            case "telegram.operation":
+            case "operation":
+            case "path":
+                telegram.Operation = ParseTelegramOperation(value);
+                return true;
+            case "telegram.message_thread_id":
+            case "message_thread_id":
+                if (TryParseInt64(value, out var messageThreadId))
+                    telegram.MessageThreadId = messageThreadId;
+                return true;
+            case "telegram.text":
+            case "text":
+                telegram.Text = value;
+                return true;
+            case "telegram.parse_mode":
+            case "parse_mode":
+                telegram.ParseMode = value;
+                return true;
+            case "telegram.disable_web_page_preview":
+            case "disable_web_page_preview":
+                if (TryParseBool(value, out var disableWebPagePreview))
+                    telegram.DisableWebPagePreview = disableWebPagePreview;
+                return true;
+            case "telegram.reply_to_message_id":
+            case "reply_to_message_id":
+                if (TryParseInt64(value, out var replyToMessageId))
+                    telegram.ReplyToMessageId = replyToMessageId;
+                return true;
+            case "telegram.expected_from_user_id":
+            case "expected_from_user_id":
+            case "from_user_id":
+                telegram.ExpectedFromUserId = value;
+                return true;
+            case "telegram.expected_from_username":
+            case "expected_from_username":
+            case "from_username":
+            case "from_user":
+                telegram.ExpectedFromUsername = value;
+                return true;
+            case "telegram.correlation_contains":
+            case "correlation_contains":
+            case "contains":
+                telegram.CorrelationContains = value;
+                return true;
+            case "telegram.wait_timeout_ms":
+            case "wait_timeout_ms":
+                if (TryParseInt32(value, out var waitTimeoutMs))
+                    telegram.WaitTimeoutMs = waitTimeoutMs;
+                return true;
+            case "telegram.poll_timeout_sec":
+            case "telegram.poll_timeout_seconds":
+            case "poll_timeout_sec":
+            case "poll_timeout_seconds":
+                if (TryParseInt32(value, out var pollTimeoutSeconds))
+                    telegram.PollTimeoutSeconds = pollTimeoutSeconds;
+                return true;
+            case "telegram.settle_polls_after_match":
+            case "settle_polls_after_match":
+                if (TryParseInt32(value, out var settlePollsAfterMatch))
+                    telegram.SettlePollsAfterMatch = settlePollsAfterMatch;
+                return true;
+            case "telegram.collect_all_replies":
+            case "collect_all_replies":
+                if (TryParseBool(value, out var collectAllReplies))
+                    telegram.CollectAllReplies = collectAllReplies;
+                return true;
+            case "telegram.start_from_latest":
+            case "start_from_latest":
+                if (TryParseBool(value, out var startFromLatest))
+                    telegram.StartFromLatest = startFromLatest;
+                return true;
+            case "telegram.offset":
+            case "offset":
+                if (TryParseInt64(value, out var offset) && offset > 0)
+                    telegram.Offset = offset;
+                return true;
+            case "telegram.http_method":
+            case "method":
+            case "http_method":
+                telegram.HttpMethod = value;
+                return true;
+            case "telegram.content_type":
+            case "content_type":
+                telegram.ContentType = value;
+                return true;
+            case "telegram.timeout_ms":
+                if (TryParseInt32(value, out var connectorTimeoutMs))
+                    telegram.TimeoutMs = connectorTimeoutMs;
+                return true;
+            case "timeout_ms":
+            case "llm_timeout_ms":
+            case "aevatar.llm_timeout_ms":
+                if (TryParseInt32(value, out var requestTimeoutMs))
+                {
+                    if (key == "timeout_ms" || key == "aevatar.llm_timeout_ms")
+                    {
+                        telegram.TimeoutMs = requestTimeoutMs == 0
+                            ? 0
+                            : timeoutMs is > 0
+                            ? Math.Max(100, Math.Min(requestTimeoutMs, timeoutMs.Value) - 1000)
+                            : requestTimeoutMs;
+                    }
+                }
+                return true;
+            case "telegram.phone_number":
+            case "telegram_user.phone_number":
+            case "phone_number":
+                telegram.PhoneNumber = value;
+                return true;
+            case "telegram.verification_code":
+            case "telegram_user.verification_code":
+            case "verification_code":
+                telegram.VerificationCode = value;
+                return true;
+            case "telegram.2fa_password":
+            case "telegram.password":
+            case "telegram_user.2fa_password":
+            case "telegram_user.password":
+            case "2fa_password":
+            case "password":
+                telegram.Password = value;
+                return true;
+            case "telegram.emit_chat_response":
+            case "emit_chat_response":
+                if (TryParseBool(value, out var emitChatResponse))
+                    telegram.EmitChatResponse = emitChatResponse;
+                return true;
+            case "run_id":
+            case "workflow.run_id":
+            case "workflow_run_id":
+            case "session_id":
+                telegram.RunId = value;
+                return true;
+            case "step_id":
+            case "workflow.step_id":
+            case "workflow_step_id":
+                telegram.StepId = value;
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -443,9 +625,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             Prompt = prompt,
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
+            Telegram = new TelegramBridgeRequest(),
         };
-        CopyPropagatedMetadata(ctx, chatRequest.Metadata);
-        CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+        ApplyTypedToolContext(ctx, chatRequest);
+        CopyParametersToChatRequest(request, chatRequest, timeoutMs);
+        chatRequest.Telegram.RunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+        chatRequest.Telegram.StepId = stepId;
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
@@ -527,6 +712,57 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 DeduplicationOperationId = dispatchDedupId,
             },
         };
+
+    private static TelegramBridgeOperation ParseTelegramOperation(string value)
+    {
+        if (string.Equals(value, "/waitReply", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "wait_reply", StringComparison.OrdinalIgnoreCase))
+        {
+            return TelegramBridgeOperation.WaitReply;
+        }
+
+        if (string.Equals(value, "/ensureLogin", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "ensure_login", StringComparison.OrdinalIgnoreCase))
+        {
+            return TelegramBridgeOperation.EnsureLogin;
+        }
+
+        return TelegramBridgeOperation.SendMessage;
+    }
+
+    private static bool TryParsePositiveInt32(string value, out int parsed) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) && parsed > 0;
+
+    private static bool TryParseInt32(string value, out int parsed) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed);
+
+    private static bool TryParseInt64(string value, out long parsed) =>
+        long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed);
+
+    private static bool TryParseBool(string value, out bool parsed)
+    {
+        parsed = false;
+        if (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = true;
+            return true;
+        }
+
+        if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "no", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool TryResolvePending(
         LLMCallModuleState state,

@@ -421,6 +421,65 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenMetadataOnlyRoutingProvided_ShouldNotPromoteRoutingContext()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(provider);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "metadata-route",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+        };
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-metadata-only", metadata))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RoutingContext.Should().Be(LLMRequestRoutingContext.Empty);
+        provider.LastStreamRequest.ToolContext!.Routing.ModelOverride.Should().BeNull();
+        provider.LastStreamRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        provider.LastStreamRequest.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenBaseRoutingAndTypedToolRoutingOverlap_ShouldMergeTypedValues()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RoutingContext = new LLMRequestRoutingContext(
+                    ModelOverride: "base-model",
+                    NyxIdRoutePreference: "base-route",
+                    MaxToolRoundsOverride: 3,
+                    UserMemoryPrompt: "base-memory"),
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Routing = new LLMRequestRoutingContext(
+                        ModelOverride: "typed-model",
+                        NyxIdRoutePreference: null,
+                        MaxToolRoundsOverride: 9,
+                        UserMemoryPrompt: null),
+                },
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RoutingContext.Should().NotBeNull();
+        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("typed-model");
+        provider.LastStreamRequest.RoutingContext.NyxIdRoutePreference.Should().Be("base-route");
+        provider.LastStreamRequest.RoutingContext.MaxToolRoundsOverride.Should().Be(9);
+        provider.LastStreamRequest.RoutingContext.UserMemoryPrompt.Should().Be("base-memory");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldExposeRequestIdToLlmMiddlewareMetadata()
     {
         var provider = new StreamingProvider(["A"]);
