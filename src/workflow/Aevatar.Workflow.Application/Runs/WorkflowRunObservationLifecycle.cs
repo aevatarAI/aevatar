@@ -23,10 +23,12 @@ internal sealed class WorkflowRunObservationLifecycle
         CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Projection activation belongs to the explicit observation lifecycle, after
-        // target resolution/context creation and before dispatch. PrepareAsync stays
-        // free of read-side lifecycle work, while first-run streaming has a session
-        // to attach before the command enters the actor inbox.
+        // Refactor (iter39/cluster-039-draft-run-projection-session-activation):
+        //   Old pattern: BindAsync only attached to an already-active projection session, so a cold
+        //   draft-run stream could fail before the command reached the workflow actor.
+        //   New principle: Live workflow observation may create/lease the actorized projection
+        //   session inside this explicit observation lifecycle before dispatch; PrepareAsync,
+        //   Host endpoints, and query/read paths remain free of projection lifecycle work.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -87,5 +89,4 @@ internal sealed class WorkflowRunObservationLifecycle
         return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
             WorkflowChatRunStartError.ProjectionDisabled);
     }
-
 }

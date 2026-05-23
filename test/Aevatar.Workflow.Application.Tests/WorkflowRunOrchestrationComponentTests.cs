@@ -378,7 +378,6 @@ public sealed class WorkflowRunOrchestrationComponentTests
     {
         public bool ProjectionEnabled { get; set; } = true;
         public bool EnsureReturnsNull { get; set; }
-        public bool AttachReturnsNull { get; set; }
         public Exception? AttachException { get; set; }
         public List<(string RootActorId, string CommandId)> EnsureCalls { get; } = [];
         public FakeProjectionLease ExistingLease { get; set; } = new("actor-1", "cmd-1");
@@ -411,8 +410,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 throw AttachException;
 
             AttachCalls.Add((lease, sink));
-            return Task.FromResult<IAsyncDisposable?>(
-                AttachReturnsNull ? null : new FakeLiveSinkLease());
+            return Task.FromResult<IAsyncDisposable?>(new FakeLiveSinkLease());
         }
 
         public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
