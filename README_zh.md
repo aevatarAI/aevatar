@@ -375,7 +375,7 @@ src/
 ├── Aevatar.Mainnet.Host.Api      # 生产统一宿主
 └── Aevatar.Hosting               # 共享宿主基础设施
 test/                             # 单元、集成和 API 测试
-workflows/                        # YAML 工作流定义
+apps/aevatar-console-web/          # 前端控制台
 docs/                             # 架构文档
 ```
 
@@ -392,9 +392,6 @@ dotnet test aevatar.slnx --nologo
 # 按域构建
 dotnet build aevatar.foundation.slnf
 dotnet build aevatar.workflow.slnf
-
-# CI 架构门禁
-bash tools/ci/architecture_guards.sh
 ```
 
 ---

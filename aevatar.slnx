@@ -26,14 +26,6 @@
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
     <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
-  <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
-    <Project Path="demos\Aevatar.Demos.Inspector\Aevatar.Demos.Inspector.csproj" />
-    <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
-    <Project Path="demos\Aevatar.Demos.Workflow\Aevatar.Demos.Workflow.csproj" />
-    <Project Path="demos\Aevatar.Demos.Workflow.Web\Aevatar.Demos.Workflow.Web.csproj" />
-    <File Path="demos\README.md" />
-  </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
     <File Path="docs\EVENT_SOURCING.md" />
@@ -176,7 +168,6 @@
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
-    <Project Path="test\Aevatar.Demos.Inspector.Tests\Aevatar.Demos.Inspector.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />
@@ -186,7 +177,6 @@
     <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
 	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
-    <Project Path="test\Aevatar.Tools.Cli.Tests\Aevatar.Tools.Cli.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Tests\Aevatar.GAgentService.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Integration.Tests\Aevatar.GAgentService.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
@@ -202,9 +192,5 @@
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.StatusDashboard.Tests\Aevatar.GAgents.StatusDashboard.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.Household.Tests\Aevatar.GAgents.Household.Tests.csproj" />
-  </Folder>
-  <Folder Name="/tools/">
-    <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
-    <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </Folder>
 </Solution>
