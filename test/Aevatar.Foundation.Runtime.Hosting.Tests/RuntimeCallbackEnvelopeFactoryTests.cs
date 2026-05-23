@@ -77,6 +77,30 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
     }
 
     [Fact]
+    public void CreateScheduledEnvelope_WhenFiredSelfEvent_ShouldStampTypedCallbackState()
+    {
+        var scheduled = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+            actorId: "workflow-parent",
+            callbackId: "retry-callback",
+            generation: 5,
+            fireIndex: 3,
+            triggerEnvelope: new EventEnvelope
+            {
+                Payload = Any.Pack(new StringValue { Value = "retry" }),
+                Route = EnvelopeRouteSemantics.CreateDirect("child-actor", "workflow-parent"),
+            },
+            deliveryMode: RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            slotEpoch: RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        RuntimeCallbackEnvelopeStateReader.TryRead(scheduled, out var state).Should().BeTrue();
+        state.CallbackId.Should().Be("retry-callback");
+        state.Generation.Should().Be(5);
+        state.FireIndex.Should().Be(3);
+        state.FiredAtUnixTimeMs.Should().BePositive();
+        state.SlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+    }
+
+    [Fact]
     public void CreateScheduledEnvelope_ShouldPreserveDirectRoute_WhenConfiguredForEnvelopeRedelivery()
     {
         var triggerEnvelope = new EventEnvelope

@@ -146,6 +146,24 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     }
 
     [Fact]
+    public async Task RuntimeCallbackSchedulerGrain_ShouldValidateTimerPeriodBeforePersistingTypedState()
+    {
+        var persistentState =
+            DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
+        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+
+        var act = () => grain.ScheduleTimerAsync(
+            "timer-callback",
+            CreateEnvelope("evt-timer"),
+            dueTimeMs: 100,
+            periodMs: 0);
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        persistentState.State.ReminderCallbacks.Should().BeEmpty();
+        ((RuntimeCallbackPersistentStateProxy)(object)persistentState).WriteCount.Should().Be(0);
+    }
+
+    [Fact]
     public void RuntimeCallbackSchedulerGrainBoundary_ShouldAcceptTypedEventEnvelope()
     {
         var scheduleTimeout = typeof(IRuntimeCallbackSchedulerGrain).GetMethod(
@@ -157,6 +175,37 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         scheduleTimeout!.GetParameters()[1].ParameterType.Should().Be(typeof(EventEnvelope));
         scheduleTimer.Should().NotBeNull();
         scheduleTimer!.GetParameters()[1].ParameterType.Should().Be(typeof(EventEnvelope));
+    }
+
+    [Theory]
+    [InlineData(RuntimeCallbackDeliveryMode.FiredSelfEvent, RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent)]
+    [InlineData(RuntimeCallbackDeliveryMode.EnvelopeRedelivery, RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery)]
+    public void RuntimeCallbackSchedulerGrain_ShouldMapDeliveryModeToTypedProto(
+        RuntimeCallbackDeliveryMode runtimeMode,
+        RuntimeCallbackScheduleDeliveryMode protoMode)
+    {
+        var method = typeof(RuntimeCallbackSchedulerGrain).GetMethod(
+            "ToProtoDeliveryMode",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        method!.Invoke(null, [runtimeMode]).Should().Be(protoMode);
+    }
+
+    [Theory]
+    [InlineData(RuntimeCallbackScheduleDeliveryMode.Unspecified, RuntimeCallbackDeliveryMode.FiredSelfEvent)]
+    [InlineData(RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent, RuntimeCallbackDeliveryMode.FiredSelfEvent)]
+    [InlineData(RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery, RuntimeCallbackDeliveryMode.EnvelopeRedelivery)]
+    public void RuntimeCallbackSchedulerGrain_ShouldMapTypedProtoDeliveryModeToRuntime(
+        RuntimeCallbackScheduleDeliveryMode protoMode,
+        RuntimeCallbackDeliveryMode runtimeMode)
+    {
+        var method = typeof(RuntimeCallbackSchedulerGrain).GetMethod(
+            "FromProtoDeliveryMode",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        method!.Invoke(null, [protoMode]).Should().Be(runtimeMode);
     }
 
     private static EventEnvelope CreateEnvelope(string id) => new()
