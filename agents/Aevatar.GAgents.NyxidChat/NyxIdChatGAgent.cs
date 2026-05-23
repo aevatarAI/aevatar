@@ -54,7 +54,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     }
 
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleCreationCompensationAsync(
@@ -176,7 +176,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
         var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
-        var chatHistoryStore = Services.GetRequiredService<IChatHistoryStore>();
+        var chatHistoryCommandPort = Services.GetRequiredService<IChatHistoryCommandPort>();
 
         await PersistDomainEventAsync(new NyxIdChatConversationDeletionStartedEvent
         {
@@ -199,7 +199,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
         try
         {
-            await chatHistoryStore.DeleteConversationAsync(command.ScopeId, command.ActorId, CancellationToken.None);
+            await chatHistoryCommandPort.DeleteConversationAsync(command.ScopeId, command.ActorId, CancellationToken.None);
             await PersistDomainEventAsync(new NyxIdChatConversationHistoryDeletedEvent
             {
                 ScopeId = command.ScopeId,
@@ -229,7 +229,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     }
 
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and IChatHistoryStore side effects.
+    //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeletionCompensationAsync(

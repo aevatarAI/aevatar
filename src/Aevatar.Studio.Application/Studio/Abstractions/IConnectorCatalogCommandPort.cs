@@ -1,17 +1,16 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-public interface IConnectorCatalogStore
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
+public interface IConnectorCatalogCommandPort
 {
-    Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default);
+    Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
 
     Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
         StoredConnectorCatalog catalog,
         long? expectedVersion = null,
         CancellationToken cancellationToken = default);
-
-    Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
-
-    Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default);
 
     Task<StoredConnectorDraft> SaveConnectorDraftAsync(
         StoredConnectorDraft draft,

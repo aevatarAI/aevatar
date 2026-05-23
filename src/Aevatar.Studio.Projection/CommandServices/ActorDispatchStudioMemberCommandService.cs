@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -19,18 +18,19 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// </summary>
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
 {
-    private const string DirectRoute = "aevatar.studio.projection.studio-member";
-    private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
+    private const string MemberPublisherId = "aevatar.studio.projection.studio-member";
+    private const string TeamPublisherId = "aevatar.studio.projection.studio-team";
+    private const string BindingRunPublisherId = "aevatar.studio.projection.studio-member-binding-run";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioProjectionActorCommandDispatch _commandDispatch;
 
     public ActorDispatchStudioMemberCommandService(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort)
+        StudioProjectionActorCommandDispatch commandDispatch)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
     }
 
     public async Task<StudioMemberSummaryResponse> CreateAsync(
@@ -189,23 +189,13 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     private async Task DispatchToTeamAsync(
         string scopeId, string teamId, IMessage payload, CancellationToken ct)
     {
-        const string TeamDirectRoute = "aevatar.studio.projection.studio-team";
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
         // Refactor (iter56/cluster-910-projection-activation-cleanup):
         //   old=command-path pre-dispatch activation
         //   new=committed-state plan provider
         //   team fanout provisions only the receiving actor.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(TeamDirectRoute, actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, TeamPublisherId, ct);
     }
 
     public async Task UpdateImplementationAsync(
@@ -260,15 +250,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(BindingRunDirectRoute, actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, BindingRunPublisherId, ct);
     }
 
     private static StudioMemberImplementationRef BuildImplementationRefMessage(
@@ -386,16 +368,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         //   new=committed-state plan provider
         //   member commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(actorId, ct);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, MemberPublisherId, ct);
     }
 
     private static string GenerateMemberId()

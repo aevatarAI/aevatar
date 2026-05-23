@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -23,6 +24,8 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddChatHistoryGAgents();
+        services.AddCqrsCore();
+        services.AddStudioActorCommandDispatch();
         services.Configure<StudioStorageOptions>(configuration.GetSection("Studio:Storage"));
         services.Configure<ConnectorCatalogStorageOptions>(configuration.GetSection(ConnectorCatalogStorageOptions.SectionName));
         services.AddSingleton(WorkflowCompatibilityProfile.AevatarV1);
@@ -48,9 +51,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IUserMemoryStore, ActorBackedUserMemoryStore>();
-        services.AddSingleton<IConnectorCatalogStore, ActorBackedConnectorCatalogStore>();
-        services.AddSingleton<IRoleCatalogStore, ActorBackedRoleCatalogStore>();
-        services.AddSingleton<IChatHistoryStore, ActorBackedChatHistoryStore>();
+        services.AddSingleton<ActorBackedConnectorCatalogStore>();
+        services.AddSingleton<IConnectorCatalogQueryPort>(sp => sp.GetRequiredService<ActorBackedConnectorCatalogStore>());
+        services.AddSingleton<IConnectorCatalogCommandPort>(sp => sp.GetRequiredService<ActorBackedConnectorCatalogStore>());
+        services.AddSingleton<ActorBackedRoleCatalogStore>();
+        services.AddSingleton<IRoleCatalogQueryPort>(sp => sp.GetRequiredService<ActorBackedRoleCatalogStore>());
+        services.AddSingleton<IRoleCatalogCommandPort>(sp => sp.GetRequiredService<ActorBackedRoleCatalogStore>());
+        services.AddSingleton<ActorBackedChatHistoryStore>();
+        services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         // Refactor (iter21/cluster-001):

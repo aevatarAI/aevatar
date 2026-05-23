@@ -27,8 +27,8 @@ namespace Aevatar.Studio.Hosting;
 /// <see cref="UserConfigCurrentStateDocument"/>): either Elasticsearch or
 /// InMemory is enabled based on <c>Projection:Document:Providers:*</c>
 /// configuration. Required by the actor-backed stores
-/// (<c>IRoleCatalogStore</c>, <c>IConnectorCatalogStore</c>,
-/// <c>IChatHistoryStore</c>, <c>IGAgentActorRegistryQueryPort</c>,
+/// (<c>IRoleCatalogQueryPort</c>, <c>IConnectorCatalogQueryPort</c>,
+/// <c>IChatHistoryQueryPort</c>, <c>IGAgentActorRegistryQueryPort</c>,
 /// <c>IUserMemoryStore</c>) that read
 /// from these documents via <c>IProjectionDocumentReader</c>.
 /// </summary>

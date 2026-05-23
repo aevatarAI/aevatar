@@ -1,11 +1,16 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-public interface IChatHistoryStore
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
+public interface IChatHistoryQueryPort
 {
     Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default);
-    Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(string scopeId, string conversationId, CancellationToken ct = default);
-    Task SaveMessagesAsync(string scopeId, string conversationId, ConversationMeta meta, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default);
-    Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default);
+
+    Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct = default);
 }
 
 public sealed record ChatHistoryIndex(IReadOnlyList<ConversationMeta> Conversations);

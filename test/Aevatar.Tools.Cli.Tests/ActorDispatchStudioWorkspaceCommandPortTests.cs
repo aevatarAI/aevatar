@@ -31,6 +31,7 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         evt.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
         receipt.WorkspaceId.Should().Be("studio-workspace:scope-1");
         receipt.ActorId.Should().Be("studio-workspace:scope-1");
+        receipt.CommandId.Should().Be(harness.SingleEnvelopeId);
         receipt.ExpectedVersion.Should().Be(3);
     }
 
@@ -216,13 +217,15 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         {
             Port = new ActorDispatchStudioWorkspaceCommandPort(
                 new StubBootstrap(),
-                _dispatchPort,
+                CreateCommandDispatch(_dispatchPort),
                 new StubScopeResolver(scopeId));
         }
 
         public ActorDispatchStudioWorkspaceCommandPort Port { get; }
 
         public int DispatchCount => _dispatchPort.Dispatches.Count;
+
+        public string SingleEnvelopeId => _dispatchPort.Dispatches.Should().ContainSingle().Which.Envelope.Id;
 
         public TPayload SinglePayload<TPayload>(string expectedActorId = "studio-workspace:scope-1")
             where TPayload : IMessage, new()
@@ -254,6 +257,26 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
     }
 
     private sealed record DispatchRecord(string ActorId, EventEnvelope Envelope);
+
+    private static StudioActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
+    {
+        var service = new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchService<
+            StudioActorCommand,
+            StudioActorCommandTarget,
+            StudioActorCommandReceipt,
+            StudioActorCommandStartError>(
+            new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchPipeline<
+                StudioActorCommand,
+                StudioActorCommandTarget,
+                StudioActorCommandReceipt,
+                StudioActorCommandStartError>(
+                new StudioActorCommandTargetResolver(),
+                new Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy(),
+                new StudioActorCommandEnvelopeFactory(),
+                new Aevatar.CQRS.Core.Commands.ActorCommandTargetDispatcher<StudioActorCommandTarget>(dispatchPort),
+                new StudioActorCommandReceiptFactory()));
+        return new StudioActorCommandDispatch(service);
+    }
 
     private sealed class StubActor(string id) : IActor
     {

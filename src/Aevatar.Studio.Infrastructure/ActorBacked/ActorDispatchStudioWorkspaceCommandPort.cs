@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -17,17 +16,19 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspaceCommandPort
 {
+    private const string PublisherId = "aevatar.studio.infrastructure.workspace";
+
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
 
     public ActorDispatchStudioWorkspaceCommandPort(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     }
 
@@ -142,8 +143,8 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
         //   workspace commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioWorkspaceGAgent>(actorId, ct);
         SetWorkspace(evt, actorId, scopeId);
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
-        return new StudioWorkspaceCommandReceipt(actorId, actor.Id, Guid.NewGuid().ToString("N"), expectedVersion);
+        var receipt = await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
+        return new StudioWorkspaceCommandReceipt(actorId, actor.Id, receipt.CommandId, expectedVersion);
     }
 
     private string ResolveScopeIdOrDefault() =>

@@ -1,17 +1,16 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-public interface IRoleCatalogStore
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
+public interface IRoleCatalogCommandPort
 {
-    Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default);
+    Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
 
     Task<StoredRoleCatalog> SaveRoleCatalogAsync(
         StoredRoleCatalog catalog,
         long? expectedVersion = null,
         CancellationToken cancellationToken = default);
-
-    Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
-
-    Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default);
 
     Task<StoredRoleDraft> SaveRoleDraftAsync(
         StoredRoleDraft draft,

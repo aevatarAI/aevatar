@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -16,17 +15,17 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// </summary>
 internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommandPort
 {
-    private const string DirectRoute = "aevatar.studio.projection.studio-team";
+    private const string PublisherId = "aevatar.studio.projection.studio-team";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioProjectionActorCommandDispatch _commandDispatch;
 
     public ActorDispatchStudioTeamCommandService(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort)
+        StudioProjectionActorCommandDispatch commandDispatch)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
     }
 
     public async Task<StudioTeamSummaryResponse> CreateAsync(
@@ -173,16 +172,7 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
         //   new=committed-state plan provider
         //   team commands return after accepted dispatch, not readmodel materialization.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
-        };
-
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, PublisherId, ct);
     }
 
     private static string GenerateTeamId()
