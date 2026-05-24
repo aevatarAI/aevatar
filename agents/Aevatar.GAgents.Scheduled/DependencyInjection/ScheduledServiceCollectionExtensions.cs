@@ -41,6 +41,8 @@ public static class ScheduledServiceCollectionExtensions
         // ─── Retired-actor cleanup contribution ───
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ScheduledRetiredActorSpec>());
+        services.TryAddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<ITimeZoneResolver, TimeZoneResolver>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,

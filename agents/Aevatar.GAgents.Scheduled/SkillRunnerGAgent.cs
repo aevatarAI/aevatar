@@ -27,6 +27,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
+    private readonly IClock _clock;
+    private readonly ITimeZoneResolver _timeZoneResolver;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
     // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
@@ -44,7 +46,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        IClock? clock = null,
+        ITimeZoneResolver? timeZoneResolver = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -54,7 +58,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             toolSources,
             nyxIdApiClient,
             ownerLlmConfigSource,
-            approvalHandler)
+            approvalHandler,
+            clock,
+            timeZoneResolver)
     {
     }
 
@@ -67,7 +73,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
         IOwnerLlmConfigSource? ownerLlmConfigSource,
-        IToolApprovalHandler? approvalHandler)
+        IToolApprovalHandler? approvalHandler,
+        IClock? clock,
+        ITimeZoneResolver? timeZoneResolver)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -79,6 +87,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         _nyxIdApiClient = nyxIdApiClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
+        _clock = clock ?? new SystemClock();
+        _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _toolFailureCounter = toolMiddlewareChain.Counter;
     }
 
@@ -108,6 +118,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }),
         scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
         cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
+        clock: _clock,
+        timeZoneResolver: _timeZoneResolver,
         logger: Logger,
         ownerDescription: $"Skill runner {Id}");
 
@@ -185,7 +197,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         await PersistDomainEventAsync(initialized);
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
+        //   Old: SkillRunnerGAgent sampled DateTimeOffset.UtcNow and cron helper resolved timezone inline.
+        //   New: ChannelScheduleRunner owns injected clock/timezone dependencies and samples once for this turn.
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
@@ -198,7 +213,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.UtcNow;
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
@@ -286,7 +301,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
         }
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
