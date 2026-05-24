@@ -103,6 +103,21 @@ public class WebSocketVoiceTransportTests
     }
 
     [Fact]
+    public async Task Completion_should_finish_when_receive_loop_observes_close()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var transport = new WebSocketVoiceTransport(socket);
+
+        var frames = new List<VoiceTransportFrame>();
+        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+            frames.Add(frame);
+
+        frames.Count.ShouldBe(0);
+        await transport.Completion;
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
     public async Task DisposeAsync_should_close_open_socket_and_swallow_close_failures()
     {
         var openSocket = new FakeWebSocket(WebSocketState.Open);

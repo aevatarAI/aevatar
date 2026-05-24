@@ -21,6 +21,8 @@ internal sealed class FakeWebSocket : WebSocket
 {
     private readonly Queue<ReceiveFrame> _frames = [];
     private readonly bool _keepOpenUntilCancelledWhenEmpty;
+    private readonly TaskCompletionSource _closeWhenEmpty =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private WebSocketState _state;
 
     public FakeWebSocket(WebSocketState state, bool keepOpenUntilCancelledWhenEmpty = false)
@@ -51,6 +53,8 @@ internal sealed class FakeWebSocket : WebSocket
 
     public void EnqueueReceive(WebSocketMessageType messageType, byte[] data, bool endOfMessage = true) =>
         _frames.Enqueue(new ReceiveFrame(messageType, data, endOfMessage));
+
+    public void CompleteReceiveClose() => _closeWhenEmpty.TrySetResult();
 
     public override void Abort()
     {
@@ -103,9 +107,7 @@ internal sealed class FakeWebSocket : WebSocket
         {
             if (_keepOpenUntilCancelledWhenEmpty)
             {
-                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var registration = cancellationToken.Register(() => gate.TrySetResult());
-                await gate.Task;
+                await _closeWhenEmpty.Task.WaitAsync(cancellationToken);
             }
 
             _state = WebSocketState.CloseReceived;

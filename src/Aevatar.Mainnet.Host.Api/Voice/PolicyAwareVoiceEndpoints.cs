@@ -51,6 +51,9 @@ public static class PolicyAwareVoiceEndpoints
         [FromServices] IUserAgentCatalogQueryPort userAgentCatalog,
         [FromServices] IVoicePresenceSessionResolver sessionResolver)
     {
+        // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+        //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+        //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
         if (!http.WebSockets.IsWebSocketRequest)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -120,7 +123,7 @@ public static class PolicyAwareVoiceEndpoints
         {
             await AttachWithTimeoutAsync(session, transport, options.AttachTimeout, http.RequestAborted);
             attached = true;
-            await WaitUntilClosedAsync(ws, options.WebSocketCloseWaitTimeout, http.RequestAborted);
+            await WaitUntilClosedAsync(transport, options.WebSocketCloseWaitTimeout, http.RequestAborted);
         }
         catch when (!attached)
         {
@@ -363,8 +366,11 @@ public static class PolicyAwareVoiceEndpoints
         await session.AttachTransportAsync(transport, timeoutCts.Token).WaitAsync(timeoutCts.Token);
     }
 
+    // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+    //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+    //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
     private static async Task WaitUntilClosedAsync(
-        WebSocket ws,
+        WebSocketVoiceTransport transport,
         TimeSpan timeout,
         CancellationToken ct)
     {
@@ -376,8 +382,7 @@ public static class PolicyAwareVoiceEndpoints
             timeoutCts?.CancelAfter(timeout);
             var waitToken = timeoutCts?.Token ?? ct;
 
-            while (ws.State == WebSocketState.Open && !waitToken.IsCancellationRequested)
-                await Task.Delay(500, waitToken);
+            await transport.Completion.WaitAsync(waitToken);
         }
         catch (OperationCanceledException)
         {

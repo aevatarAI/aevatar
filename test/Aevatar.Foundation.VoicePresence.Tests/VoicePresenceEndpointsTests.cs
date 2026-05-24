@@ -39,9 +39,7 @@ public class VoicePresenceEndpointsTests
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
@@ -62,9 +60,7 @@ public class VoicePresenceEndpointsTests
         context.Request.RouteValues["actorId"] = "agent-1";
         context.Request.QueryString = new QueryString("?module=voice_presence_openai");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
@@ -147,9 +143,7 @@ public class VoicePresenceEndpointsTests
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         module.HasVolatileTransportLease.ShouldBeFalse();
@@ -240,9 +234,7 @@ public class VoicePresenceEndpointsTests
         context.Request.RouteValues["moduleName"] = "voice_presence_openai";
         context.Request.QueryString = new QueryString("?module=voice_presence_minicpm");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app, "/voice/{actorId}/{moduleName}").RequestDelegate!(context);
 
         resolver.Requests.ShouldContain(request =>
