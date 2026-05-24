@@ -35,6 +35,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class WorkflowInfrastructureCoverageTests
 {
     [Fact]

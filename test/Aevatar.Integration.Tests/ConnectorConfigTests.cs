@@ -3,6 +3,7 @@ using FluentAssertions;
 
 namespace Aevatar.Integration.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class ConnectorConfigTests
 {
     [Fact]
