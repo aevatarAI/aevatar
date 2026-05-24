@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -8,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Tests.Shared;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -119,16 +118,13 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
         return storage.ReadSchedulerState(grain.GetGrainId());
     }
 
-    private static async Task<IHost> StartSiloHostAsync()
-    {
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
-        var host = Host.CreateDefaultBuilder()
+    private static async Task<IHost> StartSiloHostAsync() =>
+        await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
-                    siloPort: siloPort,
-                    gatewayPort: gatewayPort,
+                    siloPort: ports.SiloPort,
+                    gatewayPort: ports.GatewayPort,
                     serviceId: $"aevatar-runtime-callback-credential-guard-service-{Guid.NewGuid():N}",
                     clusterId: $"aevatar-runtime-callback-credential-guard-cluster-{Guid.NewGuid():N}");
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
@@ -145,18 +141,7 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
                         (sp, _) => sp.GetRequiredService<TestRuntimeCallbackSchedulerStateStorage>());
                 });
             })
-            .Build();
-
-        await host.StartAsync();
-        return host;
-    }
-
-    private static int ReserveTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
+            .Build());
 
     private static EventEnvelope CreateEnvelope(string id, IMessage payload) => new()
     {
