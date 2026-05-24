@@ -53,15 +53,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 BuildCatalogDocument("alpha", updatedAt, sortOrder: 1),
             ],
         };
-        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>
         {
-            Item = new WorkflowCapabilitiesCurrentStateDocument
+            Item = new WorkflowCapabilitiesStartupArtifact
             {
                 Id = "workflow-capabilities",
-                ActorId = "workflow-capabilities",
-                StateVersion = 3,
-                LastEventId = "startup-materialization",
-                UpdatedAt = updatedAt.AddMinutes(2),
+                GeneratedAtUtc = updatedAt.AddMinutes(2),
                 SchemaVersion = "capabilities.v1",
                 Primitives =
                 [
@@ -121,7 +118,11 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         detail.Definition.Steps[0].Children.Should().ContainSingle(child => child.Id == "child");
         detail.Edges.Should().ContainSingle(edge => edge.From == "start" && edge.To == "child" && edge.Label == "child");
         capabilities.Workflows.Should().HaveCount(2);
-        capabilities.AuthorityStateVersion.Should().Be(12);
+        typeof(WorkflowCapabilitiesDocument)
+            .GetProperty("AuthorityStateVersion")
+            .Should()
+            .BeNull();
+        capabilities.GeneratedAtUtc.Should().Be(updatedAt.AddMinutes(2));
         capabilities.ProjectionWatermark.Should().Be(updatedAt.AddMinutes(2));
         capabilities.Primitives.Should().ContainSingle(primitive =>
             primitive.Name == "assign" &&
@@ -139,7 +140,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     public async Task WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
     {
         var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>();
-        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>();
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>();
         var port = new WorkflowCatalogReadModelQueryPort(
             catalogReader,
             capabilitiesReader,
@@ -150,7 +151,10 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var capabilities = await port.GetCapabilitiesAsync();
 
         capabilities.SchemaVersion.Should().Be("capabilities.v1");
-        capabilities.AuthorityStateVersion.Should().Be(0);
+        typeof(WorkflowCapabilitiesDocument)
+            .GetProperty("AuthorityStateVersion")
+            .Should()
+            .BeNull();
         capabilities.ProjectionWatermark.Should().Be(default);
         capabilities.Workflows.Should().BeEmpty();
         catalogReader.GetCalls.Should().Be(1);
@@ -166,7 +170,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             [BuildCatalogDocument("alpha", updatedAt)]);
         var port = new WorkflowCatalogReadModelQueryPort(
             catalogReader,
-            new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>(),
+            new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>(),
             new WorkflowCatalogReadModelMapper());
 
         var catalogTask = port.ListWorkflowCatalogAsync();

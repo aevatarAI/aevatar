@@ -5,17 +5,17 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowProjectionExemptionTests
+public sealed class WorkflowStartupArtifactExemptionTests
 {
     [Fact]
-    public void WorkflowCapabilitiesCurrentStateDocument_ShouldDeclareStartupBootstrapExemption()
+    public void WorkflowCapabilitiesStartupArtifact_ShouldDeclareStartupBootstrapExemption()
     {
-        var exemption = typeof(WorkflowCapabilitiesCurrentStateDocument)
+        var exemption = typeof(WorkflowCapabilitiesStartupArtifact)
             .GetCustomAttribute<ProjectionExemptAttribute>(inherit: false);
 
         exemption.Should().NotBeNull();
         exemption!.Category.Should().Be(ProjectionExemptionCategory.StartupBootstrap);
         exemption.Reason.Should().Be(
-            "Workflow capabilities are materialized by WorkflowCapabilitiesStartupMaterializer from startup module and connector capability sources.");
+            "Workflow capabilities are startup artifacts materialized by WorkflowCapabilitiesStartupMaterializer from module and connector capability sources.");
     }
 }

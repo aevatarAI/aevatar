@@ -50,7 +50,7 @@ public sealed class WorkflowCatalogReadModelMapper
         };
 
     public WorkflowCapabilitiesDocument ToCapabilitiesDocument(
-        WorkflowCapabilitiesCurrentStateDocument capabilities,
+        WorkflowCapabilitiesStartupArtifact capabilities,
         IReadOnlyList<WorkflowCatalogCurrentStateDocument> workflows)
     {
         var workflowWatermark = workflows.Count == 0
@@ -61,11 +61,8 @@ public sealed class WorkflowCatalogReadModelMapper
             SchemaVersion = string.IsNullOrWhiteSpace(capabilities.SchemaVersion)
                 ? "capabilities.v1"
                 : capabilities.SchemaVersion,
-            GeneratedAtUtc = Max(capabilities.UpdatedAt, workflowWatermark),
-            AuthorityStateVersion = workflows.Count == 0
-                ? capabilities.StateVersion
-                : Math.Max(capabilities.StateVersion, workflows.Max(workflow => workflow.StateVersion)),
-            ProjectionWatermark = Max(capabilities.UpdatedAt, workflowWatermark),
+            GeneratedAtUtc = capabilities.GeneratedAtUtc,
+            ProjectionWatermark = Max(capabilities.GeneratedAtUtc, workflowWatermark),
             Primitives = capabilities.Primitives.Select(ToPrimitiveCapability).ToList(),
             Connectors = capabilities.Connectors.Select(ToConnectorCapability).ToList(),
             Workflows = workflows

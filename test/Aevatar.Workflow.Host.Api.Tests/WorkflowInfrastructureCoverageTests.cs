@@ -377,7 +377,8 @@ public sealed class WorkflowInfrastructureCoverageTests
 
             writer.LastWritten.Should().NotBeNull();
             var document = writer.LastWritten!;
-            document.Id.Should().Be(WorkflowCapabilitiesStartupMaterializer.DocumentId);
+            document.Id.Should().Be(WorkflowCapabilitiesStartupMaterializer.ArtifactId);
+            document.GeneratedAtUtc.Should().BeAfter(DateTimeOffset.MinValue);
             var primitiveNames = document.Primitives.Select(primitive => primitive.Name).ToList();
             primitiveNames.Should().Contain("connector_call");
             primitiveNames.Should().Contain("llm_call");
@@ -420,6 +421,22 @@ public sealed class WorkflowInfrastructureCoverageTests
             .Select(field => field.FieldNumber)
             .Should().NotContain(5);
         descriptor.FindFieldByName("closed_world_blocked").Should().BeNull();
+    }
+
+    [Fact]
+    public void WorkflowCapabilitiesStartupArtifactProto_ShouldExposeOnlyArtifactWatermarks()
+    {
+        var descriptor = WorkflowCapabilitiesStartupArtifact.Descriptor;
+        var proto = descriptor.ToProto();
+
+        proto.ReservedRange.Should().Contain(range => range.Start <= 2 && range.End > 2);
+        proto.ReservedRange.Should().Contain(range => range.Start <= 3 && range.End > 3);
+        proto.ReservedRange.Should().Contain(range => range.Start <= 5 && range.End > 5);
+        descriptor.FindFieldByName("state_version").Should().BeNull();
+        descriptor.FindFieldByName("last_event_id").Should().BeNull();
+        descriptor.FindFieldByName("actor_id").Should().BeNull();
+        descriptor.FindFieldByName("generated_at_utc_value").Should().NotBeNull();
+        descriptor.FindFieldByName("schema_version").Should().NotBeNull();
     }
 
     [Fact]
@@ -496,12 +513,12 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     private sealed class RecordingCapabilitiesWriteDispatcher
-        : IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>
+        : IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>
     {
-        public WorkflowCapabilitiesCurrentStateDocument? LastWritten { get; private set; }
+        public WorkflowCapabilitiesStartupArtifact? LastWritten { get; private set; }
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            WorkflowCapabilitiesCurrentStateDocument readModel,
+            WorkflowCapabilitiesStartupArtifact readModel,
             CancellationToken ct = default)
         {
             LastWritten = readModel;

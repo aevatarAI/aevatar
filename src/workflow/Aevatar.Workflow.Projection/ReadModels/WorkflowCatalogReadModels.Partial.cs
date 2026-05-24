@@ -89,14 +89,22 @@ public sealed partial class WorkflowCatalogStepReadModel
 
 [ProjectionExempt(
     Category = ProjectionExemptionCategory.StartupBootstrap,
-    Reason = "Workflow capabilities are materialized by WorkflowCapabilitiesStartupMaterializer from startup module and connector capability sources.")]
-public sealed partial class WorkflowCapabilitiesCurrentStateDocument : IProjectionReadModel<WorkflowCapabilitiesCurrentStateDocument>
+    Reason = "Workflow capabilities are startup artifacts materialized by WorkflowCapabilitiesStartupMaterializer from module and connector capability sources.")]
+public sealed partial class WorkflowCapabilitiesStartupArtifact : IProjectionReadModel<WorkflowCapabilitiesStartupArtifact>
 {
-    public DateTimeOffset UpdatedAt
+    string IProjectionReadModel.ActorId => Id;
+
+    long IProjectionReadModel.StateVersion => 0;
+
+    string IProjectionReadModel.LastEventId => string.Empty;
+
+    public DateTimeOffset GeneratedAtUtc
     {
-        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
-        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+        get => GeneratedAtUtcValue == null ? default : GeneratedAtUtcValue.ToDateTimeOffset();
+        set => GeneratedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
     }
+
+    public DateTimeOffset UpdatedAt => GeneratedAtUtc;
 
     public IList<WorkflowPrimitiveCapabilityReadModel> Primitives
     {

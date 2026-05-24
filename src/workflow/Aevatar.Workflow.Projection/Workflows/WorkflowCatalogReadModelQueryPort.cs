@@ -6,14 +6,14 @@ namespace Aevatar.Workflow.Projection.Workflows;
 
 public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IWorkflowCapabilitiesPort
 {
-    private const string CapabilitiesDocumentId = "workflow-capabilities";
+    private const string CapabilitiesArtifactId = "workflow-capabilities";
     private readonly IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string> _catalogReader;
-    private readonly IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string> _capabilitiesReader;
+    private readonly IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string> _capabilitiesReader;
     private readonly WorkflowCatalogReadModelMapper _mapper;
 
     public WorkflowCatalogReadModelQueryPort(
         IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string> catalogReader,
-        IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string> capabilitiesReader,
+        IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string> capabilitiesReader,
         WorkflowCatalogReadModelMapper mapper)
     {
         _catalogReader = catalogReader ?? throw new ArgumentNullException(nameof(catalogReader));
@@ -50,11 +50,10 @@ public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IW
 
     public async Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
-        var capabilities = await _capabilitiesReader.GetAsync(CapabilitiesDocumentId, ct)
-            ?? new WorkflowCapabilitiesCurrentStateDocument
+        var capabilities = await _capabilitiesReader.GetAsync(CapabilitiesArtifactId, ct)
+            ?? new WorkflowCapabilitiesStartupArtifact
             {
-                Id = CapabilitiesDocumentId,
-                ActorId = CapabilitiesDocumentId,
+                Id = CapabilitiesArtifactId,
                 SchemaVersion = "capabilities.v1",
             };
         return _mapper.ToCapabilitiesDocument(capabilities, await QueryCatalogDocumentsAsync(ct));
