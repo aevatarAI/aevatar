@@ -344,13 +344,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var input = new ChatRouteInput
         {
             SourceKind = ChatSourceKind.NyxRelay,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = callerScope.NyxUserId,
-                Platform = callerScope.Platform,
-                RegistrationScopeId = callerScope.RegistrationScopeId,
-                SenderId = callerScope.SenderId,
-            },
+            CallerScope = callerScope.Clone(),
             Channel = callerScope.Platform,
             CommandName = ExtractCommandName(activity.Content?.Text),
             ContentHint = string.Empty,

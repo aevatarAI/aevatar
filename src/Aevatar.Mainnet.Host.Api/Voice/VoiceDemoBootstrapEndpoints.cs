@@ -7,8 +7,6 @@ using Aevatar.GAgents.Scheduled;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
-using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
@@ -48,8 +46,7 @@ internal static class VoiceDemoBootstrapEndpoints
                 statusCode: StatusCodes.Status403Forbidden);
         }
 
-        var routingScope = RoutingOwnerScope.ForNyxIdNative(scopeId);
-        var scheduledScope = ScheduledOwnerScope.ForNyxIdNative(scopeId);
+        var ownerScope = OwnerScope.ForNyxIdNative(scopeId);
 
         var voiceDemoReceipt = await voiceDemoAgentCommandPort.EnsureAsync(scopeId, VoiceModuleName, ct);
         var actorId = voiceDemoReceipt.ActorId;
@@ -59,13 +56,13 @@ internal static class VoiceDemoBootstrapEndpoints
             AgentId = actorId,
             AgentType = NyxIdChatServiceDefaults.GAgentTypeName,
             TemplateName = "voice-demo",
-            OwnerScope = scheduledScope.Clone(),
+            OwnerScope = ownerScope.Clone(),
         }, ct);
 
         var routePolicyReceipt = await EnsureVoiceRoutePolicyAsync(
             scopeId,
             actorId,
-            routingScope,
+            ownerScope,
             routePolicyCommandPort,
             routePolicyQueryPort,
             ct);
@@ -89,18 +86,18 @@ internal static class VoiceDemoBootstrapEndpoints
     private static async Task<ChatRoutePolicyCommandAcceptedReceipt> EnsureVoiceRoutePolicyAsync(
         string scopeId,
         string actorId,
-        RoutingOwnerScope routingScope,
+        OwnerScope ownerScope,
         IChatRoutePolicyCommandPort routePolicyCommandPort,
         IChatRoutePolicyQueryPort routePolicyQueryPort,
         CancellationToken ct)
     {
-        var existing = await routePolicyQueryPort.LookupForCallerAsync(routingScope, ct);
+        var existing = await routePolicyQueryPort.LookupForCallerAsync(ownerScope, ct);
         var command = new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope
+            OwnerScope = new OwnerScope
             {
                 NyxUserId = scopeId,
-                Platform = RoutingOwnerScope.NyxIdPlatform,
+                Platform = OwnerScope.NyxIdPlatform,
             },
             DefaultTarget = existing?.DefaultTarget.Clone() ?? ForwardToDemoActor(actorId),
         };

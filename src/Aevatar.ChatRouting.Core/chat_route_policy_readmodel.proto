@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.ChatRouting.Core";
 
 import "google/protobuf/timestamp.proto";
 import "chat_route_policy.proto";
+import "agent_messages.proto";
 
 // ─── ChatRoutePolicy current-state readmodel ───
 //
@@ -33,7 +34,7 @@ message ChatRoutePolicyCurrentStateDocument {
 
   // Business fields (projected 1:1 from ChatRoutePolicyState).
   string policy_id = 10;
-  ChatRouteCallerScope owner_scope = 11;
+  aevatar.OwnerScope owner_scope = 11;
   ChatRouteAction default_target = 12;
   repeated ChatRouteRule rules = 13;
   int64 policy_version = 14;

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Text;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
