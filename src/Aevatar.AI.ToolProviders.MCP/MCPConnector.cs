@@ -14,7 +14,7 @@ namespace Aevatar.AI.ToolProviders.MCP;
 /// </summary>
 public sealed class MCPConnector : IConnector, IAsyncDisposable
 {
-    private readonly MCPClientManager _clientManager;
+    private readonly IMCPToolDiscoveryPort _clientManager;
     private readonly MCPServerConfig _serverConfig;
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
@@ -28,7 +28,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         string? defaultTool = null,
         IEnumerable<string>? allowedTools = null,
         IEnumerable<string>? allowedInputKeys = null,
-        MCPClientManager? clientManager = null,
+        IMCPToolDiscoveryPort? clientManager = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -183,7 +183,10 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() => _clientManager.DisposeAsync();
+    public ValueTask DisposeAsync() =>
+        _clientManager is IAsyncDisposable disposable
+            ? disposable.DisposeAsync()
+            : ValueTask.CompletedTask;
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {

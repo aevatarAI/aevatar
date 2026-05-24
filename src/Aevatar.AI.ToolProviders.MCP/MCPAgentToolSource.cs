@@ -11,13 +11,13 @@ namespace Aevatar.AI.ToolProviders.MCP;
 public sealed class MCPAgentToolSource : IAgentToolSource
 {
     private readonly MCPToolsOptions _options;
-    private readonly MCPClientManager _clientManager;
+    private readonly IMCPToolDiscoveryPort _clientManager;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyList<IAgentTool>>>? _cachedTools;
 
     public MCPAgentToolSource(
         MCPToolsOptions options,
-        MCPClientManager clientManager,
+        IMCPToolDiscoveryPort clientManager,
         ILogger<MCPAgentToolSource>? logger = null)
     {
         _options = options;
@@ -70,7 +70,7 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     }
 
     private static async Task<IReadOnlyList<IAgentTool>> DiscoverAllAsync(
-        MCPToolsOptions options, MCPClientManager clientManager, ILogger logger, CancellationToken ct)
+        MCPToolsOptions options, IMCPToolDiscoveryPort clientManager, ILogger logger, CancellationToken ct)
     {
         if (options.Servers.Count == 0)
             return [];
