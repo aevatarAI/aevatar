@@ -2350,6 +2350,68 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 
 ---
 
+## Auto-stop / Throttle 条件(强制,per Auric 2026-05-25 "设置一下停止条件或者降速条件吧")
+
+Controller 每 wakeup 在 sweep 之后、派 codex 之前,evaluate 下列条件。**stop** 优先于 throttle。
+
+### Stop(硬停 — controller 不再派任何 codex,仅 push notification + 写 `.refactor-loop/.auto-stopped` 标记)
+
+任一命中即 stop:
+
+1. **Audit 干涸**:最近 2 次 audit 报告 `AUDIT_DONE:iter-N:0`(0 cluster)。
+2. **Intake 池空**:open `auto-loop` 标签 issue 中,非 `🎉 phase:merged` 且非 `🆘 human:卡死` 的 actionable 数 == 0,且 open `auto-loop` PR 数 == 0。
+3. **Reflector 连续 escalate**:最近 3 次 reflector 决议都是 `META_RESOLVED:escalate-human`(说明 CLAUDE.md 规则解释跨多 cluster 都需人决策)。
+4. **PR 吞吐崩**:最近 48h 0 PR merged 且最近 24h 0 fix 收敛(只在死循环 fix/reject)。
+5. **Loop 标记文件**:仓库根存在 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`(maintainer 手动 touch)。
+
+stop 触发动作:
+- post PushNotification 给 user(中文):"auto-loop 停止,原因 X,Y 个 in-flight codex 自然完成后不再续派"
+- 写 `.refactor-loop/.auto-stopped` 含 timestamp + reason
+- ScheduleWakeup **不调用**(loop 真停)
+- 不 kill 在跑 codex(让自然完成,各自的 fix/merge 流程走完)
+
+### Throttle(降速 — 仍派 codex 但降并发或换角度)
+
+任一命中即 throttle(可叠加):
+
+1. **Audit 候选少**:最近 audit `AUDIT_DONE:iter-N:1`(只 1 cluster)→ 不再 prefetch 下一 audit,等当前 cluster 进 Phase 8 才派 audit-N+1。
+2. **Reflector 频繁**:最近 5 PR 里 >= 2 PR 需要 reflector → 暂停新 design issue intake(只跑 in-flight fix/review),concurrency floor 5→3。
+3. **Reviewer reject 率高**:最近 3 PR 累计 reviewer reject 率 >= 60% → 暂停新 implement 派出,集中 fix loop。
+4. **Triage eligible 率低**:最近 5 个 triage `TRIAGE_DONE:N:not-eligible` 占 >= 60% → 不再主动 scan open issue,等 maintainer 显式 label。
+5. **0 codex 但有 actionable**:concurrency_monitor `zero_streak >= 5` → 强制 wakeup 立即派(已有规则,此为保留兼容)。
+
+throttle 触发动作:
+- post 中文 status banner 到任一最近活跃 PR/issue(说明降速 + 原因)
+- concurrency floor 调整 5→3,wakeup heartbeat 1500s→2400s
+- 不写 `.auto-stopped`(loop 仍存活)
+
+### Resume(从 stop 恢复)
+
+stop 后 loop 不会自动 resume。**只有以下信号**才重启:
+- maintainer 删 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`
+- maintainer 显式 `/loop` 命令重启
+- maintainer 把 `phase9-auto-solve` 加到 fresh issue(monitor daemon 不主动接,等 manual resume)
+
+恢复后 controller wakeup 第一动作:删除 stop 标记文件 + post "resumed at <ts> by <signal>" banner。
+
+### 自检
+
+Controller 每 wakeup 第一动作:
+```bash
+[[ -f .refactor-loop/.auto-stopped || -f .refactor-loop/.pause ]] && { echo STOP_MARKER_FOUND; cat .refactor-loop/.auto-stopped 2>/dev/null; exit 0; }
+```
+
+无标记继续 sweep 流程;有标记直接 ScheduleWakeup omit + push notification 重申状态。
+
+### 反面(❌ 严禁)
+
+- ❌ stop 后仍派 codex(违反"controller 不再派任何 codex")
+- ❌ throttle 时把 concurrency floor 降到 0(应至少保 1 codex 处理 in-flight fix)
+- ❌ 自动 resume(无 maintainer 信号 = stay stopped)
+- ❌ 把 `🆘 human` issue 数算入 actionable 池(那是等人,不是 actionable)
+
+---
+
 ## Files
 
 - [prompts/audit.md](prompts/audit.md) — audit phase template
