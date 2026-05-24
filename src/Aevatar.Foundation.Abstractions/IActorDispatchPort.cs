@@ -1,6 +1,12 @@
 namespace Aevatar.Foundation.Abstractions;
 
-public enum DispatchAdmissionFollowUpStage
+/// <summary>
+/// Optional observation phase for dispatch admission follow-up events.
+/// </summary>
+/// <remarks>
+/// 为 iter96+ 预留.
+/// </remarks>
+internal enum DispatchAdmissionFollowUpStage
 {
     Unspecified = 0,
     Handled = 1,
@@ -44,7 +50,10 @@ public static class DispatchAdmissionFactory
 /// <summary>
 /// Optional observation event for phases that happen after dispatch admission.
 /// </summary>
-public sealed record DispatchAdmissionFollowUp(
+/// <remarks>
+/// 为 iter96+ 预留.
+/// </remarks>
+internal sealed record DispatchAdmissionFollowUp(
     string CommandId,
     string ActorId,
     DispatchAdmissionFollowUpStage Stage,
