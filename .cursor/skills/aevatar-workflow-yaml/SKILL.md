@@ -46,8 +46,8 @@ steps:                          # required in practice
     target_role: analyst        # optional, alias: role
     parameters:                 # optional, Dict<string,string>
       prompt_prefix: "Analyze:"
-      agent_type: TelegramBridgeGAgent  # optional: direct GAgent type dispatch (llm/evaluate/reflect)
-      agent_id: bridge:telegram:default # optional: explicit target actor id
+      agent_type: RoleGAgent    # optional: direct GAgent type dispatch (llm/evaluate/reflect)
+      agent_id: role:analyst    # optional: explicit target actor id
     next: step2                 # optional
     children: []                # optional, recursive
     branches:                   # optional, Dict<string,string>
@@ -220,84 +220,87 @@ Use when a step should call a concrete GAgent directly:
 
 ```yaml
 steps:
-  - id: send_to_telegram_bridge
+  - id: call_specialist_agent
     type: llm_call
     parameters:
-      agent_type: TelegramBridgeGAgent
-      agent_id: bridge:telegram:openclaw
-      connector: telegram
-      operation: /sendMessage
-      chat_id: "${telegram.chat_id}"
-      parse_mode: Markdown
+      agent_type: RoleGAgent
+      agent_id: role:repo-analyst
+      prompt_prefix: "Summarize the repository architecture."
 ```
 
 The same `agent_type` pattern also works for `evaluate` and `reflect`.
 
-### Task Delegation via BridgeGAgent (e.g., TelegramUserBridgeGAgent)
+### External Messaging via NyxID Relay
 
-When you need Aevatar to delegate heavy lifting (like codebase research, file operations, or complex execution) to an external agent like OpenClaw in a Telegram group, use the `TelegramUserBridgeGAgent` (or `TelegramBridgeGAgent`). The pattern is: send the request to the group, then wait for the response/signal.
+Workflow-local Telegram bridge actors are retired. When a workflow is triggered from a channel message, keep the channel traffic on the NyxID relay path: NyxID forwards the inbound platform message to Aevatar's `/api/webhooks/nyxid-relay` callback, the workflow processes normalized relay context, and replies go back through NyxID channel relay APIs instead of a workflow-owned send/wait-reply actor.
 
 ```yaml
 steps:
-  - id: send_task_to_openclaw
+  - id: compose_relay_reply
     type: llm_call
+    role: advisor
     parameters:
-      agent_type: TelegramUserBridgeGAgent
-      connector: telegram_user
-      operation: /sendMessage
-      chat_id: "${telegram.chat_id}"
-      parse_mode: Markdown
-      timeout_ms: "30000"
       prompt_prefix: |
-        @${telegram.openclaw_bot_username}
+        Please answer the inbound channel request.
+        Message: ${relay.message.text}
+    next: send_relay_reply
+
+  - id: send_relay_reply
+    type: connector_call
+    parameters:
+      connector: nyxid_channel_relay
+      operation: /api/v1/channel-relay/reply
+      message_id: "${relay.message_id}"
+      text: "${compose_relay_reply}"
+      timeout_ms: "30000"
+```
+
+If the work needs an external agent such as OpenClaw, model that as a normal relay conversation owned by NyxID and resume the workflow from the next inbound relay callback or a persisted continuation. Do not add workflow-local polling steps for platform chat history.
+
+```yaml
+steps:
+  - id: request_external_research
+    type: connector_call
+    parameters:
+      connector: nyxid_channel_relay
+      operation: /api/v1/channel-relay/reply
+      message_id: "${relay.message_id}"
+      text: |
+        @${relay.external_agent_username}
         Please research this repository and summarize the architecture.
         Repo URL: ${collect_repo_url}
         Please include final architecture details in your reply.
-    next: wait_openclaw_reply
+      timeout_ms: "30000"
+    next: mark_external_research_pending
 
-  - id: wait_openclaw_reply
-    type: llm_call
+  - id: mark_external_research_pending
+    type: assign
     parameters:
-      agent_type: TelegramUserBridgeGAgent
-      connector: telegram_user
-      operation: /waitReply
-      chat_id: "${telegram.chat_id}"
-      expected_from_username: "${telegram.openclaw_bot_username}"
-      # Wait config
-      wait_timeout_ms: "180000"     # Max time to wait for the reply
-      poll_timeout_sec: "8"         # Long-polling seconds per request
-      start_from_latest: "true"     # Ignore old messages before this step started
-      collect_all_replies: "true"   # If OpenClaw sends multiple chunks, collect them all
-      settle_polls_after_match: "2" # Wait for 2 more polls after the first match to ensure no trailing chunks are missed
-      timeout_ms: "190000"          # Step-level timeout (slightly larger than wait_timeout_ms)
-      prompt_prefix: "Waiting for OpenClaw's architecture summary."
-    on_error:
-      strategy: fallback
-      fallback_step: timeout_fallback
-    next: process_openclaw_result
+      target: "external_research_status"
+      value: "pending_relay_callback"
 
   - id: process_openclaw_result
     type: assign
     parameters:
       target: "architecture_summary"
-      value: "${wait_openclaw_reply}"  # The accumulated response from the wait step
+      value: "${relay.message.text}"  # Supplied by the next inbound NyxID relay callback
 
   - id: timeout_fallback
     type: assign
     parameters:
-      target: bridge_timeout
-      value: "OpenClaw reply timeout"
+      target: relay_continuation_timeout
+      value: "Relay continuation timeout"
 ```
 
-**Key Points for Bridge Delegation:**
-1. **`operation: /sendMessage`**: Issues the command to the external bot in the shared chat. Mention the bot via `@${telegram.openclaw_bot_username}` to ensure it picks up the request.
-2. **`operation: /waitReply`**: Blocks the workflow execution and polls the group chat until a response from `expected_from_username` is received. 
-3. **Chunked Responses**: External bots (like OpenClaw) often split long responses into multiple Telegram messages. Use `collect_all_replies: "true"` and `settle_polls_after_match: "N"` to stitch these chunks together.
-4. **Timeouts**: `timeout_ms` on the `/waitReply` step MUST be greater than `wait_timeout_ms` to avoid the workflow runtime aborting the step before the graceful wait timeout concludes.
+**Key Points for Relay Delegation:**
+1. **Inbound ownership**: NyxID owns the platform webhook and forwards normalized channel messages to Aevatar.
+2. **Outbound ownership**: Aevatar sends replies through NyxID channel relay APIs, usually `/api/v1/channel-relay/reply`.
+3. **Continuation**: Long-running external work should resume from a later relay callback or persisted workflow continuation.
+4. **No workflow polling**: Do not poll platform chat history or wait for replies inside a workflow step.
 
-### Prompt Composition for External Agents (Telegram/OpenClaw)
+### Prompt Composition for External Agents
 
-When `llm_call` is used as a bridge message to an external agent, prompt quality matters more than strict format contracts.
+When a workflow asks an external agent to continue work through the relay, prompt quality matters more than strict format contracts.
 
 Use this structure:
 
@@ -355,10 +358,13 @@ steps:
       value: "$input"
 
   - id: send_to_openclaw
-    type: llm_call
+    type: connector_call
     parameters:
-      prompt_prefix: |
-        @${telegram.openclaw_bot_username}
+      connector: nyxid_channel_relay
+      operation: /api/v1/channel-relay/reply
+      message_id: "${relay.message_id}"
+      text: |
+        @${relay.external_agent_username}
         Please research this repository and write a report.
         Repo URL: ${collect_repo_url}
         Report output directory: ${report_output_directory}
@@ -367,13 +373,12 @@ steps:
 
 ### Runtime Defaults From config.json
 
-You can inject shared runtime values via `WorkflowRuntimeDefaults` in host `config.json`; they become run metadata variables and can be referenced as `${...}` in workflow YAML.
+You can inject shared runtime values via `WorkflowRuntimeDefaults` in host `config.json`; they become run metadata variables and can be referenced as `${...}` in workflow YAML. Channel callback payload such as `relay.message_id` and `relay.message.text` comes from the NyxID relay ingress rather than static defaults.
 
 ```json
 {
   "WorkflowRuntimeDefaults": {
-    "telegram.chat_id": "-1001234567890",
-    "telegram.openclaw_bot_username": "openclaw_bot"
+    "relay.external_agent_username": "openclaw_bot"
   }
 }
 ```

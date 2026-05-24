@@ -40,9 +40,12 @@ if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
 fi
 
 set +e
+# Refactor (iter92/cluster-644):
+#   Old pattern: workflow-local Telegram bridge GAgents/proto owned Telegram send/wait-reply behavior inside workflow extensions.
+#   New principle: workflow must not reintroduce those bridge actors; Telegram traffic stays on the NyxID relay path.
 workflow_telegram_bridge_report="$(
   rg -n "workflow\.telegram-(bridge|user-bridge|wait-reply)|TelegramBridgeGAgent|TelegramUserBridgeGAgent|TelegramWaitReplyGAgent|TelegramGetUpdatesExternalLinkTransport|telegram_wait_reply|AddWorkflowBridgeExtensions|Aevatar\.Workflow\.Extensions\.Bridge" \
-    src test tools aevatar.slnx \
+    src test tools docs .cursor/skills aevatar.slnx \
     -g '!**/bin/**' \
     -g '!**/obj/**' \
     -g '!tools/ci/architecture_guards.sh'
