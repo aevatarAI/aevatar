@@ -67,9 +67,14 @@ public static class ScheduledServiceCollectionExtensions
             UserAgentCatalogProjector>();
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
+            SkillRunnerExecutionProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
             UserAgentCatalogNyxCredentialProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
             UserAgentCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<SkillRunnerExecutionDocument>,
+            SkillRunnerExecutionDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
             UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
@@ -103,6 +108,11 @@ public static class ScheduledServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<SkillRunnerExecutionDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<SkillRunnerExecutionDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
             services.AddElasticsearchDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>>().Metadata,
@@ -112,6 +122,8 @@ public static class ScheduledServiceCollectionExtensions
         else
         {
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<SkillRunnerExecutionDocument, string>(
                 static doc => doc.Id, static key => key);
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 static doc => doc.Id, static key => key);

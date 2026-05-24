@@ -27,10 +27,14 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<SkillRunnerExecutionDocument, string> _executionReader;
 
-    public UserAgentCatalogQueryPort(IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
+    public UserAgentCatalogQueryPort(
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
+        IProjectionDocumentReader<SkillRunnerExecutionDocument, string> executionReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _executionReader = executionReader ?? throw new ArgumentNullException(nameof(executionReader));
     }
 
     public async Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
@@ -45,7 +49,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         if (document == null || document.Tombstoned) return null;
 
         return DocumentMatchesCaller(document, caller)
-            ? ToEntry(document)
+            ? ToEntry(document, await _executionReader.GetAsync(agentId, ct))
             : null;
     }
 
@@ -83,10 +87,12 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             };
 
             var page = await _documentReader.QueryAsync(query, ct);
+            var executionDocuments = await LoadExecutionDocumentsAsync(page.Items, ct);
             foreach (var doc in page.Items)
             {
                 if (doc.Tombstoned) continue;
-                entries.Add(ToEntry(doc));
+                executionDocuments.TryGetValue(doc.Id ?? string.Empty, out var execution);
+                entries.Add(ToEntry(doc, execution));
                 if (entries.Count >= MaxCallerCatalogEntries)
                     return entries;
             }
@@ -177,7 +183,9 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
     /// after the credential drop). Internal callers that still need the credential go
     /// through <see cref="IUserAgentDeliveryTargetReader"/>.
     /// </summary>
-    internal static UserAgentCatalogReadModelEntry ToEntry(UserAgentCatalogDocument document)
+    internal static UserAgentCatalogReadModelEntry ToEntry(
+        UserAgentCatalogDocument document,
+        SkillRunnerExecutionDocument? execution = null)
     {
         var documentScope = document.OwnerScope ?? OwnerScope.FromLegacyFields(
 #pragma warning disable CS0612 // legacy field read for backfill only
@@ -195,11 +203,11 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             ApiKeyId = document.ApiKeyId ?? string.Empty,
             ScheduleCron = document.ScheduleCron ?? string.Empty,
             ScheduleTimezone = document.ScheduleTimezone ?? string.Empty,
-            Status = document.Status ?? string.Empty,
-            LastRunAt = document.LastRunAtUtc,
-            NextRunAt = document.NextRunAtUtc,
-            ErrorCount = document.ErrorCount,
-            LastError = document.LastError ?? string.Empty,
+            Status = execution?.Status ?? string.Empty,
+            LastRunAt = execution?.LastRunAtUtc,
+            NextRunAt = execution?.NextRunAtUtc,
+            ErrorCount = execution?.ErrorCount ?? 0,
+            LastError = execution?.LastError ?? string.Empty,
             CreatedAt = document.CreatedAtUtc,
             UpdatedAt = document.UpdatedAtUtc,
             Tombstoned = document.Tombstoned,
@@ -208,6 +216,52 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
             OwnerScope = documentScope,
+            CatalogAuthorityStateVersion = document.StateVersion,
+            CatalogLastEventId = document.LastEventId ?? string.Empty,
+            RunnerAuthorityStateVersion = execution?.StateVersion,
+            RunnerLastEventId = execution?.LastEventId ?? string.Empty,
         };
+    }
+
+    private async Task<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>> LoadExecutionDocumentsAsync(
+        IReadOnlyList<UserAgentCatalogDocument> documents,
+        CancellationToken ct)
+    {
+        var ids = documents
+            .Where(static doc => !doc.Tombstoned)
+            .Select(static doc => doc.Id?.Trim())
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (ids.Length == 0)
+            return new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal);
+
+        var result = await _executionReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = ids.Length,
+                Filters =
+                [
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(SkillRunnerExecutionDocument.Id),
+                        Operator = ids.Length == 1
+                            ? ProjectionDocumentFilterOperator.Eq
+                            : ProjectionDocumentFilterOperator.In,
+                        Value = ids.Length == 1
+                            ? ProjectionDocumentValue.FromString(ids[0])
+                            : ProjectionDocumentValue.FromStrings(ids),
+                    },
+                ],
+            },
+            ct);
+
+        return result.Items
+            .Where(static doc => !string.IsNullOrWhiteSpace(doc.Id))
+            .GroupBy(static doc => doc.Id, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderByDescending(doc => doc.StateVersion).First(),
+                StringComparer.Ordinal);
     }
 }

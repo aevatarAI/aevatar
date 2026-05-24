@@ -76,6 +76,24 @@ message SkillRunnerState {
   bool requires_nyxid_proxy_success = 21;
 }
 
+message SkillRunnerExecutionDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  google.protobuf.Timestamp created_at_utc = 6;
+  string template_name = 7;
+  string scope_id = 8;
+  string schedule_cron = 9;
+  string schedule_timezone = 10;
+  string status = 11;
+  google.protobuf.Timestamp last_run_at_utc = 12;
+  google.protobuf.Timestamp next_run_at_utc = 13;
+  int32 error_count = 14;
+  string last_error = 15;
+}
+
 message InitializeSkillRunnerCommand {
   string skill_name = 1;
   string template_name = 2;
