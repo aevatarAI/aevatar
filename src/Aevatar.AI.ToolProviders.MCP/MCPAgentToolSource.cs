@@ -13,7 +13,7 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     private readonly MCPToolsOptions _options;
     private readonly MCPClientManager _clientManager;
     private readonly ILogger _logger;
-    private volatile Task<IReadOnlyList<IAgentTool>>? _cachedTools;
+    private volatile Lazy<Task<IReadOnlyList<IAgentTool>>>? _cachedTools;
 
     public MCPAgentToolSource(
         MCPToolsOptions options,
@@ -28,11 +28,45 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     /// <inheritdoc />
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        var current = _cachedTools;
-        if (current is { IsCompletedSuccessfully: true }) return current;
-        var task = DiscoverAllAsync(_options, _clientManager, _logger, ct);
-        var winner = Interlocked.CompareExchange(ref _cachedTools, task, current);
-        return ReferenceEquals(winner, current) ? task : winner!;
+        while (true)
+        {
+            var current = _cachedTools;
+            if (TryGetReusableTask(current, out var cached))
+                return cached;
+
+            // Refactor (iter88/cluster-088):
+            // Old: cache miss started MCP discovery before CompareExchange, so loser calls still
+            // created external MCP clients.
+            // New: cache the non-started Lazy<Task<T>> first; only the winning Lazy evaluates.
+            var candidate = new Lazy<Task<IReadOnlyList<IAgentTool>>>(
+                () => DiscoverAllAsync(_options, _clientManager, _logger, ct),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var winner = Interlocked.CompareExchange(ref _cachedTools, candidate, current);
+            if (ReferenceEquals(winner, current))
+                return candidate.Value;
+        }
+    }
+
+    private static bool TryGetReusableTask(
+        Lazy<Task<IReadOnlyList<IAgentTool>>>? current,
+        out Task<IReadOnlyList<IAgentTool>> task)
+    {
+        task = null!;
+        if (current == null)
+            return false;
+
+        if (!current.IsValueCreated)
+        {
+            task = current.Value;
+            return true;
+        }
+
+        var existing = current.Value;
+        if (existing.IsFaulted || existing.IsCanceled)
+            return false;
+
+        task = existing;
+        return true;
     }
 
     private static async Task<IReadOnlyList<IAgentTool>> DiscoverAllAsync(

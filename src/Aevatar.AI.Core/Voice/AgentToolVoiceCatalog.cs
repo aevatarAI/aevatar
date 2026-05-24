@@ -13,7 +13,7 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly ILogger _logger;
-    private volatile Task<IReadOnlyList<VoiceToolDefinition>>? _toolDefinitions;
+    private volatile Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>? _toolDefinitions;
 
     public AgentToolVoiceCatalog(
         IEnumerable<IAgentToolSource> toolSources,
@@ -28,14 +28,42 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
         while (true)
         {
             var current = _toolDefinitions;
-            if (current != null && !current.IsFaulted && !current.IsCanceled)
-                return current;
+            if (TryGetReusableTask(current, out var cached))
+                return cached;
 
-            var discoveryTask = DiscoverAllToolsAsync(_toolSources, _logger, ct);
-            var winner = Interlocked.CompareExchange(ref _toolDefinitions, discoveryTask, current);
-            if (winner == current)
-                return discoveryTask;
+            // Refactor (iter88/cluster-088):
+            // Old: first-use discovery started before CompareExchange, multiplying source discovery
+            // under parallel callers.
+            // New: publish Lazy<Task<T>> first and let ExecutionAndPublication start discovery once.
+            var candidate = new Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>(
+                () => DiscoverAllToolsAsync(_toolSources, _logger, ct),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var winner = Interlocked.CompareExchange(ref _toolDefinitions, candidate, current);
+            if (ReferenceEquals(winner, current))
+                return candidate.Value;
         }
+    }
+
+    private static bool TryGetReusableTask(
+        Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>? current,
+        out Task<IReadOnlyList<VoiceToolDefinition>> task)
+    {
+        task = null!;
+        if (current == null)
+            return false;
+
+        if (!current.IsValueCreated)
+        {
+            task = current.Value;
+            return true;
+        }
+
+        var existing = current.Value;
+        if (existing.IsFaulted || existing.IsCanceled)
+            return false;
+
+        task = existing;
+        return true;
     }
 
     private static async Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAllToolsAsync(

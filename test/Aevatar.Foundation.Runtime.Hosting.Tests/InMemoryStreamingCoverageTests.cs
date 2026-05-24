@@ -297,6 +297,40 @@ public sealed class InMemoryStreamingCoverageTests
     }
 
     [Fact]
+    public async Task StreamProvider_ConcurrentFirstUse_ShouldCreateAndNotifyOnce()
+    {
+        var provider = new InMemoryStreamProvider();
+        var created = 0;
+        using var subscription = provider.SubscribeCreated(id =>
+        {
+            if (id == "actor-parallel")
+                Interlocked.Increment(ref created);
+        });
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyCount = 0;
+
+        var tasks = Enumerable.Range(0, 64)
+            .Select(_ => Task.Run(async () =>
+            {
+                if (Interlocked.Increment(ref readyCount) == 64)
+                    ready.TrySetResult(true);
+
+                await start.Task;
+                return provider.GetStream("actor-parallel");
+            }))
+            .ToArray();
+
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        start.SetResult(true);
+
+        var streams = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        streams.Should().OnlyContain(stream => ReferenceEquals(stream, streams[0]));
+        created.Should().Be(1);
+    }
+
+    [Fact]
     public void StreamProvider_CallbackFailures_ShouldBeBestEffort()
     {
         var provider = new InMemoryStreamProvider(
