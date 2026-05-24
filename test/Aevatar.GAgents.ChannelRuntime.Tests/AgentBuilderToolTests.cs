@@ -244,6 +244,150 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_AgentStatus_JoinsPerIdCatalogAndExecutionAtToolBoundary()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-join", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-join",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily",
+                Status = string.Empty,
+                ErrorCount = 0,
+                CatalogAuthorityStateVersion = 7,
+                CatalogLastEventId = "catalog-7",
+            }));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.GetAsync("skill-runner-join", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SkillRunnerExecutionDocument?>(new SkillRunnerExecutionDocument
+            {
+                Id = "skill-runner-join",
+                StateVersion = 3,
+                LastEventId = "runner-3",
+                Status = SkillRunnerDefaults.StatusError,
+                ErrorCount = 2,
+                LastError = "tool failed",
+            }));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "agent_status",
+                  "agent_id": "skill-runner-join"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
+            doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
+            doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
+
+            await queryPort.Received(1).GetForCallerAsync(
+                "skill-runner-join",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).GetAsync(
+                "skill-runner-join",
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ListAgents_JoinsCatalogAndExecutionAtToolBoundary()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-list",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily",
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list")),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal)
+                {
+                    ["skill-runner-list"] = new()
+                    {
+                        Id = "skill-runner-list",
+                        StateVersion = 4,
+                        LastEventId = "runner-4",
+                        Status = SkillRunnerDefaults.StatusRunning,
+                        ErrorCount = 1,
+                    },
+                }));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
+            agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
+            agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            agent.GetProperty("error_count").GetInt32().Should().Be(1);
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list")),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RunAgent_RejectsDisabledAgent()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -490,28 +634,33 @@ public sealed class AgentBuilderToolTests
     public void Constructor_Requires_Typed_Dependencies()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
         var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
 
-        var missingQuery = () => new AgentBuilderTool(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingNyxFactory = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSkillRunner = () => new AgentBuilderTool(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
-        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
-        var missingCallerScope = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
-        var missingSourceQuery = () => new AgentBuilderToolSource(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
-        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
-        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingNyxFactory = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
         missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
         missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
         missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingSourceExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingSourceNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
         missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
@@ -527,6 +676,7 @@ public sealed class AgentBuilderToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
         services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
         services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
@@ -569,6 +719,7 @@ public sealed class AgentBuilderToolTests
 
         var source = new AgentBuilderToolSource(
             queryPort,
+            Substitute.For<ISkillRunnerExecutionQueryPort>(),
             nyxClientFactory,
             skillRunnerPort,
             catalogCommandPort,
@@ -603,6 +754,7 @@ public sealed class AgentBuilderToolTests
         var provider = services.BuildServiceProvider();
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
+            provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
             provider.GetRequiredService<INyxIdApiClientFactory>(),
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),

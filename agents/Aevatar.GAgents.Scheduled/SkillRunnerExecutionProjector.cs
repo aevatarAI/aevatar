@@ -6,6 +6,9 @@ using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
 
+// Refactor (iter94/cluster-094a):
+//   Old: runner execution fields were tempting to fold into the catalog readmodel/query port.
+//   New: SkillRunner committed state owns and materializes execution readmodel rows independently.
 public sealed class SkillRunnerExecutionProjector
     : ICurrentStateProjectionMaterializer<UserAgentCatalogMaterializationContext>
 {

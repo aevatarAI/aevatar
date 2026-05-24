@@ -78,6 +78,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
             UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
+        services.TryAddSingleton<ISkillRunnerExecutionQueryPort, SkillRunnerExecutionQueryPort>();
         // Internal-only credential-bearing reader for outbound delivery (issue #466 §D).
         // Architecture rule: NEVER inject IUserAgentDeliveryTargetReader into an
         // IAgentTool implementation; LLM tools see only the caller-scoped public port

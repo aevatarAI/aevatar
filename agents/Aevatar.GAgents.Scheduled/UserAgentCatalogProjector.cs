@@ -7,8 +7,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
-// Catalog documents are actor-scoped membership read models. Runner execution facts
-// are projected separately by SkillRunnerExecutionProjector.
+// Refactor (iter94/cluster-094a):
+//   Old: catalog projection/query surfaces could carry runner execution facts beside membership facts.
+//   New: this projector only materializes UserAgentCatalog authority membership; SkillRunner execution has its own projector/read port.
 public sealed class UserAgentCatalogProjector
     : ICurrentStateProjectionMaterializer<UserAgentCatalogMaterializationContext>
 {

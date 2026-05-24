@@ -116,7 +116,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("agent-B", OwnerScope.ForNyxIdNative("user-B")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asUserA = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-A"), CancellationToken.None);
         var asUserB = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-B"), CancellationToken.None);
@@ -136,7 +136,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("agent-lark", OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var fromCli = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
         var fromLark = await port.QueryByCallerAsync(OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1"), CancellationToken.None);
@@ -156,7 +156,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildDocument("bob-agent", OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob")),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asBob = await port.QueryByCallerAsync(OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob"), CancellationToken.None);
 
@@ -174,7 +174,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         reader.GetAsync("alice-agent", Arg.Any<CancellationToken>())
             .Returns(BuildDocument("alice-agent", OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice")));
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asBob = await port.GetForCallerAsync(
             "alice-agent",
@@ -199,7 +199,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         doc.StateVersion = 42;
         reader.GetAsync("alice-agent", Arg.Any<CancellationToken>()).Returns(doc);
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asAlice = await port.GetStateVersionForCallerAsync(
             "alice-agent",
@@ -236,7 +236,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildLegacyNyxidDocument("legacy-cli-agent", "user-1"),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asUser1 = await port.QueryByCallerAsync(OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
@@ -252,7 +252,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             BuildLegacyLarkDocument("legacy-lark-agent", "user-1"),
         });
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var asUser1Lark = await port.QueryByCallerAsync(
             OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1"),
@@ -396,7 +396,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         reader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(BuildDocument("agent-1", OwnerScope.ForNyxIdNative("user-1")));
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
         var entry = await port.GetForCallerAsync("agent-1", OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
         entry.Should().NotBeNull();
@@ -418,7 +418,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             .ToList<UserAgentCatalogDocument>();
         var reader = new RecordingDocumentReader(docs);
 
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
         var entries = await port.QueryByCallerAsync(caller, CancellationToken.None);
 
         entries.Should().HaveCount(305,
@@ -426,7 +426,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
-    public async Task QueryByCallerAsync_JoinsRunnerExecutionWithoutSyntheticStateVersion()
+    public async Task QueryByCallerAsync_ReturnsCatalogAuthorityWithoutRunnerExecutionJoin()
     {
         var caller = OwnerScope.ForNyxIdNative("user-join");
         var catalogDocument = BuildDocument("agent-join", caller);
@@ -436,31 +436,17 @@ public sealed class UnifyCallerScopeAcceptanceTests
         {
             catalogDocument,
         });
-        var executionReader = new RecordingExecutionDocumentReader(new List<SkillRunnerExecutionDocument>
-        {
-            new()
-            {
-                Id = "agent-join",
-                ActorId = "agent-join",
-                StateVersion = 2,
-                LastEventId = "runner-2",
-                Status = SkillRunnerDefaults.StatusRunning,
-                ErrorCount = 1,
-                LastError = "previous failure",
-            },
-        });
 
-        var port = new UserAgentCatalogQueryPort(reader, executionReader);
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var entry = (await port.QueryByCallerAsync(caller, CancellationToken.None)).Should().ContainSingle().Subject;
-        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
-        entry.ErrorCount.Should().Be(1);
-        entry.LastError.Should().Be("previous failure");
+        entry.Status.Should().BeEmpty();
+        entry.ErrorCount.Should().Be(0);
+        entry.LastError.Should().BeEmpty();
         entry.CatalogAuthorityStateVersion.Should().Be(5);
         entry.CatalogLastEventId.Should().Be("catalog-5");
-        entry.RunnerAuthorityStateVersion.Should().Be(2);
-        entry.RunnerLastEventId.Should().Be("runner-2");
-        entry.CatalogAuthorityStateVersion.Should().NotBe(7);
+        entry.RunnerAuthorityStateVersion.Should().BeNull();
+        entry.RunnerLastEventId.Should().BeEmpty();
     }
 
     // ─── Actor → projector → query integration (lark caller end-to-end) ───
@@ -520,7 +506,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         // dispatcher's last-written documents — close enough to exercise the actor →
         // projector → reader chain end-to-end without standing up the full pipeline.
         var reader = new RecordingDocumentReader(dispatcher.Upserts);
-        var port = new UserAgentCatalogQueryPort(reader, new EmptyExecutionDocumentReader());
+        var port = new UserAgentCatalogQueryPort(reader);
 
         var fromAlice = await port.QueryByCallerAsync(aliceScope, CancellationToken.None);
         var fromBob = await port.QueryByCallerAsync(bobScope, CancellationToken.None);
@@ -693,56 +679,4 @@ public sealed class UnifyCallerScopeAcceptanceTests
         }
     }
 
-    private sealed class EmptyExecutionDocumentReader : IProjectionDocumentReader<SkillRunnerExecutionDocument, string>
-    {
-        public Task<SkillRunnerExecutionDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<SkillRunnerExecutionDocument?>(null);
-
-        public Task<ProjectionDocumentQueryResult<SkillRunnerExecutionDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<SkillRunnerExecutionDocument>());
-    }
-
-    private sealed class RecordingExecutionDocumentReader : IProjectionDocumentReader<SkillRunnerExecutionDocument, string>
-    {
-        private readonly IList<SkillRunnerExecutionDocument> _items;
-
-        public RecordingExecutionDocumentReader(IList<SkillRunnerExecutionDocument> items)
-        {
-            _items = items;
-        }
-
-        public Task<SkillRunnerExecutionDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            var match = _items.FirstOrDefault(d => string.Equals(d.Id, key, StringComparison.Ordinal));
-            return Task.FromResult(match?.Clone());
-        }
-
-        public Task<ProjectionDocumentQueryResult<SkillRunnerExecutionDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default)
-        {
-            IEnumerable<SkillRunnerExecutionDocument> filtered = _items.Select(d => d.Clone());
-            foreach (var filter in query.Filters)
-            {
-                if (filter.FieldPath != nameof(SkillRunnerExecutionDocument.Id))
-                    continue;
-
-                filtered = filter.Operator switch
-                {
-                    ProjectionDocumentFilterOperator.Eq => filtered.Where(d =>
-                        string.Equals(d.Id, filter.Value.RawValue as string, StringComparison.Ordinal)),
-                    ProjectionDocumentFilterOperator.In when filter.Value.RawValue is string[] ids => filtered.Where(d =>
-                        ids.Contains(d.Id, StringComparer.Ordinal)),
-                    _ => filtered,
-                };
-            }
-
-            return Task.FromResult(new ProjectionDocumentQueryResult<SkillRunnerExecutionDocument>
-            {
-                Items = filtered.Take(query.Take).ToArray(),
-            });
-        }
-    }
 }

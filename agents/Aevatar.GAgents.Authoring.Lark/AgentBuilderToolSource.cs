@@ -12,6 +12,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
     //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     private readonly IUserAgentCatalogQueryPort _queryPort;
+    private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
@@ -20,6 +21,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
 
     public AgentBuilderToolSource(
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         INyxIdApiClientFactory nyxClientFactory,
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
@@ -27,6 +29,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         ILogger<AgentBuilderTool>? toolLogger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
         _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
@@ -41,6 +44,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         [
             new AgentBuilderTool(
                 _queryPort,
+                _executionQueryPort,
                 _nyxClientFactory,
                 _skillRunnerPort,
                 _catalogCommandPort,
