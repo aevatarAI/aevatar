@@ -130,13 +130,12 @@ message RotateAevatarOAuthClientHmacKeyCommand {}
 // broker_capability_enabled on this client.
 message ObserveBrokerCapabilityCommand {}
 
-// Persisted when bootstrap needs to re-emit the authoritative state root for
-// the OAuth client projection without changing business state. This repairs a
-// missing/stale readmodel after the projection scope is activated, while
-// keeping rebuild semantics owned by the actor rather than query-time replay.
+// Tombstone for the removed projection-only event. Keep its message name and
+// field numbers reserved so old event-store payloads remain replay-safe and
+// future events cannot reuse the same wire shape accidentally.
 message AevatarOAuthClientProjectionRebuildRequestedEvent {
-  string reason = 1;
-  google.protobuf.Timestamp requested_at = 2;
+  reserved 1, 2;
+  reserved "reason", "requested_at";
 }
 
 // Persisted after a failed actor-owned provisioning attempt schedules a
