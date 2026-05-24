@@ -11,7 +11,21 @@ namespace Aevatar.GAgents.Channel.Protocol.Tests;
 public sealed class ChannelTracingSmokeTests
 {
     [Fact]
-    public async Task TracingMiddleware_EmitsPipelineInvokeSpanWithMandatoryDimensions()
+    public void ChannelDiagnosticsTags_ShouldMatchDocumentedDottedChannelKeys()
+    {
+        ChannelDiagnostics.Tags.ActivityId.ShouldBe("aevatar.channel.activity_id");
+        ChannelDiagnostics.Tags.ProviderEventId.ShouldBe("aevatar.channel.provider_event_id");
+        ChannelDiagnostics.Tags.CanonicalKey.ShouldBe("aevatar.channel.canonical_key");
+        ChannelDiagnostics.Tags.BotInstanceId.ShouldBe("aevatar.channel.bot_instance_id");
+        ChannelDiagnostics.Tags.SentActivityId.ShouldBe("aevatar.channel.sent_activity_id");
+        ChannelDiagnostics.Tags.RetryCount.ShouldBe("aevatar.channel.retry_count");
+        ChannelDiagnostics.Tags.RawPayloadBlobRef.ShouldBe("aevatar.channel.raw_payload_blob_ref");
+        ChannelDiagnostics.Tags.AuthPrincipal.ShouldBe("aevatar.channel.auth_principal");
+        ChannelDiagnostics.Tags.ChannelId.ShouldBe("aevatar.channel.id");
+    }
+
+    [Fact]
+    public async Task TracingMiddleware_EmitsPipelineInvokeSpanWithLiteralChannelTagFamily()
     {
         var spans = new List<Activity>();
         using var listener = new ActivityListener
@@ -25,10 +39,14 @@ public sealed class ChannelTracingSmokeTests
 
         var pipeline = new MiddlewarePipelineBuilder()
             .Use(new TracingMiddleware())
+            .Use(new SentActivityTagMiddleware("sent-1"))
             .Build(new ServiceCollection().BuildServiceProvider());
 
+        var context = new MiddlewarePipelineTests.StubTurnContext();
+        context.Activity.RawPayloadBlobRef = "blob://raw/payload-1";
+
         await pipeline.InvokeAsync(
-            new MiddlewarePipelineTests.StubTurnContext(),
+            context,
             () => Task.CompletedTask,
             CancellationToken.None);
 
@@ -39,20 +57,20 @@ public sealed class ChannelTracingSmokeTests
         span.Status.ShouldBe(ActivityStatusCode.Ok);
 
         var tags = span.TagObjects.ToDictionary(pair => pair.Key, pair => pair.Value);
-        tags.ShouldNotContainKey("activity_id");
-        tags.ShouldContainKey("aevatar.channel.activity_id");
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.ActivityId);
-        tags[ChannelDiagnostics.Tags.ActivityId].ShouldBe("act-1");
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.CanonicalKey);
-        tags[ChannelDiagnostics.Tags.CanonicalKey].ShouldBe("slack:team:channel");
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.BotInstanceId);
-        tags[ChannelDiagnostics.Tags.BotInstanceId].ShouldBe("ops-bot");
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.ChannelId);
-        tags[ChannelDiagnostics.Tags.ChannelId].ShouldBe("slack");
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.RetryCount);
-        tags[ChannelDiagnostics.Tags.RetryCount].ShouldBe(TracingMiddleware.DefaultRetryCount);
-        tags.ShouldContainKey(ChannelDiagnostics.Tags.AuthPrincipal);
-        tags[ChannelDiagnostics.Tags.AuthPrincipal].ShouldBe("bot:reg-1");
+        tags["aevatar.channel.activity_id"].ShouldBe("act-1");
+        tags["aevatar.channel.provider_event_id"].ShouldBe("blob://raw/payload-1");
+        tags["aevatar.channel.canonical_key"].ShouldBe("slack:team:channel");
+        tags["aevatar.channel.bot_instance_id"].ShouldBe("ops-bot");
+        tags["aevatar.channel.sent_activity_id"].ShouldBe("sent-1");
+        tags["aevatar.channel.retry_count"].ShouldBe(TracingMiddleware.DefaultRetryCount);
+        tags["aevatar.channel.raw_payload_blob_ref"].ShouldBe("blob://raw/payload-1");
+        tags["aevatar.channel.auth_principal"].ShouldBe("bot:reg-1");
+        tags["aevatar.channel.id"].ShouldBe("slack");
+
+        foreach (var legacyKey in LegacyBareChannelTagKeys)
+        {
+            tags.ShouldNotContainKey(legacyKey);
+        }
     }
 
     [Fact]
@@ -87,4 +105,34 @@ public sealed class ChannelTracingSmokeTests
         public Task InvokeAsync(ITurnContext context, Func<Task> next, CancellationToken ct) =>
             throw new InvalidOperationException("boom");
     }
+
+    private sealed class SentActivityTagMiddleware : IChannelMiddleware
+    {
+        private readonly string _sentActivityId;
+
+        public SentActivityTagMiddleware(string sentActivityId)
+        {
+            _sentActivityId = sentActivityId;
+        }
+
+        public Task InvokeAsync(ITurnContext context, Func<Task> next, CancellationToken ct)
+        {
+            Activity.Current?.SetTag(ChannelDiagnostics.Tags.SentActivityId, _sentActivityId);
+            return next();
+        }
+    }
+
+    private static readonly string[] LegacyBareChannelTagKeys =
+    [
+        "activity_id",
+        "provider_event_id",
+        "canonical_key",
+        "bot_instance_id",
+        "sent_activity_id",
+        "retry_count",
+        "raw_payload_blob_ref",
+        "auth_principal",
+        "channel_id",
+        "id",
+    ];
 }
