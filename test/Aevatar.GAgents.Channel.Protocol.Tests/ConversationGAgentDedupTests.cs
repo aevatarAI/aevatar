@@ -2311,7 +2311,7 @@ public sealed class ConversationGAgentDedupTests
     // ─── Lark CardKit card-mode streaming tests ───
 
     [Fact]
-    public async Task HandleLarkCardCreateContinuationAsync_TypedContinuationFlow_MaterializesStreamingState()
+    public async Task HandleLarkCardOperationCompletedAsync_TypedSignalFlow_MaterializesStreamingState()
     {
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-flow");
 
@@ -2323,16 +2323,14 @@ public sealed class ConversationGAgentDedupTests
         lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Create);
         lifecycle.LarkCardInFlightSequence.ShouldBe(1);
 
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-flow",
-            Sequence = lifecycle.LarkCardInFlightSequence,
-            OperationGeneration = lifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-flow", "relay-msg-1", "hello"),
-            Success = true,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-flow",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-flow", "relay-msg-1", "hello"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
 
         lifecycle = agent.State.ActiveReplyLifecycles.Single();
         lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.LarkCardStreaming);
@@ -2375,36 +2373,32 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleLarkCardStreamContinuationAsync_StaleKey_DoesNotMutateLifecycle()
+    public async Task HandleLarkCardOperationCompletedAsync_StaleKey_DoesNotMutateLifecycle()
     {
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-stale");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"));
         var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-stale",
-            Sequence = createLifecycle.LarkCardInFlightSequence,
-            OperationGeneration = createLifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"),
-            Success = true,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-stale",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-stale", "relay-msg-1", "second"));
         var active = agent.State.ActiveReplyLifecycles.Single();
 
-        await agent.HandleLarkCardStreamContinuationAsync(new LarkCardStreamContinuationEvent
-        {
-            CorrelationId = "act-card-stale",
-            Sequence = active.LarkCardInFlightSequence,
-            OperationGeneration = active.LarkCardOperationGeneration + 99,
-            CardId = "card_xyz",
-            Chunk = CreateCardStreamChunk("act-card-stale", "relay-msg-1", "stale"),
-            Success = true,
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-stale",
+            active.LarkCardInFlightSequence,
+            active.LarkCardOperationGeneration + 99,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "stale"),
+            success: true));
 
         var unchanged = agent.State.ActiveReplyLifecycles.Single();
         unchanged.LastFlushedText.ShouldBe("first");
@@ -2413,23 +2407,21 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleLarkCardStreamContinuationAsync_SerialCoalescing_UsesLatestPendingText()
+    public async Task HandleLarkCardOperationCompletedAsync_SerialCoalescing_UsesLatestPendingText()
     {
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-coalesce");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"));
         var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-coalesce",
-            Sequence = createLifecycle.LarkCardInFlightSequence,
-            OperationGeneration = createLifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"),
-            Success = true,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-coalesce",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "second"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
@@ -2437,16 +2429,13 @@ public sealed class ConversationGAgentDedupTests
         var streamLifecycle = agent.State.ActiveReplyLifecycles.Single();
         streamLifecycle.PendingAccumulatedText.ShouldBe("third");
 
-        await agent.HandleLarkCardStreamContinuationAsync(new LarkCardStreamContinuationEvent
-        {
-            CorrelationId = "act-card-coalesce",
-            Sequence = streamLifecycle.LarkCardInFlightSequence,
-            OperationGeneration = streamLifecycle.LarkCardOperationGeneration,
-            CardId = "card_xyz",
-            StreamingElementId = "streaming_main",
-            Chunk = CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "second"),
-            Success = true,
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-coalesce",
+            streamLifecycle.LarkCardInFlightSequence,
+            streamLifecycle.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "second"),
+            success: true));
 
         var followUp = agent.State.ActiveReplyLifecycles.Single();
         followUp.LastFlushedText.ShouldBe("second");
@@ -2455,16 +2444,13 @@ public sealed class ConversationGAgentDedupTests
         followUp.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Stream);
         followUp.LarkCardInFlightSequence.ShouldBe(3);
 
-        await agent.HandleLarkCardStreamContinuationAsync(new LarkCardStreamContinuationEvent
-        {
-            CorrelationId = "act-card-coalesce",
-            Sequence = followUp.LarkCardInFlightSequence,
-            OperationGeneration = followUp.LarkCardOperationGeneration,
-            CardId = "card_xyz",
-            StreamingElementId = "streaming_main",
-            Chunk = CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "third"),
-            Success = true,
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-coalesce",
+            followUp.LarkCardInFlightSequence,
+            followUp.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "third"),
+            success: true));
 
         var coalesced = agent.State.ActiveReplyLifecycles.Single();
         coalesced.LastFlushedText.ShouldBe("third");
@@ -2487,19 +2473,17 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"));
         var lifecycle = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-postsend",
-            Sequence = lifecycle.LarkCardInFlightSequence,
-            OperationGeneration = lifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"),
-            Success = false,
-            CardId = "card_orphan",
-            CardMessageId = "om_orphan",
-            IsPostSendFailure = true,
-            ErrorCode = "card_first_stream_failed",
-            ErrorSummary = "stream rejected",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-postsend",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"),
+            success: false,
+            cardId: "card_orphan",
+            cardMessageId: "om_orphan",
+            isPostSendFailure: true,
+            errorCode: "card_first_stream_failed",
+            errorSummary: "stream rejected"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello world"));
 
@@ -2520,16 +2504,14 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"));
         var create = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-finalize",
-            Sequence = create.LarkCardInFlightSequence,
-            OperationGeneration = create.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"),
-            Success = true,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-finalize",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
 
         var ready = new LlmReplyReadyEvent
         {
@@ -2543,20 +2525,18 @@ public sealed class ConversationGAgentDedupTests
         };
         await agent.HandleLlmReplyReadyAsync(ready);
         var finalize = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardFinalizeContinuationAsync(new LarkCardFinalizeContinuationEvent
-        {
-            CorrelationId = "act-card-finalize",
-            Sequence = finalize.LarkCardInFlightSequence,
-            OperationGeneration = finalize.LarkCardOperationGeneration,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-            CommandId = "llm-reply:act-card-finalize",
-            Activity = CreateRelayActivity("act-card-finalize", "relay-msg-1"),
-            FinalText = "complete answer",
-            LastFlushedText = "complete answer",
-            Success = true,
-            FinalTextWritten = true,
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-finalize",
+            finalize.LarkCardInFlightSequence,
+            finalize.LarkCardOperationGeneration,
+            "card_xyz",
+            "om_card_msg",
+            "llm-reply:act-card-finalize",
+            CreateRelayActivity("act-card-finalize", "relay-msg-1"),
+            "complete answer",
+            "complete answer",
+            success: true,
+            finalTextWritten: true));
 
         var events = await store.GetEventsAsync(agent.Id);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
@@ -2574,29 +2554,24 @@ public sealed class ConversationGAgentDedupTests
         await firstAgent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"));
         var create = firstAgent.State.ActiveReplyLifecycles.Single();
-        await firstAgent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-reactivate",
-            Sequence = create.LarkCardInFlightSequence,
-            OperationGeneration = create.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"),
-            Success = true,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-        });
+        await firstAgent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-reactivate",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await firstAgent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "second"));
         var stream = firstAgent.State.ActiveReplyLifecycles.Single();
-        await firstAgent.HandleLarkCardStreamContinuationAsync(new LarkCardStreamContinuationEvent
-        {
-            CorrelationId = "act-card-reactivate",
-            Sequence = stream.LarkCardInFlightSequence,
-            OperationGeneration = stream.LarkCardOperationGeneration,
-            CardId = "card_xyz",
-            StreamingElementId = "streaming_main",
-            Chunk = CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "second"),
-            Success = true,
-        });
+        await firstAgent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-reactivate",
+            stream.LarkCardInFlightSequence,
+            stream.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "second"),
+            success: true));
 
         var lifecycle = firstAgent.State.ActiveReplyLifecycles.Single();
         lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.LarkCard);
@@ -2621,20 +2596,18 @@ public sealed class ConversationGAgentDedupTests
         });
         var finalize = secondAgent.State.ActiveReplyLifecycles.Single();
         finalize.LarkCardInFlightSequence.ShouldBe(3);
-        await secondAgent.HandleLarkCardFinalizeContinuationAsync(new LarkCardFinalizeContinuationEvent
-        {
-            CorrelationId = "act-card-reactivate",
-            Sequence = finalize.LarkCardInFlightSequence,
-            OperationGeneration = finalize.LarkCardOperationGeneration,
-            CardId = "card_xyz",
-            CardMessageId = "om_card_msg",
-            CommandId = "llm-reply:act-card-reactivate",
-            Activity = CreateRelayActivity("act-card-reactivate", "relay-msg-1"),
-            FinalText = "third",
-            LastFlushedText = "second",
-            Success = true,
-            FinalTextWritten = true,
-        });
+        await secondAgent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-reactivate",
+            finalize.LarkCardInFlightSequence,
+            finalize.LarkCardOperationGeneration,
+            "card_xyz",
+            "om_card_msg",
+            "llm-reply:act-card-reactivate",
+            CreateRelayActivity("act-card-reactivate", "relay-msg-1"),
+            "third",
+            "second",
+            success: true,
+            finalTextWritten: true));
 
         secondAgent.State.ActiveReplyLifecycles.ShouldBeEmpty();
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(
@@ -2660,17 +2633,15 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"));
         var lifecycle = agent.State.ActiveReplyLifecycles.Single();
-        await agent.HandleLarkCardCreateContinuationAsync(new LarkCardCreateContinuationEvent
-        {
-            CorrelationId = "act-card-fb-final",
-            Sequence = lifecycle.LarkCardInFlightSequence,
-            OperationGeneration = lifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"),
-            Success = false,
-            IsRateLimited = true,
-            ErrorCode = "card_create_failed",
-            ErrorSummary = "down",
-        });
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-fb-final",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"),
+            success: false,
+            isRateLimited: true,
+            errorCode: "card_create_failed",
+            errorSummary: "down"));
 
         var ready = new LlmReplyReadyEvent
         {
@@ -2701,6 +2672,117 @@ public sealed class ConversationGAgentDedupTests
             ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ReplyToken = "runtime-token-" + correlationId,
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardCreateCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        LlmReplyCardStreamChunkEvent chunk,
+        bool success,
+        string cardId = "",
+        string cardMessageId = "",
+        bool isRateLimited = false,
+        bool isTableLimitExceeded = false,
+        bool isCardUnavailable = false,
+        bool isPostSendFailure = false,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:create:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Create,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            Chunk = chunk,
+            RawResult = new LarkCardOperationRawResult
+            {
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                IsRateLimited = isRateLimited,
+                IsTableLimitExceeded = isTableLimitExceeded,
+                IsCardUnavailable = isCardUnavailable,
+                IsPostSendFailure = isPostSendFailure,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardStreamCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        LlmReplyCardStreamChunkEvent chunk,
+        bool success,
+        bool isRateLimited = false,
+        bool isTableLimitExceeded = false,
+        bool isCardUnavailable = false,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:stream:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Stream,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            CardId = cardId,
+            StreamingElementId = "streaming_main",
+            Chunk = chunk,
+            RawResult = new LarkCardOperationRawResult
+            {
+                IsRateLimited = isRateLimited,
+                IsTableLimitExceeded = isTableLimitExceeded,
+                IsCardUnavailable = isCardUnavailable,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardFinalizeCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        string cardMessageId,
+        string commandId,
+        ChatActivity activity,
+        string finalText,
+        string lastFlushedText,
+        bool success,
+        bool finalTextWritten,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:finalize:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Finalize,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            CardId = cardId,
+            CardMessageId = cardMessageId,
+            CommandId = commandId,
+            Activity = activity,
+            FinalText = finalText,
+            LastFlushedText = lastFlushedText,
+            RawResult = new LarkCardOperationRawResult
+            {
+                FinalTextWritten = finalTextWritten,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
         };
 
     private sealed class RecordingCardTurnRunner : IConversationCardTurnRunner
