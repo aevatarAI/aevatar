@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
@@ -7,6 +9,81 @@ namespace Aevatar.AI.Tests;
 
 public sealed class AIAbstractionsProtoCoverageTests
 {
+    [Fact]
+    public void LLMControlContext_ShouldMergeIntoTypedContexts_AndRoundTripPayload()
+    {
+        var control = new LLMControlContext(
+            NyxIdAccessToken: " token-1 ",
+            NyxIdOrgToken: " org-1 ",
+            SenderNyxIdAccessToken: " sender-1 ",
+            ModelOverride: " model-a ",
+            NyxIdRoutePreference: " route-a ",
+            MaxToolRoundsOverride: 7,
+            UserMemoryPrompt: " remember ");
+        var baseToolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "base-token",
+                NyxIdOrgToken = "base-org",
+                SenderNyxIdAccessToken = "base-sender",
+            },
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = "base-model",
+                NyxIdRoutePreference = "base-route",
+                MaxToolRoundsOverride = 3,
+                UserMemoryPrompt = "base-memory",
+            },
+        };
+
+        var toolContext = control.ToToolContext(baseToolContext);
+        var routingContext = control.ToRoutingContext(new LLMRequestRoutingContext(
+            "base-model",
+            "base-route",
+            3,
+            "base-memory"));
+        var payload = control.ToPayload();
+        var roundTripped = LLMControlContextMapper.FromPayload(payload);
+
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
+        toolContext.Credentials.NyxIdOrgToken.Should().Be("org-1");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-1");
+        toolContext.Routing.ModelOverride.Should().Be("model-a");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
+        toolContext.Routing.UserMemoryPrompt.Should().Be("remember");
+        routingContext.Should().Be(new LLMRequestRoutingContext("model-a", "route-a", 7, "remember"));
+        roundTripped.Should().Be(new LLMControlContext("token-1", "org-1", "sender-1", "model-a", "route-a", 7, "remember"));
+        payload.HasMaxToolRoundsOverride.Should().BeTrue();
+    }
+
+    [Fact]
+    public void LLMControlContext_ShouldKeepBaseValues_WhenControlValuesAreBlank()
+    {
+        var control = new LLMControlContext(" ", null, "\t", "", " ", null, null);
+        var baseToolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "base-token",
+                SenderNyxIdAccessToken = "base-sender",
+            },
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = "base-model",
+                NyxIdRoutePreference = "base-route",
+                MaxToolRoundsOverride = 5,
+                UserMemoryPrompt = "base-memory",
+            },
+        };
+
+        control.ToToolContext(baseToolContext).Should().Be(baseToolContext);
+        control.ToRoutingContext(baseToolContext.Routing).Should().Be(baseToolContext.Routing);
+        LLMControlContextMapper.FromPayload(null).Should().Be(LLMControlContext.Empty);
+        control.ToPayload().HasMaxToolRoundsOverride.Should().BeFalse();
+    }
+
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {

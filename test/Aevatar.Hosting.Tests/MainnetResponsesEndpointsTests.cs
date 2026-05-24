@@ -1328,9 +1328,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("qwen-3");
-        provider.LastRequest.Metadata!
-            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
 
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("model").GetString().Should().Be("chrono-llm/qwen-3");
@@ -1362,9 +1360,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         provider.LastRequest!.Model.Should().Be("claude-opus-4-7");
-        provider.LastRequest.Metadata!
-            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/llm/anthropic/v1");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
     [Fact]

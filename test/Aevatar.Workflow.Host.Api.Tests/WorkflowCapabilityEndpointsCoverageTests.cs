@@ -189,6 +189,66 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.ActorId.Should().Be("source-actor-1");
     }
 
+    [Theory]
+    [InlineData("catalog", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
+    [InlineData("workflow", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
+    [InlineData("actor", WorkflowChatSourceKind.DefinitionActor, "auto", "actor-1", null)]
+    [InlineData("direct", WorkflowChatSourceKind.Direct, null, "actor-1", null)]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAliases(
+        string kind,
+        WorkflowChatSourceKind expectedKind,
+        string? workflowName,
+        string? actorId,
+        string[]? workflowYamls)
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = kind,
+                WorkflowName = workflowName,
+                ActorId = actorId,
+                WorkflowYamls = workflowYamls ?? [],
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source!.Kind.Should().Be(expectedKind);
+        result.Request.Source.WorkflowName.Should().Be(workflowName);
+        result.Request.Source.ActorId.Should().Be(actorId);
+    }
+
+    [Theory]
+    [InlineData("catalog", null, null, WorkflowChatRunStartError.WorkflowNotFound)]
+    [InlineData("actor", "auto", null, WorkflowChatRunStartError.AgentNotFound)]
+    [InlineData("inline-yaml", "auto", "actor-1", WorkflowChatRunStartError.InvalidWorkflowYaml)]
+    [InlineData("unknown", "auto", "actor-1", WorkflowChatRunStartError.InvalidWorkflowYaml)]
+    public void ChatRunRequestNormalizer_ShouldRejectInvalidTypedSources(
+        string kind,
+        string? workflowName,
+        string? actorId,
+        WorkflowChatRunStartError expectedError)
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = kind,
+                WorkflowName = workflowName,
+                ActorId = actorId,
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(expectedError);
+    }
+
     [Fact]
     public void ChatRunRequestNormalizer_ShouldDerivePromptAndInputParts_FromMultimodalInput()
     {
