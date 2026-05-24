@@ -16,6 +16,7 @@ public sealed class AgentBuilderTool : IAgentTool
     //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
     //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     private readonly IUserAgentCatalogQueryPort _queryPort;
+    private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
@@ -27,6 +28,7 @@ public sealed class AgentBuilderTool : IAgentTool
     //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
     public AgentBuilderTool(
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         INyxIdApiClientFactory nyxClientFactory,
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
@@ -34,6 +36,7 @@ public sealed class AgentBuilderTool : IAgentTool
         ILogger<AgentBuilderTool>? logger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
         _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
@@ -111,28 +114,30 @@ public sealed class AgentBuilderTool : IAgentTool
         var action = args.Str("action", "list_agents");
         return action switch
         {
-            "list_agents" => await ListAgentsAsync(_queryPort, caller, ct),
-            "agent_status" => await GetAgentStatusAsync(args, _queryPort, caller, ct),
+            "list_agents" => await ListAgentsAsync(_queryPort, _executionQueryPort, caller, ct),
+            "agent_status" => await GetAgentStatusAsync(args, _queryPort, _executionQueryPort, caller, ct),
             "run_agent" => await RunAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
             "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
             "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
-            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _catalogCommandPort, _skillRunnerPort, _nyxClientFactory, token, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _nyxClientFactory, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
     }
 
     private async Task<string> ListAgentsAsync(
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         OwnerScope caller,
         CancellationToken ct)
     {
-        var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
+        var agents = await QueryAgentsForCallerAsync(queryPort, executionQueryPort, caller, ct);
         return JsonSerializer.Serialize(new { agents, total = agents.Length });
     }
 
     private async Task<string> GetAgentStatusAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -140,7 +145,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for agent_status"}""";
 
-        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
+        var entry = await QueryAgentForCallerAsync(queryPort, executionQueryPort, agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -150,6 +155,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private async Task<string> DeleteAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ISkillRunnerCommandPort skillRunnerPort,
         INyxIdApiClientFactory nyxClientFactory,
@@ -161,7 +167,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for delete_agent"}""";
 
-        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
+        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -196,7 +202,7 @@ public sealed class AgentBuilderTool : IAgentTool
         //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
-        var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
+        var agents = await QueryAgentsForCallerAsync(queryPort, executionQueryPort, caller, ct);
 
         return JsonSerializer.Serialize(new
         {
@@ -221,15 +227,12 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for run_agent"}""";
 
-        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
+        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
         if (!SupportsManagedLifecycle(entry.AgentType))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
-
-        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
-            return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
         var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, ct);
@@ -242,8 +245,8 @@ public sealed class AgentBuilderTool : IAgentTool
             agent_id = entry.AgentId,
             template = entry.TemplateName,
             note = revisionFeedback is null
-                ? "Manual run dispatched."
-                : "Manual run dispatched with revision feedback.",
+                ? "Manual run accepted for dispatch. Runner state decides whether execution proceeds; use /agent-status to observe the result."
+                : "Manual run accepted for dispatch with revision feedback. Runner state decides whether execution proceeds; use /agent-status to observe the result.",
         });
     }
 
@@ -258,17 +261,14 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
-            return SerializeAgentStatus(entry.value, "Agent is already disabled.");
-
         // Refactor (iter1/cluster-002):
         //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
-        var dispatch = await TryDispatchLifecycleAsync(entry.value, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        return SerializeAgentStatus(entry.value, "Disable accepted. Status update is propagating; run /agent-status to confirm the agent is paused.");
+        return SerializeAgentStatus(entry.value!, "Disable accepted. Status update is propagating; run /agent-status to confirm the agent is paused.");
     }
 
     private async Task<string> EnableAgentAsync(
@@ -282,17 +282,14 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal))
-            return SerializeAgentStatus(entry.value, "Agent is already enabled.");
-
         // Refactor (iter1/cluster-002):
         //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
-        var dispatch = await TryDispatchLifecycleAsync(entry.value, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        return SerializeAgentStatus(entry.value, "Enable accepted. Status update is propagating; run /agent-status to confirm the agent is running.");
+        return SerializeAgentStatus(entry.value!, "Enable accepted. Status update is propagating; run /agent-status to confirm the agent is running.");
     }
 
     private static string SerializeAgentStatus(UserAgentCatalogReadModelEntry entry, string? note = null)
@@ -317,11 +314,16 @@ public sealed class AgentBuilderTool : IAgentTool
 
     private async Task<object[]> QueryAgentsForCallerAsync(
         IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
         OwnerScope caller,
         CancellationToken ct)
     {
         var entries = await queryPort.QueryByCallerAsync(caller, ct);
+        var executions = await executionQueryPort.QueryByAgentIdsAsync(
+            entries.Select(static entry => entry.AgentId).ToArray(),
+            ct);
         return entries
+            .Select(entry => MergeExecution(entry, executions.GetValueOrDefault(entry.AgentId)))
             .Select(static x => new
             {
                 agent_id = x.AgentId,
@@ -349,7 +351,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return (null, $$"""{"error":"agent_id is required for {{actionName}}"}""");
 
-        var entry = await queryPort.GetForCallerAsync(agentId.Trim(), caller, ct);
+        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
         if (entry is null)
             return (null, JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" }));
 
@@ -357,6 +359,74 @@ public sealed class AgentBuilderTool : IAgentTool
             return (null, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {actionName}" }));
 
         return (entry, null);
+    }
+
+    private static Task<UserAgentCatalogReadModelEntry?> QueryCatalogAgentForCallerAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        string agentId,
+        OwnerScope caller,
+        CancellationToken ct) =>
+        queryPort.GetForCallerAsync(agentId, caller, ct);
+
+    private static async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        ISkillRunnerExecutionQueryPort executionQueryPort,
+        string agentId,
+        OwnerScope caller,
+        CancellationToken ct)
+    {
+        var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
+        if (entry is null)
+            return null;
+
+        return MergeExecution(entry, await executionQueryPort.GetAsync(entry.AgentId, ct));
+    }
+
+    // Refactor (iter94/cluster-094a):
+    //   Old: UserAgentCatalogQueryPort joined catalog and runner execution readmodels, creating a stable cross-authority view inside a query port.
+    //   New: /agents and /agent-status compose catalog + SkillRunner execution rows at the AgentBuilder consumer boundary.
+    //   This is presentation response assembly only. It must not be reused as an
+    //   internal lifecycle command admission source or promoted into an aggregate
+    //   query contract; command admission uses catalog authority only, while runner
+    //   execution state remains runner-owned and observable through readmodels.
+    internal static UserAgentCatalogReadModelEntry MergeExecution(
+        UserAgentCatalogReadModelEntry catalog,
+        SkillRunnerExecutionDocument? execution)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        if (execution is null)
+            return catalog;
+
+        return new UserAgentCatalogReadModelEntry
+        {
+            AgentId = catalog.AgentId,
+            ConversationId = catalog.ConversationId,
+            NyxProviderSlug = catalog.NyxProviderSlug,
+            AgentType = catalog.AgentType,
+            TemplateName = catalog.TemplateName,
+            ScopeId = catalog.ScopeId,
+            ApiKeyId = catalog.ApiKeyId,
+            ScheduleCron = catalog.ScheduleCron,
+            ScheduleTimezone = catalog.ScheduleTimezone,
+            Status = execution.Status ?? string.Empty,
+            LastRunAt = execution.LastRunAtUtc,
+            NextRunAt = execution.NextRunAtUtc,
+            ErrorCount = execution.ErrorCount,
+            LastError = execution.LastError ?? string.Empty,
+            CreatedAt = catalog.CreatedAt,
+            UpdatedAt = catalog.UpdatedAt,
+            Tombstoned = catalog.Tombstoned,
+            LarkReceiveId = catalog.LarkReceiveId,
+            LarkReceiveIdType = catalog.LarkReceiveIdType,
+            LarkReceiveIdFallback = catalog.LarkReceiveIdFallback,
+            LarkReceiveIdTypeFallback = catalog.LarkReceiveIdTypeFallback,
+            OwnerScope = catalog.OwnerScope,
+            CatalogAuthorityStateVersion = catalog.CatalogAuthorityStateVersion,
+            CatalogLastEventId = catalog.CatalogLastEventId,
+            RunnerAuthorityStateVersion = execution.StateVersion,
+            RunnerLastEventId = execution.LastEventId ?? string.Empty,
+        };
     }
 
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(

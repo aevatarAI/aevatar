@@ -226,7 +226,7 @@ try {
     PersistDomainEventAsync(SkillRunnerExecutionCompletedEvent { Output = output });
     CancelRetryLeaseAsync();
     Scheduler.ScheduleNextRunAsync(now);
-    // runner committed state is projected into UserAgentCatalogDocument
+    // runner committed state is projected into SkillRunnerExecutionDocument
 }
 catch (Exception ex) {
     if (RetryAttempt < MaxRetryAttempts /*=1*/)
@@ -234,7 +234,7 @@ catch (Exception ex) {
     PersistDomainEventAsync(SkillRunnerExecutionFailedEvent { Error = ex.Message });
     TrySendFailureAsync(ex.Message);
     Scheduler.ScheduleNextRunAsync(now);
-    // failure facts are owned by the runner and projected into the catalog document
+    // failure facts are owned by the runner and projected into the execution document
 }
 ```
 
@@ -309,7 +309,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ### `UserAgentCatalogEntry`（well-known 注册表条目）
 - 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily"`、`platform="lark"`、`conversation_id`、`scope_id`、`lark_receive_id*`
-- 不承载执行事实：`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error` 由 `SkillRunnerState` 拥有，并由 `UserAgentCatalogProjector` 从 runner committed state 合并进 `UserAgentCatalogDocument`。
+- 不承载执行事实：`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error` 由 `SkillRunnerState` 拥有，并由 `SkillRunnerExecutionProjector` 从 runner committed state 物化进 `SkillRunnerExecutionDocument`。
 - `nyx_api_key` / `api_key_id`：actor state 内的 catalog entry 保留这两个字段；公开 `UserAgentCatalogDocument` 不再暴露 `nyx_api_key`，运行时出站读取单独的 `UserAgentCatalogNyxCredentialDocument`。
 
 ### 命令 / 事件
@@ -356,7 +356,9 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 **事实源**：`SkillRunnerGAgent` actor state（每个 agent 一个 actor，拥有执行事实）+ `UserAgentCatalogGAgent`（well-known，全局唯一注册表 actor，只拥有成员集合与静态属性）
 
-**Projection**：`UserAgentCatalogProjector` 消费 catalog committed state 与 runner committed state → 合并物化到 `UserAgentCatalogDocument`。catalog membership 字段来自 `UserAgentCatalogState`；执行字段来自 `SkillRunnerState`。
+**Projection**：`UserAgentCatalogProjector` 只消费 catalog committed state → 物化 catalog membership-only `UserAgentCatalogDocument`，`StateVersion` 来自 `UserAgentCatalogGAgent` committed version。`SkillRunnerExecutionProjector` 只消费 runner committed state → 物化 runner-owned `SkillRunnerExecutionDocument`，`StateVersion` 来自对应 `SkillRunnerGAgent` committed version。`/agents` 与 `/agent-status` 在 query/consumer 层 join 两个 readmodel，并暴露 catalog/runner 双水位，不合成单一版本。
+
+**Presentation join 约束**：`/agents` 与 `/agent-status` 的 catalog + execution join 只是对外 presentation response 装配，用于展示 caller 可见 agent 的执行快照。它不得作为内部 lifecycle command 准入事实源，不得形成可复用 aggregate query contract，也不得反向声明 catalog/execution 的统一业务状态。`run_agent` / `disable_agent` / `enable_agent` 同步准入只依赖 catalog authority（caller visible、agent exists、agent type supports managed lifecycle）；runner `Enabled/Disabled` 只在 `SkillRunnerGAgent` 自身 turn 内判定，拒绝执行时发布 runner-owned state event，再由 `/agent-status` 或 `/agents` 观察。
 
 **查询端口**：`IUserAgentCatalogQueryPort`
 - `QueryByCallerAsync(owner_scope)`：`/agents` 命令的数据源
@@ -364,7 +366,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 **关键不变量 / 测试关注**：
 - `UpsertRegistryAsync` 在 `HandleInitializeAsync` 末尾只注册 membership；它不写执行字段。
-- runner 执行完成、失败、启停后的 committed state 是 `/agent-status` 的执行事实来源；projection 必须从 runner state 合并 `status` / `last_run_at` / `next_run_at` / `error_count` / `last_error`。
+- runner 执行完成、失败、启停后的 committed state 是 `/agent-status` 的执行事实来源；projection 必须从 runner state 物化 `status` / `last_run_at` / `next_run_at` / `error_count` / `last_error` 到 `SkillRunnerExecutionDocument`。
 - 创建、启停、删除与手动运行命令的同步结果只承诺 accepted；readmodel 是否已经反映，需要通过后续 `/agent-status`、`/agents` 或推送事件观察。
 
 ---
@@ -450,7 +452,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 | ~~#437~~ ✅ | 高（数据隔离） | `/daily` binding causes cross-user data leakage（用户视角） | UserConfigGAgent scope key | **已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复**（composite scope `{regScope}:lark:{senderId}`）；下表 12.6 #8 / 12.8 E11 转为回归测试 |
 | ~~#436~~ ✅ | 高（同上 #437 的工程分析） | GitHub username binding shared across all Lark users（last writer wins） | 同上 | 同上 |
 | #439 | 高（语义错） | SkillRunner masks GitHub tool failures as silent "no activity" success | prompt + nyxid_proxy 工具 + runner 的"非空即成功"路径 | 强制 GitHub 接口返回 4xx/5xx，验证报告必须显式标错而不是出 `No X surfaced` |
-| #440 | 中（运维可见性） | `/agent-status` 首次执行不刷新 `Last run`/`Next run` | runner committed state → `UserAgentCatalogProjector` 合并路径 | `/daily X`（run_immediately）→ 30s 后 `/agent-status <id>` 看 `Last run` 应非 n/a |
+| #440 | 中（运维可见性） | `/agent-status` 首次执行不刷新 `Last run`/`Next run` | runner committed state → `SkillRunnerExecutionProjector` execution readmodel 路径 | `/daily X`（run_immediately）→ 30s 后 `/agent-status <id>` 看 `Last run` 应非 n/a |
 | ~~#423~~ ✅ | 中（增强 + 失败通知短板） | richer report content + progressive delivery + chunked + 失败通知旁路 | prompt（§A，#458 已合）+ streaming-edit（§B，#469 已合）+ chunked + failure-notification slug（§C，本 PR） | 已落地：`/daily` 报告流式编辑、>30K 自动分段、出站失败时优先经入站 channel-bot 投递失败通知 |
 | #398 | 高（链路断） | Lark relay callbacks never reach aevatar | NyxID 侧 callback_url 配置 / 多副本 ingress / Lark 订阅状态 | 用户发消息无任何反应，aevatar 日志只有 K8s liveness |
 
@@ -493,7 +495,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - `HandleInitializeAsync`：`SkillContent` 为空 → 直接返回不持久化（仅 LogWarning）
 - `HandleInitializeAsync` 正常 → 持久化 `SkillRunnerInitializedEvent` + `Scheduler.ScheduleNextRunAsync` + `UpsertRegistryAsync`
 - `HandleTriggerAsync`：`State.Enabled=false` → 跳过
-- `HandleTriggerAsync` 成功 → `Completed` 事件 + retry lease 取消 + 下次调度；执行字段由 runner committed state 投影到 catalog document
+- `HandleTriggerAsync` 成功 → `Completed` 事件 + retry lease 取消 + 下次调度；执行字段由 runner committed state 投影到 `SkillRunnerExecutionDocument`
 - `HandleTriggerAsync` 失败：`RetryAttempt < 1` → `ScheduleRetryAsync(2)` 不发 `Failed`
 - `HandleTriggerAsync` 失败：`RetryAttempt >= 1` → 持久化 `Failed` + `TrySendFailureAsync` + 下次调度（仍按 cron）+ status=error
 - `Disable` → `Enabled=false`，下次 trigger 跳过
@@ -506,8 +508,8 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 应覆盖：
 - `Upsert` → entry 进 state；同 agent 再次 `Upsert` → 覆盖且不重复
-- `SkillRunnerExecutionCompletedEvent` / `SkillRunnerExecutionFailedEvent` → projector 合并 `last_run_at` / `next_run_at` / `status` / `error_count` / `last_error`
-- **#440 应加测**：membership upsert 与 runner execution committed state 在 projection 后共同体现在 `UserAgentCatalogDocument` 上。
+- `SkillRunnerExecutionCompletedEvent` / `SkillRunnerExecutionFailedEvent` → execution projector 物化 `last_run_at` / `next_run_at` / `status` / `error_count` / `last_error`
+- **#440 应加测**：membership upsert 与 runner execution committed state 分别物化到 `UserAgentCatalogDocument` / `SkillRunnerExecutionDocument`，查询层 join 后共同体现在 `/agent-status` DTO 上。
 - `Tombstone` → entry 标 `tombstoned=true`，`/agents` 列表里隐藏
 - Projector：每种事件 → readmodel 对应字段被覆盖（projector 是单调覆盖语义，不累加）
 

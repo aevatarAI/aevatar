@@ -28,7 +28,8 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
 
-    public UserAgentCatalogQueryPort(IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
+    public UserAgentCatalogQueryPort(
+        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
@@ -44,9 +45,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         var document = await _documentReader.GetAsync(agentId, ct);
         if (document == null || document.Tombstoned) return null;
 
-        return DocumentMatchesCaller(document, caller)
-            ? ToEntry(document)
-            : null;
+        return DocumentMatchesCaller(document, caller) ? ToEntry(document) : null;
     }
 
     /// <summary>
@@ -195,11 +194,6 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             ApiKeyId = document.ApiKeyId ?? string.Empty,
             ScheduleCron = document.ScheduleCron ?? string.Empty,
             ScheduleTimezone = document.ScheduleTimezone ?? string.Empty,
-            Status = document.Status ?? string.Empty,
-            LastRunAt = document.LastRunAtUtc,
-            NextRunAt = document.NextRunAtUtc,
-            ErrorCount = document.ErrorCount,
-            LastError = document.LastError ?? string.Empty,
             CreatedAt = document.CreatedAtUtc,
             UpdatedAt = document.UpdatedAtUtc,
             Tombstoned = document.Tombstoned,
@@ -208,6 +202,8 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
             OwnerScope = documentScope,
+            CatalogAuthorityStateVersion = document.StateVersion,
+            CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
     }
 }

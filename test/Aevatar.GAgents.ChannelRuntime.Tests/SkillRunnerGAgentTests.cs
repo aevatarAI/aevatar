@@ -186,10 +186,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         persisted.Should().HaveCount(2);
 
         var runnerState = agent.State.Clone();
-        var writeDispatcher = new RecordingCatalogWriteDispatcher();
-        var projector = new UserAgentCatalogProjector(
+        var writeDispatcher = new RecordingExecutionWriteDispatcher();
+        var projector = new SkillRunnerExecutionProjector(
             writeDispatcher,
-            new EmptyCatalogDocumentReader(),
             new FixedProjectionClock(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero)));
 
         await projector.ProjectAsync(
@@ -215,9 +214,33 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         writeDispatcher.Upserts.Should().ContainSingle();
         var doc = writeDispatcher.Upserts[0];
         doc.Id.Should().Be("skill-runner-projection-regression");
+        doc.ActorId.Should().Be("skill-runner-projection-regression");
         doc.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
         doc.NextRunAtUtc.Should().NotBeNull();
-        doc.RunnerSourceVersion.Should().Be(2);
+        doc.StateVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WhenDisabled_PersistsRunnerOwnedRejectedEvent()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+        await _agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "test" });
+
+        await _agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "run_agent" });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+
+        _agent.State.Enabled.Should().BeFalse();
+        _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+        _agent.State.ErrorCount.Should().Be(1);
     }
 
     [Fact]
@@ -1109,12 +1132,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private sealed class RecordingCatalogWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
+    private sealed class RecordingExecutionWriteDispatcher : IProjectionWriteDispatcher<SkillRunnerExecutionDocument>
     {
-        public List<UserAgentCatalogDocument> Upserts { get; } = [];
+        public List<SkillRunnerExecutionDocument> Upserts { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            UserAgentCatalogDocument readModel,
+            SkillRunnerExecutionDocument readModel,
             CancellationToken ct = default)
         {
             Upserts.Add(readModel.Clone());
@@ -1123,17 +1146,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
-    }
-
-    private sealed class EmptyCatalogDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
-    {
-        public Task<UserAgentCatalogDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<UserAgentCatalogDocument?>(null);
-
-        public Task<ProjectionDocumentQueryResult<UserAgentCatalogDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>());
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionClock
