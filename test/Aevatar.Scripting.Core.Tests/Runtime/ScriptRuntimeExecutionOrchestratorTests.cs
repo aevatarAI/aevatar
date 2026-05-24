@@ -4,7 +4,6 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Serialization;
@@ -29,8 +28,6 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
                 behavior.Descriptor,
                 behavior.Descriptor.ToContract(),
                 () => new AsyncDisposableBehavior(tracker))),
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeProjectionBuilder(),
             new ProtobufMessageCodec());
 
         var facts = await dispatcher.DispatchAsync(

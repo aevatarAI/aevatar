@@ -22,19 +22,9 @@ public sealed partial record ScriptBehaviorDispatchRequest(
 
 public sealed partial record ScriptBehaviorDispatchRequest
 {
-    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
-    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
-    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
-    public string ReadModelSchemaVersion { get; init; } = string.Empty;
-
-    public string ReadModelSchemaHash { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Pre-compiled materialization plan cached by the calling actor.
-    /// When non-null the dispatcher skips compilation; when null the dispatcher compiles on the fly.
-    /// </summary>
-    public Materialization.ScriptReadModelMaterializationPlan? CachedMaterializationPlan { get; init; }
-
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     public ScriptBehaviorDispatchRequest(
         string ActorId,
         string DefinitionActorId,
