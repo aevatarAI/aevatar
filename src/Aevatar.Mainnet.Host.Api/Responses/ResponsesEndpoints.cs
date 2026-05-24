@@ -76,25 +76,12 @@ internal static partial class ResponsesApiEndpoints
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
         var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.Responses");
-        if (result.Forward?.Action.ForwardToTeam is not null)
+        if (result.Forward?.Action.ForwardToTeam is not null ||
+            result.Forward?.Action.ForwardToStudioMember is not null)
         {
-            return await HandleForwardToTeamAsync(
+            return await HandleForwardedAguiAsync(
                 http,
                 result.Forward.Normalized,
-                result.Forward.CallerScope,
-                result.Forward,
-                forwardingService,
-                bearerToken,
-                logger,
-                ct);
-        }
-
-        if (result.Forward?.Action.ForwardToGagent is not null)
-        {
-            return await HandleForwardToGAgentAsync(
-                http,
-                result.Forward.Normalized,
-                result.Forward.CallerScope,
                 result.Forward,
                 forwardingService,
                 bearerToken,
@@ -319,46 +306,9 @@ internal static partial class ResponsesApiEndpoints
             ct);
     }
 
-    private static async Task<IResult> HandleForwardToTeamAsync(
+    private static async Task<IResult> HandleForwardedAguiAsync(
         HttpContext http,
         NormalizedResponsesRequest normalized,
-        ResponsesCallerScope callerScope,
-        ResponsesForwardCommandResult forwardPlan,
-        IResponsesForwardingApplicationService forwardingService,
-        string bearerToken,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
-
-        if (normalized.Stream)
-        {
-            await WriteAGuiBackedResponseStreamAsync(
-                http.Response,
-                normalized,
-                createdAt,
-                forwardPlan,
-                forwardingService,
-                bearerToken,
-                logger,
-                ct);
-            return Results.Empty;
-        }
-
-        return await CollectAGuiBackedResponseAsync(
-            normalized,
-            createdAt,
-            forwardPlan,
-            forwardingService,
-            bearerToken,
-            logger,
-            ct);
-    }
-
-    private static async Task<IResult> HandleForwardToGAgentAsync(
-        HttpContext http,
-        NormalizedResponsesRequest normalized,
-        ResponsesCallerScope callerScope,
         ResponsesForwardCommandResult forwardPlan,
         IResponsesForwardingApplicationService forwardingService,
         string bearerToken,

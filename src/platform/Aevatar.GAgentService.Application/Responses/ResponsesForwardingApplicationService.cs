@@ -128,8 +128,17 @@ public sealed class ResponsesForwardingApplicationService(
         if (plan.Action.ForwardToTeam is not null)
             return await BuildForwardToTeamRequestAsync(plan, bearerToken, plan.Action.ForwardToTeam, ct);
 
+        if (plan.Action.ForwardToStudioMember is not null)
+            return await BuildForwardToStudioMemberRequestAsync(plan, bearerToken, plan.Action.ForwardToStudioMember, ct);
+
         if (plan.Action.ForwardToGagent is not null)
-            return await BuildForwardToGAgentRequestAsync(plan, bearerToken, plan.Action.ForwardToGagent, ct);
+        {
+            // Refactor (iter92/cluster-793): Old: /v1/responses treated ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only the direct actor target; Studio member routing uses ForwardToStudioMember.
+            return InvocationRequestResult.FromError(
+                500,
+                "chat_route_action_not_supported",
+                "ForwardToGAgent is a direct actor target and is not supported by the Responses LLM facade. Use ForwardToStudioMember or ForwardToTeam.");
+        }
 
         return InvocationRequestResult.FromError(500, "chat_route_invalid", "Forward decision has no forwarding target.");
     }
@@ -165,21 +174,27 @@ public sealed class ResponsesForwardingApplicationService(
             endpointId));
     }
 
-    private async Task<InvocationRequestResult> BuildForwardToGAgentRequestAsync(
+    private async Task<InvocationRequestResult> BuildForwardToStudioMemberRequestAsync(
         ResponsesForwardCommandResult plan,
         string bearerToken,
-        ForwardToGAgent forwardToGAgent,
+        ForwardToStudioMember forwardToStudioMember,
         CancellationToken ct)
     {
-        var memberId = forwardToGAgent.ActorId?.Trim() ?? string.Empty;
+        var memberId = forwardToStudioMember.MemberId?.Trim() ?? string.Empty;
+        var endpointId = string.IsNullOrWhiteSpace(forwardToStudioMember.EndpointId)
+            ? DefaultGAgentChatEndpointId
+            : forwardToStudioMember.EndpointId.Trim();
+        var scopeId = string.IsNullOrWhiteSpace(forwardToStudioMember.ScopeId)
+            ? plan.CallerScope.ScopeId
+            : forwardToStudioMember.ScopeId.Trim();
         if (memberId.Length == 0)
-            return InvocationRequestResult.FromError(500, "chat_route_invalid", "ForwardToGAgent decision missing actor_id.");
+            return InvocationRequestResult.FromError(500, "chat_route_invalid", "ForwardToStudioMember decision missing member_id.");
 
         MemberPublishedServiceResolution resolution;
         try
         {
             resolution = await memberPublishedServiceResolver.ResolveAsync(
-                new MemberPublishedServiceResolveRequest(plan.CallerScope.ScopeId, memberId),
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
         }
         catch (InvalidOperationException ex)
@@ -192,7 +207,7 @@ public sealed class ResponsesForwardingApplicationService(
             bearerToken,
             resolution.ScopeId,
             resolution.PublishedServiceId,
-            DefaultGAgentChatEndpointId));
+            endpointId));
     }
 
     private static StaticGAgentStreamInvocationRequest BuildInvocationRequest(

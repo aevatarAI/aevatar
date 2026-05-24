@@ -82,14 +82,14 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenForwardToGAgent_ShouldRegisterSessionBeforeReturningForwardPlan()
+    public async Task CreateAsync_WhenForwardToStudioMember_ShouldRegisterSessionBeforeReturningForwardPlan()
     {
         var completion = new RecordingCompletionService(new ResponsesCompletionResult("unused", null, []));
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
             completionService: completion,
             sessionPort: sessions,
-            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToGAgentAction("member-1")));
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToStudioMemberAction("member-1")));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -107,6 +107,34 @@ public sealed class ResponsesCommandFacadeTests
         result.Forward!.Session.ResponseId.Should().Be(sessions.Registered[0].ResponseId);
         result.Forward.Session.ActorId.Should().Be("actor-" + sessions.Registered[0].ResponseId);
         completion.LastRequest.Should().BeNull("forwarded Responses bypass provider execution but must keep session lifecycle");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenForwardToGAgent_ShouldReturnRouteContractErrorWithoutRegisteringSession()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("unused", null, []));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            completionService: completion,
+            sessionPort: sessions,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToGAgentAction("direct-actor-1")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), "token");
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "chat_route_action_not_supported",
+            "ForwardToGAgent is a direct actor target and is not supported by /v1/responses. Use ForwardToStudioMember or ForwardToTeam."));
+        sessions.Registered.Should().BeEmpty();
+        completion.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -415,6 +443,19 @@ public sealed class ResponsesCommandFacadeTests
     private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
     {
         ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
+    };
+
+    private static ChatRouteAction ForwardToStudioMemberAction(
+        string memberId,
+        string endpointId = "",
+        string scopeId = "") => new()
+    {
+        ForwardToStudioMember = new ForwardToStudioMember
+        {
+            MemberId = memberId,
+            EndpointId = endpointId,
+            ScopeId = scopeId,
+        },
     };
 
     private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()

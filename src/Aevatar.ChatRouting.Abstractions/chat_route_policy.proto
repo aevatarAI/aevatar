@@ -95,23 +95,15 @@ message ForwardToModel {
   string model_name = 1;
 }
 
+// Refactor (iter92/cluster-793): Old: /v1/responses treated
+// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
+// the direct actor target; Studio member routing uses ForwardToStudioMember.
 message ForwardToGAgent {
-  // Identifier whose interpretation depends on ingress source_kind:
-  //   - CHAT_SOURCE_KIND_VOICE: raw Orleans grain key. The voice ingress
-  //     binds /ws/voice/{actorId} directly to this actor.
-  //   - CHAT_SOURCE_KIND_NYX_RELAY: raw Orleans grain key. Overrides
-  //     NeedsLlmReplyEvent.TargetActorId on the relay path so the LLM
-  //     reply is dispatched to the named ConversationGAgent actor.
-  //   - CHAT_SOURCE_KIND_NYX_RESPONSES (LLM facade): Studio memberId.
-  //     The LLM facade has no raw-actor binding path, so the field is
-  //     resolved via IMemberPublishedServiceResolver to a published
-  //     service id, then invoked through IStaticGAgentStreamInvocationPort.
-  //     This matches issue #588's invariant that every invoke resolves
-  //     to a member identity.
-  //   - CHAT_SOURCE_KIND_DIRECT (NyxIdChat create): raw Orleans grain key.
-  //     Overrides the default conversation actor id at create time.
-  // ADR-0024 §D5 documents this asymmetry. The field name `actor_id` is
-  // historical; per-ingress meaning is what matters.
+  // Direct actor / Orleans grain key target. Used only by GAgent-native
+  // ingress paths that can bind to a raw actor address (Voice, Nyx Relay,
+  // Direct NyxIdChat create). LLM facades such as /v1/responses must not
+  // interpret this as a Studio member identity; use ForwardToStudioMember
+  // for that contract.
   string actor_id = 1;
   // Optional voice module to attach to on the target actor. Only used
   // when source_kind = CHAT_SOURCE_KIND_VOICE; ignored otherwise.
@@ -150,6 +142,24 @@ message ForwardToTeam {
   string scope_id = 3;
 }
 
+// ForwardToStudioMember targets one Studio member's published GAgent service.
+// Refactor (iter92/cluster-793): Old: /v1/responses treated
+// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
+// the direct actor target; Studio member routing uses ForwardToStudioMember.
+// LLM facades resolve member_id via IMemberPublishedServiceResolver, then
+// dispatch through IStaticGAgentStreamInvocationPort<AGUIEvent>. This keeps
+// Studio member identity separate from ForwardToGAgent's direct actor target.
+message ForwardToStudioMember {
+  // Studio member id (REQUIRED).
+  string member_id = 1;
+  // Published service endpoint id. Empty means the conventional "chat"
+  // endpoint.
+  string endpoint_id = 2;
+  // Optional override scope id. Empty means "use the ingress URL/caller
+  // scope".
+  string scope_id = 3;
+}
+
 message ChatRouteAction {
   // tag 5 + name `bypass` were previously a `Bypass` oneof variant; removed
   // because the dev `/ws/voice/{actorId}` entry does not produce a
@@ -164,6 +174,7 @@ message ChatRouteAction {
     ForwardToWorkflow forward_to_workflow = 3;
     Reject reject = 4;
     ForwardToTeam forward_to_team = 6;
+    ForwardToStudioMember forward_to_studio_member = 7;
   }
 }
 
