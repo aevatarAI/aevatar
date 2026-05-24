@@ -37,7 +37,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (pcm16.IsEmpty) return;
-        await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
+        try
+        {
+            await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
+        }
+        catch
+        {
+            _completion.TrySetResult();
+            throw;
+        }
     }
 
     public async Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
@@ -46,7 +54,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         ArgumentNullException.ThrowIfNull(frame);
         var json = ControlJsonWriter.Format(frame);
         var bytes = Encoding.UTF8.GetBytes(json);
-        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+        try
+        {
+            await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+        }
+        catch
+        {
+            _completion.TrySetResult();
+            throw;
+        }
     }
 
     // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):

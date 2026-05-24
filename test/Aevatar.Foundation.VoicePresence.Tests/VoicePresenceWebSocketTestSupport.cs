@@ -35,6 +35,8 @@ internal sealed class FakeWebSocket : WebSocket
 
     public bool ThrowOnClose { get; set; }
 
+    public Exception? SendException { get; set; }
+
     public bool Disposed { get; private set; }
 
     public int CloseCalls { get; private set; }
@@ -130,6 +132,8 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = endOfMessage;
+        if (SendException != null)
+            throw SendException;
 
         if (messageType == WebSocketMessageType.Text)
         {
@@ -143,6 +147,28 @@ internal sealed class FakeWebSocket : WebSocket
         }
 
         return Task.CompletedTask;
+    }
+
+    public override ValueTask SendAsync(
+        ReadOnlyMemory<byte> buffer,
+        WebSocketMessageType messageType,
+        WebSocketMessageFlags flags,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SendException != null)
+            throw SendException;
+
+        if (messageType == WebSocketMessageType.Text)
+        {
+            SentTexts.Add(Encoding.UTF8.GetString(buffer.Span));
+        }
+        else if (messageType == WebSocketMessageType.Binary)
+        {
+            SentBinaries.Add(buffer.ToArray());
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     private readonly record struct ReceiveFrame(
