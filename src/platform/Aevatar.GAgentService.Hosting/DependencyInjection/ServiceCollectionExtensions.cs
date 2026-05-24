@@ -115,8 +115,8 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
             WorkflowCatalogCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<WorkflowCapabilitiesCurrentStateDocument>,
-            WorkflowCapabilitiesCurrentStateDocumentMetadataProvider>();
+            IProjectionDocumentMetadataProvider<WorkflowCapabilitiesStartupArtifact>,
+            WorkflowCapabilitiesStartupArtifactMetadataProvider>();
 
         if (documentProvider.ElasticsearchEnabled)
         {
@@ -133,7 +133,7 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
-            TryAddElasticsearchDocumentProjectionStore<WorkflowCapabilitiesCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<WorkflowCapabilitiesStartupArtifact>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -150,7 +150,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
-            TryAddInMemoryDocumentProjectionStore<WorkflowCapabilitiesCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<WorkflowCapabilitiesStartupArtifact>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -173,7 +173,7 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowCapabilitiesCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<WorkflowCapabilitiesStartupArtifact>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)
