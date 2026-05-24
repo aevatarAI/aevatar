@@ -31,6 +31,8 @@ public sealed class OwnerScopeProtoCompatibilityTests
     [Fact]
     public void OwnerScopeContainingFields_ShouldUseCanonicalFoundationType()
     {
+        OwnerScope.Descriptor.FullName.Should().Be("aevatar.OwnerScope");
+
         FieldMessageFullName(UserAgentCatalogEntry.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UserAgentCatalogUpsertCommand.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UserAgentCatalogDocument.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
@@ -39,6 +41,15 @@ public sealed class OwnerScopeProtoCompatibilityTests
         FieldMessageFullName(ChatRoutePolicyState.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(UpsertChatRoutePolicyRequested.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
         FieldMessageFullName(ChatRoutePolicyCurrentStateDocument.Descriptor, "owner_scope").Should().Be(OwnerScope.Descriptor.FullName);
+    }
+
+    [Fact]
+    public void OwnerScopeFields_ShouldPreserveCanonicalWireTags()
+    {
+        OwnerScope.Descriptor.FindFieldByName("nyx_user_id")!.FieldNumber.Should().Be(1);
+        OwnerScope.Descriptor.FindFieldByName("platform")!.FieldNumber.Should().Be(2);
+        OwnerScope.Descriptor.FindFieldByName("registration_scope_id")!.FieldNumber.Should().Be(3);
+        OwnerScope.Descriptor.FindFieldByName("sender_id")!.FieldNumber.Should().Be(4);
     }
 
     [Fact]
