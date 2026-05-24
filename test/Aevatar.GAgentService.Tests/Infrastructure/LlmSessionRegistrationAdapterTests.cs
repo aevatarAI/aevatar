@@ -257,6 +257,77 @@ public sealed class LlmSessionRegistrationAdapterTests
         await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
     }
 
+    [Fact]
+    public async Task RecordCompletionAsync_ShouldDispatchCompletionEnvelope_WithDefaultTimestamp()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = "forwarded done",
+            ToolCalls =
+            {
+                new LlmSessionCompletedToolCall
+                {
+                    CallId = "call-1",
+                    ToolName = "WebFetch",
+                    Result = ResponsesJsonValues.ParseBoundaryPayload("""{"ok":true}"""),
+                },
+            },
+        };
+
+        await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
+
+        dispatch.Calls.Should().ContainSingle();
+        dispatch.Calls[0].actorId.Should().Be("actor-1");
+        dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RecordResponseSessionCompletionRequested");
+        var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
+        packed.ResponseId.Should().Be("resp_1");
+        packed.Completion.OutputText.Should().Be("forwarded done");
+        packed.Completion.CompletedAt.Should().NotBeNull();
+        packed.Completion.ToolCalls.Should().ContainSingle()
+            .Which.CallId.Should().Be("call-1");
+    }
+
+    [Fact]
+    public async Task RecordCompletionAsync_ShouldPreservePresetTimestamp()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+        var preset = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-01T00:00:00+00:00"));
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = "done",
+            CompletedAt = preset,
+        };
+
+        await adapter.RecordCompletionAsync("actor-1", "resp_1", completion);
+
+        var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordResponseSessionCompletionRequested>();
+        packed.Completion.CompletedAt.Should().Be(preset);
+    }
+
+    [Theory]
+    [InlineData("", "resp_1", "sessionActorId")]
+    [InlineData("actor-1", "", "responseId")]
+    public async Task RecordCompletionAsync_ShouldRejectMissingArguments(string actorId, string respId, string param)
+    {
+        var (adapter, _, _) = CreateAdapter();
+        var completion = new LlmSessionCompletion();
+
+        var act = () => adapter.RecordCompletionAsync(actorId, respId, completion);
+
+        await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
+    }
+
+    [Fact]
+    public async Task RecordCompletionAsync_ShouldRejectNullCompletion()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var act = () => adapter.RecordCompletionAsync("actor-1", "resp_1", null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
     private static (LlmSessionRegistrationAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch) CreateAdapter()
     {
         var runtime = new RecordingRuntime();

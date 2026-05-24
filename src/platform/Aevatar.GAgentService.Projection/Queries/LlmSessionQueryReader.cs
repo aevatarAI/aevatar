@@ -8,6 +8,9 @@ using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
 {
     private readonly IProjectionDocumentReader<LlmSessionCurrentStateReadModel, string> _documentStore;
@@ -58,7 +61,29 @@ public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
                     call.EmittedAt,
                     call.ReceivedAt,
                     call.ResolvedAt))
-                .ToArray());
+                .ToArray(),
+            MapCompletion(readModel.Completion));
+
+    // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+    //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+    //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+    private static LlmSessionCompletionSnapshot? MapCompletion(LlmSessionCompletionReadModel? completion)
+    {
+        if (completion is null || completion.CompletedAt is null)
+            return null;
+
+        return new LlmSessionCompletionSnapshot(
+            completion.OutputText ?? string.Empty,
+            completion.ToolCalls
+                .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
+                    tool.CallId,
+                    tool.ToolName,
+                    ResponsesJsonValues.ToBoundaryJson(tool.Result)))
+                .ToArray(),
+            completion.CompletedAt,
+            string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+            string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage);
+    }
 
     /// <summary>
     /// For Expired calls without a caller-provided result, the boundary

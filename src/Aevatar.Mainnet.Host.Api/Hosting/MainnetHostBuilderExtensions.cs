@@ -44,6 +44,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class MainnetHostBuilderExtensions
 {
     public static WebApplicationBuilder AddAevatarMainnetHost(
@@ -121,6 +124,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
+        builder.Services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):

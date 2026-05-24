@@ -1,15 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.ChatRouting.Abstractions;
-using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Presentation.AGUI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -19,6 +12,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 internal static partial class ResponsesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -45,18 +41,14 @@ internal static partial class ResponsesApiEndpoints
         HttpContext http,
         ResponsesCreateRequest request,
         [FromServices] IResponsesCommandFacade commandFacade,
-        [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
-        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
-        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        [FromServices] IResponsesForwardingApplicationService forwardingService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(commandFacade);
-        ArgumentNullException.ThrowIfNull(teamEntryMemberResolver);
-        ArgumentNullException.ThrowIfNull(memberPublishedServiceResolver);
-        ArgumentNullException.ThrowIfNull(staticGAgentStreamInvocationPort);
+        ArgumentNullException.ThrowIfNull(forwardingService);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         var bearerToken = ExtractBearerToken(http);
@@ -86,9 +78,9 @@ internal static partial class ResponsesApiEndpoints
                 http,
                 result.Forward.Normalized,
                 result.Forward.CallerScope,
-                result.Forward.Action.ForwardToTeam,
-                teamEntryMemberResolver,
-                staticGAgentStreamInvocationPort,
+                result.Forward,
+                forwardingService,
+                bearerToken,
                 logger,
                 ct);
         }
@@ -99,9 +91,9 @@ internal static partial class ResponsesApiEndpoints
                 http,
                 result.Forward.Normalized,
                 result.Forward.CallerScope,
-                result.Forward.Action.ForwardToGagent,
-                memberPublishedServiceResolver,
-                staticGAgentStreamInvocationPort,
+                result.Forward,
+                forwardingService,
+                bearerToken,
                 logger,
                 ct);
         }
@@ -321,69 +313,17 @@ internal static partial class ResponsesApiEndpoints
             ct);
     }
 
-    /// <summary>
-    /// Handle a <see cref="ChatRouteAction.ForwardToTeam"/> decision: resolve the
-    /// team's entry member to a Studio published service, invoke it as an
-    /// ephemeral GAgent run via <see cref="IStaticGAgentStreamInvocationPort{TFrame}"/>,
-    /// and map the AGUI event stream back to OpenAI Responses (SSE or JSON).
-    ///
-    /// Bypasses LLM session/provider/llmRequest entirely — the response id
-    /// the caller sees is the normalized response id; per-turn run lifecycle
-    /// belongs to the team entry member's actor.
-    /// </summary>
     private static async Task<IResult> HandleForwardToTeamAsync(
         HttpContext http,
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
-        ForwardToTeam forwardToTeam,
-        ITeamEntryMemberResolver teamEntryMemberResolver,
-        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ResponsesForwardCommandResult forwardPlan,
+        IResponsesForwardingApplicationService forwardingService,
+        string bearerToken,
         ILogger logger,
         CancellationToken ct)
     {
-        var teamId = forwardToTeam.TeamId?.Trim() ?? string.Empty;
-        var endpointId = forwardToTeam.EndpointId?.Trim() ?? string.Empty;
-        if (teamId.Length == 0)
-            return ToErrorResult(
-                StatusCodes.Status500InternalServerError,
-                "chat_route_invalid",
-                "ForwardToTeam decision missing team_id.");
-        if (endpointId.Length == 0)
-            return ToErrorResult(
-                StatusCodes.Status500InternalServerError,
-                "chat_route_invalid",
-                "ForwardToTeam decision missing endpoint_id.");
-
-        // ForwardToTeam.scope_id is reserved for future cross-scope routing;
-        // v1 stamps the caller's ingress scope and ignores conflicting overrides.
-        var scopeId = callerScope.ScopeId;
-
-        TeamEntryMemberResolution resolution;
-        try
-        {
-            resolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
-        }
-        catch (TeamEntryMemberResolutionException ex)
-        {
-            return ToErrorResult(
-                ResolveTeamEntryHttpStatusCode(ex.Code),
-                ex.Code,
-                ex.Message);
-        }
-
-        var identity = new ServiceIdentity
-        {
-            TenantId = resolution.ScopeId,
-            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
-            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-            ServiceId = resolution.PublishedServiceId,
-        };
-        var input = new StaticGAgentStreamInvocationInput(
-            Prompt: normalized.Prompt ?? string.Empty,
-            SessionId: normalized.ResponseId,
-            Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
-        var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, endpointId, input);
-        var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
 
         if (normalized.Stream)
         {
@@ -391,8 +331,9 @@ internal static partial class ResponsesApiEndpoints
                 http.Response,
                 normalized,
                 createdAt,
-                invocationRequest,
-                staticGAgentStreamInvocationPort,
+                forwardPlan,
+                forwardingService,
+                bearerToken,
                 logger,
                 ct);
             return Results.Empty;
@@ -401,77 +342,24 @@ internal static partial class ResponsesApiEndpoints
         return await CollectAGuiBackedResponseAsync(
             normalized,
             createdAt,
-            invocationRequest,
-            staticGAgentStreamInvocationPort,
+            forwardPlan,
+            forwardingService,
+            bearerToken,
             logger,
             ct);
     }
 
-    /// <summary>
-    /// Handle a <see cref="ChatRouteAction.ForwardToGagent"/> decision on the LLM
-    /// facade: resolve <see cref="ForwardToGAgent.ActorId"/> as a Studio
-    /// <c>memberId</c> via <see cref="IMemberPublishedServiceResolver"/>, then
-    /// invoke the resulting published service via
-    /// <see cref="IStaticGAgentStreamInvocationPort{TFrame}"/> and map AGUI events
-    /// back to OpenAI Responses (SSE or JSON).
-    ///
-    /// Endpoint selection: ForwardToGAgent has no <c>endpoint_id</c> field, so the
-    /// caller is steered toward the default chat endpoint
-    /// (<see cref="DefaultGAgentChatEndpointId"/>). This matches the contract a
-    /// chat-route policy author can reasonably express through ForwardToGAgent —
-    /// a single named GAgent run with no per-rule endpoint customization. Authors
-    /// who need an explicit endpoint should switch to ForwardToTeam (which does
-    /// carry endpoint_id) or to a direct Studio invoke URL.
-    /// </summary>
     private static async Task<IResult> HandleForwardToGAgentAsync(
         HttpContext http,
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
-        ForwardToGAgent forwardToGAgent,
-        IMemberPublishedServiceResolver memberPublishedServiceResolver,
-        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ResponsesForwardCommandResult forwardPlan,
+        IResponsesForwardingApplicationService forwardingService,
+        string bearerToken,
         ILogger logger,
         CancellationToken ct)
     {
-        var memberId = forwardToGAgent.ActorId?.Trim() ?? string.Empty;
-        if (memberId.Length == 0)
-            return ToErrorResult(
-                StatusCodes.Status500InternalServerError,
-                "chat_route_invalid",
-                "ForwardToGAgent decision missing actor_id.");
-
-        MemberPublishedServiceResolution resolution;
-        try
-        {
-            resolution = await memberPublishedServiceResolver.ResolveAsync(
-                new MemberPublishedServiceResolveRequest(callerScope.ScopeId, memberId),
-                ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // The resolver's normalization (empty / disallowed separator chars in
-            // memberId) raises InvalidOperationException. Surface as a structured
-            // 400 so the caller sees a real error code, not the resolver's bare
-            // message bubbling up through generic exception handling.
-            return ToErrorResult(
-                StatusCodes.Status400BadRequest,
-                "chat_route_invalid",
-                ex.Message);
-        }
-
-        var identity = new ServiceIdentity
-        {
-            TenantId = resolution.ScopeId,
-            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
-            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-            ServiceId = resolution.PublishedServiceId,
-        };
-        var input = new StaticGAgentStreamInvocationInput(
-            Prompt: normalized.Prompt ?? string.Empty,
-            SessionId: normalized.ResponseId,
-            Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
-        var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, DefaultGAgentChatEndpointId, input);
-        var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
 
         if (normalized.Stream)
         {
@@ -479,8 +367,9 @@ internal static partial class ResponsesApiEndpoints
                 http.Response,
                 normalized,
                 createdAt,
-                invocationRequest,
-                staticGAgentStreamInvocationPort,
+                forwardPlan,
+                forwardingService,
+                bearerToken,
                 logger,
                 ct);
             return Results.Empty;
@@ -489,46 +378,20 @@ internal static partial class ResponsesApiEndpoints
         return await CollectAGuiBackedResponseAsync(
             normalized,
             createdAt,
-            invocationRequest,
-            staticGAgentStreamInvocationPort,
+            forwardPlan,
+            forwardingService,
+            bearerToken,
             logger,
             ct);
-    }
-
-    /// <summary>
-    /// Default endpoint id used when ForwardToGAgent forwards to a single Studio
-    /// member without naming an explicit endpoint. Members published by Studio's
-    /// member-first authoring flow expose this as their canonical chat entry.
-    /// </summary>
-    internal const string DefaultGAgentChatEndpointId = "chat";
-
-    private static Dictionary<string, string> BuildStaticGAgentInvocationHeaders(
-        HttpContext http,
-        NormalizedResponsesRequest normalized,
-        ResponsesCallerScope callerScope)
-    {
-        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
-            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-        };
-
-        var bearerToken = ExtractBearerToken(http);
-        if (!string.IsNullOrWhiteSpace(bearerToken))
-        {
-            headers[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-            headers[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-        }
-
-        return headers;
     }
 
     private static async Task WriteAGuiBackedResponseStreamAsync(
         HttpResponse response,
         NormalizedResponsesRequest normalized,
         long createdAt,
-        StaticGAgentStreamInvocationRequest invocationRequest,
-        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ResponsesForwardCommandResult forwardPlan,
+        IResponsesForwardingApplicationService forwardingService,
+        string bearerToken,
         ILogger logger,
         CancellationToken ct)
     {
@@ -537,226 +400,160 @@ internal static partial class ResponsesApiEndpoints
         response.Headers.CacheControl = "no-store";
         response.Headers.Pragma = "no-cache";
         response.Headers["X-Accel-Buffering"] = "no";
-        await response.StartAsync(ct);
 
+        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
         var adapter = new AGUIEventToResponsesSseAdapter(
             response,
             normalized.ResponseId,
             normalized.MessageItemId,
             JsonOptions);
-        await adapter.WriteCreatedAsync(
-            BuildCreatedResponse(normalized, createdAt),
-            BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
-            ct);
 
         try
         {
-            var result = await staticGAgentStreamInvocationPort.InvokeAsync(
-                invocationRequest,
-                emitAsync: adapter.WriteAsync,
-                onAcceptedAsync: null,
+            await response.StartAsync(ct);
+            await adapter.WriteCreatedAsync(
+                BuildCreatedResponse(normalized, createdAt),
+                BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
                 ct);
-            if (!result.Succeeded)
+
+            var result = await forwardingService.ForwardAsync(
+                forwardPlan,
+                bearerToken,
+                async (evt, token) => await adapter.WriteAsync(evt, token),
+                ct);
+            if (result.Error is not null)
             {
-                await adapter.WriteFailureAsync(
-                    result.StartError.ToString().ToLowerInvariant(),
-                    "GAgent invocation could not be started.",
-                    ct);
+                if (!adapter.HasFailed)
+                {
+                    await adapter.WriteFailureAsync(result.Error.Code, result.Error.Message, ct);
+                }
                 return;
             }
 
-            if (adapter.HasFailed || result.CompletionStatus == GAgentDraftRunCompletionStatus.Failed)
+            var completion = result.Snapshot!.Completion!;
+            if (!string.IsNullOrWhiteSpace(completion.FailureCode))
             {
                 if (!adapter.HasFailed)
                 {
                     await adapter.WriteFailureAsync(
-                        "gagent_invocation_failed",
-                        "GAgent invocation failed.",
+                        completion.FailureCode!,
+                        completion.FailureMessage ?? "GAgent invocation failed.",
                         ct);
                 }
                 return;
             }
 
             await adapter.WriteCompletedAsync(
+                completion,
                 buildCompletedMessageItem: text => BuildOutputMessage(normalized.MessageItemId, "completed", text),
                 buildFunctionCallItem: tool => BuildFunctionCallOutputItem(new ToolCall
                 {
-                    Id = tool.ToolCallId,
+                    Id = tool.CallId,
                     Name = tool.ToolName,
-                    ArgumentsJson = tool.Result ?? "{}",
+                    ArgumentsJson = tool.ResultJson ?? "{}",
                 }),
-                buildCompletedResponse: text => BuildCompletedResponse(
+                buildCompletedResponse: snapshot => BuildCompletedResponse(
                     normalized,
                     createdAt,
-                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    text,
-                    adapter.CompletedToolCalls
-                        .Select(tc => new ToolCall
+                    snapshot.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    snapshot.OutputText,
+                    snapshot.ToolCalls
+                        .Select(static tc => new ToolCall
                         {
-                            Id = tc.ToolCallId,
+                            Id = tc.CallId,
                             Name = tc.ToolName,
-                            ArgumentsJson = tc.Result ?? "{}",
+                            ArgumentsJson = tc.ResultJson ?? "{}",
                         })
                         .ToArray(),
                     usage: null),
                 ct);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            // Client aborted; nothing to forward.
-        }
-        catch (InvalidOperationException ex) when (IsServiceNotFoundException(ex))
-        {
-            logger.LogWarning(ex, "AGUI-backed stream invocation resolved to unknown service for response {ResponseId}", normalized.ResponseId);
-            await adapter.WriteFailureAsync(
-                "gagent_target_not_found",
-                ex.Message,
-                ct);
+            await forwardingService.RecordForwardedFailureAsync(
+                forwardPlan,
+                "request_timeout",
+                "Request timed out.",
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "AGUI-backed stream invocation failed for response {ResponseId}", normalized.ResponseId);
-            await adapter.WriteFailureAsync(
+            logger.LogError(ex, "AGUI-backed stream rendering failed for response {ResponseId}", normalized.ResponseId);
+            await forwardingService.RecordForwardedFailureAsync(
+                forwardPlan,
                 "gagent_invocation_failed",
                 "GAgent invocation failed mid-stream.",
-                ct);
+                CancellationToken.None);
+            try
+            {
+                await adapter.WriteFailureAsync(
+                    "gagent_invocation_failed",
+                    "GAgent invocation failed mid-stream.",
+                    ct);
+            }
+            catch (Exception writeEx)
+            {
+                logger.LogWarning(
+                    writeEx,
+                    "Failed to write AGUI-backed stream failure frame for response {ResponseId}",
+                    normalized.ResponseId);
+            }
         }
     }
-
-    /// <summary>
-    /// Recognizes the <see cref="InvalidOperationException"/> raised by the
-    /// service-invocation resolution layer when the resolved
-    /// <c>publishedServiceId</c> isn't registered as a Studio service. The
-    /// resolver layer doesn't define a typed exception for this case (it's
-    /// raised from <c>ServiceInvocationResolutionService.ResolveAsync</c> with
-    /// a deterministic message prefix), so we match by message shape. Keeps
-    /// chat-route policy authors out of the generic 500 bucket.
-    /// </summary>
-    private static bool IsServiceNotFoundException(InvalidOperationException ex) =>
-        ex.Message.StartsWith("Service '", StringComparison.Ordinal) &&
-        ex.Message.Contains("was not found", StringComparison.Ordinal);
 
     private static async Task<IResult> CollectAGuiBackedResponseAsync(
         NormalizedResponsesRequest normalized,
         long createdAt,
-        StaticGAgentStreamInvocationRequest invocationRequest,
-        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ResponsesForwardCommandResult forwardPlan,
+        IResponsesForwardingApplicationService forwardingService,
+        string bearerToken,
         ILogger logger,
         CancellationToken ct)
     {
-        var aggregatedText = new StringBuilder();
-        var completedToolCalls = new List<ToolCall>();
-        var toolCallNames = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? failureCode = null;
-        string? failureMessage = null;
-
-        async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
-        {
-            switch (evt.EventCase)
-            {
-                case AGUIEvent.EventOneofCase.TextMessageContent:
-                    var delta = evt.TextMessageContent?.Delta;
-                    if (!string.IsNullOrEmpty(delta))
-                        aggregatedText.Append(delta);
-                    break;
-                case AGUIEvent.EventOneofCase.ToolCallStart:
-                    if (!string.IsNullOrWhiteSpace(evt.ToolCallStart?.ToolCallId))
-                        toolCallNames[evt.ToolCallStart.ToolCallId] = evt.ToolCallStart.ToolName ?? string.Empty;
-                    break;
-                case AGUIEvent.EventOneofCase.ToolCallEnd:
-                    var endId = evt.ToolCallEnd?.ToolCallId;
-                    if (string.IsNullOrWhiteSpace(endId))
-                        break;
-                    var name = toolCallNames.GetValueOrDefault(endId!, string.Empty);
-                    completedToolCalls.Add(new ToolCall
-                    {
-                        Id = endId!,
-                        Name = name,
-                        ArgumentsJson = evt.ToolCallEnd?.Result ?? "{}",
-                    });
-                    break;
-                case AGUIEvent.EventOneofCase.RunError:
-                    failureCode = string.IsNullOrWhiteSpace(evt.RunError?.Code)
-                        ? "gagent_invocation_failed"
-                        : evt.RunError!.Code;
-                    failureMessage = string.IsNullOrWhiteSpace(evt.RunError?.Message)
-                        ? "GAgent invocation failed."
-                        : evt.RunError!.Message;
-                    break;
-            }
-            await ValueTask.CompletedTask;
-        }
-
         try
         {
-            var result = await staticGAgentStreamInvocationPort.InvokeAsync(
-                invocationRequest,
-                emitAsync: EmitAsync,
-                onAcceptedAsync: null,
-                ct);
-            if (!result.Succeeded)
-            {
-                return ToErrorResult(
-                    StatusCodes.Status502BadGateway,
-                    result.StartError.ToString().ToLowerInvariant(),
-                    "GAgent invocation could not be started.");
-            }
-            if (failureMessage is not null || result.CompletionStatus == GAgentDraftRunCompletionStatus.Failed)
-            {
+            var result = await forwardingService.ForwardAsync(forwardPlan, bearerToken, onEventAsync: null, ct);
+            if (result.Error is not null)
+                return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
+
+            var completion = result.Snapshot!.Completion!;
+            if (!string.IsNullOrWhiteSpace(completion.FailureCode))
                 return ToErrorResult(
                     StatusCodes.Status500InternalServerError,
-                    failureCode ?? "gagent_invocation_failed",
-                    failureMessage ?? "GAgent invocation failed.");
-            }
+                    completion.FailureCode!,
+                    completion.FailureMessage ?? "GAgent invocation failed.");
+
+            var completed = BuildCompletedResponse(
+                normalized,
+                createdAt,
+                completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                completion.OutputText,
+                completion.ToolCalls
+                    .Select(static tc => new ToolCall
+                    {
+                        Id = tc.CallId,
+                        Name = tc.ToolName,
+                        ArgumentsJson = tc.ResultJson ?? "{}",
+                    })
+                    .ToArray(),
+                usage: null);
+            return Results.Json(completed, statusCode: StatusCodes.Status200OK);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             return Results.StatusCode(StatusCodes.Status408RequestTimeout);
         }
-        catch (InvalidOperationException ex) when (IsServiceNotFoundException(ex))
-        {
-            // The static port's resolution service throws InvalidOperationException
-            // with "Service '<...>' was not found." when ForwardToTeam/ForwardToGAgent
-            // resolves to a publishedServiceId that isn't actually registered as a
-            // Studio service (e.g. chat-route policy points at a member that was
-            // never bound). Surface as structured 404 so chat-route authors can
-            // distinguish "configured wrong" from "service crashed".
-            logger.LogWarning(ex, "AGUI-backed invocation resolved to unknown service for response {ResponseId}", normalized.ResponseId);
-            return ToErrorResult(
-                StatusCodes.Status404NotFound,
-                "gagent_target_not_found",
-                ex.Message);
-        }
         catch (Exception ex)
         {
-            logger.LogError(ex, "AGUI-backed invocation failed for response {ResponseId}", normalized.ResponseId);
+            logger.LogError(ex, "AGUI-backed response rendering failed for response {ResponseId}", normalized.ResponseId);
             return ToErrorResult(
                 StatusCodes.Status500InternalServerError,
                 "gagent_invocation_failed",
                 "GAgent invocation failed.");
         }
-
-        var completed = BuildCompletedResponse(
-            normalized,
-            createdAt,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            aggregatedText.ToString(),
-            completedToolCalls,
-            usage: null);
-        return Results.Json(completed, statusCode: StatusCodes.Status200OK);
     }
-
-    private static int ResolveTeamEntryHttpStatusCode(string code) =>
-        code switch
-        {
-            TeamEntryMemberErrorCodes.TeamNotFound => StatusCodes.Status404NotFound,
-            TeamEntryMemberErrorCodes.EntryMemberNotFound => StatusCodes.Status404NotFound,
-            TeamEntryMemberErrorCodes.TeamArchived => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberNotConfigured => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberMismatch => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberNotReady => StatusCodes.Status503ServiceUnavailable,
-            _ => StatusCodes.Status400BadRequest,
-        };
 
     private static ResponsesResponseSnapshot BuildCreatedResponse(
         NormalizedResponsesRequest normalized,

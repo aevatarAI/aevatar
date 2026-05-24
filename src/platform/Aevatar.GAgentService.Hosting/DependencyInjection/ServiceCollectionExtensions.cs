@@ -37,6 +37,9 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Hosting.DependencyInjection;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddGAgentServiceCapability(
@@ -66,6 +69,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
+        services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
