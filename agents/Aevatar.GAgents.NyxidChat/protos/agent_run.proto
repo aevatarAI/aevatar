@@ -68,9 +68,24 @@ message AgentRunGAgentState {
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
 // a short-lived relay reply_token; AgentRunGAgent must never persist that
-// credential into AgentRunGAgentState or any AgentRun*Event.
+// credential into AgentRunGAgentState, AgentRun*Event facts, or durable
+// scheduler callback payloads.
 message AgentRunStartRequested {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 1;
+}
+
+// Durable output-dispatch retry signal emitted by the callback scheduler.
+// Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+//   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+//   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+message AgentRunOutputDispatchRetryRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int64 generation = 5;
+  int64 requested_at_unix_ms = 6;
+  bool requires_runtime_reply_token = 7;
 }
 
 message AgentRunCleanupRequested {

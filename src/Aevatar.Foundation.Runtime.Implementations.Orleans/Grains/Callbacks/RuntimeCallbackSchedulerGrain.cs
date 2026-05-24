@@ -9,6 +9,9 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
 public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSchedulerGrain, IRemindable
 {
+    // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+    //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+    //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
     private const string ReminderNamePrefix = "runtime-callback:";
     private const string SchedulerStateName = "runtime-callback-scheduler-v2";
     private const int SchedulerSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2;
@@ -117,6 +120,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         ArgumentNullException.ThrowIfNull(triggerEnvelope);
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTimeMs, 0);
+        DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
     }
 
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)

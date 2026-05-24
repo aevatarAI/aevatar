@@ -304,6 +304,12 @@ message LarkCardOperationCompletedEvent {
 }
 
 message LarkCardOperationTimeoutFiredEvent {
+  // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+  //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+  //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+  reserved 8;
+  reserved "chunk";
+
   string correlation_id = 1;
   LarkCardOperationPhase operation = 2;
   int64 sequence = 3;
@@ -311,7 +317,6 @@ message LarkCardOperationTimeoutFiredEvent {
   string card_id = 5;
   string card_message_id = 6;
   string command_id = 7;
-  LlmReplyCardStreamChunkEvent chunk = 8;
   aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
   string final_text = 10;
   string last_flushed_text = 11;

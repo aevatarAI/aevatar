@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -96,17 +97,118 @@ public sealed class LarkCardOperationSignalTests
         completed.SentActivityId.Should().Be("lark-card-stream:om_orphan");
     }
 
+    [Fact]
+    public async Task HandleLlmReplyCardStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
+    {
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
+        var agent = CreateAgent(
+            "conv-lark-card-timeout-sanitize",
+            new RecordingCardRunner(),
+            new RecordingActorDispatchPort(),
+            new InMemoryEventStore(),
+            callbackHarness.Scheduler);
+
+        await agent.HandleEventAsync(Envelope("conv-lark-card-timeout-sanitize",
+            CreateCardStreamChunk("corr-card-timeout-token", "relay-msg-1", "hello")));
+
+        var scheduled = callbackHarness.Timeouts.Should().ContainSingle().Subject;
+        var timeout = scheduled.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
+        timeout.CorrelationId.Should().Be("corr-card-timeout-token");
+        timeout.Operation.Should().Be(LarkCardOperationPhase.Create);
+
+        var persistedText = Encoding.UTF8.GetString(scheduled.TriggerEnvelope.ToByteArray());
+        persistedText.Should().NotContain("runtime-token-corr-card-timeout-token");
+        persistedText.Should().NotContain("runtime-user-access-token-corr-card-timeout-token");
+        persistedText.Should().NotContain("reply_token");
+        persistedText.Should().NotContain("reply_token_expires_at_unix_ms");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_FinalizeTimeoutPayload_StripsActivityRuntimeRelayCredentials()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            "conv-lark-card-finalize-timeout-sanitize",
+            new RecordingCardRunner(),
+            new RecordingActorDispatchPort(),
+            new InMemoryEventStore(),
+            scheduler);
+        var chunk = CreateCardStreamChunk("corr-card-finalize-token", "relay-msg-1", "hello");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, chunk));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleEventAsync(Envelope(agent.Id,
+            new LarkCardOperationCompletedEvent
+            {
+                OperationId = "corr-card-finalize-token:create:1:1",
+                CorrelationId = "corr-card-finalize-token",
+                Operation = LarkCardOperationPhase.Create,
+                Sequence = lifecycle.LarkCardInFlightSequence,
+                OperationGeneration = lifecycle.LarkCardOperationGeneration,
+                State = LarkCardOperationResultState.Succeeded,
+                Chunk = chunk.Clone(),
+                RawResult = new LarkCardOperationRawResult
+                {
+                    CardId = "card_ok",
+                    CardMessageId = "om_card_msg",
+                },
+            }));
+        scheduler.Timeouts.Clear();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-card-finalize-token",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = chunk.Activity.Clone(),
+            Outbound = new MessageContent { Text = "final text" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "runtime-ready-token-corr-card-finalize-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReadyAtUnixMs = 100,
+        });
+
+        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        var timeout = scheduled.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
+        timeout.Operation.Should().Be(LarkCardOperationPhase.Finalize);
+        timeout.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+        timeout.Activity.TransportExtras.NyxAgentApiKeyId.Should().Be("nyx-key-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxPlatform.Should().Be("lark");
+        timeout.Activity.TransportExtras.NyxConversationId.Should().Be("oc-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxPlatformMessageId.Should().Be("om-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxLarkUnionId.Should().Be("on-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc-lark-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxRegistrationScopeId.Should().Be("scope-corr-card-finalize-token");
+        timeout.Activity.TransportExtras.NyxSenderUserId.Should().Be("user-corr-card-finalize-token");
+
+        var persistedText = Encoding.UTF8.GetString(scheduled.TriggerEnvelope.ToByteArray());
+        persistedText.Should().NotContain("runtime-user-access-token-corr-card-finalize-token");
+        persistedText.Should().NotContain("runtime-ready-token-corr-card-finalize-token");
+        persistedText.Should().NotContain("nyx_user_access_token");
+        persistedText.Should().NotContain("reply_token");
+
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
+        await callbackHarness.Scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = agent.Id,
+            CallbackId = "lark-card-finalize-timeout-sanitized",
+            TriggerEnvelope = scheduled.TriggerEnvelope.Clone(),
+            DueTime = TimeSpan.FromMinutes(1),
+        });
+    }
+
     private static ConversationGAgent CreateAgent(
         string id,
         IConversationCardTurnRunner cardRunner,
         IActorDispatchPort dispatch,
-        IEventStore store)
+        IEventStore store,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton(dispatch)
             .AddSingleton(cardRunner)
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+            .AddSingleton(callbackScheduler ?? new NoopCallbackScheduler())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -188,6 +290,18 @@ public sealed class LarkCardOperationSignalTests
                     ReplyMessageId = replyMessageId,
                     CorrelationId = correlationId,
                 },
+                TransportExtras = new TransportExtras
+                {
+                    NyxUserAccessToken = "runtime-user-access-token-" + correlationId,
+                    NyxAgentApiKeyId = "nyx-key-" + correlationId,
+                    NyxPlatform = "lark",
+                    NyxConversationId = "oc-" + correlationId,
+                    NyxPlatformMessageId = "om-" + correlationId,
+                    NyxLarkUnionId = "on-" + correlationId,
+                    NyxLarkChatId = "oc-lark-" + correlationId,
+                    NyxRegistrationScopeId = "scope-" + correlationId,
+                    NyxSenderUserId = "user-" + correlationId,
+                },
             },
             AccumulatedText = accumulatedText,
             ChunkAtUnixMs = 42,
@@ -245,6 +359,44 @@ public sealed class LarkCardOperationSignalTests
             var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
             return envelope.Payload.Unpack<T>();
         }
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Timeouts.Add(new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            });
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class InMemoryEventStore : IEventStore

@@ -341,6 +341,9 @@ public sealed partial class ConversationGAgent
         string? lastFlushedText,
         CancellationToken ct)
     {
+        // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+        //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+        //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
         await ScheduleSelfDurableTimeoutAsync(
             BuildLarkCardOperationTimeoutCallbackId(correlationId, operation, generation),
             StreamingFailureUpdateTimeout,
@@ -353,8 +356,7 @@ public sealed partial class ConversationGAgent
                 CardId = cardId ?? string.Empty,
                 CardMessageId = cardMessageId ?? string.Empty,
                 CommandId = commandId ?? string.Empty,
-                Chunk = chunk?.Clone(),
-                Activity = activity?.Clone(),
+                Activity = CloneForDurableState(activity),
                 FinalText = finalText ?? string.Empty,
                 LastFlushedText = lastFlushedText ?? string.Empty,
                 FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -1012,7 +1014,7 @@ public sealed partial class ConversationGAgent
                         InFlight = null,
                         PendingAccumulatedText = null,
                     });
-                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, evt.Chunk);
+                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, sourceChunk: null);
                 return;
             }
 
@@ -1222,8 +1224,6 @@ public sealed partial class ConversationGAgent
                     LarkCardStreamingPhase.CreationFailed,
                     terminalReason: "create_timeout",
                     fieldUpdate: s => s with { InFlight = null });
-                if (evt.Chunk is not null)
-                    await HandleNyxRelayStreamingChunkCoreAsync(ToTextStreamChunk(evt.Chunk));
                 return;
             case LarkCardOperationPhase.Stream:
             {
@@ -1237,7 +1237,7 @@ public sealed partial class ConversationGAgent
                         InFlight = null,
                         PendingAccumulatedText = null,
                     });
-                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, evt.Chunk);
+                await ContinueLarkCardCoalescedWorkAsync(correlationId, recovered, sourceChunk: null);
                 return;
             }
             case LarkCardOperationPhase.Finalize:

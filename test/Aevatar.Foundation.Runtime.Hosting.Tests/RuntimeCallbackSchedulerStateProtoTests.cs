@@ -5,8 +5,10 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Orleans.Runtime;
+using Aevatar.Workflow.Core;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -200,6 +202,75 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
     }
 
     [Fact]
+    public async Task RuntimeCallbackSchedulerGrain_ShouldRejectCredentialEnvelopeBeforePersistingTypedState()
+    {
+        var persistentState =
+            DispatchProxy.Create<IPersistentState<RuntimeCallbackSchedulerState>, RuntimeCallbackPersistentStateProxy>();
+        var grain = new RuntimeCallbackSchedulerGrain(persistentState);
+        var envelope = CreateEnvelope(
+            "evt-credential",
+            new NeedsCredentialPayload
+            {
+                ReplyToken = "runtime-reply-token",
+            });
+
+        var act = () => grain.ScheduleTimeoutAsync("credential-callback", envelope, dueTimeMs: 100);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reply_token*");
+        persistentState.State.ReminderCallbacks.Should().BeEmpty();
+        ((RuntimeCallbackPersistentStateProxy)(object)persistentState).WriteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void DurableCallbackEnvelopeCredentialGuard_ShouldWalkNestedRepeatedAndMapMessages()
+    {
+        var repeatedPayload = new EventStoreCommitResult
+        {
+            CommittedEvents =
+            {
+                new StateEvent
+                {
+                    EventData = Any.Pack(new NeedsCredentialPayload
+                    {
+                        ReplyToken = "runtime-reply-token",
+                    }),
+                },
+            },
+        };
+        var mapPayload = new WorkflowRunState
+        {
+            PendingChildRunIdsByParentRunId =
+            {
+                ["parent"] = new WorkflowRunState.Types.ChildRunIdSet
+                {
+                    ChildRunIds = { "child-1" },
+                },
+            },
+            ExecutionStates =
+            {
+                ["credential"] = Any.Pack(new NeedsCredentialPayload
+                {
+                    ReplyToken = "runtime-reply-token",
+                }),
+            },
+        };
+
+        var repeatedAct = () => DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(
+            CreateEnvelope("evt-repeated", repeatedPayload));
+        var mapAct = () => DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(
+            CreateEnvelope("evt-map", mapPayload));
+
+        repeatedAct.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*committed_events[0].event_data*aevatar.foundation.runtime.hosting.tests.NeedsCredentialPayload*.reply_token*");
+        mapAct.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*execution_states[credential]*aevatar.foundation.runtime.hosting.tests.NeedsCredentialPayload*.reply_token*");
+    }
+
+    [Fact]
     public void RuntimeCallbackSchedulerGrainBoundary_ShouldAcceptTypedEventEnvelope()
     {
         var scheduleTimeout = typeof(IRuntimeCallbackSchedulerGrain).GetMethod(
@@ -274,10 +345,13 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .WithInnerException<ArgumentOutOfRangeException>();
     }
 
-    private static EventEnvelope CreateEnvelope(string id) => new()
+    private static EventEnvelope CreateEnvelope(string id) =>
+        CreateEnvelope(id, new StringValue { Value = "payload" });
+
+    private static EventEnvelope CreateEnvelope(string id, IMessage payload) => new()
     {
         Id = id,
-        Payload = Any.Pack(new StringValue { Value = "payload" }),
+        Payload = Any.Pack(payload),
         Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-1"),
     };
 
@@ -342,4 +416,81 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             return type.IsValueType ? Activator.CreateInstance(type) : null;
         }
     }
+}
+
+public sealed partial class NeedsCredentialPayload : IMessage<NeedsCredentialPayload>
+{
+    private static readonly MessageParser<NeedsCredentialPayload> MessageParser =
+        new(() => new NeedsCredentialPayload());
+
+    public static MessageParser<NeedsCredentialPayload> Parser => MessageParser;
+
+    public static MessageDescriptor Descriptor =>
+        NeedsCredentialPayloadReflection.Descriptor.MessageTypes[0];
+
+    MessageDescriptor IMessage.Descriptor => Descriptor;
+
+    public string ReplyToken { get; set; } = string.Empty;
+
+    public NeedsCredentialPayload()
+    {
+    }
+
+    public NeedsCredentialPayload(NeedsCredentialPayload other)
+    {
+        ReplyToken = other.ReplyToken;
+    }
+
+    public NeedsCredentialPayload Clone() => new(this);
+
+    public bool Equals(NeedsCredentialPayload? other) =>
+        other is not null && string.Equals(ReplyToken, other.ReplyToken, StringComparison.Ordinal);
+
+    public override bool Equals(object? obj) => Equals(obj as NeedsCredentialPayload);
+
+    public override int GetHashCode() => ReplyToken.GetHashCode(StringComparison.Ordinal);
+
+    public void WriteTo(CodedOutputStream output)
+    {
+        if (ReplyToken.Length != 0)
+        {
+            output.WriteRawTag(10);
+            output.WriteString(ReplyToken);
+        }
+    }
+
+    public int CalculateSize() =>
+        ReplyToken.Length == 0 ? 0 : 1 + CodedOutputStream.ComputeStringSize(ReplyToken);
+
+    public void MergeFrom(NeedsCredentialPayload other)
+    {
+        if (other.ReplyToken.Length != 0)
+            ReplyToken = other.ReplyToken;
+    }
+
+    public void MergeFrom(CodedInputStream input)
+    {
+        uint tag;
+        while ((tag = input.ReadTag()) != 0)
+        {
+            if (tag == 10)
+                ReplyToken = input.ReadString();
+            else
+                input.SkipLastField();
+        }
+    }
+}
+
+public static class NeedsCredentialPayloadReflection
+{
+    private static readonly FileDescriptor FileDescriptor = FileDescriptor.FromGeneratedCode(
+        Convert.FromBase64String(
+            "CiN0ZXN0X25lZWRzX2NyZWRlbnRpYWxfcGF5bG9hZC5wcm90bxIoYWV2YXRhci5mb3VuZGF0aW9uLnJ1bnRpbWUuaG9zdGluZy50ZXN0cyItChZOZWVkc0NyZWRlbnRpYWxQYXlsb2FkEhMKC3JlcGx5X3Rva2VuGAEgASgJYgZwcm90bzM="),
+        [],
+        new GeneratedClrTypeInfo(
+            null,
+            null,
+            [new GeneratedClrTypeInfo(typeof(NeedsCredentialPayload), NeedsCredentialPayload.Parser, ["ReplyToken"], null, null, null, null)]));
+
+    public static FileDescriptor Descriptor => FileDescriptor;
 }
