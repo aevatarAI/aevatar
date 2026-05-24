@@ -5,15 +5,20 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.Hosting;
+using Orleans.Runtime;
+using Orleans.Runtime.Hosting;
+using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -33,11 +38,23 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
             var generation = await grain.ScheduleTimeoutAsync("lark-card-sanitized", sanitized, dueTimeMs: 60000);
             generation.Should().Be(1);
 
+            var stateAfterSanitized = await ReadSchedulerStateAsync(host, grain);
+            stateAfterSanitized.ReminderCallbacks.Should().ContainSingle();
+            stateAfterSanitized.ReminderCallbacks.Should().ContainKey("lark-card-sanitized");
+            var persistedLarkCard = stateAfterSanitized.ReminderCallbacks["lark-card-sanitized"];
+            persistedLarkCard.TriggerEnvelope.Payload
+                .Unpack<LarkCardOperationTimeoutFiredEvent>()
+                .Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+
             var act = () => grain.ScheduleTimeoutAsync("lark-card-unsanitized", unsanitized, dueTimeMs: 60000);
 
             await act.Should()
                 .ThrowAsync<InvalidOperationException>()
                 .WithMessage("*nyx_user_access_token*");
+
+            var stateAfterRejected = await ReadSchedulerStateAsync(host, grain);
+            stateAfterRejected.ReminderCallbacks.Should().HaveCount(stateAfterSanitized.ReminderCallbacks.Count);
+            stateAfterRejected.ReminderCallbacks.Should().NotContainKey("lark-card-unsanitized");
         }
         finally
         {
@@ -66,11 +83,23 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
             var generation = await grain.ScheduleTimeoutAsync("nyx-relay-sanitized", sanitized, dueTimeMs: 60000);
             generation.Should().Be(1);
 
+            var stateAfterSanitized = await ReadSchedulerStateAsync(host, grain);
+            stateAfterSanitized.ReminderCallbacks.Should().ContainSingle();
+            stateAfterSanitized.ReminderCallbacks.Should().ContainKey("nyx-relay-sanitized");
+            var persistedNyxRelay = stateAfterSanitized.ReminderCallbacks["nyx-relay-sanitized"];
+            persistedNyxRelay.TriggerEnvelope.Payload
+                .Unpack<NyxRelayTextOperationTimeoutFiredEvent>()
+                .Chunk.ReplyToken.Should().BeEmpty();
+
             var act = () => grain.ScheduleTimeoutAsync("nyx-relay-unsanitized", unsanitized, dueTimeMs: 60000);
 
             await act.Should()
                 .ThrowAsync<InvalidOperationException>()
                 .WithMessage("*reply_token*");
+
+            var stateAfterRejected = await ReadSchedulerStateAsync(host, grain);
+            stateAfterRejected.ReminderCallbacks.Should().HaveCount(stateAfterSanitized.ReminderCallbacks.Count);
+            stateAfterRejected.ReminderCallbacks.Should().NotContainKey("nyx-relay-unsanitized");
         }
         finally
         {
@@ -81,6 +110,14 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
 
     private static IRuntimeCallbackSchedulerGrain ResolveSchedulerGrain(IHost host, string actorId) =>
         host.Services.GetRequiredService<IGrainFactory>().GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+
+    private static async Task<RuntimeCallbackSchedulerState> ReadSchedulerStateAsync(
+        IHost host,
+        IRuntimeCallbackSchedulerGrain grain)
+    {
+        var storage = host.Services.GetRequiredService<TestRuntimeCallbackSchedulerStateStorage>();
+        return storage.ReadSchedulerState(grain.GetGrainId());
+    }
 
     private static async Task<IHost> StartSiloHostAsync()
     {
@@ -98,6 +135,14 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
                 {
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
+                });
+                siloBuilder.ConfigureServices(services =>
+                {
+                    services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.GrainStateStorageName);
+                    services.AddSingleton<TestRuntimeCallbackSchedulerStateStorage>();
+                    services.AddGrainStorage<TestRuntimeCallbackSchedulerStateStorage>(
+                        OrleansRuntimeConstants.GrainStateStorageName,
+                        (sp, _) => sp.GetRequiredService<TestRuntimeCallbackSchedulerStateStorage>());
                 });
             })
             .Build();
@@ -195,4 +240,53 @@ public sealed class RuntimeCallbackSchedulerGrainCredentialGuardIntegrationTests
             NyxSenderUserId = "user-1",
         },
     };
+
+    private sealed class TestRuntimeCallbackSchedulerStateStorage : IGrainStorage
+    {
+        private const string SchedulerStateName = "runtime-callback-scheduler-v2";
+        private readonly Dictionary<(string StateName, GrainId GrainId), object> _states = new();
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (_states.TryGetValue((stateName, grainId), out var state))
+            {
+                grainState.State = CloneState((T)state);
+                grainState.RecordExists = true;
+                grainState.ETag = string.Empty;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            _states[(stateName, grainId)] = CloneState(grainState.State)
+                ?? throw new InvalidOperationException("Runtime callback scheduler state cannot be null.");
+            grainState.RecordExists = true;
+            grainState.ETag = string.Empty;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            _states.Remove((stateName, grainId));
+            grainState.RecordExists = false;
+            grainState.ETag = string.Empty;
+            return Task.CompletedTask;
+        }
+
+        public RuntimeCallbackSchedulerState ReadSchedulerState(GrainId grainId)
+        {
+            var state = _states[(SchedulerStateName, grainId)];
+            return ((RuntimeCallbackSchedulerState)state).Clone();
+        }
+
+        private static T CloneState<T>(T state)
+        {
+            if (state is IDeepCloneable<T> cloneable)
+                return cloneable.Clone();
+
+            return state;
+        }
+    }
 }
