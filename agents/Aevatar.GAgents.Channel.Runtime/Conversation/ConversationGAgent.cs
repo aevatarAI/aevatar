@@ -2282,22 +2282,89 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return next;
     }
 
-    // Refactor (iter20/cluster-004):
-    //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
-    //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+    // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+    //   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+    //   New principle: event describes transition facts; reducer derives current state from event + actor state
     private static ConversationGAgentState ApplyReplyLifecycleChanged(
         ConversationGAgentState current,
         ConversationReplyLifecycleChangedEvent evt)
     {
         var next = current.Clone();
-        if (evt.Lifecycle is null || string.IsNullOrWhiteSpace(evt.Lifecycle.CorrelationId))
+
+        var normalizedCorrelationId = NormalizeOptional(evt.CorrelationId);
+        if (normalizedCorrelationId is null || evt.Mode == ConversationReplyLifecycleMode.Unspecified)
             return next;
 
-        UpsertReplyLifecycle(next.ActiveReplyLifecycles, evt.Lifecycle);
+        var lifecycle = FindReplyLifecycle(next.ActiveReplyLifecycles, normalizedCorrelationId, evt.Mode)?.Clone() ??
+                        new ConversationReplyLifecycleState
+                        {
+                            CorrelationId = normalizedCorrelationId,
+                            Mode = evt.Mode,
+                        };
+        ApplyReplyLifecycleTransitionFact(lifecycle, evt);
         next.LastUpdatedUnixMs = evt.ChangedAtUnixMs > 0
             ? evt.ChangedAtUnixMs
-            : evt.Lifecycle.UpdatedAtUnixMs;
+            : lifecycle.UpdatedAtUnixMs;
+        UpsertReplyLifecycle(next.ActiveReplyLifecycles, lifecycle);
         return next;
+    }
+
+    private static void ApplyReplyLifecycleTransitionFact(
+        ConversationReplyLifecycleState lifecycle,
+        ConversationReplyLifecycleChangedEvent evt)
+    {
+        if (evt.Phase != ConversationReplyLifecyclePhase.Unspecified)
+            lifecycle.Phase = evt.Phase;
+
+        if (evt.HasPlatformMessageIdAssigned)
+            lifecycle.PlatformMessageId = evt.PlatformMessageIdAssigned ?? string.Empty;
+        if (evt.HasCardIdAssigned)
+            lifecycle.CardId = evt.CardIdAssigned ?? string.Empty;
+        if (evt.HasCardMessageIdAssigned)
+            lifecycle.CardMessageId = evt.CardMessageIdAssigned ?? string.Empty;
+        if (evt.HasOriginalCardIdAssigned)
+            lifecycle.OriginalCardId = evt.OriginalCardIdAssigned ?? string.Empty;
+        if (evt.HasFlushedTextDelta)
+            lifecycle.LastFlushedText = evt.FlushedTextDelta ?? string.Empty;
+        if (evt.HasEditCountDelta)
+            lifecycle.EditCount += evt.EditCountDelta;
+        if (evt.HasSequenceDelta)
+            lifecycle.Sequence += evt.SequenceDelta;
+        if (evt.HasStreamingElementIdSelected)
+            lifecycle.StreamingElementId = evt.StreamingElementIdSelected ?? string.Empty;
+        if (evt.HasTerminalReason)
+            lifecycle.TerminalReason = evt.TerminalReason ?? string.Empty;
+        if (evt.HasLarkCardOperation)
+            lifecycle.LarkCardInFlightOperation = evt.LarkCardOperation;
+        if (evt.HasNyxRelayOperation)
+            lifecycle.NyxRelayInFlightOperation = evt.NyxRelayOperation;
+        if (evt.HasOperationSequence)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardInFlightSequence = evt.OperationSequence;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayInFlightSequence = evt.OperationSequence;
+        }
+
+        if (evt.HasOperationGeneration)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardOperationGeneration = evt.OperationGeneration;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayOperationGeneration = evt.OperationGeneration;
+        }
+
+        if (evt.HasQueuedAccumulatedText)
+            lifecycle.PendingAccumulatedText = evt.QueuedAccumulatedText ?? string.Empty;
+        if (evt.HasFinalizeText)
+            lifecycle.PendingFinalizeText = evt.FinalizeText ?? string.Empty;
+        if (evt.HasFinalizeCommandId)
+            lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
+        if (evt.HasNyxRelayTerminalState)
+            lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
+
+        if (evt.ChangedAtUnixMs > 0)
+            lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
     }
 
     private static ConversationGAgentState ApplyReplyLifecycleCleared(
@@ -2387,6 +2454,14 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         RemoveReplyLifecycle(field, lifecycle.CorrelationId, lifecycle.Mode);
         field.Add(lifecycle.Clone());
     }
+
+    private static ConversationReplyLifecycleState? FindReplyLifecycle(
+        Google.Protobuf.Collections.RepeatedField<ConversationReplyLifecycleState> field,
+        string correlationId,
+        ConversationReplyLifecycleMode mode) =>
+        field.FirstOrDefault(lifecycle =>
+            lifecycle.Mode == mode &&
+            string.Equals(lifecycle.CorrelationId, correlationId, StringComparison.Ordinal));
 
     private static void RemoveReplyLifecycle(
         Google.Protobuf.Collections.RepeatedField<ConversationReplyLifecycleState> field,

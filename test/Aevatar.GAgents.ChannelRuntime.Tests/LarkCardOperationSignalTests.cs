@@ -88,10 +88,18 @@ public sealed class LarkCardOperationSignalTests
             .Where(e => e.EventType == ConversationReplyLifecycleChangedEvent.Descriptor.FullName)
             .Select(e => ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(e.EventData.Value))
             .Last();
-        changed.Lifecycle.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardTerminated);
-        changed.Lifecycle.CardId.Should().Be("card_orphan");
-        changed.Lifecycle.CardMessageId.Should().Be("om_orphan");
-        changed.Lifecycle.TerminalReason.Should().Be("create_post_send_failed:card_first_stream_failed");
+        changed.CorrelationId.Should().Be("corr-reconstruct");
+        changed.Mode.Should().Be(ConversationReplyLifecycleMode.LarkCard);
+        changed.PreviousPhase.Should().Be(ConversationReplyLifecyclePhase.LarkCardCreating);
+        changed.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardTerminated);
+        changed.ChangedAtUnixMs.Should().BeGreaterThan(0);
+        changed.CardIdAssigned.Should().Be("card_orphan");
+        changed.CardMessageIdAssigned.Should().Be("om_orphan");
+        changed.OriginalCardIdAssigned.Should().Be("card_orphan");
+        changed.LarkCardOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        changed.OperationSequence.Should().Be(0);
+        changed.OperationGeneration.Should().Be(lifecycle.LarkCardOperationGeneration);
+        changed.TerminalReason.Should().Be("create_post_send_failed:card_first_stream_failed");
 
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
         completed.SentActivityId.Should().Be("lark-card-stream:om_orphan");
