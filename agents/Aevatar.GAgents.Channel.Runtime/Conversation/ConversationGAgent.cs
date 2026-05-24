@@ -357,9 +357,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             ToolMode = ToolMode.None,
         };
         var decision = resolver.Resolve(snapshot, input);
-        return ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out var target)
-            ? new ChatRouteAction { ForwardToGagent = target }
-            : decision.Action.Clone();
+        return decision.Action.Clone();
     }
 
     private static OwnerScope? TryBuildRelayCallerScope(ChatActivity activity)

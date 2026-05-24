@@ -79,8 +79,6 @@ public static class PolicyAwareVoiceEndpoints
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
                 return;
-            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
-                break;
             case ChatRouteAction.ActionOneofCase.ForwardToModel
                 when ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out _):
                 break;
@@ -101,7 +99,7 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        var actorId = target.ActorId?.Trim();
+        var actorId = target.ActorId.Trim();
         if (string.IsNullOrWhiteSpace(actorId))
         {
             http.Response.StatusCode = StatusCodes.Status403Forbidden;

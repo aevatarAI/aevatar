@@ -7,6 +7,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Mainnet.Host.Api.Status;
 
@@ -139,7 +140,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
 
     private static HealthProbeOutcome? VerifyWorkspaceSources(IReadOnlyList<IAgentToolSource> sources)
     {
-        var requiredSourceTypes = new HashSet<Type>
+        var requiredSourceTypes = new HashSet<System.Type>
         {
             typeof(InvokeGAgentToolSource),
             typeof(InvokeTeamToolSource),
@@ -161,6 +162,29 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
 
     private static HealthProbeOutcome? VerifyRouteMigration()
     {
+        var gagentHint = new ChatRouteToolChoiceHint
+        {
+            ToolName = "aevatar_invoke_gagent",
+            PrefilledArguments = new Struct
+            {
+                Fields =
+                {
+                    ["actor_id"] = Value.ForString("status-agent"),
+                },
+            },
+        };
+        var teamHint = new ChatRouteToolChoiceHint
+        {
+            ToolName = "aevatar_invoke_team",
+            PrefilledArguments = new Struct
+            {
+                Fields =
+                {
+                    ["team_id"] = Value.ForString("status-team"),
+                    ["endpoint_id"] = Value.ForString("chat"),
+                },
+            },
+        };
         var snapshot = new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
@@ -174,7 +198,11 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
                     Match = new ChatRouteMatch { CommandName = "/agent" },
                     Action = new ChatRouteAction
                     {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "status-agent" },
+                        ForwardToModel = new ForwardToModel
+                        {
+                            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+                            ToolChoiceHint = gagentHint,
+                        },
                     },
                 },
                 new ChatRouteRule
@@ -184,11 +212,10 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
                     Match = new ChatRouteMatch { CommandName = "/team" },
                     Action = new ChatRouteAction
                     {
-                        ForwardToTeam = new ForwardToTeam
+                        ForwardToModel = new ForwardToModel
                         {
-                            TeamId = "status-team",
-                            EndpointId = "chat",
-                            ScopeId = "status-scope",
+                            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+                            ToolChoiceHint = teamHint,
                         },
                     },
                 },

@@ -113,7 +113,7 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 
 1. `workspace.default` tool set 可解析。
 2. 五个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
-3. 旧的 `ForwardToGAgent` / `ForwardToTeam` / `ForwardToWorkflow` route action 可迁移成 `ForwardToModel + tool_choice_hint`。
+3. route policy 使用 `ForwardToModel + tool_choice_hint` 表达 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 目标；旧 GAgent/team wire action 已删除。
 4. `wait=complete` 只对 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 进入 ChatRun completion 协调。
 
 `http_status` 支持的常用参数：

@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -239,22 +241,15 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WhenRouteRequiresToolDrivenForward_ShouldReturnNotImplementedWithoutLlmCall()
+    public async Task PostChatCompletions_WhenRoutePinsTeamTool_ShouldExecuteThroughToolDrivenModelAction()
     {
         var provider = new ChatCompletionsRecordingLLMProvider
         {
-            StreamChunks = [new LLMStreamChunk { DeltaContent = "should not run", IsLast = true }],
+            StreamChunks = [new LLMStreamChunk { DeltaContent = "tool-driven", IsLast = true }],
         };
         var queryPort = ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(
-                new ChatRouteAction
-                {
-                    ForwardToTeam = new ForwardToTeam
-                    {
-                        TeamId = "team-1",
-                        EndpointId = "chat",
-                    },
-                },
+                TeamToolHintAction("team-1", "chat"),
                 []));
         await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
         var client = app.GetTestClient();
@@ -273,11 +268,16 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
-        body.Should().Contain("chat_route_action_not_supported");
-        body.Should().Contain("Tool-set and tool-choice");
-        response.Headers.GetValues("Deprecation").Should().ContainSingle().Which.Should().Be("true");
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().ContainSingle().Which.Name.Should().Be("aevatar_invoke_team");
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("choices")[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString()
+            .Should()
+            .Be("tool-driven");
     }
 
     [Fact]
@@ -322,6 +322,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty)));
         builder.Services.AddSingleton<IResponsesRouteResolver>(new ChatCompletionsNoopRouteResolver());
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                static _ => new StaticAgentToolSource([new ChatCompletionsStubAgentTool("aevatar_invoke_team", "Invoke a team")]));
+        });
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -341,12 +349,66 @@ public sealed class MainnetChatCompletionsEndpointsTests
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task PostChatCompletions_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
+    {
+        var provider = new ChatCompletionsRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Hi",
+                    IsLast = true,
+                    Usage = new TokenUsage(1, 1, 2),
+                },
+            ],
+        };
+        var toolProvider = new ChatCompletionsRecordingResponsesToolProvider(
+            substituteTools: [new ChatCompletionsStubAgentTool("WebSearch", "would substitute client WebSearch")],
+            additiveTools:
+            [
+                new ChatCompletionsStubAgentTool("use_skill", "load a skill"),
+                new ChatCompletionsStubAgentTool("ornn_search_skills", "search Ornn skills"),
+            ]);
+        await using var app = await CreateAppAsync(provider, responsesToolProvider: toolProvider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": "ping"}],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "WebSearch",
+                    "description": "client declared search",
+                    "parameters": {"type":"object","properties":{}}
+                  }
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "openai-bearer");
+
+        var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        provider.LastRequest.Should().NotBeNull();
+        var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
+        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "WebSearch"]);
+    }
+
     private static async Task<WebApplication> CreateAppAsync(
         ChatCompletionsRecordingLLMProvider provider,
         ChatCompletionsRecordingSessionStore? sessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        IResponsesRouteResolver? routeResolver = null)
+        IResponsesRouteResolver? routeResolver = null,
+        IResponsesToolProvider? responsesToolProvider = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -363,6 +425,16 @@ public sealed class MainnetChatCompletionsEndpointsTests
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty)));
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new ChatCompletionsNoopRouteResolver());
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                static _ => new StaticAgentToolSource([new ChatCompletionsStubAgentTool("aevatar_invoke_team", "Invoke a team")]));
+        });
+        if (responsesToolProvider != null)
+            builder.Services.AddSingleton(responsesToolProvider);
 
         var app = builder.Build();
         app.MapChatCompletionsApiEndpoints();
@@ -455,6 +527,26 @@ public sealed class MainnetChatCompletionsEndpointsTests
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
+    private static ChatRouteAction TeamToolHintAction(string teamId, string endpointId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_team",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["team_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(teamId),
+                        ["endpoint_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(endpointId),
+                    },
+                },
+            },
+        },
+    };
+
     private sealed class ChatCompletionsRecordingSessionStore : ILlmSessionRegistrationPort
     {
         public List<LlmSessionRecord> Registered { get; } = [];
@@ -505,5 +597,55 @@ public sealed class MainnetChatCompletionsEndpointsTests
             string responseId,
             string callId,
             CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class ChatCompletionsRecordingResponsesToolProvider : IResponsesToolProvider
+    {
+        private readonly IReadOnlyList<IAgentTool> _substituteTools;
+        private readonly IReadOnlyList<IAgentTool> _additiveTools;
+
+        public ChatCompletionsRecordingResponsesToolProvider(
+            IReadOnlyList<IAgentTool> substituteTools,
+            IReadOnlyList<IAgentTool> additiveTools)
+        {
+            _substituteTools = substituteTools;
+            _additiveTools = additiveTools;
+        }
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_substituteTools);
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
+    }
+
+    private sealed class ChatCompletionsStubAgentTool : IAgentTool
+    {
+        public ChatCompletionsStubAgentTool(string name, string description)
+        {
+            Name = name;
+            Description = description;
+        }
+
+        public string Name { get; }
+
+        public string Description { get; }
+
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

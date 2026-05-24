@@ -1,4 +1,5 @@
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -1031,16 +1032,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     ///
     /// Action semantics on the relay run-actor path:
     /// <list type="bullet">
-    ///   <item><c>ForwardToGAgent.actor_id</c> → overrides
+    ///   <item><c>ForwardToModel.tool_choice_hint(aevatar_invoke_gagent).actor_id</c> overrides
     ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
     ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
     ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
-    ///   <item><c>ForwardToModel.model_name</c> → the generation executor maps
+    ///   <item><c>ForwardToModel.model_name</c> is mapped by the generation executor
     ///     this typed route decision into LLM metadata before invoking the
     ///     provider.</item>
-    ///   <item><c>Reject</c> → resolver-side already failed the turn before
+    ///   <item><c>Reject</c> means resolver-side already failed the turn before
     ///     the run was dispatched; this method shouldn't see it.</item>
-    ///   <item>Anything else / no TargetRef → no-op (resolver returned
+    ///   <item>Anything else / no TargetRef is a no-op (resolver returned
     ///     fallback / no policy / unsupported v2 action).</item>
     /// </list>
     /// </summary>
@@ -1052,20 +1053,18 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         switch (targetRef.ActionCase)
         {
-            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
-                var forwardedActorId = NormalizeOptional(targetRef.ForwardToGagent?.ActorId);
-                if (forwardedActorId is not null &&
-                    !string.Equals(forwardedActorId, request.TargetActorId, StringComparison.Ordinal))
+            case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                if (ChatRouteActionTargets.TryGetGAgentActorTarget(targetRef, out var target) &&
+                    !string.Equals(target.ActorId, request.TargetActorId, StringComparison.Ordinal))
                 {
                     _logger.LogInformation(
-                        "Chat-route override: redirecting run target actor {Original} → {Override} (correlation={CorrelationId})",
+                        "Chat-route override: redirecting run target actor {Original} -> {Override} (correlation={CorrelationId})",
                         NormalizeOptional(request.TargetActorId) ?? "<empty>",
-                        forwardedActorId,
+                        target.ActorId,
                         request.CorrelationId);
-                    request.TargetActorId = forwardedActorId;
+                    request.TargetActorId = target.ActorId;
                 }
-                break;
-            case ChatRouteAction.ActionOneofCase.ForwardToModel:
+
                 var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
                 if (routedModel is not null)
                 {

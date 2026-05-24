@@ -152,9 +152,17 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
-    public void Resolve_ForwardToGAgentRule_TranslatesToToolDrivenModelAction()
+    public void Resolve_GAgentToolHintRule_PassesThroughUnchanged()
     {
         var resolver = NewResolver();
+        var action = ToolHintAction(
+            "aevatar_invoke_gagent",
+            new Dictionary<string, string>
+            {
+                ["actor_id"] = "agent-voice",
+                ["voice_module_name"] = "voice_presence_openai",
+            },
+            toolSetName: "voice.realtime");
         var snapshot = new ChatRoutePolicySnapshot(
             ForwardToModelAction("default-model"),
             [
@@ -163,14 +171,7 @@ public sealed class ChatRouteResolverTests
                     RuleId = "voice-openai",
                     Priority = 10,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent
-                        {
-                            ActorId = "agent-voice",
-                            VoiceModuleName = "voice_presence_openai",
-                        },
-                    },
+                    Action = action,
                 },
             ]);
 
@@ -181,31 +182,30 @@ public sealed class ChatRouteResolverTests
         });
 
         decision.MatchedRuleId.Should().Be("voice-openai");
-        decision.Deprecations.Should().ContainSingle().Which.Should().BeEquivalentTo(new
-        {
-            Code = "legacy_forward_to_gagent",
-            ActionKind = "ForwardToGAgent",
-            MatchedRuleId = "voice-openai",
-            TranslatedTarget = "aevatar_invoke_gagent(actor_id=agent-voice)",
-        });
+        decision.Deprecations.Should().BeEmpty();
+        decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,
             expectedToolName: "aevatar_invoke_gagent",
             expectedArguments: new Dictionary<string, string>
             {
                 ["actor_id"] = "agent-voice",
-            });
-        decision.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields
-            .Should()
-            .NotContainKey(
-                "voice_module_name",
-                "the current aevatar_invoke_gagent tool schema has no voice_module_name argument");
+                ["voice_module_name"] = "voice_presence_openai",
+            },
+            expectedToolSetName: "voice.realtime");
     }
 
     [Fact]
-    public void Resolve_ForwardToTeamRule_TranslatesToToolDrivenModelAction()
+    public void Resolve_TeamToolHintRule_PassesThroughUnchanged()
     {
         var resolver = NewResolver();
+        var action = ToolHintAction(
+            "aevatar_invoke_team",
+            new Dictionary<string, string>
+            {
+                ["team_id"] = "team-1",
+                ["endpoint_id"] = "chat",
+            });
         var snapshot = new ChatRoutePolicySnapshot(
             ForwardToModelAction("default-model"),
             [
@@ -214,28 +214,15 @@ public sealed class ChatRouteResolverTests
                     RuleId = "team-route",
                     Priority = 10,
                     Match = new ChatRouteMatch { CommandName = "/triage" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToTeam = new ForwardToTeam
-                        {
-                            TeamId = "team-1",
-                            EndpointId = "chat",
-                            ScopeId = "scope-1",
-                        },
-                    },
+                    Action = action,
                 },
             ]);
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
 
         decision.MatchedRuleId.Should().Be("team-route");
-        decision.Deprecations.Should().ContainSingle().Which.Should().BeEquivalentTo(new
-        {
-            Code = "legacy_forward_to_team",
-            ActionKind = "ForwardToTeam",
-            MatchedRuleId = "team-route",
-            TranslatedTarget = "aevatar_invoke_team(team_id=team-1, endpoint_id=chat, scope_id=scope-1)",
-        });
+        decision.Deprecations.Should().BeEmpty();
+        decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,
             expectedToolName: "aevatar_invoke_team",
@@ -243,7 +230,6 @@ public sealed class ChatRouteResolverTests
             {
                 ["team_id"] = "team-1",
                 ["endpoint_id"] = "chat",
-                ["scope_id"] = "scope-1",
             });
     }
 
@@ -286,7 +272,7 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
-    public void Resolve_LegacyRule_LogsStructuredWarning()
+    public void Resolve_LegacyWorkflowRule_LogsStructuredWarning()
     {
         var logger = new RecordingLogger<ChatRouteResolver>();
         var resolver = NewResolver(logger);
@@ -295,25 +281,25 @@ public sealed class ChatRouteResolverTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "legacy-agent",
+                    RuleId = "legacy-workflow",
                     Priority = 10,
-                    Match = new ChatRouteMatch { CommandName = "/agent" },
+                    Match = new ChatRouteMatch { CommandName = "/workflow" },
                     Action = new ChatRouteAction
                     {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "agent-1" },
+                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
                     },
                 },
             ]);
 
-        _ = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/agent" });
+        _ = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/workflow" });
 
         var entry = logger.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(LogLevel.Warning);
         entry.Message.Should().Contain("chat_route_legacy_action_used");
-        entry.State.Should().ContainKey("MatchedRuleId").WhoseValue.Should().Be("legacy-agent");
-        entry.State.Should().ContainKey("ActionKind").WhoseValue.Should().Be("ForwardToGAgent");
+        entry.State.Should().ContainKey("MatchedRuleId").WhoseValue.Should().Be("legacy-workflow");
+        entry.State.Should().ContainKey("ActionKind").WhoseValue.Should().Be("ForwardToWorkflow");
         entry.State.Should().ContainKey("TranslatedTarget").WhoseValue.Should()
-            .Be("aevatar_invoke_gagent(actor_id=agent-1)");
+            .Be("aevatar_start_workflow(workflow_id=workflow-1)");
         entry.State.Should().ContainKey("Suggestion").WhoseValue.Should().BeOfType<string>()
             .Which.Should().Contain("ChatRoutePolicyMigrator");
     }
@@ -350,13 +336,12 @@ public sealed class ChatRouteResolverTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "legacy-first",
+                    RuleId = "tool-first",
                     Priority = 1,
                     Match = new ChatRouteMatch { Channel = "lark" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "first-agent" },
-                    },
+                    Action = ToolHintAction(
+                        "aevatar_invoke_gagent",
+                        new Dictionary<string, string> { ["actor_id"] = "first-agent" }),
                 },
                 new ChatRouteRule
                 {
@@ -370,8 +355,8 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
 
         decision.MatchedRuleId.Should().Be(
-            "legacy-first",
-            "the resolver consumes the already-projected rule order even when legacy and new action shapes are mixed");
+            "tool-first",
+            "the resolver consumes the already-projected rule order even when tool-hint and model actions are mixed");
         AssertForwardToModelTool(
             decision.Action,
             expectedToolName: "aevatar_invoke_gagent",
@@ -382,18 +367,16 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
-    public void Resolve_DefaultTargetIsForwardToTeam_TranslatesToToolDrivenModelAction()
+    public void Resolve_DefaultTargetIsTeamToolHint_PassesThroughUnchanged()
     {
         var resolver = NewResolver();
-        var defaultTeam = new ChatRouteAction
-        {
-            ForwardToTeam = new ForwardToTeam
+        var defaultTeam = ToolHintAction(
+            "aevatar_invoke_team",
+            new Dictionary<string, string>
             {
-                TeamId = "default-team",
-                EndpointId = "chat",
-                ScopeId = "scope-x",
-            },
-        };
+                ["team_id"] = "default-team",
+                ["endpoint_id"] = "chat",
+            });
         var snapshot = new ChatRoutePolicySnapshot(defaultTeam, []);
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
@@ -407,19 +390,17 @@ public sealed class ChatRouteResolverTests
             {
                 ["team_id"] = "default-team",
                 ["endpoint_id"] = "chat",
-                ["scope_id"] = "scope-x",
             });
     }
 
     [Fact]
-    public void Resolve_DefaultTargetIsForwardToGAgent_TranslatesToToolDrivenModelAction()
+    public void Resolve_DefaultTargetIsGAgentToolHint_PassesThroughUnchanged()
     {
         var resolver = NewResolver();
         var snapshot = new ChatRoutePolicySnapshot(
-            new ChatRouteAction
-            {
-                ForwardToGagent = new ForwardToGAgent { ActorId = "default-agent" },
-            },
+            ToolHintAction(
+                "aevatar_invoke_gagent",
+                new Dictionary<string, string> { ["actor_id"] = "default-agent" }),
             []);
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
@@ -653,11 +634,12 @@ public sealed class ChatRouteResolverTests
     private static void AssertForwardToModelTool(
         ChatRouteAction action,
         string expectedToolName,
-        IReadOnlyDictionary<string, string> expectedArguments)
+        IReadOnlyDictionary<string, string> expectedArguments,
+        string expectedToolSetName = "workspace.default")
     {
         action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToModel);
         action.ForwardToModel.ModelName.Should().BeEmpty();
-        action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+        action.ForwardToModel.ToolSetRef.Name.Should().Be(expectedToolSetName);
         action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be(expectedToolName);
         action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields
             .Should()
@@ -669,6 +651,29 @@ public sealed class ChatRouteResolverTests
                 .Should()
                 .Be(value);
         }
+    }
+
+    private static ChatRouteAction ToolHintAction(
+        string toolName,
+        IReadOnlyDictionary<string, string> arguments,
+        string toolSetName = "workspace.default")
+    {
+        var fields = new Struct();
+        foreach (var (key, value) in arguments)
+            fields.Fields[key] = ProtoValue.ForString(value);
+
+        return new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = toolName,
+                    PrefilledArguments = fields,
+                },
+            },
+        };
     }
 
     internal static OwnerScope CallerScope() => OwnerScope.ForChannel(

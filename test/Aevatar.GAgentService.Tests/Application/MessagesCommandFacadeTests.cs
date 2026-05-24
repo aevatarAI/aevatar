@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -44,19 +46,23 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectForwardToGAgentRoute()
+    public async Task CreateAsync_WhenRouteCarriesToolSet_ShouldAddRouteTools()
     {
-        var facade = CreateFacade(chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
-        {
-            ForwardToGagent = new ForwardToGAgent { ActorId = "member-1" },
-        }));
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("ok", null, []));
+        var facade = CreateFacade(
+            completionService: completion,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ToolSetRouteAction("workspace.default")),
+            toolSetRegistry: new StaticToolSetRegistry([
+                new StubAgentTool("use_skill", "Use a skill"),
+                new StubAgentTool("ornn_search_skills", "Search skills"),
+            ]));
 
         var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
 
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            501,
-            "chat_route_action_not_supported",
-            "ForwardToGAgent is not supported by /v1/messages in v1."));
+        result.Error.Should().BeNull();
+        completion.LastRequest.Should().NotBeNull();
+        completion.LastRequest!.Tools!.Select(static tool => tool.Name)
+            .Should().Contain(["use_skill", "ornn_search_skills"]);
     }
 
     [Fact]
@@ -156,13 +162,16 @@ public sealed class MessagesCommandFacadeTests
     private static MessagesCommandFacade CreateFacade(
         IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
-        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null) =>
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
+        IToolSetRegistry? toolSetRegistry = null) =>
         new(
             new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             sessionPort ?? new RecordingSessionPort(),
             completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
+            new ResponsesToolClassificationService([], NullLogger<ResponsesToolClassificationService>.Instance),
+            new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             new StaticLlmProviderFactory(),
             NullLogger<MessagesCommandFacade>.Instance);
 
@@ -185,11 +194,21 @@ public sealed class MessagesCommandFacadeTests
                 Messages = [ChatMessage.User("hello")],
             },
             new Dictionary<string, string>(StringComparer.Ordinal),
-            new ResponsesToolClassification([], [], [], []));
+            new ResponsesToolClassification([], [], [], []),
+            ResponsesToolChoiceHintPlan.Empty);
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction ToolSetRouteAction(string toolSetName) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ModelName = string.Empty,
+            ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName },
+        },
     };
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
@@ -218,6 +237,46 @@ public sealed class MessagesCommandFacadeTests
                 Action = action.Clone(),
                 UsedFallback = false,
             });
+    }
+
+    private sealed class EmptyToolSetRegistry : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            ToolSetResolveResult.Failure(new ToolSetResolveError(
+                ToolSetResolveError.UnknownNameCode,
+                toolSetRef?.Name ?? string.Empty,
+                $"Tool set '{toolSetRef?.Name}' is not registered.",
+                []));
+    }
+
+    private sealed class StaticToolSetRegistry(IReadOnlyList<IAgentTool> tools) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            ToolSetResolveResult.Success(
+                toolSetRef?.Name ?? "workspace.default",
+                [new StaticAgentToolSource(tools)]);
+    }
+
+    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
+    }
+
+    private sealed class StubAgentTool(string name, string description) : IAgentTool
+    {
+        public string Name { get; } = name;
+
+        public string Description { get; } = description;
+
+        public string ParametersSchema { get; } = """{"type":"object","properties":{}}""";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"ok":true}""");
     }
 
     private sealed class StaticLlmProviderFactory : ILLMProviderFactory

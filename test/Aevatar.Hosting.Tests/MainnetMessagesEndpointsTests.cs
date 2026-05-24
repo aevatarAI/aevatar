@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
@@ -390,12 +391,8 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldNotInjectAevatarAdditiveTools()
+    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
     {
-        // Regression: /v1/messages must explicitly pass Array.Empty<IResponsesToolProvider>()
-        // to ResponsesToolClassifier so Aevatar substitutes/additives never shadow the
-        // Anthropic client's own tool harness (Claude Code in particular). If a future
-        // refactor wires DI providers into this path, this test fails.
         var provider = new MessagesRecordingLLMProvider
         {
             StreamChunks =
@@ -423,7 +420,14 @@ public sealed class MainnetMessagesEndpointsTests
             {
               "model": "claude-haiku-4-5",
               "max_tokens": 32,
-              "messages": [{"role": "user", "content": "ping"}]
+              "messages": [{"role": "user", "content": "ping"}],
+              "tools": [
+                {
+                  "name": "WebSearch",
+                  "description": "client declared search",
+                  "input_schema": {"type":"object","properties":{}}
+                }
+              ]
             }
             """),
         };
@@ -433,7 +437,7 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         provider.LastRequest.Should().NotBeNull();
         var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
+        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "WebSearch"]);
     }
 
     [Fact]
@@ -643,7 +647,7 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenChatRouteForwardsToGAgent_RoutesThroughToolDrivenModelAction()
+    public async Task PostMessages_WhenChatRoutePinsGAgentTool_RoutesThroughToolDrivenModelAction()
     {
         var provider = new MessagesRecordingLLMProvider
         {
@@ -657,7 +661,7 @@ public sealed class MainnetMessagesEndpointsTests
             ],
         };
         var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("target-agent"),
+            GAgentToolHintAction("target-agent"),
             []));
         await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
         var client = app.GetTestClient();
@@ -679,8 +683,7 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().BeEmpty(
-            "/v1/messages does not install the Responses workspace tool set yet; legacy ForwardToGAgent is normalized to ForwardToModel instead of bypassing the LLM.");
+        provider.LastRequest!.Tools.Should().ContainSingle().Which.Name.Should().Be("aevatar_invoke_gagent");
         provider.LastRequest.Model.Should().Be("original-claude");
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
@@ -709,12 +712,20 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                static _ => new StaticAgentToolSource([new MessagesStubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent")]));
+        });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
 
@@ -817,9 +828,23 @@ public sealed class MainnetMessagesEndpointsTests
         Reject = new Reject { Reason = message },
     };
 
-    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
-        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
+        ForwardToModel = new ForwardToModel
+        {
+            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
+                },
+            },
+        },
     };
 
     private sealed class MessagesRecordingSessionStore :
@@ -903,6 +928,12 @@ public sealed class MainnetMessagesEndpointsTests
             ResponsesToolProviderContext context,
             CancellationToken ct = default) =>
             ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
     }
 
     private sealed class MessagesStubAgentTool : IAgentTool

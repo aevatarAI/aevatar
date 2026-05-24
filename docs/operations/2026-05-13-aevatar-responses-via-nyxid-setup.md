@@ -5,8 +5,8 @@
 当前状态：
 
 - Responses 客户端走 `/v1/responses` 和 `/v1/models`，这是主入口。
-- Claude Code 这类 Messages-only 客户端走 `/v1/messages`，已经可用，但能力比 Responses 窄。
-- Ornn skill bridge 只在 `/v1/responses` 可用：服务端会注入 `use_skill` 和 `ornn_search_skills`。`/v1/messages` 不注入这些工具。
+- Claude Code 这类 Messages-only 客户端走 `/v1/messages`，Chat Completions-only 客户端走 `/v1/chat/completions`。
+- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用直连 tool-source plan 和工具分类；Ornn skill bridge 会在三条入口注入 `use_skill` 和 `ornn_search_skills`，chat-route `ToolSetRef` 指定的 tool sources 也会三条入口同样注入。
 - 客户端只持有 NyxID API key，不直接接触任何 LLM 供应商凭据。
 
 ## 1. 链路速览
@@ -14,7 +14,7 @@
 ```text
 client
    ↓ Authorization: Bearer nyx_...
-   ↓ /v1/responses 或 /v1/messages
+   ↓ /v1/responses、/v1/messages 或 /v1/chat/completions
 NyxID proxy plane
    https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1/...
    ↓ 校验 API key + allowed services
@@ -147,7 +147,7 @@ base_url = "https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1"
 - `wire_api = "responses"` 必填。
 - `base_url` 停在 `/v1`，客户端会追加 `/responses`、`/models`。
 - `model` 优先使用 `/v1/models` 返回的 `<service-slug>/<model>`。
-- 如果要让 Responses 调用 Ornn skills，NyxID API key 的 allowed services 还要覆盖 Ornn API service，默认 slug 是 `ornn-api`。
+- 如果要让直连入口调用 Ornn skills，NyxID API key 的 allowed services 还要覆盖 Ornn API service，默认 slug 是 `ornn-api`。
 
 ## 6. 配置 Claude Code / Messages 客户端
 
@@ -166,8 +166,8 @@ export ANTHROPIC_MODEL="chrono-llm/gpt-5.5"
 - 用 `ANTHROPIC_AUTH_TOKEN`，让客户端发 `Authorization: Bearer ...`。
 - 不要用只会发 `x-api-key` 的配置项；NyxID proxy plane 识别 bearer。
 - `ANTHROPIC_BASE_URL` 停在 `/aevatar`，Claude Code 会自行拼 `/v1/messages`。
-- `/v1/messages` 是无状态窄门面，每次请求都是一轮新的 `LlmSession`；需要 `previous_response_id` continuation 时用 `/v1/responses`。
-- `/v1/messages` 不注入 Aevatar 服务端工具，也不注入 Ornn skill bridge；Claude Code 自己声明的工具仍由 Claude Code 自己处理。
+- `/v1/messages` 是无状态协议门面，每次请求都是一轮新的 `LlmSession`；需要 `previous_response_id` continuation 时用 `/v1/responses`。
+- `/v1/messages` 与 `/v1/responses`、`/v1/chat/completions` 共享直连 tool-source plan 和工具分类；服务端会注入 Ornn skill bridge，也会按 chat-route `ToolSetRef` 注入同一批 route tools。
 - Messages 的 `max_tokens` 必填。
 
 ## 7. curl 冒烟测试
@@ -257,7 +257,7 @@ curl -N "$BASE/messages" \
 | Messages 返回 `invalid_max_tokens` | `max_tokens` 缺失或不是正整数 | 给 Messages 请求补 `max_tokens` |
 | Messages 返回 `unsupported_parameter` | 使用了 `top_p`、`top_k`、`stop_sequences` 或 forced `tool_choice` | 删除这些参数；需要完整控制面时改用 Responses |
 | Messages 图片没有进入模型 | 当前 Messages facade v1 会丢弃 image content | 先走文本；图片输入等后续协议补齐 |
-| Ornn skill 工具没出现 | 走的是 `/v1/messages`，或 Responses host 没启用 skill bridge | 改走 `/v1/responses`；确认 Mainnet host 已注册 `ResponsesUserSkillsToolProvider` |
+| Ornn skill 工具没出现 | Mainnet host 没启用共享直连 tool-source plan / 工具分类或未注册 skill bridge | 确认 Mainnet host 已注册 `IResponsesDirectToolPlanService`、`IResponsesToolClassificationService` 与 `ResponsesUserSkillsToolProvider` |
 | Ornn skill 工具能出现但搜索/加载失败 | 受限 NyxID API key 没覆盖 Ornn API service，或用户没有 Ornn 权限 | 把 Ornn API 的 UserService id 加进 `--allowed-services`；确认用户能访问 `ornn-api` |
 
 ## 9. 相关文档

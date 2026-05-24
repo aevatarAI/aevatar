@@ -9,6 +9,7 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -47,7 +48,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                     RuleId = "voice-demo",
                     Priority = 900,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "old-agent" } },
+                    Action = GAgentToolHint("old-agent", "voice_presence_openai"),
                     Description = "replace stale voice demo rule",
                 },
             ]);
@@ -92,9 +93,35 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         var voiceRule = command.Rules.Should().ContainSingle(rule => rule.RuleId == "voice-demo").Subject;
         voiceRule.Priority.Should().Be(1000);
         voiceRule.Match.SourceKind.Should().Be(ChatSourceKind.Voice);
-        voiceRule.Action.ForwardToGagent.ActorId.Should().Be(demoActorId);
-        voiceRule.Action.ForwardToGagent.VoiceModuleName.Should().Be("voice_presence_openai");
+        voiceRule.Action.ForwardToModel.ToolSetRef.Name.Should().Be("voice.realtime");
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_invoke_gagent");
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
+            .Should()
+            .Be(demoActorId);
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["voice_module_name"].StringValue
+            .Should()
+            .Be("voice_presence_openai");
     }
+
+    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolSetRef = new ChatRouteToolSetRef { Name = "voice.realtime" },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                        ["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString(voiceModuleName),
+                    },
+                },
+            },
+        },
+    };
 
     private static async Task<WebApplication> CreateAppAsync(
         RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,

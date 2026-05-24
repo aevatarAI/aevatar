@@ -39,32 +39,13 @@ public sealed class ChatRoutePolicyMigratorTests
     }
 
     [Fact]
-    public void MigrateLegacyActions_MixedSnapshot_RewritesOnlyLegacyForwardActions()
+    public void MigrateLegacyActions_MixedSnapshot_RewritesOnlyWorkflowLegacyAction()
     {
-        var defaultTarget = new ChatRouteAction
-        {
-            ForwardToGagent = new ForwardToGAgent { ActorId = "default-agent" },
-        };
+        var defaultTarget = NewForwardToModel("default-model", includeToolHint: true);
         var newRuleAction = NewForwardToModel("new-model", includeToolHint: true);
         var snapshot = new ChatRoutePolicySnapshot(
             defaultTarget,
             [
-                new ChatRouteRule
-                {
-                    RuleId = "legacy-team",
-                    Priority = 20,
-                    Match = new ChatRouteMatch { CommandName = "/team" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToTeam = new ForwardToTeam
-                        {
-                            TeamId = "team-1",
-                            EndpointId = "chat",
-                            ScopeId = "scope-1",
-                        },
-                    },
-                    Description = "team route",
-                },
                 new ChatRouteRule
                 {
                     RuleId = "new-model",
@@ -88,31 +69,14 @@ public sealed class ChatRoutePolicyMigratorTests
 
         var migrated = ChatRoutePolicyMigrator.MigrateLegacyActions(snapshot);
 
-        AssertForwardToModelTool(
-            migrated.DefaultTarget,
-            expectedToolName: "aevatar_invoke_gagent",
-            expectedArguments: new Dictionary<string, string>
-            {
-                ["actor_id"] = "default-agent",
-            });
+        migrated.DefaultTarget.Should().Be(defaultTarget);
 
         migrated.Rules.Select(static rule => rule.RuleId)
             .Should()
-            .ContainInOrder("legacy-team", "new-model", "legacy-workflow");
-        migrated.Rules[0].Description.Should().Be("team route");
-        migrated.Rules[0].Match.CommandName.Should().Be("/team");
+            .ContainInOrder("new-model", "legacy-workflow");
+        migrated.Rules[0].Action.Should().Be(newRuleAction);
         AssertForwardToModelTool(
-            migrated.Rules[0].Action,
-            expectedToolName: "aevatar_invoke_team",
-            expectedArguments: new Dictionary<string, string>
-            {
-                ["team_id"] = "team-1",
-                ["endpoint_id"] = "chat",
-                ["scope_id"] = "scope-1",
-            });
-        migrated.Rules[1].Action.Should().Be(newRuleAction);
-        AssertForwardToModelTool(
-            migrated.Rules[2].Action,
+            migrated.Rules[1].Action,
             expectedToolName: "aevatar_start_workflow",
             expectedArguments: new Dictionary<string, string>
             {

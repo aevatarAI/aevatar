@@ -17,6 +17,8 @@ public sealed class MessagesCommandFacade(
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
     IResponsesCompletionApplicationService completionService,
+    IResponsesToolClassificationService toolClassificationService,
+    IResponsesDirectToolPlanService directToolPlanService,
     ILLMProviderFactory providerFactory,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
@@ -60,17 +62,24 @@ public sealed class MessagesCommandFacade(
                 sessionResult.Error.Code,
                 sessionResult.Error.Message);
 
-        var plan = await BuildExecutionPlanAsync(
+        var planResult = await BuildExecutionPlanAsync(
             normalized,
             callerScopeResult.Scope!,
             routedModelResult.Model!,
+            routedModelResult.Action!,
             bearerToken,
             sessionResult.Session!,
             ct);
 
+        if (planResult.Error is not null)
+            return MessagesCreateCommandResult.FromError(
+                planResult.Error.StatusCode,
+                planResult.Error.Code,
+                planResult.Error.Message);
+
         return normalized.Stream
-            ? MessagesCreateCommandResult.FromStreamPlan(plan)
-            : await ExecuteNonStreamingAsync(plan, ct);
+            ? MessagesCreateCommandResult.FromStreamPlan(planResult.Plan!)
+            : await ExecuteNonStreamingAsync(planResult.Plan!, ct);
     }
 
     public async Task<ResponsesStreamCommandResult> StreamAsync(
@@ -84,13 +93,17 @@ public sealed class MessagesCommandFacade(
         try
         {
             var provider = providerFactory.GetDefault();
-            var completion = await completionService.StreamAsync(
-                provider,
-                plan.LlmRequest,
-                plan.ToolContextMetadata,
-                plan.ToolClassification,
-                onTextDelta,
-                ct);
+            ResponsesCompletionResult completion;
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                completion = await completionService.StreamAsync(
+                    provider,
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    onTextDelta,
+                    ct);
+            }
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
             return ResponsesStreamCommandResult.FromCompleted(
                 completion.Text,
@@ -155,18 +168,17 @@ public sealed class MessagesCommandFacade(
                     : routeDecision.Action.Reject.Reason);
         }
 
-        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
-            return RouteTargetResult.FromModel(routeDecision.Action.ForwardToModel.ModelName.Trim());
-
-        if (routeDecision.Action.ForwardToGagent is not null)
+        var action = routeDecision.Action.Clone();
+        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+            ? action.ForwardToModel.ModelName.Trim()
+            : normalized.Model;
+        if (action.ForwardToModel is null)
         {
-            return RouteTargetResult.FromError(
-                501,
-                "chat_route_action_not_supported",
-                "ForwardToGAgent is not supported by /v1/messages in v1.");
+            action.ForwardToModel = new ForwardToModel();
         }
 
-        return RouteTargetResult.FromModel(normalized.Model);
+        action.ForwardToModel.ModelName = routedModel;
+        return RouteTargetResult.FromModel(routedModel, action);
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -193,21 +205,25 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<MessagesCreateCommandPlan> BuildExecutionPlanAsync(
+    private async Task<ExecutionPlanResult> BuildExecutionPlanAsync(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
         string routedModel,
+        ChatRouteAction routeAction,
         string bearerToken,
         LlmSessionRegistrationResult session,
         CancellationToken ct)
     {
         var toolProviderContext = BuildToolProviderContext(callerScope, normalized.MessageId, bearerToken);
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
+        var toolPlan = directToolPlanService.Build(routeAction);
+        if (toolPlan.Error is not null)
+            return ExecutionPlanResult.FromError(toolPlan.Error);
+
+        var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
-            Array.Empty<IResponsesToolProvider>(),
             toolProviderContext,
-            logger,
-            ct);
+            toolPlan.AdditionalToolProviders,
+            ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -223,12 +239,13 @@ public sealed class MessagesCommandFacade(
                 normalized.MessageId);
         }
 
-        return new MessagesCreateCommandPlan(
+        return ExecutionPlanResult.FromPlan(new MessagesCreateCommandPlan(
             normalized,
             session,
             llmRequest,
             toolProviderContext.ToolContextMetadata,
-            toolClassification);
+            toolClassification,
+            toolPlan.ToolChoiceHintPlan));
     }
 
     private async Task<MessagesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -238,12 +255,16 @@ public sealed class MessagesCommandFacade(
         try
         {
             var provider = providerFactory.GetDefault();
-            var completion = await completionService.CollectAsync(
-                provider,
-                plan.LlmRequest,
-                plan.ToolContextMetadata,
-                plan.ToolClassification,
-                ct);
+            ResponsesCompletionResult completion;
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                completion = await completionService.CollectAsync(
+                    provider,
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    ct);
+            }
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
             return MessagesCreateCommandResult.FromCompleted(new MessagesCreateCompletedCommandResult(plan.Normalized, completion));
         }
@@ -430,15 +451,25 @@ public sealed class MessagesCommandFacade(
 
     private sealed record RouteTargetResult(
         string? Model,
+        ChatRouteAction? Action,
         ResponsesCommandError? Error)
     {
-        public static RouteTargetResult FromModel(string model) => new(model, null);
+        public static RouteTargetResult FromModel(string model, ChatRouteAction action) => new(model, action, null);
 
         public static RouteTargetResult FromError(int statusCode, string code, string message) =>
-            new(null, new ResponsesCommandError(statusCode, code, message));
+            new(null, null, new ResponsesCommandError(statusCode, code, message));
     }
 
     private sealed record SessionRegistrationResult(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
+
+    private sealed record ExecutionPlanResult(
+        MessagesCreateCommandPlan? Plan,
+        ResponsesCommandError? Error)
+    {
+        public static ExecutionPlanResult FromPlan(MessagesCreateCommandPlan plan) => new(plan, null);
+
+        public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
+    }
 }

@@ -6,6 +6,11 @@ owner: eanzhao
 
 # ADR-0024: Chat Route Policy — Config Actor + Boundary Resolver
 
+> Superseded for GAgent/team routing by ADR-0026. The current wire action set
+> no longer includes `ForwardToGAgent` or `ForwardToTeam`; policies express
+> those targets as `ForwardToModel.tool_set_ref + tool_choice_hint` with
+> `aevatar_invoke_gagent` or `aevatar_invoke_team`.
+
 ## Context
 
 Aevatar today has four ingress paths that each hard-route inbound traffic to a

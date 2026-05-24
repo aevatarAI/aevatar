@@ -125,8 +125,6 @@ public sealed class ChatRouteResolver
         deprecation = new ChatRouteDeprecation();
         var actionKind = action.ActionCase switch
         {
-            ChatRouteAction.ActionOneofCase.ForwardToGagent => "ForwardToGAgent",
-            ChatRouteAction.ActionOneofCase.ForwardToTeam => "ForwardToTeam",
             ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "ForwardToWorkflow",
             _ => string.Empty,
         };
@@ -137,8 +135,6 @@ public sealed class ChatRouteResolver
 
         var code = action.ActionCase switch
         {
-            ChatRouteAction.ActionOneofCase.ForwardToGagent => "legacy_forward_to_gagent",
-            ChatRouteAction.ActionOneofCase.ForwardToTeam => "legacy_forward_to_team",
             ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "legacy_forward_to_workflow",
             _ => string.Empty,
         };
@@ -158,14 +154,8 @@ public sealed class ChatRouteResolver
 
 internal static class ChatRouteActionTranslator
 {
-    internal const string InvokeGAgentToolName = "aevatar_invoke_gagent";
-    internal const string InvokeTeamToolName = "aevatar_invoke_team";
     internal const string StartWorkflowToolName = "aevatar_start_workflow";
 
-    private const string ActorIdArgument = "actor_id";
-    private const string TeamIdArgument = "team_id";
-    private const string EndpointIdArgument = "endpoint_id";
-    private const string ScopeIdArgument = "scope_id";
     private const string WorkflowIdArgument = "workflow_id";
 
     public static ChatRouteAction ToRuntimeDecisionAction(ChatRouteAction action)
@@ -175,18 +165,6 @@ internal static class ChatRouteActionTranslator
         return action.ActionCase switch
         {
             ChatRouteAction.ActionOneofCase.ForwardToModel => action.Clone(),
-            ChatRouteAction.ActionOneofCase.ForwardToGagent => ForwardToToolModel(
-                InvokeGAgentToolName,
-                [
-                    new(ActorIdArgument, action.ForwardToGagent.ActorId, IncludeWhenEmpty: true),
-                ]),
-            ChatRouteAction.ActionOneofCase.ForwardToTeam => ForwardToToolModel(
-                InvokeTeamToolName,
-                [
-                    new(TeamIdArgument, action.ForwardToTeam.TeamId, IncludeWhenEmpty: true),
-                    new(EndpointIdArgument, action.ForwardToTeam.EndpointId, IncludeWhenEmpty: true),
-                    new(ScopeIdArgument, action.ForwardToTeam.ScopeId, IncludeWhenEmpty: false),
-                ]),
             ChatRouteAction.ActionOneofCase.ForwardToWorkflow => ForwardToToolModel(
                 StartWorkflowToolName,
                 [
@@ -206,10 +184,6 @@ internal static class ChatRouteActionTranslator
 
         return action.ActionCase switch
         {
-            ChatRouteAction.ActionOneofCase.ForwardToGagent =>
-                $"{InvokeGAgentToolName}({ActorIdArgument}={action.ForwardToGagent.ActorId})",
-            ChatRouteAction.ActionOneofCase.ForwardToTeam =>
-                $"{InvokeTeamToolName}({TeamIdArgument}={action.ForwardToTeam.TeamId}, {EndpointIdArgument}={action.ForwardToTeam.EndpointId}, {ScopeIdArgument}={action.ForwardToTeam.ScopeId})",
             ChatRouteAction.ActionOneofCase.ForwardToWorkflow =>
                 $"{StartWorkflowToolName}({WorkflowIdArgument}={action.ForwardToWorkflow.WorkflowId})",
             ChatRouteAction.ActionOneofCase.ForwardToModel when action.ForwardToModel?.ToolChoiceHint is { } hint =>

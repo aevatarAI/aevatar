@@ -446,13 +446,12 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_WhenTargetRefForwardsToGAgent_OverridesTargetActorId()
+    public async Task HandleStartAsync_WhenTargetRefUsesGAgentToolHint_OverridesTargetActorId()
     {
         // Regression: NeedsLlmReplyEvent.TargetRef carries the chat-route
         // boundary decision from ConversationGAgent into the run actor.
         // Before this fix the field was written + persisted but no consumer
-        // read it — Forward* actions silently no-op'd on the relay path.
-        // ForwardToGAgent.actor_id must redirect the reply target so per-bot
+        // read it. GAgent tool-hint actor_id must redirect the reply target so per-bot
         // routing rules (e.g. /daily → specialized agent X) actually take effect.
         var originalTarget = Substitute.For<IActor>();
         originalTarget.Id.Returns("conversation:original");
@@ -482,14 +481,11 @@ public sealed class AgentRunGAgentTests
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-forward-gagent",
-            TargetRef = new ChatRouteAction
-            {
-                ForwardToGagent = new ForwardToGAgent { ActorId = "conversation:forwarded" },
-            },
+            TargetRef = GAgentToolHint("conversation:forwarded"),
         });
 
         forwardedHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
-            "ForwardToGAgent.actor_id must redirect the reply target");
+            "aevatar_invoke_gagent actor_id must redirect the reply target");
         originalHandled.Should().BeEmpty(
             "the original conversation actor must not receive the reply when the route override fires");
         runtime.State.TargetActorId.Should().Be("conversation:forwarded",
@@ -2223,6 +2219,25 @@ public sealed class AgentRunGAgentTests
                 CorrelationId = "corr-1",
             },
         };
+
+    private static ChatRouteAction GAgentToolHint(string actorId)
+    {
+        var arguments = new Struct();
+        arguments.Fields["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId);
+
+        return new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = "aevatar_invoke_gagent",
+                    PrefilledArguments = arguments,
+                },
+            },
+        };
+    }
 
     private sealed class DispatchingActorRuntime(params (string Id, IActor Actor)[] actors) :
         IActorRuntime,

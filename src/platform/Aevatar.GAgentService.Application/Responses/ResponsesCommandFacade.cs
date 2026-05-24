@@ -1,6 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -15,7 +13,7 @@ namespace Aevatar.GAgentService.Application.Responses;
 //   Old pattern: Mainnet Host endpoints owned normalization, target resolution, session registration, tool persistence, and LLM command execution inline.
 //   New principle: Application owns the Responses command lifecycle as a typed facade; Host maps HTTP/SSE/JSON frames around these command plans and results.
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed class ResponsesCommandFacade(
     ILLMProviderFactory providerFactory,
@@ -25,8 +23,8 @@ public sealed class ResponsesCommandFacade(
     ILlmSessionRegistrationPort responseSessionRegistrationPort,
     ILlmSessionQueryPort responseSessionQueryPort,
     IResponsesCompletionApplicationService completionService,
-    IEnumerable<IResponsesToolProvider> toolProviders,
-    IToolSetRegistry toolSetRegistry,
+    IResponsesToolClassificationService toolClassificationService,
+    IResponsesDirectToolPlanService directToolPlanService,
     ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
 {
     private const string RegistrationScopeMetadataKey = "scope_id";
@@ -78,18 +76,6 @@ public sealed class ResponsesCommandFacade(
                 sessionResult.Error.StatusCode,
                 sessionResult.Error.Code,
                 sessionResult.Error.Message);
-
-        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
-        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-        if (routedModelResult.ForwardAction is not null)
-            return ResponsesCreateCommandResult.FromForward(new ResponsesForwardCommandResult(
-                normalized,
-                callerScope,
-                routedModelResult.ForwardAction,
-                sessionResult.Session!,
-                continuation.PreviousSnapshot,
-                createdAt));
 
         var prepared = await BuildExecutionPlanAsync(
             normalized,
@@ -270,12 +256,6 @@ public sealed class ResponsesCommandFacade(
                     : routeDecision.Action.Reject.Reason);
         }
 
-        if (routeDecision.Action.ForwardToTeam is not null ||
-            routeDecision.Action.ForwardToGagent is not null)
-        {
-            return RouteTargetResult.FromForward(routeDecision.Action);
-        }
-
         var action = routeDecision.Action.Clone();
         var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
             ? action.ForwardToModel.ModelName.Trim()
@@ -375,35 +355,14 @@ public sealed class ResponsesCommandFacade(
     {
         var toolProviderContext = BuildToolProviderContext(callerScope, normalized.ResponseId, bearerToken);
         var forwardToModel = routeAction.ForwardToModel;
-        var effectiveToolProviders = toolProviders;
-        var toolChoiceHintPlan = ResponsesToolChoiceHintPlan.Empty;
-        if (forwardToModel is not null)
-        {
-            if (forwardToModel.ToolSetRef != null && !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
-            {
-                var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef);
-                if (!toolSet.IsSuccess)
-                {
-                    var error = toolSet.Error!;
-                    return ExecutionPlanResult.FromError(new ResponsesCommandError(
-                        500,
-                        error.Code,
-                        error.Message));
-                }
+        var toolPlan = directToolPlanService.Build(routeAction);
+        if (toolPlan.Error is not null)
+            return ExecutionPlanResult.FromError(toolPlan.Error);
 
-                effectiveToolProviders = [.. toolProviders, new ToolSetResponsesToolProvider(toolSet.Sources)];
-            }
-
-            toolChoiceHintPlan = ResponsesToolChoiceHints.Create(
-                forwardToModel.ToolChoiceHint?.ToolName,
-                forwardToModel.ToolChoiceHint?.PrefilledArguments);
-        }
-
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
+        var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
-            effectiveToolProviders,
             toolProviderContext,
-            logger,
+            toolPlan.AdditionalToolProviders,
             ct);
         var routedModel = string.IsNullOrWhiteSpace(forwardToModel?.ModelName)
             ? normalized.Model
@@ -425,7 +384,7 @@ public sealed class ResponsesCommandFacade(
             llmRequest,
             toolProviderContext.ToolContextMetadata,
             toolClassification,
-            toolChoiceHintPlan,
+            toolPlan.ToolChoiceHintPlan,
             createdAt));
     }
 
@@ -976,15 +935,12 @@ public sealed class ResponsesCommandFacade(
 
     private sealed record RouteTargetResult(
         ChatRouteAction? Action,
-        ChatRouteAction? ForwardAction,
         ResponsesCommandError? Error)
     {
-        public static RouteTargetResult FromModel(ChatRouteAction action) => new(action, null, null);
-
-        public static RouteTargetResult FromForward(ChatRouteAction action) => new(null, action, null);
+        public static RouteTargetResult FromModel(ChatRouteAction action) => new(action, null);
 
         public static RouteTargetResult FromError(int statusCode, string code, string message) =>
-            new(null, null, new ResponsesCommandError(statusCode, code, message));
+            new(null, new ResponsesCommandError(statusCode, code, message));
     }
 
     private sealed record ExecutionPlanResult(
@@ -1014,24 +970,4 @@ public sealed class ResponsesCommandFacade(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
 
-    private sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
-    {
-        private readonly IReadOnlyList<IAgentToolSource> _sources;
-
-        public ToolSetResponsesToolProvider(IReadOnlyList<IAgentToolSource> sources)
-        {
-            _sources = sources ?? throw new ArgumentNullException(nameof(sources));
-        }
-
-        public async ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
-            ResponsesToolProviderContext context,
-            CancellationToken ct = default)
-        {
-            var tools = new List<IAgentTool>();
-            foreach (var source in _sources)
-                tools.AddRange(await source.DiscoverToolsAsync(ct));
-
-            return tools;
-        }
-    }
 }

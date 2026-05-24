@@ -41,6 +41,40 @@ public sealed record ResponsesToolClassification(
     IReadOnlyList<string> SubstitutedToolNames,
     IReadOnlyList<string> AdditiveToolNames);
 
+public interface IResponsesToolClassificationService
+{
+    ValueTask<ResponsesToolClassification> ClassifyAsync(
+        IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        ResponsesToolProviderContext context,
+        IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+        CancellationToken ct = default);
+}
+
+public sealed class ResponsesToolClassificationService(
+    IEnumerable<IResponsesToolProvider> toolProviders,
+    ILogger<ResponsesToolClassificationService> logger) : IResponsesToolClassificationService
+{
+    public ValueTask<ResponsesToolClassification> ClassifyAsync(
+        IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        ResponsesToolProviderContext context,
+        IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(declaredTools);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var effectiveProviders = additionalProviders is null
+            ? toolProviders
+            : toolProviders.Concat(additionalProviders);
+        return ResponsesToolClassifier.ClassifyAsync(
+            declaredTools,
+            effectiveProviders,
+            context,
+            logger,
+            ct);
+    }
+}
+
 public sealed record ResponsesCompletionResult(
     string Text,
     TokenUsage? Usage,

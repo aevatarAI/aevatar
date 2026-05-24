@@ -10,6 +10,7 @@ using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -34,7 +35,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     public async Task PolicyAwareVoice_DefaultRoute_ShouldAttachDefaultVoiceTarget()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
-            ForwardToGAgent("voice-agent-default", "voice_presence_openai"),
+            GAgentToolHint("voice-agent-default", "voice_presence_openai"),
             []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-default"]);
         var stateTransitions = new List<VoicePresenceState>();
@@ -64,7 +65,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     public async Task PolicyAwareVoice_VoiceLarkRule_ShouldRouteToRuleTarget()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
-            ForwardToGAgent("voice-agent-default"),
+            GAgentToolHint("voice-agent-default"),
             [
                 new ChatRouteRule
                 {
@@ -75,7 +76,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
                         SourceKind = ChatSourceKind.Voice,
                         Channel = "lark",
                     },
-                    Action = ForwardToGAgent("voice-agent-lark"),
+                    Action = GAgentToolHint("voice-agent-lark"),
                 },
             ]));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
@@ -105,7 +106,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenCallerCannotAttach_ShouldRejectBeforeUpgrade()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("other-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("other-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: []);
         var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -170,7 +171,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenSessionMissing_ShouldReturnNotFoundBeforeUpgrade()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.NotFound);
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -194,7 +195,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         //   absent. Match the dev bypass at VoicePresenceEndpoints.MapVoicePresenceWebSocket
         //   and return 503 Service Unavailable so callers retry as the cold
         //   actor finishes initializing.
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.NotInitialized);
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -213,7 +214,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenAttachFailsAfterUpgrade_ShouldCloseWithPolicyViolation()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.Attached(new VoicePresenceSession(
             isInitialized: static () => true,
@@ -234,7 +235,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenRemoteAudioUnsupported_ShouldReturnServiceUnavailableBeforeUpgrade()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.Unsupported();
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -253,7 +254,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_TypedResolutionUnsupported_ShouldMapTo503WithoutSocketAccept()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.Unsupported();
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -273,7 +274,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenTransportAlreadyAttached_ShouldReturnConflictBeforeUpgrade()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.TransportAlreadyAttached);
         var socket = new FakeWebSocket(WebSocketState.Open);
@@ -291,7 +292,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_TypedResolutionTransportAlreadyAttached_ShouldMapAttachTo409WithoutSocketAccept()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = RecordingVoiceSessionResolver.PreflightFailed(
             VoicePresencePreflightFailureKind.TransportAlreadyAttached);
@@ -312,7 +313,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_WhenLeaseAcceptedPendingAttach_ShouldAttachAndDetachWhenSocketCloses()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var attached = 0;
         var detached = 0;
@@ -350,7 +351,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedPendingAttach_ShouldAcceptAttachAndReleaseAfterSocketClose()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var attached = 0;
         var detached = 0;
@@ -389,7 +390,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Fact]
     public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedAttached_ShouldAcceptAndDetachWhenSocketCloses()
     {
-        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(GAgentToolHint("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var attached = 0;
         var detached = 0;
@@ -423,15 +424,26 @@ public sealed class PolicyAwareVoiceEndpointsTests
         resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
     }
 
-    private static ChatRouteAction ForwardToGAgent(string actorId, string voiceModuleName = "") =>
-        new()
+    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName = "")
+    {
+        var arguments = new Struct();
+        arguments.Fields["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId);
+        if (!string.IsNullOrWhiteSpace(voiceModuleName))
+            arguments.Fields["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString(voiceModuleName);
+
+        return new ChatRouteAction
         {
-            ForwardToGagent = new ForwardToGAgent
+            ForwardToModel = new ForwardToModel
             {
-                ActorId = actorId,
-                VoiceModuleName = voiceModuleName,
+                ToolSetRef = new ChatRouteToolSetRef { Name = "voice.realtime" },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = "aevatar_invoke_gagent",
+                    PrefilledArguments = arguments,
+                },
             },
         };
+    }
 
     private static ChatRouteAction ForwardToModel(string modelName) =>
         new()

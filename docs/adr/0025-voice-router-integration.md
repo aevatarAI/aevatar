@@ -6,6 +6,11 @@ owner: eanzhao
 
 # ADR-0025: Voice Router Integration - Policy-Aware WebSocket Boundary
 
+> Superseded for target encoding by ADR-0026. Voice still resolves through
+> `/ws/voice`, but the policy target is now `ForwardToModel` with
+> `tool_set_ref = voice.realtime` and `tool_choice_hint =
+> aevatar_invoke_gagent`, not a `ForwardToGAgent` wire action.
+
 ## Context
 
 Issue #674 extends the chat route policy from ADR-0024 to voice. Voice in this

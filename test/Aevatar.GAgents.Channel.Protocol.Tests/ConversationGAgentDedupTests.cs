@@ -11,6 +11,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
@@ -893,7 +894,7 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteForwardsToGAgent_CarriesTargetRefToDispatcher()
+    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteUsesGAgentToolHint_CarriesTargetRefToDispatcher()
     {
         var dispatcher = new RecordingRunDispatcher();
         var runner = new RecordingTurnRunner
@@ -921,10 +922,7 @@ public sealed class ConversationGAgentDedupTests
                         Channel = "lark",
                         CommandName = "/daily",
                     },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
-                    },
+                    Action = GAgentToolHint("target-gagent-1"),
                 },
             ]));
         var resolver = new ChatRouteResolver(new StaticChatRouteFallbackProvider("fallback-model"));
@@ -961,7 +959,8 @@ public sealed class ConversationGAgentDedupTests
 
         dispatcher.Dispatched.ShouldHaveSingleItem();
         dispatcher.Dispatched[0].RunId.ShouldBe("corr-route");
-        dispatcher.Dispatched[0].TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        dispatcher.Dispatched[0].TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"]
+            .StringValue.ShouldBe("target-gagent-1");
         dispatcher.Dispatched[0].ReplyToken.ShouldBe("runtime-only-token");
 
         var events = await store.GetEventsAsync(agent.Id);
@@ -2290,6 +2289,24 @@ public sealed class ConversationGAgentDedupTests
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction GAgentToolHint(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Value.ForString(actorId),
+                    },
+                },
+            },
+        },
     };
 
     private sealed class RecordingEventPublisher : IEventPublisher

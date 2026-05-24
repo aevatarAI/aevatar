@@ -3,7 +3,6 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -182,49 +181,20 @@ public sealed record ResponsesCreateCommandPlan(
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Create response branches returned HTTP/SSE/JSON directly from orchestration code.
-//   New principle: Application returns one typed union for error, stream plan, completed result, or boundary forwarding.
+//   New principle: Application returns one typed union for error, stream plan, or completed result.
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
-    ResponsesCreateCompletedCommandResult? Completed,
-    ResponsesForwardCommandResult? Forward)
+    ResponsesCreateCompletedCommandResult? Completed)
 {
     public static ResponsesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
 
     public static ResponsesCreateCommandResult FromStreamPlan(ResponsesCreateCommandPlan plan) =>
-        new(null, plan, null, null);
+        new(null, plan, null);
 
     public static ResponsesCreateCommandResult FromCompleted(ResponsesCreateCompletedCommandResult completed) =>
-        new(null, null, completed, null);
-
-    public static ResponsesCreateCommandResult FromForward(ResponsesForwardCommandResult forward) =>
-        new(null, null, null, forward);
-}
-
-// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
-//   Old pattern: Forward-to-team/GAgent decisions were endpoint locals interleaved with provider-session setup.
-//   New principle: Forwarding is a typed command result so Host can invoke boundary AGUI rendering without owning route policy.
-// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
-//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-public sealed record ResponsesForwardCommandResult(
-    NormalizedResponsesRequest Normalized,
-    ResponsesCallerScope CallerScope,
-    ChatRouteAction Action,
-    LlmSessionRegistrationResult Session,
-    LlmSessionSnapshot? PreviousSnapshot,
-    DateTimeOffset CreatedAt);
-
-public sealed record ResponsesForwardingResult(
-    ResponsesCommandError? Error,
-    LlmSessionSnapshot? Snapshot)
-{
-    public static ResponsesForwardingResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null);
-
-    public static ResponsesForwardingResult FromSnapshot(LlmSessionSnapshot snapshot) =>
-        new(null, snapshot);
+        new(null, null, completed);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -280,7 +250,8 @@ public sealed record MessagesCreateCommandPlan(
     LlmSessionRegistrationResult Session,
     LLMRequest LlmRequest,
     IReadOnlyDictionary<string, string> ToolContextMetadata,
-    ResponsesToolClassification ToolClassification);
+    ResponsesToolClassification ToolClassification,
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Messages create execution directly selected HTTP JSON versus SSE in the Host orchestration body.
@@ -325,21 +296,6 @@ public interface IResponsesCommandFacade
     Task<ResponsesStreamCommandResult> StreamAsync(
         ResponsesCreateCommandPlan plan,
         Func<string, CancellationToken, ValueTask> onTextDelta,
-        CancellationToken ct = default);
-}
-
-public interface IResponsesForwardingApplicationService
-{
-    Task<ResponsesForwardingResult> ForwardAsync(
-        ResponsesForwardCommandResult plan,
-        string bearerToken,
-        Func<AGUIEvent, CancellationToken, ValueTask>? onEventAsync = null,
-        CancellationToken ct = default);
-
-    Task<ResponsesForwardingResult> RecordForwardedFailureAsync(
-        ResponsesForwardCommandResult plan,
-        string code,
-        string message,
         CancellationToken ct = default);
 }
 

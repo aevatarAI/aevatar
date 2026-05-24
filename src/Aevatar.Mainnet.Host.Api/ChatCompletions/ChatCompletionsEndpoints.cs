@@ -48,6 +48,8 @@ internal static class ChatCompletionsApiEndpoints
         [FromServices] IResponsesRouteResolver routeResolver,
         [FromServices] ILlmSessionRegistrationPort sessionRegistrationPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
+        [FromServices] IResponsesToolClassificationService toolClassificationService,
+        [FromServices] IResponsesDirectToolPlanService directToolPlanService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -60,6 +62,8 @@ internal static class ChatCompletionsApiEndpoints
         ArgumentNullException.ThrowIfNull(routeResolver);
         ArgumentNullException.ThrowIfNull(sessionRegistrationPort);
         ArgumentNullException.ThrowIfNull(completionService);
+        ArgumentNullException.ThrowIfNull(toolClassificationService);
+        ArgumentNullException.ThrowIfNull(directToolPlanService);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.ChatCompletions");
 
@@ -107,27 +111,19 @@ internal static class ChatCompletionsApiEndpoints
                     : routeDecision.Action.Reject.Reason);
         }
 
-        var forwardToModel = routeDecision.Action.ForwardToModel;
+        var routeAction = routeDecision.Action.Clone();
+        var forwardToModel = routeAction.ForwardToModel;
         if (forwardToModel is not null)
         {
-            if (HasToolDrivenRouting(forwardToModel))
-            {
-                return ToErrorResult(
-                    StatusCodes.Status501NotImplemented,
-                    "chat_route_action_not_supported",
-                    "Tool-set and tool-choice chat route actions are not supported by /v1/chat/completions in v1.");
-            }
-
             if (!string.IsNullOrWhiteSpace(forwardToModel.ModelName))
                 routedModel = forwardToModel.ModelName.Trim();
         }
-        else if (routeDecision.Action.ForwardToGagent is not null || routeDecision.Action.ForwardToTeam is not null)
+        else
         {
-            return ToErrorResult(
-                StatusCodes.Status501NotImplemented,
-                "chat_route_action_not_supported",
-                "ForwardToGAgent and ForwardToTeam are not supported by /v1/chat/completions in v1.");
+            routeAction.ForwardToModel = new ForwardToModel();
         }
+
+        routeAction.ForwardToModel.ModelName = routedModel;
 
         var createdAt = DateTimeOffset.UtcNow;
         LlmSessionRegistrationResult session;
@@ -151,12 +147,20 @@ internal static class ChatCompletionsApiEndpoints
             callerScope,
             normalized.CompletionId,
             bearerToken);
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
+        var toolPlan = directToolPlanService.Build(routeAction);
+        if (toolPlan.Error is not null)
+        {
+            return ToErrorResult(
+                toolPlan.Error.StatusCode,
+                toolPlan.Error.Code,
+                toolPlan.Error.Message);
+        }
+
+        var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
-            Array.Empty<IResponsesToolProvider>(),
             toolProviderContext,
-            logger,
-            ct);
+            toolPlan.AdditionalToolProviders,
+            ct: ct);
 
         var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
         var effectiveModel = routedModel;
@@ -208,6 +212,7 @@ internal static class ChatCompletionsApiEndpoints
                 toolProviderContext.ToolContextMetadata,
                 normalized,
                 toolClassification,
+                toolPlan.ToolChoiceHintPlan,
                 createdAt,
                 ct);
             return Results.Empty;
@@ -216,12 +221,16 @@ internal static class ChatCompletionsApiEndpoints
         try
         {
             var provider = providerFactory.GetDefault();
-            var completion = await completionService.CollectAsync(
-                provider,
-                llmRequest,
-                toolProviderContext.ToolContextMetadata,
-                toolClassification,
-                ct);
+            ResponsesCompletionResult completion;
+            using (ResponsesToolContext.Push(toolPlan.ToolChoiceHintPlan))
+            {
+                completion = await completionService.CollectAsync(
+                    provider,
+                    llmRequest,
+                    toolProviderContext.ToolContextMetadata,
+                    toolClassification,
+                    ct);
+            }
             await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
             return Results.Json(
                 BuildCompletedChatCompletion(normalized, completion, createdAt.ToUnixTimeSeconds()),
@@ -258,12 +267,6 @@ internal static class ChatCompletionsApiEndpoints
         ?? normalized.ChatMessages.LastOrDefault()?.Content
         ?? string.Empty;
 
-    private static bool HasToolDrivenRouting(ForwardToModel forwardToModel) =>
-        (forwardToModel.ToolSetRef is not null &&
-         !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name)) ||
-        (forwardToModel.ToolChoiceHint is not null &&
-         !string.IsNullOrWhiteSpace(forwardToModel.ToolChoiceHint.ToolName));
-
     private static async Task WriteStreamingChatCompletionAsync(
         HttpResponse response,
         ILLMProviderFactory providerFactory,
@@ -275,6 +278,7 @@ internal static class ChatCompletionsApiEndpoints
         IReadOnlyDictionary<string, string> toolContextMetadata,
         NormalizedChatCompletionsRequest normalized,
         ResponsesToolClassification toolClassification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan,
         DateTimeOffset createdAt,
         CancellationToken ct)
     {
@@ -288,22 +292,26 @@ internal static class ChatCompletionsApiEndpoints
         try
         {
             var provider = providerFactory.GetDefault();
-            var completion = await completionService.StreamAsync(
-                provider,
-                llmRequest,
-                toolContextMetadata,
-                toolClassification,
-                async (delta, token) =>
-                {
-                    if (string.IsNullOrEmpty(delta))
-                        return;
+            ResponsesCompletionResult completion;
+            using (ResponsesToolContext.Push(toolChoiceHintPlan))
+            {
+                completion = await completionService.StreamAsync(
+                    provider,
+                    llmRequest,
+                    toolContextMetadata,
+                    toolClassification,
+                    async (delta, token) =>
+                    {
+                        if (string.IsNullOrEmpty(delta))
+                            return;
 
-                    await WriteDataFrameAsync(
-                        response,
-                        BuildStreamingTextChunk(normalized, createdAt.ToUnixTimeSeconds(), delta),
-                        token);
-                },
-                ct);
+                        await WriteDataFrameAsync(
+                            response,
+                            BuildStreamingTextChunk(normalized, createdAt.ToUnixTimeSeconds(), delta),
+                            token);
+                    },
+                    ct);
+            }
 
             foreach (var toolCall in completion.ForwardedToolCalls)
             {

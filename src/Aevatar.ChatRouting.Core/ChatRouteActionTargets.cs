@@ -7,12 +7,13 @@ public static class ChatRouteActionTargets
 {
     private const string InvokeGAgentToolName = "aevatar_invoke_gagent";
     private const string ActorIdArgument = "actor_id";
+    private const string VoiceModuleNameArgument = "voice_module_name";
 
     public static bool TryGetGAgentActorTarget(
         ChatRouteDecision? decision,
-        out ForwardToGAgent target)
+        out ChatRouteGAgentToolTarget target)
     {
-        target = new ForwardToGAgent();
+        target = default;
         if (TryGetGAgentActorTarget(decision?.OriginalAction, out target))
             return true;
 
@@ -21,17 +22,11 @@ public static class ChatRouteActionTargets
 
     public static bool TryGetGAgentActorTarget(
         ChatRouteAction? action,
-        out ForwardToGAgent target)
+        out ChatRouteGAgentToolTarget target)
     {
-        target = new ForwardToGAgent();
+        target = default;
         if (action is null)
             return false;
-
-        if (action.ForwardToGagent is { } direct)
-        {
-            target = direct.Clone();
-            return !string.IsNullOrWhiteSpace(target.ActorId);
-        }
 
         if (action.ForwardToModel?.ToolChoiceHint is not { } hint ||
             !string.Equals(hint.ToolName, InvokeGAgentToolName, StringComparison.Ordinal))
@@ -43,7 +38,9 @@ public static class ChatRouteActionTargets
         if (string.IsNullOrWhiteSpace(actorId))
             return false;
 
-        target.ActorId = actorId;
+        target = new ChatRouteGAgentToolTarget(
+            actorId,
+            ReadString(hint.PrefilledArguments, VoiceModuleNameArgument));
         return true;
     }
 
@@ -58,3 +55,7 @@ public static class ChatRouteActionTargets
         return value.StringValue?.Trim() ?? string.Empty;
     }
 }
+
+public readonly record struct ChatRouteGAgentToolTarget(
+    string ActorId,
+    string VoiceModuleName);

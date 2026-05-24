@@ -9,6 +9,7 @@ using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -139,10 +140,7 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
                 {
                     RuleId = "rule-1", Priority = 50,
                     Match = new ChatRouteMatch { Channel = "lark" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "agent-x" },
-                    },
+                    Action = GAgentToolHint("agent-x"),
                     Description = "test rule",
                 },
             ]);
@@ -158,7 +156,8 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("\"defaultTarget\"");
         body.Should().Contain("deepseek/deepseek-chat");
         body.Should().Contain("\"ruleId\": \"rule-1\"");
-        body.Should().Contain("\"actorId\": \"agent-x\"");
+        body.Should().Contain("aevatar_invoke_gagent");
+        body.Should().Contain("agent-x");
     }
 
     [Fact]
@@ -167,22 +166,17 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         var snapshot = new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
-                ForwardToGagent = new ForwardToGAgent { ActorId = "default-agent" },
+                ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "default-workflow" },
             },
             [
                 new ChatRouteRule
                 {
-                    RuleId = "legacy-team",
+                    RuleId = "legacy-workflow",
                     Priority = 50,
                     Match = new ChatRouteMatch { Channel = "lark" },
                     Action = new ChatRouteAction
                     {
-                        ForwardToTeam = new ForwardToTeam
-                        {
-                            TeamId = "team-1",
-                            EndpointId = "chat",
-                            ScopeId = Scope,
-                        },
+                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
                     },
                 },
             ]);
@@ -196,10 +190,10 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         body.Should().Contain("\"forwardToModel\"");
         body.Should().Contain("\"toolSetRef\"");
-        body.Should().Contain("aevatar_invoke_gagent");
-        body.Should().Contain("aevatar_invoke_team");
-        body.Should().NotContain("\"forwardToGagent\"");
-        body.Should().NotContain("\"forwardToTeam\"");
+        body.Should().Contain("aevatar_start_workflow");
+        body.Should().Contain("default-workflow");
+        body.Should().Contain("workflow-1");
+        body.Should().NotContain("\"forwardToWorkflow\"");
         commandPort.Upserts.Should().BeEmpty();
     }
 
@@ -311,6 +305,25 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         await app.StartAsync();
         return app;
     }
+
+    private static ChatRouteAction GAgentToolHint(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
+                },
+            },
+        },
+    };
 
     private static string StripLineComments(string source) =>
         Regex.Replace(source, @"^\s*//.*$", string.Empty, RegexOptions.Multiline);
