@@ -268,34 +268,36 @@ public sealed partial class ConversationGAgent
         };
 
         if (!string.Equals(current.PlatformMessageId, updated.PlatformMessageId, StringComparison.Ordinal))
-            evt.PlatformMessageId = updated.PlatformMessageId ?? string.Empty;
+            evt.PlatformMessageIdAssigned = updated.PlatformMessageId ?? string.Empty;
         if (!string.Equals(current.LastFlushedText, updated.LastFlushedText, StringComparison.Ordinal))
-            evt.LastFlushedText = updated.LastFlushedText ?? string.Empty;
+            evt.FlushedTextDelta = updated.LastFlushedText ?? string.Empty;
         if (current.EditCount != updated.EditCount)
-            evt.EditCount = updated.EditCount;
+            evt.EditCountDelta = updated.EditCount - current.EditCount;
         if (!string.Equals(current.TerminalReason, updated.TerminalReason, StringComparison.Ordinal))
             evt.TerminalReason = updated.TerminalReason ?? string.Empty;
 
         var currentOperation = current.InFlight?.Operation ?? NyxRelayTextOperationKind.Unspecified;
         var updatedOperation = updated.InFlight?.Operation ?? NyxRelayTextOperationKind.Unspecified;
         if (currentOperation != updatedOperation)
-            evt.NyxRelayInFlightOperation = updatedOperation;
+            evt.NyxRelayOperation = updatedOperation;
 
         var currentSequence = current.InFlight?.Sequence ?? 0;
         var updatedSequence = updated.InFlight?.Sequence ?? 0;
         if (currentSequence != updatedSequence)
-            evt.NyxRelayInFlightSequence = updatedSequence;
+            evt.OperationSequence = updatedSequence;
 
-        if (current.OperationGeneration != updated.OperationGeneration)
-            evt.NyxRelayOperationGeneration = updated.OperationGeneration;
+        if (current.OperationGeneration != updated.OperationGeneration ||
+            currentOperation != updatedOperation ||
+            currentSequence != updatedSequence)
+            evt.OperationGeneration = updated.OperationGeneration;
         if (!string.Equals(current.PendingAccumulatedText, updated.PendingAccumulatedText, StringComparison.Ordinal))
-            evt.PendingAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
+            evt.QueuedAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
         if (!string.Equals(current.PendingFinalizeText, updated.PendingFinalizeText, StringComparison.Ordinal))
-            evt.PendingFinalizeText = updated.PendingFinalizeText ?? string.Empty;
+            evt.FinalizeText = updated.PendingFinalizeText ?? string.Empty;
         if (!string.Equals(current.PendingFinalizeCommandId, updated.PendingFinalizeCommandId, StringComparison.Ordinal))
-            evt.PendingFinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
+            evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
         if (current.PendingTerminalState != updated.PendingTerminalState)
-            evt.PendingNyxRelayTerminalState = updated.PendingTerminalState;
+            evt.NyxRelayTerminalState = updated.PendingTerminalState;
 
         return evt;
     }

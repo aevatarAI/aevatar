@@ -1596,6 +1596,94 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task NyxRelayStreaming_EmitsTransitionFactsForStartEditAndTerminal()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_nyx_emit"),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-nyx-emit", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-nyx-emit", "relay-msg-1", "hello"));
+        var started = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            started,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextIdle,
+            ConversationReplyLifecyclePhase.TextIdle);
+        started.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        started.OperationSequence.ShouldBe(1);
+        started.OperationGeneration.ShouldBe(1);
+        started.QueuedAccumulatedText.ShouldBe("hello");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var flushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            flushed,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextIdle,
+            ConversationReplyLifecyclePhase.TextPlaceholderSent);
+        flushed.PlatformMessageIdAssigned.ShouldBe("om_nyx_emit");
+        flushed.FlushedTextDelta.ShouldBe("hello");
+        flushed.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        flushed.OperationSequence.ShouldBe(0);
+        flushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-nyx-emit", "relay-msg-1", "hello edited"));
+        var editStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            editStarted,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextPlaceholderSent,
+            ConversationReplyLifecyclePhase.TextPlaceholderSent);
+        editStarted.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        editStarted.OperationSequence.ShouldBe(1);
+        editStarted.OperationGeneration.ShouldBe(2);
+        editStarted.QueuedAccumulatedText.ShouldBe("hello edited");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var edited = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            edited,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextPlaceholderSent,
+            ConversationReplyLifecyclePhase.TextStreaming);
+        edited.FlushedTextDelta.ShouldBe("hello edited");
+        edited.EditCountDelta.ShouldBe(1);
+        edited.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        edited.OperationSequence.ShouldBe(0);
+        edited.OperationGeneration.ShouldBe(2);
+        edited.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-nyx-emit",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-nyx-emit", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello edited" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        var terminated = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            terminated,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextStreaming,
+            ConversationReplyLifecyclePhase.TextTerminalSucceeded);
+        terminated.TerminalReason.ShouldBe("completed");
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_TextStreamingLifecycleSurvivesReactivation()
     {
         var store = new InMemoryEventStore();
@@ -1658,50 +1746,6 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task ActivateAsync_LegacyReplyLifecycleSnapshotEvent_FallbackReplacesCurrentState()
-    {
-        var store = new InMemoryEventStore();
-        await AppendStateEventAsync(
-            store,
-            "conv-legacy-lifecycle-replay",
-            new ConversationReplyLifecycleChangedEvent
-            {
-                LegacyLifecycleSnapshot = new LegacyConversationReplyLifecycleSnapshot
-                {
-                    CorrelationId = "corr-legacy",
-                    Mode = ConversationReplyLifecycleMode.NyxRelayText,
-                    Phase = ConversationReplyLifecyclePhase.TextStreaming,
-                    PlatformMessageId = "om_legacy",
-                    LastFlushedText = "legacy text",
-                    EditCount = 2,
-                    UpdatedAtUnixMs = 123,
-                    NyxRelayInFlightOperation = NyxRelayTextOperationKind.Interim,
-                    NyxRelayInFlightSequence = 7,
-                    NyxRelayOperationGeneration = 9,
-                    PendingAccumulatedText = "pending legacy",
-                },
-                ChangedAtUnixMs = 456,
-            },
-            1);
-
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-legacy-lifecycle-replay", store: store);
-
-        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
-        lifecycle.CorrelationId.ShouldBe("corr-legacy");
-        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
-        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextStreaming);
-        lifecycle.PlatformMessageId.ShouldBe("om_legacy");
-        lifecycle.LastFlushedText.ShouldBe("legacy text");
-        lifecycle.EditCount.ShouldBe(2);
-        lifecycle.UpdatedAtUnixMs.ShouldBe(123);
-        lifecycle.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
-        lifecycle.NyxRelayInFlightSequence.ShouldBe(7);
-        lifecycle.NyxRelayOperationGeneration.ShouldBe(9);
-        lifecycle.PendingAccumulatedText.ShouldBe("pending legacy");
-        agent.State.LastUpdatedUnixMs.ShouldBe(456);
-    }
-
-    [Fact]
     public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossNyxRelayTransitions()
     {
         var store = new InMemoryEventStore();
@@ -1715,10 +1759,9 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.TextIdle,
                 Phase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
                 ChangedAtUnixMs = 100,
-                PlatformMessageId = "om_fact",
-                LastFlushedText = "first",
-                EditCount = 1,
-                NyxRelayOperationGeneration = 1,
+                PlatformMessageIdAssigned = "om_fact",
+                FlushedTextDelta = "first",
+                OperationGeneration = 1,
             },
             1);
         await AppendStateEventAsync(
@@ -1731,14 +1774,14 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
                 Phase = ConversationReplyLifecyclePhase.TextStreaming,
                 ChangedAtUnixMs = 200,
-                LastFlushedText = "second",
-                EditCount = 2,
-                NyxRelayInFlightOperation = NyxRelayTextOperationKind.Final,
-                NyxRelayInFlightSequence = 2,
-                NyxRelayOperationGeneration = 2,
-                PendingFinalizeText = "final",
-                PendingFinalizeCommandId = "cmd-final",
-                PendingNyxRelayTerminalState = LlmReplyTerminalState.Completed,
+                FlushedTextDelta = "second",
+                EditCountDelta = 2,
+                NyxRelayOperation = NyxRelayTextOperationKind.Final,
+                OperationSequence = 2,
+                OperationGeneration = 2,
+                FinalizeText = "final",
+                FinalizeCommandId = "cmd-final",
+                NyxRelayTerminalState = LlmReplyTerminalState.Completed,
             },
             2);
         await AppendStateEventAsync(
@@ -1751,11 +1794,11 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.TextStreaming,
                 Phase = ConversationReplyLifecyclePhase.TextTerminalSucceeded,
                 ChangedAtUnixMs = 300,
-                NyxRelayInFlightOperation = NyxRelayTextOperationKind.Unspecified,
-                NyxRelayInFlightSequence = 0,
-                PendingFinalizeText = string.Empty,
-                PendingFinalizeCommandId = string.Empty,
-                PendingNyxRelayTerminalState = LlmReplyTerminalState.Unspecified,
+                NyxRelayOperation = NyxRelayTextOperationKind.Unspecified,
+                OperationSequence = 0,
+                FinalizeText = string.Empty,
+                FinalizeCommandId = string.Empty,
+                NyxRelayTerminalState = LlmReplyTerminalState.Unspecified,
                 TerminalReason = "completed",
             },
             3);
@@ -2168,6 +2211,27 @@ public sealed class ConversationGAgentDedupTests
             ],
             expectedVersion: version - 1);
 
+    private static ConversationReplyLifecycleChangedEvent LastReplyLifecycleChanged(
+        IReadOnlyList<StateEvent> events) =>
+        events
+            .Where(e => e.EventType == ConversationReplyLifecycleChangedEvent.Descriptor.FullName)
+            .Select(e => ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(e.EventData.Value))
+            .Last();
+
+    private static void AssertReplyLifecycleTransition(
+        ConversationReplyLifecycleChangedEvent evt,
+        ConversationReplyLifecycleMode mode,
+        string correlationId,
+        ConversationReplyLifecyclePhase previousPhase,
+        ConversationReplyLifecyclePhase phase)
+    {
+        evt.Mode.ShouldBe(mode);
+        evt.CorrelationId.ShouldBe(correlationId);
+        evt.PreviousPhase.ShouldBe(previousPhase);
+        evt.Phase.ShouldBe(phase);
+        evt.ChangedAtUnixMs.ShouldBeGreaterThan(0);
+    }
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(
         RecordingTurnRunner runner,
         string agentId,
@@ -2545,6 +2609,139 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task LarkCardStreaming_EmitsTransitionFactsForCreateStreamFinalize()
+    {
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-emit");
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello"));
+        var createStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            createStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.Unspecified,
+            ConversationReplyLifecyclePhase.LarkCardCreating);
+        createStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Create);
+        createStarted.OperationSequence.ShouldBe(1);
+        createStarted.OperationGeneration.ShouldBe(1);
+        createStarted.QueuedAccumulatedText.ShouldBe("hello");
+
+        var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-emit",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello"),
+            success: true,
+            cardId: "card_emit",
+            cardMessageId: "om_card_emit"));
+        var createFlushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            createFlushed,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardCreating,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        createFlushed.CardIdAssigned.ShouldBe("card_emit");
+        createFlushed.CardMessageIdAssigned.ShouldBe("om_card_emit");
+        createFlushed.OriginalCardIdAssigned.ShouldBe("card_emit");
+        createFlushed.FlushedTextDelta.ShouldBe("hello");
+        createFlushed.SequenceDelta.ShouldBe(1);
+        createFlushed.HasStreamingElementIdSelected.ShouldBeFalse();
+        createFlushed.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        createFlushed.OperationSequence.ShouldBe(0);
+        createFlushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello edited"));
+        var streamStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            streamStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        streamStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Stream);
+        streamStarted.OperationSequence.ShouldBe(2);
+        streamStarted.OperationGeneration.ShouldBe(2);
+        streamStarted.QueuedAccumulatedText.ShouldBe("hello edited");
+
+        var streamLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-emit",
+            streamLifecycle.LarkCardInFlightSequence,
+            streamLifecycle.LarkCardOperationGeneration,
+            "card_emit",
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello edited"),
+            success: true));
+        var streamFlushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            streamFlushed,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        streamFlushed.FlushedTextDelta.ShouldBe("hello edited");
+        streamFlushed.SequenceDelta.ShouldBe(1);
+        streamFlushed.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        streamFlushed.OperationSequence.ShouldBe(0);
+        streamFlushed.OperationGeneration.ShouldBe(2);
+        streamFlushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-card-emit",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-card-emit", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        var finalizeStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            finalizeStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        finalizeStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Finalize);
+        finalizeStarted.OperationSequence.ShouldBe(3);
+        finalizeStarted.OperationGeneration.ShouldBe(3);
+        finalizeStarted.FinalizeText.ShouldBe("hello final");
+        finalizeStarted.FinalizeCommandId.ShouldBe("llm:act-card-emit");
+
+        var finalizeLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-emit",
+            finalizeLifecycle.LarkCardInFlightSequence,
+            finalizeLifecycle.LarkCardOperationGeneration,
+            "card_emit",
+            "om_card_emit",
+            "llm:act-card-emit",
+            CreateRelayActivity("act-card-emit", "relay-msg-1"),
+            "hello final",
+            "hello edited",
+            success: true,
+            finalTextWritten: true));
+        var finalized = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            finalized,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardCompleted);
+        finalized.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        finalized.OperationSequence.ShouldBe(0);
+        finalized.OperationGeneration.ShouldBe(3);
+        finalized.QueuedAccumulatedText.ShouldBeEmpty();
+        finalized.FinalizeText.ShouldBeEmpty();
+        finalized.FinalizeCommandId.ShouldBeEmpty();
+        finalized.TerminalReason.ShouldBe("completed");
+    }
+
+    [Fact]
     public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossLarkCardTransitions()
     {
         var store = new InMemoryEventStore();
@@ -2558,9 +2755,9 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.Unspecified,
                 Phase = ConversationReplyLifecyclePhase.LarkCardCreating,
                 ChangedAtUnixMs = 100,
-                LarkCardInFlightOperation = LarkCardOperationPhase.Create,
-                LarkCardInFlightSequence = 1,
-                LarkCardOperationGeneration = 1,
+                LarkCardOperation = LarkCardOperationPhase.Create,
+                OperationSequence = 1,
+                OperationGeneration = 1,
             },
             1);
         await AppendStateEventAsync(
@@ -2573,14 +2770,14 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.LarkCardCreating,
                 Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
                 ChangedAtUnixMs = 200,
-                CardId = "card_fact",
-                CardMessageId = "om_fact",
-                OriginalCardId = "card_fact",
-                LastFlushedText = "hello",
-                Sequence = 1,
-                StreamingElementId = "streaming_main",
-                LarkCardInFlightOperation = LarkCardOperationPhase.Unspecified,
-                LarkCardInFlightSequence = 0,
+                CardIdAssigned = "card_fact",
+                CardMessageIdAssigned = "om_fact",
+                OriginalCardIdAssigned = "card_fact",
+                FlushedTextDelta = "hello",
+                SequenceDelta = 1,
+                StreamingElementIdSelected = "streaming_main",
+                LarkCardOperation = LarkCardOperationPhase.Unspecified,
+                OperationSequence = 0,
             },
             2);
         await AppendStateEventAsync(
@@ -2593,12 +2790,12 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
                 Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
                 ChangedAtUnixMs = 300,
-                PendingAccumulatedText = "queued",
-                PendingFinalizeText = "final",
-                PendingFinalizeCommandId = "cmd-final",
-                LarkCardInFlightOperation = LarkCardOperationPhase.Finalize,
-                LarkCardInFlightSequence = 2,
-                LarkCardOperationGeneration = 2,
+                QueuedAccumulatedText = "queued",
+                FinalizeText = "final",
+                FinalizeCommandId = "cmd-final",
+                LarkCardOperation = LarkCardOperationPhase.Finalize,
+                OperationSequence = 2,
+                OperationGeneration = 2,
             },
             3);
         await AppendStateEventAsync(
@@ -2611,13 +2808,13 @@ public sealed class ConversationGAgentDedupTests
                 PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
                 Phase = ConversationReplyLifecyclePhase.LarkCardCompleted,
                 ChangedAtUnixMs = 400,
-                LastFlushedText = "final",
-                Sequence = 2,
-                PendingAccumulatedText = string.Empty,
-                PendingFinalizeText = string.Empty,
-                PendingFinalizeCommandId = string.Empty,
-                LarkCardInFlightOperation = LarkCardOperationPhase.Unspecified,
-                LarkCardInFlightSequence = 0,
+                FlushedTextDelta = "final",
+                SequenceDelta = 1,
+                QueuedAccumulatedText = string.Empty,
+                FinalizeText = string.Empty,
+                FinalizeCommandId = string.Empty,
+                LarkCardOperation = LarkCardOperationPhase.Unspecified,
+                OperationSequence = 0,
                 TerminalReason = "completed",
             },
             4);

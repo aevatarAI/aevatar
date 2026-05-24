@@ -2290,16 +2290,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ConversationReplyLifecycleChangedEvent evt)
     {
         var next = current.Clone();
-        if (evt.LegacyLifecycleSnapshot is { } legacySnapshot &&
-            !string.IsNullOrWhiteSpace(legacySnapshot.CorrelationId))
-        {
-            var legacyLifecycle = ToReplyLifecycleState(legacySnapshot);
-            UpsertReplyLifecycle(next.ActiveReplyLifecycles, legacyLifecycle);
-            next.LastUpdatedUnixMs = evt.ChangedAtUnixMs > 0
-                ? evt.ChangedAtUnixMs
-                : legacyLifecycle.UpdatedAtUnixMs;
-            return next;
-        }
 
         var normalizedCorrelationId = NormalizeOptional(evt.CorrelationId);
         if (normalizedCorrelationId is null || evt.Mode == ConversationReplyLifecycleMode.Unspecified)
@@ -2319,35 +2309,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return next;
     }
 
-    private static ConversationReplyLifecycleState ToReplyLifecycleState(
-        LegacyConversationReplyLifecycleSnapshot snapshot) =>
-        new()
-        {
-            CorrelationId = snapshot.CorrelationId ?? string.Empty,
-            Mode = snapshot.Mode,
-            Phase = snapshot.Phase,
-            PlatformMessageId = snapshot.PlatformMessageId ?? string.Empty,
-            CardId = snapshot.CardId ?? string.Empty,
-            CardMessageId = snapshot.CardMessageId ?? string.Empty,
-            OriginalCardId = snapshot.OriginalCardId ?? string.Empty,
-            LastFlushedText = snapshot.LastFlushedText ?? string.Empty,
-            EditCount = snapshot.EditCount,
-            Sequence = snapshot.Sequence,
-            StreamingElementId = snapshot.StreamingElementId ?? string.Empty,
-            TerminalReason = snapshot.TerminalReason ?? string.Empty,
-            UpdatedAtUnixMs = snapshot.UpdatedAtUnixMs,
-            LarkCardInFlightOperation = snapshot.LarkCardInFlightOperation,
-            LarkCardInFlightSequence = snapshot.LarkCardInFlightSequence,
-            LarkCardOperationGeneration = snapshot.LarkCardOperationGeneration,
-            PendingAccumulatedText = snapshot.PendingAccumulatedText ?? string.Empty,
-            PendingFinalizeText = snapshot.PendingFinalizeText ?? string.Empty,
-            PendingFinalizeCommandId = snapshot.PendingFinalizeCommandId ?? string.Empty,
-            NyxRelayInFlightOperation = snapshot.NyxRelayInFlightOperation,
-            NyxRelayInFlightSequence = snapshot.NyxRelayInFlightSequence,
-            NyxRelayOperationGeneration = snapshot.NyxRelayOperationGeneration,
-            PendingNyxRelayTerminalState = snapshot.PendingNyxRelayTerminalState,
-        };
-
     private static void ApplyReplyLifecycleTransitionFact(
         ConversationReplyLifecycleState lifecycle,
         ConversationReplyLifecycleChangedEvent evt)
@@ -2355,44 +2316,52 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (evt.Phase != ConversationReplyLifecyclePhase.Unspecified)
             lifecycle.Phase = evt.Phase;
 
-        if (evt.HasPlatformMessageId)
-            lifecycle.PlatformMessageId = evt.PlatformMessageId ?? string.Empty;
-        if (evt.HasCardId)
-            lifecycle.CardId = evt.CardId ?? string.Empty;
-        if (evt.HasCardMessageId)
-            lifecycle.CardMessageId = evt.CardMessageId ?? string.Empty;
-        if (evt.HasOriginalCardId)
-            lifecycle.OriginalCardId = evt.OriginalCardId ?? string.Empty;
-        if (evt.HasLastFlushedText)
-            lifecycle.LastFlushedText = evt.LastFlushedText ?? string.Empty;
-        if (evt.HasEditCount)
-            lifecycle.EditCount = evt.EditCount;
-        if (evt.HasSequence)
-            lifecycle.Sequence = evt.Sequence;
-        if (evt.HasStreamingElementId)
-            lifecycle.StreamingElementId = evt.StreamingElementId ?? string.Empty;
+        if (evt.HasPlatformMessageIdAssigned)
+            lifecycle.PlatformMessageId = evt.PlatformMessageIdAssigned ?? string.Empty;
+        if (evt.HasCardIdAssigned)
+            lifecycle.CardId = evt.CardIdAssigned ?? string.Empty;
+        if (evt.HasCardMessageIdAssigned)
+            lifecycle.CardMessageId = evt.CardMessageIdAssigned ?? string.Empty;
+        if (evt.HasOriginalCardIdAssigned)
+            lifecycle.OriginalCardId = evt.OriginalCardIdAssigned ?? string.Empty;
+        if (evt.HasFlushedTextDelta)
+            lifecycle.LastFlushedText = evt.FlushedTextDelta ?? string.Empty;
+        if (evt.HasEditCountDelta)
+            lifecycle.EditCount += evt.EditCountDelta;
+        if (evt.HasSequenceDelta)
+            lifecycle.Sequence += evt.SequenceDelta;
+        if (evt.HasStreamingElementIdSelected)
+            lifecycle.StreamingElementId = evt.StreamingElementIdSelected ?? string.Empty;
         if (evt.HasTerminalReason)
             lifecycle.TerminalReason = evt.TerminalReason ?? string.Empty;
-        if (evt.HasLarkCardInFlightOperation)
-            lifecycle.LarkCardInFlightOperation = evt.LarkCardInFlightOperation;
-        if (evt.HasLarkCardInFlightSequence)
-            lifecycle.LarkCardInFlightSequence = evt.LarkCardInFlightSequence;
-        if (evt.HasLarkCardOperationGeneration)
-            lifecycle.LarkCardOperationGeneration = evt.LarkCardOperationGeneration;
-        if (evt.HasPendingAccumulatedText)
-            lifecycle.PendingAccumulatedText = evt.PendingAccumulatedText ?? string.Empty;
-        if (evt.HasPendingFinalizeText)
-            lifecycle.PendingFinalizeText = evt.PendingFinalizeText ?? string.Empty;
-        if (evt.HasPendingFinalizeCommandId)
-            lifecycle.PendingFinalizeCommandId = evt.PendingFinalizeCommandId ?? string.Empty;
-        if (evt.HasNyxRelayInFlightOperation)
-            lifecycle.NyxRelayInFlightOperation = evt.NyxRelayInFlightOperation;
-        if (evt.HasNyxRelayInFlightSequence)
-            lifecycle.NyxRelayInFlightSequence = evt.NyxRelayInFlightSequence;
-        if (evt.HasNyxRelayOperationGeneration)
-            lifecycle.NyxRelayOperationGeneration = evt.NyxRelayOperationGeneration;
-        if (evt.HasPendingNyxRelayTerminalState)
-            lifecycle.PendingNyxRelayTerminalState = evt.PendingNyxRelayTerminalState;
+        if (evt.HasLarkCardOperation)
+            lifecycle.LarkCardInFlightOperation = evt.LarkCardOperation;
+        if (evt.HasNyxRelayOperation)
+            lifecycle.NyxRelayInFlightOperation = evt.NyxRelayOperation;
+        if (evt.HasOperationSequence)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardInFlightSequence = evt.OperationSequence;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayInFlightSequence = evt.OperationSequence;
+        }
+
+        if (evt.HasOperationGeneration)
+        {
+            if (evt.Mode == ConversationReplyLifecycleMode.LarkCard)
+                lifecycle.LarkCardOperationGeneration = evt.OperationGeneration;
+            else if (evt.Mode == ConversationReplyLifecycleMode.NyxRelayText)
+                lifecycle.NyxRelayOperationGeneration = evt.OperationGeneration;
+        }
+
+        if (evt.HasQueuedAccumulatedText)
+            lifecycle.PendingAccumulatedText = evt.QueuedAccumulatedText ?? string.Empty;
+        if (evt.HasFinalizeText)
+            lifecycle.PendingFinalizeText = evt.FinalizeText ?? string.Empty;
+        if (evt.HasFinalizeCommandId)
+            lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
+        if (evt.HasNyxRelayTerminalState)
+            lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
 
         if (evt.ChangedAtUnixMs > 0)
             lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;

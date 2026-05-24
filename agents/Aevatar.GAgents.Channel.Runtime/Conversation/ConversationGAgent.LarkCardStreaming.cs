@@ -272,38 +272,40 @@ public sealed partial class ConversationGAgent
         };
 
         if (!string.Equals(current.CardId, updated.CardId, StringComparison.Ordinal))
-            evt.CardId = updated.CardId ?? string.Empty;
+            evt.CardIdAssigned = updated.CardId ?? string.Empty;
         if (!string.Equals(current.CardMessageId, updated.CardMessageId, StringComparison.Ordinal))
-            evt.CardMessageId = updated.CardMessageId ?? string.Empty;
+            evt.CardMessageIdAssigned = updated.CardMessageId ?? string.Empty;
         if (!string.Equals(current.OriginalCardId, updated.OriginalCardId, StringComparison.Ordinal))
-            evt.OriginalCardId = updated.OriginalCardId ?? string.Empty;
+            evt.OriginalCardIdAssigned = updated.OriginalCardId ?? string.Empty;
         if (!string.Equals(current.LastFlushedText, updated.LastFlushedText, StringComparison.Ordinal))
-            evt.LastFlushedText = updated.LastFlushedText ?? string.Empty;
+            evt.FlushedTextDelta = updated.LastFlushedText ?? string.Empty;
         if (current.Sequence != updated.Sequence)
-            evt.Sequence = updated.Sequence;
+            evt.SequenceDelta = updated.Sequence - current.Sequence;
         if (!string.Equals(current.StreamingElementId, updated.StreamingElementId, StringComparison.Ordinal))
-            evt.StreamingElementId = updated.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId;
+            evt.StreamingElementIdSelected = updated.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId;
         if (!string.Equals(current.TerminalReason, updated.TerminalReason, StringComparison.Ordinal))
             evt.TerminalReason = updated.TerminalReason ?? string.Empty;
 
         var currentOperation = current.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified;
         var updatedOperation = updated.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified;
         if (currentOperation != updatedOperation)
-            evt.LarkCardInFlightOperation = updatedOperation;
+            evt.LarkCardOperation = updatedOperation;
 
         var currentSequence = current.InFlight?.Sequence ?? 0;
         var updatedSequence = updated.InFlight?.Sequence ?? 0;
         if (currentSequence != updatedSequence)
-            evt.LarkCardInFlightSequence = updatedSequence;
+            evt.OperationSequence = updatedSequence;
 
-        if (current.OperationGeneration != updated.OperationGeneration)
-            evt.LarkCardOperationGeneration = updated.OperationGeneration;
+        if (current.OperationGeneration != updated.OperationGeneration ||
+            currentOperation != updatedOperation ||
+            currentSequence != updatedSequence)
+            evt.OperationGeneration = updated.OperationGeneration;
         if (!string.Equals(current.PendingAccumulatedText, updated.PendingAccumulatedText, StringComparison.Ordinal))
-            evt.PendingAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
+            evt.QueuedAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
         if (!string.Equals(current.PendingFinalizeText, updated.PendingFinalizeText, StringComparison.Ordinal))
-            evt.PendingFinalizeText = updated.PendingFinalizeText ?? string.Empty;
+            evt.FinalizeText = updated.PendingFinalizeText ?? string.Empty;
         if (!string.Equals(current.PendingFinalizeCommandId, updated.PendingFinalizeCommandId, StringComparison.Ordinal))
-            evt.PendingFinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
+            evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
 
         return evt;
     }
