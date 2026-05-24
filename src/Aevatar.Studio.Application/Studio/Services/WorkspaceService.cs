@@ -104,25 +104,6 @@ public sealed class WorkspaceService
             .ToList();
     }
 
-    #pragma warning disable CS0618
-    [Obsolete("Use ListDraftsAsync.")]
-    public async Task<IReadOnlyList<WorkflowSummary>> ListWorkflowsAsync(CancellationToken cancellationToken = default)
-    {
-        return (await ListDraftsAsync(cancellationToken))
-            .Select(summary => new WorkflowSummary(
-                summary.WorkflowId,
-                summary.Name,
-                summary.Description,
-                summary.FileName,
-                summary.FilePath,
-                summary.DirectoryId,
-                summary.DirectoryLabel,
-                summary.StepCount,
-                HasLayout: false,
-                summary.UpdatedAtUtc))
-            .ToList();
-    }
-
     public async Task<WorkflowDraftResponse?> GetDraftAsync(string workflowId, CancellationToken cancellationToken = default)
     {
         var workspace = await _queryPort.GetAsync(cancellationToken);
@@ -136,32 +117,6 @@ public sealed class WorkspaceService
         return ToWorkflowDraftResponse(file);
     }
 
-    [Obsolete("Use GetDraftAsync.")]
-    public async Task<WorkflowFileResponse?> GetWorkflowAsync(string workflowId, CancellationToken cancellationToken = default)
-    {
-        var workspace = await _queryPort.GetAsync(cancellationToken);
-        var file = workspace.Drafts.FirstOrDefault(item =>
-            string.Equals(item.WorkflowId, workflowId, StringComparison.Ordinal));
-        if (file is null)
-        {
-            return null;
-        }
-
-        var parse = _yamlDocumentService.Parse(file.Yaml);
-        return new WorkflowFileResponse(
-            file.WorkflowId,
-            file.Name,
-            file.FileName,
-            file.FilePath,
-            file.DirectoryId,
-            file.DirectoryLabel,
-            file.Yaml,
-            parse.Document,
-            Layout: null,
-            parse.Findings,
-            file.UpdatedAtUtc);
-    }
-
     public Task<WorkflowDraftResponse> CreateDraftAsync(
         SaveWorkflowDraftRequest request,
         CancellationToken cancellationToken = default)
@@ -172,25 +127,6 @@ public sealed class WorkspaceService
         SaveWorkflowDraftRequest request,
         CancellationToken cancellationToken = default)
         => SaveDraftAsyncCore(NormalizeRequired(workflowId, nameof(workflowId)), request, cancellationToken);
-
-    [Obsolete("Use CreateDraftAsync or UpdateDraftAsync.")]
-    public Task<WorkflowDraftResponse> SaveWorkflowAsync(
-        SaveWorkflowFileRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var nextRequest = new SaveWorkflowDraftRequest(
-            request.DirectoryId,
-            request.WorkflowName,
-            request.FileName,
-            request.Yaml,
-            Layout: null);
-        return string.IsNullOrWhiteSpace(request.WorkflowId)
-            ? CreateDraftAsync(nextRequest, cancellationToken)
-            : UpdateDraftAsync(request.WorkflowId, nextRequest, cancellationToken);
-    }
-    #pragma warning restore CS0618
 
     private async Task<WorkflowDraftResponse> SaveDraftAsyncCore(
         string? workflowId,
