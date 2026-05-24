@@ -910,6 +910,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
 
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         if (ownerScope is not null)
         {
             command.OwnerScope = ownerScope.Clone();

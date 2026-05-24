@@ -222,6 +222,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // Refactor (iter5/cluster-012):
         //   Old pattern: Upsert awaited a result object that only repeated accepted.
         //   New principle: Upsert awaits command completion; accepted status is emitted by this tool boundary.
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         await commandPort.UpsertAsync(
             new UserAgentCatalogUpsertCommand
             {

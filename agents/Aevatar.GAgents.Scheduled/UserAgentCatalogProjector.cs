@@ -139,6 +139,10 @@ public sealed class UserAgentCatalogProjector
         // is the authoritative source for ownership; the projector materializes it for
         // the caller-scoped readmodel filter rather than recomputing or inferring it.
 #pragma warning disable CS0612
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         var entryScope = entry.OwnerScope ?? OwnerScope.FromLegacyFields(entry.OwnerNyxUserId, entry.Platform);
         if (entry.OwnerScope is null)
         {

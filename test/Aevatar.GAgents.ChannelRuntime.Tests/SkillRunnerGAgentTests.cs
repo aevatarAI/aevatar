@@ -305,6 +305,51 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_WithLegacyOwnershipFields_DerivesOwnerScopeAndPreservesLegacyFields()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-legacy-owner-fallback", provider);
+        await agent.ActivateAsync();
+
+        var initialize = CreateInitializeCommand();
+#pragma warning disable CS0612 // legacy fallback branch must keep backwards-compatible writes
+        initialize.OutboundConfig.OwnerNyxUserId = "legacy-user-1";
+        initialize.OutboundConfig.Platform = "nyxid";
+#pragma warning restore CS0612
+
+        await agent.HandleInitializeAsync(initialize);
+
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
+        command.OwnerScope.Should().NotBeNull();
+        command.OwnerScope!.MatchesStrictly(OwnerScope.ForNyxIdNative("legacy-user-1")).Should().BeTrue();
+#pragma warning disable CS0612
+        command.Platform.Should().Be("nyxid");
+        command.OwnerNyxUserId.Should().Be("legacy-user-1");
+#pragma warning restore CS0612
+    }
+
+    [Fact]
     public async Task SendOutputAsync_ShouldUseTypedReceiveTarget_WhenLarkReceiveIdIsPopulated()
     {
         // Initialize with typed fields set (the shape AgentBuilderTool now writes for p2p flows).
