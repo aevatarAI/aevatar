@@ -1324,6 +1324,66 @@ if [ -f "${lark_card_streaming_file}" ]; then
   fi
 fi
 
+# Refactor (iter57/cluster-068-lark-extend-signal):
+#   Old pattern: ConversationGAgent Nyx relay text streaming awaited external relay writes
+#   inside the actor turn and interpreted their result inline.
+#   New principle: text helpers only dispatch NyxRelayTextOperationCompletedEvent with
+#   minimal raw result; actor handlers own lifecycle, timestamps, terminal reasons, and
+#   completion persistence.
+conversation_gagent_file="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"
+if [ -f "${conversation_gagent_file}" ]; then
+  nyx_relay_text_helper_report="$(
+    awk '
+      /private async Task ExecuteNyxRelayTextOperationAsync/ {
+        in_helper = 1
+        body_started = 0
+        brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
+      }
+      in_helper {
+        line = $0
+        hard_forbidden = "TransitionNyxRelayStreamingPhaseAsync|PersistStreamedCompletionAsync|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|TerminalSucceeded|TerminalPartial|DisabledPreSend|SuppressingInterim|terminalReason|failed_self_heal|final_edit_failed|interim_edit_failed|first_send_failed"
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/
+
+        if (body_started && !inside_completed_signal && line ~ hard_forbidden) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
+          in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
+        }
+      }
+    ' "${conversation_gagent_file}"
+  )"
+  if [ -n "${nyx_relay_text_helper_report}" ]; then
+    echo "${nyx_relay_text_helper_report}"
+    echo "ConversationGAgent Nyx relay text helper must stay signal-only: no lifecycle transitions, terminal reasons, timestamps, or persistence in ExecuteNyxRelayTextOperationAsync."
+    exit 1
+  fi
+fi
+
 check_orchestration_class_guard() {
   local file_path="$1"
   local max_non_empty_lines="$2"
