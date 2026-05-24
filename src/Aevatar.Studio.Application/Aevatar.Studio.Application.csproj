@@ -37,6 +37,5 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
-    <InternalsVisibleTo Include="Aevatar.Tools.Cli.Tests" />
   </ItemGroup>
 </Project>

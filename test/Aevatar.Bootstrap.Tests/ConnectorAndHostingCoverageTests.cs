@@ -142,10 +142,11 @@ public class ConnectorAndHostingCoverageTests
     [Fact]
     public async Task CliConnector_ShouldRejectPolicyAndExecuteCommand()
     {
+        var (command, args) = BuildSuccessfulCliCommand();
         var connector = new CliConnector(
             "cli-test",
-            command: "dotnet",
-            fixedArguments: ["--info"],
+            command: command,
+            fixedArguments: args,
             allowedOperations: ["status"],
             allowedInputKeys: ["q"]);
 
@@ -174,6 +175,15 @@ public class ConnectorAndHostingCoverageTests
         success.Success.Should().BeTrue();
         success.Metadata.Should().ContainKey("connector.cli.exit_code");
         success.Metadata["connector.cli.exit_code"].Should().Be("0");
+    }
+
+    private static (string Command, string[] Arguments) BuildSuccessfulCliCommand()
+    {
+        if (OperatingSystem.IsWindows())
+            return ("cmd", ["/c", "exit 0"]);
+
+        var truePath = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
+        return (truePath, []);
     }
 
     [Fact]
