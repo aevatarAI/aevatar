@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -402,12 +403,14 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         };
 
         AppendMetadata(chatRequest.Metadata, context.Headers);
-        if (!string.IsNullOrWhiteSpace(command.NyxIdAccessToken))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = command.NyxIdAccessToken.Trim();
-        if (!string.IsNullOrWhiteSpace(command.ModelOverride))
-            chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = command.ModelOverride.Trim();
-        if (!string.IsNullOrWhiteSpace(command.PreferredLlmRoute))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = command.PreferredLlmRoute.Trim();
+        chatRequest.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: Normalize(command.NyxIdAccessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: Normalize(command.ModelOverride),
+            NyxIdRoutePreference: Normalize(command.PreferredLlmRoute),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
 
@@ -423,6 +426,9 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             },
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static ChatContentPart ToProto(GAgentDraftRunInputPart source)
     {
@@ -458,6 +464,12 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+            if (AgentToolExecutionContextMapper.StripOwnedControlKeys(
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [normalizedKey] = normalizedValue,
+                    }).Count == 0)
                 continue;
 
             destination[normalizedKey] = normalizedValue;

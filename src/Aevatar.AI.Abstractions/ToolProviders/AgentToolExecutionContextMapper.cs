@@ -44,9 +44,10 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         if (request.ToolContext is { } typedContext)
-            return typedContext;
+            return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
 
         var mapped = FromMetadata(request.Metadata);
+        mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
         var caller = request.CallerContext;
         return mapped with
         {

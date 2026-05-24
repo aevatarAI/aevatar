@@ -1383,22 +1383,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
-        // Mirror SkillRunnerGAgent / WorkflowAgentGAgent: pin the bot owner's UserConfig
-        // (DefaultModel + PreferredLlmRoute + MaxToolRounds) onto outbound LLM metadata so the
-        // channel inbound → LLM path honors the same per-owner LLM routing the scheduled agents
-        // do. Without this, channel-bot LLM turns fall through to NyxIdLLMProvider's compile-time
-        // defaults and 400 against a bot owner who pre-configured a custom NyxID service. Source
-        // is bound once via constructor injection — no per-execution Services.GetService<>
-        // lookup, per codex's PR #509 partial dissent on r3159047120.
-        await OwnerLlmConfigApplier.ApplyAsync(
-            metadata,
-            inboundEvent.RegistrationScopeId,
-            _ownerLlmConfigSource,
-            _logger,
-            actorLabel: "Channel turn runner",
-            actorId: inboundEvent.MessageId,
-            ct);
-
         return metadata;
     }
 
@@ -1522,19 +1506,54 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
+        request.LlmControl = (await BuildOwnerLlmControlAsync(
+                inboundEvent,
+                LLMControlContextMapper.FromPayload(request.LlmControl),
+                ct)
+            .ConfigureAwait(false)).ToPayload();
+
         // Tag the request with the sender's binding-id and a short-lived token
         // so the downstream reply generator can try the sender's own LLM
         // route first. Missing token/binding is not an error: the generator
         // falls back to the bot owner's upstream-pinned LLM config.
         if (senderBinding is not null)
         {
-            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBinding.BindingId;
+            request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+            {
+                SenderBinding = new AgentToolSenderBindingContext(senderBinding.BindingId),
+            }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
-                request.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = senderAccessToken;
+            {
+                var currentControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+                request.LlmControl = new LLMControlContext(
+                    currentControl.NyxIdAccessToken,
+                    currentControl.NyxIdOrgToken,
+                    senderAccessToken.Trim(),
+                    currentControl.ModelOverride,
+                    currentControl.NyxIdRoutePreference,
+                    currentControl.MaxToolRoundsOverride,
+                    currentControl.UserMemoryPrompt).ToPayload();
+            }
         }
 
         return request;
+    }
+
+    private async Task<LLMControlContext> BuildOwnerLlmControlAsync(
+        ChannelInboundEvent inboundEvent,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        return await OwnerLlmConfigApplier.ApplyAsync(
+                control,
+                inboundEvent.RegistrationScopeId,
+                _ownerLlmConfigSource,
+                _logger,
+                actorLabel: "Channel turn runner",
+                actorId: inboundEvent.MessageId,
+                ct)
+            .ConfigureAwait(false);
     }
 
     private static ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)

@@ -226,9 +226,9 @@ public sealed class WorkflowRunGAgent
         }
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
-            this,
-            AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(this, toolContext);
 
         await EnsureAgentTreeAsync();
 

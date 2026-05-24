@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -847,20 +846,14 @@ If you want to hand the turn to someone, only hand it to this currently active p
 Return only {participant.DisplayName}'s reply text, with no prefixed name and no extra transcript formatting.
 """;
 
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-        var routing = new LLMRequestRoutingContext(
+        var llmControl = new LLMControlContext(
+            Normalize(accessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
             Normalize(participant.Model),
             Normalize(participant.RoutePreference),
-            null,
-            null);
-        var toolContext = AgentToolExecutionContext.Empty with
-        {
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = Normalize(accessToken),
-            },
-            Routing = routing,
-        };
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
         return new LLMRequest
         {
             RequestId = $"{sessionId}:{participant.ParticipantId}:round-{round}",
@@ -875,8 +868,8 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
                 OwnerSubject: participant.ParticipantId,
                 ResponseId: sessionId,
                 Credentials: new LLMRequestCallerCredentials(Normalize(accessToken))),
-            ToolContext = toolContext,
-            RoutingContext = routing,
+            LlmControl = llmControl,
+            RoutingContext = llmControl.ToRoutingContext(),
             Model = participant.Model,
             Temperature = 0.7,
             MaxTokens = 220,

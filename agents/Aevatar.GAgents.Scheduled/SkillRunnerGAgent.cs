@@ -298,6 +298,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
+        var llmControl = await BuildExecutionLlmControlAsync(ct);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -307,7 +309,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             : new SkillRunnerStreamingRunState(sink, SkillRunnerDefaults.StreamingEditThrottle, TimeProvider.System);
         try
         {
-            await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+            await foreach (var chunk in ChatStreamAsync(
+                               [ContentPart.TextPart(prompt)],
+                               requestId,
+                               llmControl,
+                               toolContext,
+                               metadata,
+                               ct))
             {
                 if (string.IsNullOrEmpty(chunk.DeltaContent))
                     continue;
@@ -818,14 +826,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = State.OutboundConfig?.NyxApiKey ?? string.Empty,
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
 
+        return metadata;
+    }
+
+    private async Task<LLMControlContext> BuildExecutionLlmControlAsync(CancellationToken ct)
+    {
+        var control = new LLMControlContext(
+            NyxIdAccessToken: State.OutboundConfig?.NyxApiKey,
+            NyxIdOrgToken: State.OutboundConfig?.NyxApiKey,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
         // Pin the bot owner's pre-configured model + NyxID route + tool-round cap onto the
-        // outbound LLM metadata, the same pattern AgentRunGAgent applies for
+        // outbound typed LLM control, the same pattern AgentRunGAgent applies for
         // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
         // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
         // gateway routes to the OpenAI provider — failing for bot owners who pre-configured
@@ -834,15 +855,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // through ActivatorUtilities so DI fills the optional ctor param at activation
         // time); a per-execution `Services.GetService<>` lookup would be redundant and was
         // dropped per codex's PR #509 partial dissent on r3159047120.
-        await OwnerLlmConfigApplier.ApplyAsync(
-            metadata,
+        return await OwnerLlmConfigApplier.ApplyAsync(
+            control,
             State.ScopeId,
             _ownerLlmConfigSource,
             Logger,
             actorLabel: "Skill runner",
             actorId: Id,
             ct);
-        return metadata;
     }
 
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)

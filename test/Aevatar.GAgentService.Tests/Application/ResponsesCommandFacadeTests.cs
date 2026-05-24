@@ -43,8 +43,9 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Completed);
         completion.LastRequest.Should().NotBeNull();
         completion.LastRequest!.Model.Should().Be("gpt-5");
-        completion.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("route-value");
+        completion.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        completion.LastRequest.LlmControl.Should().NotBeNull();
+        completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
         completion.LastRequest.CallerContext!.ScopeId.Should().Be("scope-1");
     }
 

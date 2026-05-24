@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -498,18 +499,18 @@ public sealed class AgentRunGAgentTests
     public async Task HandleStartAsync_WhenTargetRefForwardsToModel_InjectsModelOverrideMetadata()
     {
         // Regression: ForwardToModel.model_name from the chat-route policy
-        // must inject LLMRequestMetadataKeys.ModelOverride so the LLM
-        // provider sees the policy-chosen model. Bot-owner default model
+        // must flow through the typed LLM control carrier so the LLM provider
+        // sees the policy-chosen model. Bot-owner default model
         // intentionally loses to the chat-route override — chat route is
         // the more specific decision (caller-scope + rule match).
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("conversation:c");
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
-        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        LLMControlContext? observedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ok",
-            MetadataObserver = m => observedMetadata = m,
+            LlmControlObserver = control => observedControl = control,
         };
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -530,11 +531,10 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
-        observedMetadata!.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride);
-        observedMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be(
+        observedControl.Should().NotBeNull("the LLM provider must have been invoked");
+        observedControl!.ModelOverride.Should().Be(
             "anthropic/claude-sonnet-4-6",
-            "ForwardToModel.model_name must reach the LLM provider via the ModelOverride metadata key");
+            "ForwardToModel.model_name must reach the LLM provider via the typed llm_control field");
     }
 
     [Fact]
@@ -543,11 +543,11 @@ public sealed class AgentRunGAgentTests
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("conversation:c");
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
-        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        LLMControlContext? observedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ok",
-            MetadataObserver = m => observedMetadata = m,
+            LlmControlObserver = control => observedControl = control,
         };
 
         var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
@@ -588,11 +588,11 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
-        observedMetadata![LLMRequestMetadataKeys.ModelOverride].Should().Be(
+        observedControl.Should().NotBeNull("the LLM provider must have been invoked");
+        observedControl!.ModelOverride.Should().Be(
             "anthropic/claude-sonnet-4-6",
             "chat-route policy is more specific than the bot owner's default model");
-        observedMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be(
+        observedControl.NyxIdRoutePreference.Should().Be(
             "/api/v1/proxy/s/anthropic-via-bot-owner",
             "the route preference is independent from the model override");
     }
@@ -1876,15 +1876,11 @@ public sealed class AgentRunGAgentTests
         // (it is the bot owner's own NyxID session, freshly issued per callback) while
         // taking model / route / max-tool-rounds from the owner's pre-configured
         // UserConfig.
-        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        LLMControlContext? capturedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ack",
-            MetadataObserver = m =>
-            {
-                foreach (var pair in m)
-                    capturedMetadata[pair.Key] = pair.Value;
-            },
+            LlmControlObserver = control => capturedControl = control,
         };
 
         var actor = Substitute.For<IActor>();
@@ -1930,16 +1926,12 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-bot-owner",
         });
 
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride)
-            .WhoseValue.Should().Be("gpt-4o-bot-owner");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride)
-            .WhoseValue.Should().Be("11");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedControl.Should().NotBeNull();
+        capturedControl!.ModelOverride.Should().Be("gpt-4o-bot-owner");
+        capturedControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
+        capturedControl.MaxToolRoundsOverride.Should().Be(11);
+        capturedControl.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
+        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
     }
 
     [Fact]
@@ -1951,15 +1943,11 @@ public sealed class AgentRunGAgentTests
         // LLM call. The stale-pending GC plus the direct-enqueue + run-echoed
         // token flow keeps it fresh through the window where the LLM call actually
         // fires.
-        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        LLMControlContext? capturedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ack",
-            MetadataObserver = m =>
-            {
-                foreach (var pair in m)
-                    capturedMetadata[pair.Key] = pair.Value;
-            },
+            LlmControlObserver = control => capturedControl = control,
         };
 
         var actor = Substitute.For<IActor>();
@@ -1987,10 +1975,9 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-1",
         });
 
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedControl.Should().NotBeNull();
+        capturedControl!.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
+        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
     }
 
     private static AgentRunGAgent CreateRunAgent(
@@ -2451,7 +2438,7 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
+    private sealed class RecordingReplyGenerator(Func<bool> captureAction) : ITypedConversationReplyGenerator
     {
         public string ReplyText { get; init; } = string.Empty;
 
@@ -2461,17 +2448,34 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
+        public Action<LLMControlContext>? LlmControlObserver { get; init; }
+
+        public Action<AgentToolExecutionContext>? ToolContextObserver { get; init; }
+
         public IReadOnlyList<string>? StreamingSnapshots { get; init; }
 
         public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            await GenerateReplyAsync(activity, metadata, null, null, streamingSink, ct);
+
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
             CallCount++;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
+            if (llmControl is not null)
+                LlmControlObserver?.Invoke(llmControl);
+            if (toolContext is not null)
+                ToolContextObserver?.Invoke(toolContext);
             if (streamingSink is not null)
             {
                 if (StreamingSnapshots is { Count: > 0 })

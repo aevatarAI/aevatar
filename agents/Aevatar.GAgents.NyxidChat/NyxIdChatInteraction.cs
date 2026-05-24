@@ -22,7 +22,8 @@ public sealed record NyxIdChatCommand(
     string SessionId,
     string AccessToken,
     IReadOnlyList<NyxIdChatEndpoints.ContentPartDto>? InputParts,
-    IReadOnlyDictionary<string, string>? Metadata)
+    IReadOnlyDictionary<string, string>? Metadata,
+    LLMControlContext? LlmControl = null)
     : ICommandContextSeed
 {
     public string? CommandId => SessionId;
@@ -288,8 +289,13 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 chatRequest.InputParts.Add(part.ToProto());
         }
 
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = command.AccessToken;
-        chatRequest.Metadata["scope_id"] = command.ScopeId;
+        var control = command.LlmControl ?? LLMControlContext.Empty;
+        chatRequest.LlmControl = (control with
+        {
+            NyxIdAccessToken = string.IsNullOrWhiteSpace(command.AccessToken)
+                ? control.NyxIdAccessToken
+                : command.AccessToken.Trim(),
+        }).ToPayload();
         AppendMetadata(chatRequest.Metadata, command.Metadata);
 
         return CreateDirectEnvelope(context, chatRequest);

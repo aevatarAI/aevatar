@@ -3871,9 +3871,22 @@ public sealed class ScopeServiceEndpointsTests
         scopedHeaders.Should().NotContainKey("scope_id");
         scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
-        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/preferred-route");
-        scopedHeaders["nyxid.access_token"].Should().Be("token-123");
+        scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+
+        var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
+            "BuildScopedLlmControlAsync",
+            successContext,
+            CancellationToken.None);
+        scopedControl.Should().Be(new LLMControlContext(
+            NyxIdAccessToken: "token-123",
+            NyxIdOrgToken: "token-123",
+            SenderNyxIdAccessToken: null,
+            ModelOverride: "user-model",
+            NyxIdRoutePreference: "/preferred-route",
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null));
 
         var failingContext = new DefaultHttpContext
         {
@@ -3888,6 +3901,11 @@ public sealed class ScopeServiceEndpointsTests
             failingContext,
             CancellationToken.None);
         failedHeaders.Should().BeEmpty();
+        var failedControl = await InvokePrivateStaticTask<LLMControlContext?>(
+            "BuildScopedLlmControlAsync",
+            failingContext,
+            CancellationToken.None);
+        failedControl.Should().BeNull();
     }
 
     [Fact]

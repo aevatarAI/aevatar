@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -27,6 +28,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
+        if (command.LlmControl != null)
+            chatRequest.LlmControl = command.LlmControl.ToPayload();
 
         var envelope = new EventEnvelope
         {

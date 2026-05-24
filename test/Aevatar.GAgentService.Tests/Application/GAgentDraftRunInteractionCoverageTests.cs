@@ -381,9 +381,13 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.ScopeId.Should().Be("scope-a");
         payload.SessionId.Should().Be("corr-1");
         payload.Metadata["x-trace"].Should().Be("trace-1");
-        payload.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("token");
-        payload.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("model-x");
-        payload.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/route");
+        payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        var llmControl = LLMControlContextMapper.FromPayload(payload.LlmControl);
+        llmControl.NyxIdAccessToken.Should().Be("token");
+        llmControl.ModelOverride.Should().Be("model-x");
+        llmControl.NyxIdRoutePreference.Should().Be("/route");
         payload.InputParts.Should().HaveCount(2);
         payload.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
         payload.InputParts[0].Text.Should().Be("body");

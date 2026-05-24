@@ -29,8 +29,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
-        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
-        var inlineWorkflowYamls = request.WorkflowYamls?.ToList() ?? [];
+        var source = ResolveSource(request);
+        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(source.WorkflowName);
+        var sourceActorId = source.ActorId;
+        var inlineWorkflowYamls = source.WorkflowYamls?.ToList() ?? [];
         var hasInlineWorkflowYamls = inlineWorkflowYamls.Count > 0;
         var hasRequestedWorkflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName);
         var workflowNameForRun = hasInlineWorkflowYamls
@@ -64,10 +66,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
+        if (!string.IsNullOrWhiteSpace(sourceActorId))
         {
             return await ResolveFromSourceActorAsync(
-                request.ActorId,
+                sourceActorId,
                 hasInlineWorkflowYamls,
                 hasRequestedWorkflowName,
                 requestedWorkflowName,
@@ -101,6 +103,23 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             createdRun,
             workflowNameForRun,
             WorkflowChatRunStartError.None);
+    }
+
+    private static WorkflowChatSource ResolveSource(WorkflowChatRunRequest request)
+    {
+        if (request.Source != null)
+            return request.Source;
+
+        if (request.WorkflowYamls is { Count: > 0 })
+            return WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls, request.WorkflowName, request.ActorId);
+
+        if (!string.IsNullOrWhiteSpace(request.ActorId))
+            return WorkflowChatSource.DefinitionActor(request.ActorId, request.WorkflowName);
+
+        if (!string.IsNullOrWhiteSpace(request.WorkflowName))
+            return WorkflowChatSource.CatalogWorkflow(request.WorkflowName);
+
+        return WorkflowChatSource.Direct();
     }
 
     private async Task<WorkflowActorResolutionResult> ResolveFromSourceActorAsync(

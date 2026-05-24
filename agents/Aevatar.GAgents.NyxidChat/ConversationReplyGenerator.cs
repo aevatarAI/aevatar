@@ -18,7 +18,7 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
 //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerator
+public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGenerator
 {
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
@@ -35,11 +35,17 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
-    private sealed record EffectiveMetadataPlan(
+    private sealed record EffectiveReplyPlan(
         IReadOnlyDictionary<string, string> Primary,
-        IReadOnlyDictionary<string, string>? OwnerFallback);
+        LLMControlContext PrimaryControl,
+        AgentToolExecutionContext? PrimaryToolContext,
+        IReadOnlyDictionary<string, string>? OwnerFallback,
+        LLMControlContext? OwnerFallbackControl,
+        AgentToolExecutionContext? OwnerFallbackToolContext);
 
     private sealed record SenderPreferenceApplication(bool AnyApplied, bool RouteApplied);
+
+    private sealed record SenderPreferenceResult(LLMControlContext Control, SenderPreferenceApplication Application);
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
@@ -73,6 +79,16 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
         IStreamingReplySink? streamingSink,
+        CancellationToken ct) =>
+        await GenerateReplyAsync(activity, metadata, llmControl: null, toolContext: null, streamingSink, ct)
+            .ConfigureAwait(false);
+
+    public async Task<ConversationReplyResult> GenerateReplyAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -90,14 +106,16 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 await streamingSink.OnDeltaAsync(placeholder, ct);
         }
 
-        var metadataPlan = await BuildEffectiveMetadataPlanAsync(metadata, ct);
+        var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var primaryTools = await BuildTurnToolsAsync(ct);
 
         try
         {
             return await GenerateWithMetadataAsync(
                     activity,
-                    metadataPlan.Primary,
+                    replyPlan.Primary,
+                    replyPlan.PrimaryControl,
+                    replyPlan.PrimaryToolContext,
                     primaryTools,
                     streamingSink,
                     ct)
@@ -107,7 +125,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         {
             throw;
         }
-        catch (Exception ex) when (metadataPlan.OwnerFallback is not null && IsRetryableSenderRouteFailure(ex))
+        catch (Exception ex) when (replyPlan.OwnerFallback is not null && IsRetryableSenderRouteFailure(ex))
         {
             _logger.LogWarning(
                 ex,
@@ -117,7 +135,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             var fallbackTools = await BuildTurnToolsAsync(ct);
             return await GenerateWithMetadataAsync(
                     activity,
-                    metadataPlan.OwnerFallback,
+                    replyPlan.OwnerFallback,
+                    replyPlan.OwnerFallbackControl ?? llmControl ?? LLMControlContext.Empty,
+                    replyPlan.OwnerFallbackToolContext,
                     fallbackTools,
                     streamingSink,
                     ct)
@@ -178,10 +198,15 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private async Task<ConversationReplyResult> GenerateWithMetadataAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> effectiveMetadata,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext? baseToolContext,
         ToolManager tools,
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
+        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
+
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
         //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
@@ -204,7 +229,10 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 [
                     ChatMessage.System(BuildSystemPrompt()),
                 ],
-                Metadata = new Dictionary<string, string>(effectiveMetadata, StringComparer.Ordinal),
+                Metadata = externalMetadata,
+                ToolContext = toolContext,
+                LlmControl = llmControl,
+                RoutingContext = llmControl.ToRoutingContext(),
                 Tools = FilterValidTools(tools),
             },
             agentMiddlewares: _agentMiddlewares,
@@ -220,10 +248,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         ReplyTokenUsage? aggregatedUsage = null;
         string? lastFinishReason = null;
         await foreach (var chunk in runtime.ChatStreamAsync(
-                           activity.Content.Text,
+                           [ContentPart.TextPart(activity.Content.Text)],
                            MaxToolRounds,
                            activity.Id,
-                           effectiveMetadata,
+                           llmControl,
+                           toolContext,
+                           externalMetadata,
                            ct))
         {
             if (chunk.Usage is { } usage)
@@ -273,13 +303,19 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         return effective;
     }
 
-    private async Task<EffectiveMetadataPlan> BuildEffectiveMetadataPlanAsync(
+    private async Task<EffectiveReplyPlan> BuildEffectiveReplyPlanAsync(
         IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
         var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
-        effective.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        var effectiveControl = llmControl ?? LLMControlContext.Empty;
+        effectiveControl = effectiveControl with { SenderNyxIdAccessToken = null };
+        var effectiveToolContext = toolContext;
         Dictionary<string, string>? ownerFallback = null;
+        LLMControlContext? ownerFallbackControl = null;
+        AgentToolExecutionContext? ownerFallbackToolContext = null;
 
         // Issue #513 phase 3: prefs override chain is sender → bot-owner →
         // provider default. The bot owner's prefs are already pinned upstream
@@ -290,25 +326,35 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         // sender who set DefaultModel but not PreferredRoute still inherits
         // the bot owner's route from the upstream-pinned metadata. If a
         // sender-owned attempt fails, we retry once with this owner snapshot.
-        if (_preferencesStore is not null &&
-            metadata.TryGetValue(LLMRequestMetadataKeys.SenderBindingId, out var senderBindingId) &&
-            !string.IsNullOrWhiteSpace(senderBindingId))
+        var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
+        if (_preferencesStore is not null && !string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);
-            var applied = await ApplyPreferencesAsync(senderBindingId, effective, ct);
+            ownerFallbackControl = effectiveControl with { SenderNyxIdAccessToken = null };
+            ownerFallbackToolContext = ClearSenderBinding(effectiveToolContext);
+            var preferenceResult = await ApplyPreferencesAsync(senderBindingId, effectiveControl, ct);
+            effectiveControl = preferenceResult.Control;
+            var applied = preferenceResult.Application;
             if (applied.RouteApplied)
             {
-                if (metadata.TryGetValue(LLMRequestMetadataKeys.SenderNyxIdAccessToken, out var senderAccessToken) &&
-                    !string.IsNullOrWhiteSpace(senderAccessToken))
+                if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
                 {
-                    var trimmedToken = senderAccessToken.Trim();
-                    effective[LLMRequestMetadataKeys.NyxIdAccessToken] = trimmedToken;
-                    effective[LLMRequestMetadataKeys.NyxIdOrgToken] = trimmedToken;
+                    var trimmedToken = llmControl.SenderNyxIdAccessToken.Trim();
+                    effectiveControl = effectiveControl with
+                    {
+                        NyxIdAccessToken = trimmedToken,
+                        NyxIdOrgToken = trimmedToken,
+                        SenderNyxIdAccessToken = trimmedToken,
+                    };
                     ownerFallback = ownerSnapshot;
                 }
                 else
                 {
                     effective = ownerSnapshot;
+                    effectiveControl = ownerFallbackControl;
+                    effectiveToolContext = ownerFallbackToolContext;
+                    ownerFallbackControl = null;
+                    ownerFallbackToolContext = null;
                 }
             }
             else if (applied.AnyApplied)
@@ -324,9 +370,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
                 if (!string.IsNullOrWhiteSpace(promptSection))
                 {
-                    effective[LLMRequestMetadataKeys.UserMemoryPrompt] = promptSection;
+                    effectiveControl = effectiveControl with { UserMemoryPrompt = promptSection };
                     if (ownerFallback is not null)
-                        ownerFallback[LLMRequestMetadataKeys.UserMemoryPrompt] = promptSection;
+                        ownerFallbackControl = (ownerFallbackControl ?? effectiveControl) with
+                        {
+                            UserMemoryPrompt = promptSection,
+                        };
                 }
             }
             catch (OperationCanceledException)
@@ -339,7 +388,13 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             }
         }
 
-        return new EffectiveMetadataPlan(effective, ownerFallback);
+        return new EffectiveReplyPlan(
+            effective,
+            effectiveControl,
+            effectiveToolContext,
+            ownerFallback,
+            ownerFallbackControl,
+            ownerFallbackToolContext);
     }
 
     /// <summary>
@@ -348,13 +403,13 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     /// the bot owner's value stays intact. User-config failures degrade to
     /// "no sender override" rather than failing the LLM turn.
     /// </summary>
-    private async Task<SenderPreferenceApplication> ApplyPreferencesAsync(
+    private async Task<SenderPreferenceResult> ApplyPreferencesAsync(
         string senderBindingId,
-        Dictionary<string, string> effective,
+        LLMControlContext effectiveControl,
         CancellationToken ct)
     {
         if (_preferencesStore is null)
-            return new SenderPreferenceApplication(false, false);
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
 
         NyxIdUserLlmPreferences preferences;
         try
@@ -367,33 +422,37 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         }
         catch
         {
-            return new SenderPreferenceApplication(false, false);
+            return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false));
         }
 
-        var modelApplied = SetIfFilled(effective, LLMRequestMetadataKeys.ModelOverride, preferences.DefaultModel?.Trim());
-        var routeApplied = SetIfFilled(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, preferences.PreferredRoute?.Trim());
-        var roundsApplied = SetIfFilled(
-            effective,
-            LLMRequestMetadataKeys.MaxToolRoundsOverride,
-            preferences.MaxToolRounds > 0 ? preferences.MaxToolRounds.ToString() : null);
-        return new SenderPreferenceApplication(modelApplied || routeApplied || roundsApplied, routeApplied);
+        var modelApplied = !string.IsNullOrWhiteSpace(preferences.DefaultModel);
+        var routeApplied = !string.IsNullOrWhiteSpace(preferences.PreferredRoute);
+        var roundsApplied = preferences.MaxToolRounds > 0;
+        if (modelApplied || routeApplied || roundsApplied)
+        {
+            effectiveControl = effectiveControl with
+            {
+                ModelOverride = modelApplied ? preferences.DefaultModel!.Trim() : effectiveControl.ModelOverride,
+                NyxIdRoutePreference = routeApplied ? preferences.PreferredRoute!.Trim() : effectiveControl.NyxIdRoutePreference,
+                MaxToolRoundsOverride = roundsApplied ? preferences.MaxToolRounds : effectiveControl.MaxToolRoundsOverride,
+            };
+        }
+        return new SenderPreferenceResult(
+            effectiveControl,
+            new SenderPreferenceApplication(modelApplied || routeApplied || roundsApplied, routeApplied));
     }
 
     private static Dictionary<string, string> CreateOwnerFallbackSnapshot(Dictionary<string, string> effective)
     {
         var snapshot = new Dictionary<string, string>(effective, StringComparer.Ordinal);
         snapshot.Remove(LLMRequestMetadataKeys.SenderBindingId);
-        snapshot.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
         return snapshot;
     }
 
-    private static bool SetIfFilled(Dictionary<string, string> map, string key, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-        map[key] = value;
-        return true;
-    }
+    private static AgentToolExecutionContext? ClearSenderBinding(AgentToolExecutionContext? context) =>
+        context == null
+            ? null
+            : context with { SenderBinding = AgentToolSenderBindingContext.Empty };
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
     {

@@ -233,6 +233,21 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         IReadOnlyList<ContentPart> userContent,
         string? requestId,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = llmControl?.MaxToolRoundsOverride
+                        ?? toolContext?.Routing.MaxToolRoundsOverride
+                        ?? EffectiveConfig.MaxToolRounds;
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, llmControl, toolContext, metadata, ct);
+    }
+
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
         AgentToolExecutionContext? toolContext,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)

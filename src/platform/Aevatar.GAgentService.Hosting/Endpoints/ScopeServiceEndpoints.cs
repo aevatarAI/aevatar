@@ -130,7 +130,8 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 WorkflowYamls: request.WorkflowYamls,
                 Metadata: scopedHeaders,
-                ScopeId: scopeId);
+                ScopeId: scopeId,
+                LlmControl: await BuildScopedLlmControlAsync(http, ct));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -151,6 +152,7 @@ public static class ScopeServiceEndpoints
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
                     Metadata = scopedHeaders,
+                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
                 ct);
@@ -1524,6 +1526,7 @@ public static class ScopeServiceEndpoints
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
                             Metadata = scopedHeaders,
+                            LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                         },
                         chatRunService,
                         ct,
@@ -2877,28 +2880,68 @@ const response = await fetch("{{invokePath}}", {
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         InjectBearerToken(http, scopedHeaders);
-        if (http != null)
+        return scopedHeaders;
+    }
+
+    private static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
+        if (control == null)
+            return null;
+
+        return new ChatLlmControlInput
         {
-            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-            if (userConfigStore != null)
+            NyxIdAccessToken = control.NyxIdAccessToken,
+            NyxIdOrgToken = control.NyxIdOrgToken,
+            ModelOverride = control.ModelOverride,
+            NyxIdRoutePreference = control.NyxIdRoutePreference,
+            MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+            UserMemoryPrompt = control.UserMemoryPrompt,
+        };
+    }
+
+    private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        if (http == null)
+            return null;
+
+        var bearerToken = ExtractBearerToken(http);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: bearerToken,
+            NyxIdOrgToken: bearerToken,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore != null)
+        {
+            try
             {
-                try
+                var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                control = control with
                 {
-                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
-                        !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
-                        !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort; fall back to provider defaults if config unavailable.
-                }
+                    ModelOverride = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                        ? control.ModelOverride
+                        : userConfig.DefaultModel.Trim(),
+                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                        ? control.NyxIdRoutePreference
+                        : userConfig.PreferredLlmRoute.Trim(),
+                };
+            }
+            catch
+            {
+                // Best-effort; fall back to provider defaults if config unavailable.
             }
         }
-        return scopedHeaders;
+
+        return control == LLMControlContext.Empty ? null : control;
     }
 
     private static void InjectBearerToken(HttpContext? http, Dictionary<string, string> metadata)
@@ -2909,9 +2952,18 @@ const response = await fetch("{{invokePath}}", {
         if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var bearerToken = auth["Bearer ".Length..].Trim();
-            metadata["nyxid.access_token"] = bearerToken;
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     private static void CopyHeaders(

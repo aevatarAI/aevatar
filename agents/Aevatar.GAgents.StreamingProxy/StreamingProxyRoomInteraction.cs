@@ -1,7 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -258,19 +257,14 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
         };
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-        chatRequest.ToolContext = (AgentToolExecutionContext.Empty with
-        {
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = Normalize(command.AccessToken),
-            },
-            Routing = LLMRequestRoutingContext.Empty with
-            {
-                NyxIdRoutePreference = Normalize(command.PreferredRoute),
-                ModelOverride = Normalize(command.DefaultModel),
-            },
-        }).ToPayload();
+        chatRequest.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: Normalize(command.AccessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: Normalize(command.DefaultModel),
+            NyxIdRoutePreference: Normalize(command.PreferredRoute),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
 
         return new EventEnvelope
         {

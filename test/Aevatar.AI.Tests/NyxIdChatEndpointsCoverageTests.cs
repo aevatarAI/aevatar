@@ -1040,10 +1040,18 @@ public class NyxIdChatEndpointsCoverageTests
         command.AccessToken.Should().Be("valid-token");
         command.Metadata.Should().NotBeNull();
         command.Metadata!.Should().NotContainKey(NyxRefreshTokenMetadataKey);
-        command.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
-        command.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/relay-route");
-        command.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
-        command.Metadata[LLMRequestMetadataKeys.UserMemoryPrompt].Should().Be("remember this");
+        command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.UserMemoryPrompt);
+        command.LlmControl.Should().Be(new LLMControlContext(
+            NyxIdAccessToken: "valid-token",
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: "relay-model",
+            NyxIdRoutePreference: "/relay-route",
+            MaxToolRoundsOverride: 7,
+            UserMemoryPrompt: "remember this"));
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -1287,9 +1295,11 @@ public class NyxIdChatEndpointsCoverageTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");
         request.ScopeId.Should().Be("scope-a");
-        request.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("access-token");
-        request.Metadata["scope_id"].Should().Be("scope-a");
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        request.Metadata.Should().NotContainKey("scope_id");
         request.Metadata["custom"].Should().Be("value");
+        LLMControlContextMapper.FromPayload(request.LlmControl)
+            .NyxIdAccessToken.Should().Be("access-token");
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
             AGUIEvent.EventOneofCase.TextMessageContent,
             AGUIEvent.EventOneofCase.RunFinished);

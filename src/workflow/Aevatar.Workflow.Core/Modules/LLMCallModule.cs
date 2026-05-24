@@ -339,7 +339,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     //                bag for request metadata, LLM overrides, authorization, secure values
     //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
     //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
-    private static void ApplyTypedToolContext(
+    private static void ApplyTypedLlmControl(
         IWorkflowExecutionContext ctx,
         ChatRequestEvent chatRequest)
     {
@@ -354,21 +354,33 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-        var context = AgentToolExecutionContext.Empty with
+        chatRequest.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: Normalize(overrides.NyxIdAccessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: Normalize(overrides.ModelOverride),
+            NyxIdRoutePreference: Normalize(overrides.NyxIdRoutePreference),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
+    }
+
+    private static AgentToolExecutionContext BuildLlmControlToolContext(LLMControlContext control) =>
+        AgentToolExecutionContext.Empty with
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                NyxIdAccessToken = Normalize(overrides.NyxIdAccessToken),
+                NyxIdAccessToken = control.NyxIdAccessToken,
+                NyxIdOrgToken = control.NyxIdOrgToken,
+                SenderNyxIdAccessToken = control.SenderNyxIdAccessToken,
             },
             Routing = LLMRequestRoutingContext.Empty with
             {
-                ModelOverride = Normalize(overrides.ModelOverride),
-                NyxIdRoutePreference = Normalize(overrides.NyxIdRoutePreference),
+                ModelOverride = control.ModelOverride,
+                NyxIdRoutePreference = control.NyxIdRoutePreference,
+                MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+                UserMemoryPrompt = control.UserMemoryPrompt,
             },
         };
-        chatRequest.ToolContext = context.ToPayload();
-    }
 
     // Refactor (iter16/cluster-031):
     //   Old pattern: LLM override metadata was forwarded from generic execution
@@ -627,7 +639,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             Telegram = new TelegramBridgeRequest(),
         };
-        ApplyTypedToolContext(ctx, chatRequest);
+        ApplyTypedLlmControl(ctx, chatRequest);
         CopyParametersToChatRequest(request, chatRequest, timeoutMs);
         chatRequest.Telegram.RunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         chatRequest.Telegram.StepId = stepId;
