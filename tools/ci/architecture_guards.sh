@@ -205,6 +205,54 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Refactor (iter92/cluster-645):
+#   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
+#   New principle: this guard prevents new consumers, wrappers, or re-maps; direct model streaming goes through /v1/responses.
+set +e
+streaming_proxy_consumer_report="$(
+  rg -n "streaming-proxy|MapStreamingProxyEndpoints|AddStreamingProxy|Aevatar\.GAgents\.StreamingProxy" \
+    src agents apps \
+    -g '*.{cs,ts,tsx,js,jsx,md,json,yml,yaml,sh}' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["tools/ci/architecture_guards.sh"] = 1;
+  allowed["tools/ci/README.md"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\//)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\./)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  print $0;
+}'
+)"
+streaming_proxy_consumer_status=$?
+set -e
+
+if [[ ${streaming_proxy_consumer_status} -ne 0 && ${streaming_proxy_consumer_status} -ne 1 ]]; then
+  echo "StreamingProxy consumer guard execution failed."
+  exit "${streaming_proxy_consumer_status}"
+fi
+
+if [ -n "${streaming_proxy_consumer_report}" ]; then
+  echo "${streaming_proxy_consumer_report}"
+  echo "StreamingProxy is deprecated compatibility surface only. Do not add new production consumers; use /v1/responses for direct model streaming."
+  exit 1
+fi
+
 # Issue #643:
 #   Old: Foundation MultiAgent experimental actors/protos stayed visible as
 #   production GAgent surface without production callers. Studio empty-state

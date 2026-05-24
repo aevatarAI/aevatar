@@ -122,6 +122,33 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public void StreamingProxyEndpointSource_ShouldApplyDeprecationFilter()
+    {
+        var root = GetRepositoryRoot();
+        var endpoints = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs"));
+
+        endpoints.Should().Contain(".AddEndpointFilter(AddDeprecationHeadersAsync)");
+    }
+
+    [Fact]
+    public void AddDeprecationHeaders_ShouldAdvertiseSunsetAndSuccessor()
+    {
+        var context = new DefaultHttpContext();
+
+        StreamingProxyEndpoints.AddDeprecationHeaders(context.Response);
+
+        context.Response.Headers[StreamingProxyEndpoints.DeprecationHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.DeprecationHeaderValue);
+        context.Response.Headers[StreamingProxyEndpoints.SunsetHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.SunsetHeaderValue);
+        context.Response.Headers[StreamingProxyEndpoints.LinkHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.SuccessorLinkHeaderValue);
+        StreamingProxyEndpoints.SuccessorRoute.Should().Be("/v1/responses");
+    }
+
+    [Fact]
     public void StreamingProxyEndpointSource_ShouldNotInlineDispatchActorEvents()
     {
         var root = GetRepositoryRoot();
