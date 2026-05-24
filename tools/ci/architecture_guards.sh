@@ -396,6 +396,7 @@ bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
 bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
 bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
+bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
 
 studio_catalog_query_ports=(

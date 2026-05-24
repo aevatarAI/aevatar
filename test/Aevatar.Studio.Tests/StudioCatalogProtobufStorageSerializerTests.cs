@@ -2,6 +2,7 @@ using System.Text;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.Studio.Tests;
 
@@ -43,7 +44,30 @@ public sealed class StudioCatalogProtobufStorageSerializerTests
     }
 
     [Fact]
-    public async Task Connector_reader_keeps_json_as_import_fallback()
+    public async Task Connector_catalog_storage_rejects_legacy_json_payloads()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("{"));
+
+        var act = () => ConnectorCatalogStorageSerializer.ReadCatalogAsync(stream, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidProtocolBufferException>();
+    }
+
+    [Fact]
+    public async Task Connector_draft_storage_rejects_legacy_json_payloads()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("{"));
+
+        var act = () => ConnectorCatalogStorageSerializer.ReadDraftAsync(
+            stream,
+            DateTimeOffset.UnixEpoch,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidProtocolBufferException>();
+    }
+
+    [Fact]
+    public async Task Connector_import_parser_keeps_json_catalog_boundary()
     {
         const string json = """
         {
@@ -68,51 +92,13 @@ public sealed class StudioCatalogProtobufStorageSerializerTests
         """;
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var parser = new ConnectorCatalogImportParser();
 
-        var result = await ConnectorCatalogStorageSerializer.ReadCatalogAsync(stream, CancellationToken.None);
+        var result = await parser.ParseCatalogAsync(stream, CancellationToken.None);
 
         result.Should().ContainSingle();
         result[0].Name.Should().Be("github");
         result[0].Http.DefaultHeaders.Should().ContainKey("Accept");
-    }
-
-    [Fact]
-    public async Task Connector_draft_reader_keeps_legacy_json_draft_as_import_fallback()
-    {
-        const string json = """
-        {
-          "updatedAtUtc": "2026-05-21T08:09:10+00:00",
-          "connector": {
-            "name": "github",
-            "type": "http",
-            "enabled": true,
-            "timeoutMs": 1200,
-            "retry": 2,
-            "http": {
-              "baseUrl": "https://api.github.com",
-              "allowedMethods": ["GET"],
-              "allowedPaths": ["/repos"],
-              "allowedInputKeys": ["owner"],
-              "defaultHeaders": { "Accept": "application/json" },
-              "auth": { "type": "bearer", "scope": "repo" }
-            }
-          }
-        }
-        """;
-
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-
-        var result = await ConnectorCatalogStorageSerializer.ReadDraftAsync(
-            stream,
-            DateTimeOffset.UnixEpoch,
-            CancellationToken.None);
-
-        result.UpdatedAtUtc.Should().Be(new DateTimeOffset(2026, 5, 21, 8, 9, 10, TimeSpan.Zero));
-        result.Draft.Should().NotBeNull();
-        result.Draft!.Name.Should().Be("github");
-        result.Draft.Type.Should().Be("http");
-        result.Draft.Http.BaseUrl.Should().Be("https://api.github.com");
-        result.Draft.Http.DefaultHeaders.Should().ContainKey("Accept");
     }
 
     [Fact]
@@ -151,7 +137,30 @@ public sealed class StudioCatalogProtobufStorageSerializerTests
     }
 
     [Fact]
-    public async Task Role_reader_keeps_json_as_import_fallback()
+    public async Task Role_catalog_storage_rejects_legacy_json_payloads()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("{"));
+
+        var act = () => RoleCatalogStorageSerializer.ReadCatalogAsync(stream, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidProtocolBufferException>();
+    }
+
+    [Fact]
+    public async Task Role_draft_storage_rejects_legacy_json_payloads()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("{"));
+
+        var act = () => RoleCatalogStorageSerializer.ReadDraftAsync(
+            stream,
+            DateTimeOffset.UnixEpoch,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidProtocolBufferException>();
+    }
+
+    [Fact]
+    public async Task Role_import_parser_keeps_json_catalog_boundary()
     {
         const string json = """
         {
@@ -169,44 +178,13 @@ public sealed class StudioCatalogProtobufStorageSerializerTests
         """;
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var parser = new RoleCatalogImportParser();
 
-        var result = await RoleCatalogStorageSerializer.ReadCatalogAsync(stream, CancellationToken.None);
+        var result = await parser.ParseCatalogAsync(stream, CancellationToken.None);
 
         result.Should().ContainSingle();
         result[0].Id.Should().Be("reviewer");
         result[0].Connectors.Should().ContainSingle("github");
-    }
-
-    [Fact]
-    public async Task Role_draft_reader_keeps_legacy_json_draft_as_import_fallback()
-    {
-        const string json = """
-        {
-          "updatedAtUtc": "2026-05-21T11:12:13+00:00",
-          "role": {
-            "id": "reviewer",
-            "name": "Reviewer",
-            "systemPrompt": "Review carefully.",
-            "provider": "openai",
-            "model": "gpt-5.5",
-            "connectors": ["github"]
-          }
-        }
-        """;
-
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
-
-        var result = await RoleCatalogStorageSerializer.ReadDraftAsync(
-            stream,
-            DateTimeOffset.UnixEpoch,
-            CancellationToken.None);
-
-        result.UpdatedAtUtc.Should().Be(new DateTimeOffset(2026, 5, 21, 11, 12, 13, TimeSpan.Zero));
-        result.Draft.Should().NotBeNull();
-        result.Draft!.Id.Should().Be("reviewer");
-        result.Draft.Name.Should().Be("Reviewer");
-        result.Draft.SystemPrompt.Should().Be("Review carefully.");
-        result.Draft.Connectors.Should().ContainSingle("github");
     }
 
     private static StoredRoleDefinition NewRole() =>
