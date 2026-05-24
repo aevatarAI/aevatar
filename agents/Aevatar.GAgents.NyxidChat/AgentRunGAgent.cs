@@ -122,7 +122,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         var request = command.Request.Clone();
         ApplyTargetRefOverrides(request);
-        var runId = NormalizeOptional(request.CorrelationId) ?? Id;
+        var runId = ResolveRunId(request);
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         // ADR-0021 chain.finalized precondition: terminal status means the run has
@@ -1282,6 +1282,11 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    private string ResolveRunId(NeedsLlmReplyEvent request) =>
+        NormalizeOptional(request.RunId) ??
+        NormalizeOptional(request.CorrelationId) ??
+        Id;
 
     private sealed class AgentRunOutputDispatchException(string message, Exception innerException)
         : Exception(message, innerException);

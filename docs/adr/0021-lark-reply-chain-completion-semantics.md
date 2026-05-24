@@ -25,7 +25,7 @@ Issues #647 / #648 / #649 都源于这一根本：契约不显式，每层承诺
 
 | 阶段 | 推进方 | 同步入口 | 异步事件 | 可观察 state | 承诺 |
 |---|---|---|---|---|---|
-| **accepted** | dispatcher | `DispatchAsync` return | `NeedsLlmReplyEvent` appended | `ConversationState.PendingLlmReply` | 已收到 & 入 actor inbox stream；**不**承诺 LLM 已开始处理 |
+| **accepted** | dispatcher | `DispatchAsync` normal return | `NeedsLlmReplyEvent` appended | `ConversationState.PendingLlmReply` | 已收到 & accepted for dispatch to run actor；**不**承诺 LLM 已开始处理或 run 已 admitted |
 | **committed** | `AgentRunGAgent` | — | `AgentRunReplyProducedEvent` persisted | `AgentRunState.Status = REPLY_PRODUCED` | LLM 已产出 & state event 已落库；**不**承诺消费方已收到 |
 | **delivered** | `ConversationGAgent` + channel sink | — | `LlmReplyDeliveredEvent` (新增) | `ConversationState.LastReplyDelivery.{outcome, channel_message_id, ack_at_unix_ms}` | channel sink 已 ack；**user-visible** |
 | **finalized** | `AgentRunGAgent` + `ConversationGAgent` | — | `ConversationTurnCompletedEvent` + `AgentRunState.cleanup_completed_at != 0` | terminal status + cleanup 已完 | 所有副作用收尾；**吸收态** |
@@ -101,29 +101,18 @@ message ConversationState {
 - streaming 路径：`HandleLlmReplyStreamChunkAsync` (cs:532) / `HandleLlmReplyCardStreamChunkAsync` (cs:546) 在 final chunk emit 之后 raise event
 - 失败路径：lark API 4xx/5xx / 超时 → raise `LlmReplyDeliveryFailedEvent`
 
-### 4. Dispatcher 返回值显式化
+### 4. Dispatcher ACK 语义
 
 ```csharp
 public interface IChannelLlmReplyRunDispatcher
 {
-    Task<DispatchOutcome> DispatchAsync(NeedsLlmReplyEvent evt, CancellationToken ct = default);
-}
-
-public sealed record DispatchOutcome(
-    DispatchPhase Phase,
-    string CommandId,
-    string? RunActorId,
-    long AcceptedAtUnixMs);
-
-public enum DispatchPhase
-{
-    Accepted = 0,
-    RejectedStale = 1,        // request age > MaxRunRequestAgeMs
-    RejectedDuplicate = 2,    // dedup hit on CommandId
+    Task DispatchAsync(NeedsLlmReplyEvent evt, CancellationToken ct = default);
 }
 ```
 
-**`DispatchPhase` 只能取 `Accepted` / `Rejected*`**，**不允许** `Committed` / `Delivered` — dispatcher 不承诺 downstream 任何事。
+`DispatchAsync` 正常返回只表示请求已交给 `IActorDispatchPort` 做 run actor inbox handoff；异常表示 handoff 失败，调用方可按 durable retry 处理。`AgentRunGAgent` 拥有 run admission：typed `run_id`、duplicate absorption、stale rejection/drop 都是 actor-owned 事实，后续只能通过 `AgentRunReplyProducedEvent` / `AgentRunDroppedEvent` / `AgentRunFailedEvent` 等异步事件观察。
+
+Dispatcher 不返回 receipt，也不返回 rejected phase；`commandId` 与 `runActorId` 由 typed `run_id` 确定性派生，`acceptedAt` 只是日志时间，不是 committed / observed 事实。
 
 **兼容性**：接口 `IChannelLlmReplyRunDispatcher` 完全仓库内部消费，无 NuGet 包发布；调用方 3 处（`ConversationGAgent.cs:349` + 2 处测试 mock）随 ADR 适配。无线上兼容性风险。
 
@@ -131,7 +120,7 @@ public enum DispatchPhase
 
 | 调用点 | 同步返回承诺 | 异步可观察 |
 |---|---|---|
-| `IChannelLlmReplyRunDispatcher.DispatchAsync` return | `DispatchPhase.Accepted` (仅入 inbox) | `AgentRunReplyProducedEvent` / `AgentRunDroppedEvent` / `AgentRunFailedEvent` |
+| `IChannelLlmReplyRunDispatcher.DispatchAsync` return | accepted-for-dispatch (仅 handoff to dispatch port) | `AgentRunReplyProducedEvent` / `AgentRunDroppedEvent` / `AgentRunFailedEvent` |
 | `AgentRunGAgent.HandleAgentRunStartRequested` 返回 | run 已接收 | committed → handed_off |
 | `ConversationGAgent.HandleLlmReplyReadyAsync` 返回 | handed_off 达成（ack from AgentRunGAgent 视角） | delivered → finalized |
 | 对外 HTTP `/v1/messages` 等 | accepted 等价语义 | client 自行 poll readmodel |
@@ -149,7 +138,7 @@ public enum DispatchPhase
   - `IsTerminal` helper 统一收口（替代 cs:114-124 散落的 ad-hoc 判断）
   - 所有 handler 入口先短路终态
   - cleanup 显式幂等（`cleanup_completed_at != 0` 即视为已完成，no-op）
-  - stale signal 校验统一通过 `commandId` + `runId` + `MaxRunRequestAgeMs`
+  - stale signal 校验统一通过 typed `runId` + `MaxRunRequestAgeMs`
 
 ## Consequences
 
@@ -158,7 +147,7 @@ public enum DispatchPhase
 1. `agent_run.proto`：扩 `AgentRunStatus` enum 加 `REPLY_HANDED_OFF`；`reply_dispatched` bool 标记 reserved
 2. `conversation_state.proto`：新增 `ReplyDeliveryStatus` 消息 + `last_reply_delivery` 字段
 3. 新增 domain event：`LlmReplyDeliveredEvent` / `LlmReplyDeliveryFailedEvent`
-4. `IChannelLlmReplyRunDispatcher.DispatchAsync` 改返回 `Task<DispatchOutcome>`；新增 `DispatchOutcome` record + `DispatchPhase` enum
+4. `IChannelLlmReplyRunDispatcher.DispatchAsync` 返回 plain `Task`；删除 `DispatchOutcome` record + `DispatchPhase` enum
 5. `AgentRunGAgent` 把 `Status==ReplyProduced && reply_dispatched==true` 重写为 `Status==REPLY_HANDED_OFF`；新增 `IsTerminal` helper
 6. `ConversationGAgent.RunLlmReplyAsync` + streaming chunk path 在 lark API 调用后 raise delivery event 落地 `last_reply_delivery`
 7. 配套 `docs/canon/lark-reply-completion-semantics.md`：详细可观察 state 表 + 时序图 + 跨阶段故障矩阵

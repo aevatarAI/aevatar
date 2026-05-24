@@ -262,6 +262,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
+            runCopy.RunId = NormalizeOptional(runCopy.RunId) ??
+                            NormalizeOptional(runCopy.CorrelationId) ??
+                            activity.Id;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             var persistedCopy = runCopy.Clone();
@@ -582,17 +585,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         try
         {
-            var outcome = await dispatcher.DispatchAsync(request.Clone(), ct);
+            // Refactor (iter56/cluster-935-agent-run-actor-admission): old=dispatcher in-process admission, new=actor-owned admission with plain Task
+            //   Conversation observes only dispatch handoff success/failure here.
+            //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
+            await dispatcher.DispatchAsync(request.Clone(), ct);
             Logger.LogInformation(
-                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} phase={Phase} commandId={CommandId}",
+                "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
+                request.RunId,
                 request.CorrelationId,
-                request.Activity?.Conversation?.CanonicalKey,
-                outcome.Phase,
-                outcome.CommandId);
-            // C3 will branch on outcome.Phase to retire the pending entry on
-            // Rejected* outcomes. Today the run actor inbox handler drops
-            // stale requests and surfaces them through DeferredLlmReplyDroppedEvent,
-            // so behaviour is preserved either way.
+                request.Activity?.Conversation?.CanonicalKey);
         }
         catch (Exception ex)
         {
