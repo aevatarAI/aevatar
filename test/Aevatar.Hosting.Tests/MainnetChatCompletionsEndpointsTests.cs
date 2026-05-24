@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
@@ -296,6 +297,48 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var error = doc.RootElement.GetProperty("error");
         error.GetProperty("type").GetString().Should().Be("authentication_error");
         error.GetProperty("code").GetString().Should().Be("authentication_required");
+    }
+
+    [Fact]
+    public async Task PostChatCompletions_WhenHostAuthEnabled_ShouldReachEndpointHandlerNotJwtBearerChallenge()
+    {
+        var provider = new ChatCompletionsRecordingLLMProvider();
+        var sessions = new ChatCompletionsRecordingSessionStore();
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+        builder.WebHost.UseTestServer();
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.AddAevatarAuthentication();
+
+        builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        builder.Services.AddSingleton(sessions);
+        builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new ChatCompletionsStubCallerScopeResolver());
+        builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
+            new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
+        builder.Services.AddSingleton(new ChatRouteResolver(new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesRouteResolver>(new ChatCompletionsNoopRouteResolver());
+
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapChatCompletionsApiEndpoints();
+        await app.StartAsync();
+
+        var response = await app.GetTestClient().PostAsync(
+            "/v1/chat/completions",
+            JsonContent("""{"model":"gpt-4o-mini","messages":[{"role":"user","content":"x"}]}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("authentication_required");
+        provider.LastRequest.Should().BeNull();
+
+        await app.StopAsync();
     }
 
     private static async Task<WebApplication> CreateAppAsync(
