@@ -64,12 +64,12 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         llmProvider.Requests[1].RequestId.Should().Contain("node-b");
         llmProvider.Requests.Should().OnlyContain(request => request.Metadata == null || request.Metadata.Count == 0);
         llmProvider.Requests.Should().OnlyContain(request =>
-            request.ToolContext != null &&
-            request.ToolContext.Credentials.NyxIdAccessToken == "test-token");
+            request.LlmControl != null &&
+            request.LlmControl.NyxIdAccessToken == "test-token");
         llmProvider.Requests.Should().OnlyContain(request =>
-            request.RoutingContext != null &&
-            request.RoutingContext.NyxIdRoutePreference != null &&
-            request.RoutingContext.NyxIdRoutePreference.Contains("/api/v1/proxy/s/openclaw/node-", StringComparison.OrdinalIgnoreCase));
+            request.LlmControl != null &&
+            request.LlmControl.NyxIdRoutePreference != null &&
+            request.LlmControl.NyxIdRoutePreference.Contains("/api/v1/proxy/s/openclaw/node-", StringComparison.OrdinalIgnoreCase));
 
         roomCommands.PostMessageCommands.Should().HaveCount(1);
         roomCommands.PostMessageCommands.Should().NotContain(command => command.Content.StartsWith("当前暂时不可用", StringComparison.Ordinal));
