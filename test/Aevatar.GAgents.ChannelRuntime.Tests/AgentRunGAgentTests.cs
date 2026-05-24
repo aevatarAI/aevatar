@@ -27,51 +27,50 @@ public sealed class AgentRunGAgentTests
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance);
 
-        var outcome = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-dispatch",
+            RunId = "run-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-dispatch",
         }, CancellationToken.None);
 
-        outcome.Phase.Should().Be(DispatchPhase.Accepted);
-        outcome.CommandId.Should().Be("agent-run-start:corr-dispatch");
-        outcome.RunActorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
-        outcome.AcceptedAtUnixMs.Should().BeGreaterThan(0);
-        streamProvider.Produced.Should().ContainSingle();
-        var (actorId, envelope) = streamProvider.Produced.Single();
-        actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
-        envelope.Id.Should().Be(outcome.CommandId);
-        envelope.Runtime.Deduplication.OperationId.Should().Be(outcome.CommandId);
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var (actorId, envelope) = dispatchPort.Dispatches.Single();
+        actorId.Should().Be(AgentRunGAgent.BuildActorId("run-dispatch"));
+        envelope.Id.Should().Be("agent-run-start:run-dispatch");
+        envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
+        command.Request.RunId.Should().Be("run-dispatch");
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
         command.Request.ReplyToken.Should().Be("relay-token-dispatch");
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldRejectDuplicate_WhenRunActorAlreadyExists()
+    public async Task DispatchAsync_ShouldAcceptDuplicateStarts_ForActorOwnedAdmission()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-duplicate-dispatch",
+            RunId = "run-duplicate-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -79,36 +78,33 @@ public sealed class AgentRunGAgentTests
             RequestedAtUnixMs = now.ToUnixTimeMilliseconds(),
         };
 
-        var outcomes = await Task.WhenAll(
+        await Task.WhenAll(
             dispatcher.DispatchAsync(request, CancellationToken.None),
             dispatcher.DispatchAsync(request.Clone(), CancellationToken.None));
 
-        outcomes.Should().ContainSingle(outcome => outcome.Phase == DispatchPhase.Accepted);
-        var duplicate = outcomes.Should()
-            .ContainSingle(outcome => outcome.Phase == DispatchPhase.RejectedDuplicate)
-            .Subject;
-        duplicate.Phase.Should().Be(DispatchPhase.RejectedDuplicate);
-        duplicate.CommandId.Should().BeEmpty();
-        duplicate.RunActorId.Should().Be(AgentRunGAgent.BuildActorId("corr-duplicate-dispatch"));
-        duplicate.AcceptedAtUnixMs.Should().Be(0);
-        streamProvider.Produced.Should().ContainSingle(
-            "duplicate suppression happens at the dispatcher boundary before enqueueing another start command");
+        dispatchPort.Dispatches.Should().HaveCount(2);
+        dispatchPort.Dispatches.Select(x => x.ActorId)
+            .Should().OnlyContain(id => id == AgentRunGAgent.BuildActorId("run-duplicate-dispatch"));
+        dispatchPort.Dispatches.Select(x => x.Envelope.Id)
+            .Should().OnlyContain(id => id == "agent-run-start:run-duplicate-dispatch");
+        actorRuntime.DestroyedIds.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenEnqueueFails_ShouldDestroyCreatedActorSoRetryCanDispatch()
+    public async Task DispatchAsync_WhenDispatchPortFails_ShouldPropagateWithoutDestroyCompensation()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new FailingOnceStreamProvider();
+        var dispatchPort = new ThrowingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-retry-after-enqueue-failure",
+            RunId = "run-retry-after-enqueue-failure",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -120,30 +116,26 @@ public sealed class AgentRunGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("simulated enqueue failure");
-        actorRuntime.DestroyedIds.Should()
-            .ContainSingle(id => id == AgentRunGAgent.BuildActorId("corr-retry-after-enqueue-failure"));
-
-        var retry = await dispatcher.DispatchAsync(request.Clone(), CancellationToken.None);
-
-        retry.Phase.Should().Be(DispatchPhase.Accepted);
-        streamProvider.Produced.Should().ContainSingle();
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldRejectStaleWithoutCreatingRunActor()
+    public async Task DispatchAsync_ShouldHandStaleRequestToRunActorAdmission()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
 
-        var outcome = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stale-dispatch",
+            RunId = "run-stale-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -153,12 +145,9 @@ public sealed class AgentRunGAgentTests
                 .ToUnixTimeMilliseconds(),
         }, CancellationToken.None);
 
-        outcome.Phase.Should().Be(DispatchPhase.RejectedStale);
-        outcome.CommandId.Should().BeEmpty();
-        outcome.RunActorId.Should().BeNull();
-        outcome.AcceptedAtUnixMs.Should().Be(0);
-        streamProvider.Produced.Should().BeEmpty();
-        (await actorRuntime.ExistsAsync(AgentRunGAgent.BuildActorId("corr-stale-dispatch"))).Should().BeFalse();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        dispatchPort.Dispatches.Single().ActorId.Should().Be(AgentRunGAgent.BuildActorId("run-stale-dispatch"));
+        (await actorRuntime.ExistsAsync(AgentRunGAgent.BuildActorId("run-stale-dispatch"))).Should().BeTrue();
     }
 
     [Fact]
@@ -534,6 +523,7 @@ public sealed class AgentRunGAgentTests
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-duplicate",
+            RunId = "run-duplicate",
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -547,6 +537,7 @@ public sealed class AgentRunGAgentTests
         // REPLY_HANDED_OFF (ADR-0021). The duplicate start must short-circuit on
         // terminal-status check and NOT re-run the LLM or re-dispatch.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.RunId.Should().Be("run-duplicate");
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -1426,6 +1417,7 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stale",
+            RunId = "run-stale",
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -1434,6 +1426,7 @@ public sealed class AgentRunGAgentTests
         });
 
         replyGenerator.CaptureSucceeded.Should().BeFalse();
+        runtime.State.RunId.Should().Be("run-stale");
         handled.Should().NotBeNull();
         var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
         dropped.CorrelationId.Should().Be("corr-stale");
@@ -2022,6 +2015,28 @@ public sealed class AgentRunGAgentTests
         }
     }
 
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            throw new InvalidOperationException("simulated enqueue failure");
+        }
+    }
+
     private sealed class FailingOnceGetActorRuntime(params (string Id, IActor Actor)[] actors) : IActorRuntime
     {
         private readonly DispatchingActorRuntime _inner = new(actors);
@@ -2228,98 +2243,6 @@ public sealed class AgentRunGAgentTests
                 },
             }, c);
         }
-    }
-
-    private sealed class RecordingStreamProvider : IStreamProvider
-    {
-        private readonly Dictionary<string, RecordingStream> _streams = new(StringComparer.Ordinal);
-
-        public List<(string StreamId, EventEnvelope Envelope)> Produced =>
-            _streams.Values.SelectMany(stream => stream.Produced.Select(envelope => (stream.StreamId, envelope))).ToList();
-
-        public IStream GetStream(string actorId)
-        {
-            if (!_streams.TryGetValue(actorId, out var stream))
-            {
-                stream = new RecordingStream(actorId);
-                _streams[actorId] = stream;
-            }
-
-            return stream;
-        }
-    }
-
-    private sealed class RecordingStream(string streamId) : IStream
-    {
-        public string StreamId { get; } = streamId;
-
-        public List<EventEnvelope> Produced { get; } = [];
-
-        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
-        {
-            if (message is EventEnvelope envelope)
-                Produced.Add(envelope.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-            where T : IMessage, new() =>
-            Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
-
-        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
-    }
-
-    private sealed class FailingOnceStreamProvider : IStreamProvider
-    {
-        private readonly RecordingStreamProvider _inner = new();
-        private bool _failNextProduce = true;
-
-        public List<(string StreamId, EventEnvelope Envelope)> Produced => _inner.Produced;
-
-        public IStream GetStream(string actorId) =>
-            new FailingOnceStream(_inner.GetStream(actorId), this);
-
-        private sealed class FailingOnceStream(IStream inner, FailingOnceStreamProvider owner) : IStream
-        {
-            public string StreamId => inner.StreamId;
-
-            public async Task ProduceAsync<T>(T message, CancellationToken ct = default)
-                where T : IMessage
-            {
-                if (owner._failNextProduce)
-                {
-                    owner._failNextProduce = false;
-                    throw new InvalidOperationException("simulated enqueue failure");
-                }
-
-                await inner.ProduceAsync(message, ct);
-            }
-
-            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-                where T : IMessage, new() =>
-                inner.SubscribeAsync(handler, ct);
-
-            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
-                inner.UpsertRelayAsync(binding, ct);
-
-            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
-                inner.RemoveRelayAsync(targetStreamId, ct);
-
-            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-                inner.ListRelaysAsync(ct);
-        }
-    }
-
-    private sealed class NoopAsyncDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator

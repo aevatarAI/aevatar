@@ -49,6 +49,9 @@ message NeedsLlmReplyEvent {
   // command copy may carry it so AgentRunGAgent can apply the route before execution.
   // Never persist to event store, projection, read model, or actor state.
   aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
+  // Stable run identity owned by AgentRunGAgent. Dispatcher adapters may use
+  // correlation_id only as a bounded fallback for older persisted requests.
+  string run_id = 11;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single
