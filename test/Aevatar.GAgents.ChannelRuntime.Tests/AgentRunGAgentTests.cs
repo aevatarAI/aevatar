@@ -1226,6 +1226,70 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleOutputDispatchRetryAsync_WhenTargetActorIdOrGenerationDoesNotMatch_DropsStaleRetry()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-retry-ready",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "msg-stale-retry-ready",
+                Content = new MessageContent { Text = "hello" },
+            },
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        var retryCommand = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+
+        var wrongTarget = retryCommand.Clone();
+        wrongTarget.TargetActorId = "actor-2";
+        await runtime.HandleOutputDispatchRetryAsync(wrongTarget);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        handled.Should().BeEmpty();
+
+        var wrongGeneration = retryCommand.Clone();
+        wrongGeneration.Generation = retryCommand.Generation + 1;
+        await runtime.HandleOutputDispatchRetryAsync(wrongGeneration);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        handled.Should().BeEmpty();
+
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task HandleStartAsync_ShouldScheduleRetry_WhenDropSignalIsNotAccepted()
     {
         var actor = Substitute.For<IActor>();

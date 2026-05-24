@@ -898,6 +898,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return false;
         }
 
+        if (!string.IsNullOrWhiteSpace(State.TargetActorId) &&
+            !string.Equals(State.TargetActorId, command.TargetActorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (command.Generation > 0 && State.GenerationAttempt != command.Generation)
+            return false;
+
         return command.Attempt <= 0 || State.GenerationAttempt == command.Attempt;
     }
 

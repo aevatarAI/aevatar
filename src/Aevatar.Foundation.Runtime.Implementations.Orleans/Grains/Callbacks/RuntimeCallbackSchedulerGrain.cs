@@ -120,6 +120,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         ArgumentNullException.ThrowIfNull(triggerEnvelope);
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTimeMs, 0);
+        DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
     }
 
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)

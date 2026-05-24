@@ -356,7 +356,7 @@ public sealed partial class ConversationGAgent
                 CardId = cardId ?? string.Empty,
                 CardMessageId = cardMessageId ?? string.Empty,
                 CommandId = commandId ?? string.Empty,
-                Activity = activity?.Clone(),
+                Activity = CloneForDurableState(activity),
                 FinalText = finalText ?? string.Empty,
                 LastFlushedText = lastFlushedText ?? string.Empty,
                 FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
