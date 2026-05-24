@@ -2248,7 +2248,7 @@ Bash(
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — NyxID / chrono-* are out of scope.
 3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
-4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
+4. **No `commit`/`push`/`checkout`/`gh pr create`/`git branch` inside codex prompts** — the controller owns git topology(branch 创建、commit、push、PR 开均由 controller 做)。事故记录:#952 codex 自开 PR 默认 `base=dev`(而非 `auto-refact-dev`)→ 与 dev CONFLICTING + 误对外发布。如不显式禁止,`gh pr create` 默认 base = repo default branch 错误。**Implement/fix/test-add prompt template 必须 verbatim 含此禁令**(不只在 SKILL hint,要在 prompt 里写明)。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
