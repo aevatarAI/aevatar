@@ -47,7 +47,12 @@ public static class ElasticsearchProjectionConfiguration
         var section = configuration.GetSection(SectionPath);
         var explicitEnabled = section["Enabled"];
         if (!string.IsNullOrWhiteSpace(explicitEnabled))
-            return string.Equals(explicitEnabled.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        {
+            if (!bool.TryParse(explicitEnabled, out var enabled))
+                throw new InvalidOperationException($"Invalid boolean value '{explicitEnabled}'.");
+
+            return enabled;
+        }
 
         var hasEndpoints = section.GetSection("Endpoints").GetChildren()
             .Any(static x => !string.IsNullOrWhiteSpace(x.Value));
