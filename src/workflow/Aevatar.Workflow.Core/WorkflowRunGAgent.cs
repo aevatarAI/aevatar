@@ -27,6 +27,9 @@ namespace Aevatar.Workflow.Core;
 //                bag for request metadata, LLM overrides, authorization, secure values
 //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
 //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+// Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
+//   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
+//   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -150,6 +153,7 @@ public sealed class WorkflowRunGAgent
         RebuildCompiledWorkflowCache();
         InstallCognitiveModules();
         await base.OnActivateAsync(ct);
+        await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
     }
 
     public async Task BindWorkflowRunDefinitionAsync(
@@ -684,6 +688,7 @@ public sealed class WorkflowRunGAgent
             .On<SubWorkflowDefinitionResolutionClearedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionCleared)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
+            .On<SubWorkflowInvocationHandoffAdvancedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationHandoffAdvanced)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
             .OrCurrent();
 
