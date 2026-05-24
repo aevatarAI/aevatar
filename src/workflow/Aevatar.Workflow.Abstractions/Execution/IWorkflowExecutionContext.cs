@@ -10,6 +10,18 @@ public interface IWorkflowExecutionContext
 {
     string RunId { get; }
 
+    // Refactor (iter89/cluster-089-workflow-module-clock-state):
+    //   Old: Workflow modules read process wall clock directly for TTLs,
+    //        timeout stamps, buffered signal eviction, and elapsed metrics.
+    //   New: Workflow modules consume injected execution context time for
+    //        business timestamps and monotonic elapsed APIs for durations.
+    DateTimeOffset UtcNow => TimeProvider.System.GetUtcNow();
+
+    long GetTimestamp() => TimeProvider.System.GetTimestamp();
+
+    TimeSpan GetElapsedTime(long startingTimestamp) =>
+        TimeProvider.System.GetElapsedTime(startingTimestamp);
+
     TState LoadState<TState>(string scopeKey)
         where TState : class, IMessage<TState>, new();
 
