@@ -2423,7 +2423,7 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleLarkCardOperationTimeoutFiredAsync_CreateTimeout_FallsBackToTextEdit()
+    public async Task HandleLarkCardOperationTimeoutFiredAsync_CreateTimeout_DoesNotPersistCredentialChunk()
     {
         var text = new RecordingTurnRunner
         {
@@ -2443,16 +2443,14 @@ public sealed class ConversationGAgentDedupTests
             Operation = LarkCardOperationPhase.Create,
             Sequence = lifecycle.LarkCardInFlightSequence,
             OperationGeneration = lifecycle.LarkCardOperationGeneration,
-            Chunk = CreateCardStreamChunk("act-card-timeout", "relay-msg-1", "hello"),
             CommandId = "llm-reply:act-card-timeout",
             FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
-        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
-        text.StreamChunkCount.ShouldBe(1);
+        text.StreamChunkCount.ShouldBe(0);
         agent.State.ActiveReplyLifecycles.ShouldContain(x =>
-            x.Mode == ConversationReplyLifecycleMode.NyxRelayText &&
-            x.Phase == ConversationReplyLifecyclePhase.TextPlaceholderSent);
+            x.Mode == ConversationReplyLifecycleMode.LarkCard &&
+            x.Phase == ConversationReplyLifecyclePhase.LarkCardCreationFailed);
     }
 
     [Fact]

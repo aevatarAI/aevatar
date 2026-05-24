@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -96,17 +97,43 @@ public sealed class LarkCardOperationSignalTests
         completed.SentActivityId.Should().Be("lark-card-stream:om_orphan");
     }
 
+    [Fact]
+    public async Task HandleLlmReplyCardStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            "conv-lark-card-timeout-sanitize",
+            new RecordingCardRunner(),
+            new RecordingActorDispatchPort(),
+            new InMemoryEventStore(),
+            scheduler);
+
+        await agent.HandleEventAsync(Envelope("conv-lark-card-timeout-sanitize",
+            CreateCardStreamChunk("corr-card-timeout-token", "relay-msg-1", "hello")));
+
+        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        var timeout = scheduled.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
+        timeout.CorrelationId.Should().Be("corr-card-timeout-token");
+        timeout.Operation.Should().Be(LarkCardOperationPhase.Create);
+
+        var persistedText = Encoding.UTF8.GetString(scheduled.TriggerEnvelope.ToByteArray());
+        persistedText.Should().NotContain("runtime-token-corr-card-timeout-token");
+        persistedText.Should().NotContain("reply_token");
+        persistedText.Should().NotContain("reply_token_expires_at_unix_ms");
+    }
+
     private static ConversationGAgent CreateAgent(
         string id,
         IConversationCardTurnRunner cardRunner,
         IActorDispatchPort dispatch,
-        IEventStore store)
+        IEventStore store,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton(dispatch)
             .AddSingleton(cardRunner)
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+            .AddSingleton(callbackScheduler ?? new NoopCallbackScheduler())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -245,6 +272,44 @@ public sealed class LarkCardOperationSignalTests
             var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
             return envelope.Payload.Unpack<T>();
         }
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Timeouts.Add(new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            });
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class InMemoryEventStore : IEventStore

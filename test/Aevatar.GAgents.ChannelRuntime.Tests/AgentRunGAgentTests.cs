@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
@@ -1150,15 +1151,75 @@ public sealed class AgentRunGAgentTests
         handled.Should().BeEmpty();
 
         var retry = scheduler.Timeouts.Should().ContainSingle(
-            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor)).Subject;
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor)).Subject;
         retry.ActorId.Should().Be(runtime.Id);
         retry.DueTime.Should().Be(AgentRunGAgent.OutputDispatchRetryDelay);
-        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+        retryCommand.RunId.Should().Be("corr-retry-ready");
+        retryCommand.CorrelationId.Should().Be("corr-retry-ready");
+        retryCommand.TargetActorId.Should().Be("actor-1");
+        Encoding.UTF8.GetString(retry.TriggerEnvelope.ToByteArray()).Should().NotContain("relay-token-retry-ready");
 
-        await runtime.HandleStartAsync(retryCommand);
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
 
-        // After the retry the same persisted reply is delivered — but the LLM was not
-        // re-invoked. Status promoted to REPLY_HANDED_OFF by ApplyReplyDispatched (ADR-0021).
+        // Durable retry cannot rehydrate runtime-only relay reply_token, so it is
+        // explicitly non-retryable after reconciling the produced reply from state.
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("missing_relay_reply_token_for_durable_retry");
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleOutputDispatchRetryAsync_ForNonRelay_ReDispatchesPersistedReplyWithoutRerunningLlm()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-nonrelay-retry-ready",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "msg-nonrelay-retry-ready",
+                Content = new MessageContent { Text = "hello" },
+            },
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().BeEmpty();
+
+        var retryCommand = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
+
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
@@ -1205,14 +1266,14 @@ public sealed class AgentRunGAgentTests
         replyGenerator.CallCount.Should().Be(0);
 
         var retryCommand = scheduler.Timeouts.Should().ContainSingle(
-                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor))
-            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
 
-        await runtime.HandleStartAsync(retryCommand);
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        runtime.State.Status.Should().Be(AgentRunStatus.Started);
         replyGenerator.CallCount.Should().Be(0);
-        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        handled.Should().BeEmpty();
     }
 
     [Fact]

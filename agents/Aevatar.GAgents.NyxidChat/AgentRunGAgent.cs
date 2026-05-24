@@ -19,6 +19,9 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+//   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+//   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     public const string ActorIdPrefix = "channel-agent-run:";
@@ -234,6 +237,40 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         catch (Exception ex)
         {
             await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleOutputDispatchRetryAsync(AgentRunOutputDispatchRetryRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!IsCurrentOutputDispatchRetry(command))
+            return;
+
+        var request = BuildOutputDispatchRetryRequest(command);
+        if (command.RequiresRuntimeReplyToken)
+        {
+            _logger.LogWarning(
+                "Dropping durable output-dispatch retry without runtime reply_token: runId={RunId} correlation={CorrelationId}",
+                command.RunId,
+                command.CorrelationId);
+            await PersistFailedAsync(
+                request,
+                command.RunId,
+                "missing_relay_reply_token_for_durable_retry",
+                "Durable output-dispatch retry cannot rehydrate runtime-only relay reply_token.");
+            return;
+        }
+
+        try
+        {
+            await ReDispatchProducedReplyAsync(request, command.RunId);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (!await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                throw;
         }
     }
 
@@ -754,9 +791,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 BuildTimeoutRequest(
                     BuildOutputDispatchRetryCallbackId(runId),
                     OutputDispatchRetryDelay,
-                    new AgentRunStartRequested
+                    new AgentRunOutputDispatchRetryRequested
                     {
-                        Request = request.Clone(),
+                        RunId = runId,
+                        CorrelationId = request.CorrelationId,
+                        TargetActorId = request.TargetActorId,
+                        Attempt = State.GenerationAttempt,
+                        Generation = Math.Max(1, State.GenerationAttempt),
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        RequiresRuntimeReplyToken = IsRelayRequest(request),
                     }),
                 ct: CancellationToken.None);
             return true;
@@ -833,6 +876,57 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 runId,
                 Id);
         }
+    }
+
+    private bool IsCurrentOutputDispatchRetry(AgentRunOutputDispatchRetryRequested command)
+    {
+        if (IsTerminal())
+            return false;
+
+        if (State.Status is not AgentRunStatus.ReplyProduced)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, command.RunId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.CorrelationId) &&
+            !string.Equals(State.CorrelationId, command.CorrelationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return command.Attempt <= 0 || State.GenerationAttempt == command.Attempt;
+    }
+
+    private NeedsLlmReplyEvent BuildOutputDispatchRetryRequest(AgentRunOutputDispatchRetryRequested command) =>
+        new()
+        {
+            RunId = command.RunId ?? string.Empty,
+            CorrelationId = NormalizeOptional(command.CorrelationId) ?? State.CorrelationId ?? string.Empty,
+            TargetActorId = NormalizeOptional(command.TargetActorId) ?? State.TargetActorId ?? string.Empty,
+            Activity = BuildOutputDispatchRetryActivity(command),
+        };
+
+    private ChatActivity? BuildOutputDispatchRetryActivity(AgentRunOutputDispatchRetryRequested command)
+    {
+        var correlationId = NormalizeOptional(command.CorrelationId) ?? NormalizeOptional(State.CorrelationId);
+        if (correlationId is null)
+            return null;
+
+        return new ChatActivity
+        {
+            Id = correlationId,
+            OutboundDelivery = command.RequiresRuntimeReplyToken
+                ? new OutboundDeliveryContext
+                {
+                    CorrelationId = correlationId,
+                    ReplyMessageId = correlationId,
+                }
+                : null,
+        };
     }
 
     private RuntimeCallbackTimeoutRequest BuildTimeoutRequest(
