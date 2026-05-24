@@ -180,10 +180,9 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
-# Issue #645:
-#   StreamingProxy stays mapped only as a deprecated public compatibility route.
-#   New production consumers must not call, wrap, or re-map it; direct model
-#   streaming moves to /v1/responses, while room fan-out needs a named contract.
+# Refactor (iter92/cluster-645):
+#   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
+#   New principle: this guard prevents new consumers, wrappers, or re-maps; direct model streaming goes through /v1/responses.
 set +e
 streaming_proxy_consumer_report="$(
   rg -n "streaming-proxy|MapStreamingProxyEndpoints|AddStreamingProxy|Aevatar\.GAgents\.StreamingProxy" \

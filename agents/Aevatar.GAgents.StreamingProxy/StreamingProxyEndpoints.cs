@@ -26,6 +26,10 @@ public static class StreamingProxyEndpoints
     public const string SuccessorLinkHeaderValue =
         "</v1/responses>; rel=\"successor-version\"; title=\"Migrate direct model streaming to /v1/responses; StreamingProxy room fan-out has no one-to-one replacement\"";
 
+    // Refactor (iter92/cluster-645):
+    //   Old pattern: StreamingProxy exposed a public streaming proxy entry point for production consumers.
+    //   New principle: StreamingProxy is soft-deprecated; sunset headers point direct model streaming to /v1/responses,
+    //   and these routes remain compatibility-only.
     // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
     //   Old pattern: endpoints built post-message, join, and terminal-state room envelopes directly in Host code.
     //   New principle: endpoints validate HTTP concerns and delegate typed room commands to the existing room command service.
