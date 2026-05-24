@@ -358,6 +358,8 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 **Projection**：`UserAgentCatalogProjector` 只消费 catalog committed state → 物化 catalog membership-only `UserAgentCatalogDocument`，`StateVersion` 来自 `UserAgentCatalogGAgent` committed version。`SkillRunnerExecutionProjector` 只消费 runner committed state → 物化 runner-owned `SkillRunnerExecutionDocument`，`StateVersion` 来自对应 `SkillRunnerGAgent` committed version。`/agents` 与 `/agent-status` 在 query/consumer 层 join 两个 readmodel，并暴露 catalog/runner 双水位，不合成单一版本。
 
+**Presentation join 约束**：`/agents` 与 `/agent-status` 的 catalog + execution join 只是对外 presentation response 装配，用于展示 caller 可见 agent 的执行快照。它不得作为内部 lifecycle command 准入事实源，不得形成可复用 aggregate query contract，也不得反向声明 catalog/execution 的统一业务状态。`run_agent` / `disable_agent` / `enable_agent` 同步准入只依赖 catalog authority（caller visible、agent exists、agent type supports managed lifecycle）；runner `Enabled/Disabled` 只在 `SkillRunnerGAgent` 自身 turn 内判定，拒绝执行时发布 runner-owned state event，再由 `/agent-status` 或 `/agents` 观察。
+
 **查询端口**：`IUserAgentCatalogQueryPort`
 - `QueryByCallerAsync(owner_scope)`：`/agents` 命令的数据源
 - `GetForCallerAsync(agentId, owner_scope)`：`/agent-status <id>` 单条查询

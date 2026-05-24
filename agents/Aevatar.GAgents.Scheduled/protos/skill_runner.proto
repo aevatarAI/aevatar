@@ -156,6 +156,11 @@ message SkillRunnerExecutionFailedEvent {
   string error = 2;
 }
 
+message SkillRunnerExecutionRejectedEvent {
+  google.protobuf.Timestamp rejected_at = 1;
+  string reason = 2;
+}
+
 message DisableSkillRunnerCommand {
   string reason = 1;
 }

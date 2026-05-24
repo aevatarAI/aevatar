@@ -231,6 +231,9 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-1");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted for dispatch")
+                .And.Contain("/agent-status");
 
             await skillRunnerPort.Received(1).TriggerAsync(
                 "skill-runner-1",
@@ -388,7 +391,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RunAgent_RejectsDisabledAgent()
+    public async Task ExecuteAsync_RunAgent_DispatchesEvenWhenPresentationStatusIsDisabled()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -427,10 +430,15 @@ public sealed class AgentBuilderToolTests
                 }
                 """);
 
-            result.Should().Contain("is disabled");
-            await skillRunnerPort.DidNotReceive().TriggerAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted for dispatch")
+                .And.Contain("/agent-status");
+
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
+                "run_agent",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -506,7 +514,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DisableAgent_ReturnsAlreadyDisabledWithoutDispatch()
+    public async Task ExecuteAsync_DisableAgent_DispatchesEvenWhenPresentationStatusIsDisabled()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -549,11 +557,13 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("already disabled");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("Disable accepted")
+                .And.Contain("/agent-status");
 
-            await skillRunnerPort.DidNotReceive().DisableAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-1",
+                "disable_agent",
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -622,6 +632,57 @@ public sealed class AgentBuilderToolTests
             await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
                 Arg.Any<string>(),
                 Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LifecycleCommands_DoNotReadExecutionStatusForAdmission()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily",
+                Status = string.Empty,
+            }));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            await tool.ExecuteAsync("""{"action":"run_agent","agent_id":"skill-runner-1"}""");
+            await tool.ExecuteAsync("""{"action":"disable_agent","agent_id":"skill-runner-1"}""");
+            await tool.ExecuteAsync("""{"action":"enable_agent","agent_id":"skill-runner-1"}""");
+
+            await executionQueryPort.DidNotReceive().GetAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.DidNotReceive().QueryByAgentIdsAsync(
+                Arg.Any<IReadOnlyCollection<string>>(),
                 Arg.Any<CancellationToken>());
         }
         finally

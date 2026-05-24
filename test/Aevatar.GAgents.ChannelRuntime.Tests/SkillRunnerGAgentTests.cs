@@ -221,6 +221,29 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleTriggerAsync_WhenDisabled_PersistsRunnerOwnedRejectedEvent()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+        await _agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "test" });
+
+        await _agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "run_agent" });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+
+        _agent.State.Enabled.Should().BeFalse();
+        _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+        _agent.State.ErrorCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
     {
         var catalogActor = Substitute.For<IActor>();

@@ -205,6 +205,64 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Refactor (PR #1010 r3):
+#   Old pattern: /run-agent, /disable-agent, and /enable-agent used runner execution
+#   readmodel Status as a cross-authority business admission view.
+#   New principle: lifecycle command admission is catalog-only. Runner Enabled/Disabled
+#   is authoritative inside SkillRunnerGAgent's own turn and is later observed via readmodel.
+python3 - <<'PY'
+from pathlib import Path
+import sys
+
+path = Path("agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderTool.cs")
+text = path.read_text()
+methods = [
+    "RunAgentAsync",
+    "DisableAgentAsync",
+    "EnableAgentAsync",
+    "RequireManagedAgentAsync",
+]
+forbidden = [
+    "executionQueryPort",
+    "_executionQueryPort",
+    "QueryAgentForCallerAsync",
+    "MergeExecution",
+    "StatusDisabled",
+    "StatusRunning",
+]
+
+def method_body(source: str, name: str) -> str:
+    marker = name + "("
+    start = source.find(marker)
+    if start < 0:
+        raise RuntimeError(f"method not found: {name}")
+    open_brace = source.find("{", start)
+    if open_brace < 0:
+        raise RuntimeError(f"method body not found: {name}")
+    depth = 0
+    for index in range(open_brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace:index + 1]
+    raise RuntimeError(f"method body unterminated: {name}")
+
+violations = []
+for method in methods:
+    body = method_body(text, method)
+    for token in forbidden:
+        if token in body:
+            violations.append(f"{path}:{method}: forbidden lifecycle admission token `{token}`")
+
+if violations:
+    print("\n".join(violations))
+    print("Scheduled-agent lifecycle command admission must stay catalog-only; execution Status belongs to runner-owned observation.")
+    sys.exit(1)
+PY
+
 # Refactor (iter92/cluster-645):
 #   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
 #   New principle: this guard prevents new consumers, wrappers, or re-maps; direct model streaming goes through /v1/responses.

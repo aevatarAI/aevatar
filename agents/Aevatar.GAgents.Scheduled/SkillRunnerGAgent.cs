@@ -157,6 +157,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerNextRunScheduledEvent>(ApplyNextRunScheduled)
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
+            .On<SkillRunnerExecutionRejectedEvent>(ApplyRejected)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -210,6 +211,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (!State.Enabled)
         {
             Logger.LogInformation("Skill runner {ActorId} ignored trigger because it is disabled", Id);
+            await PersistDomainEventAsync(new SkillRunnerExecutionRejectedEvent
+            {
+                RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+                Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
+            });
             return;
         }
 
@@ -996,6 +1002,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var next = current.Clone();
         next.LastRunAt = evt.FailedAt;
         next.LastError = evt.Error ?? string.Empty;
+        next.ErrorCount += 1;
+        return next;
+    }
+
+    private static SkillRunnerState ApplyRejected(SkillRunnerState current, SkillRunnerExecutionRejectedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastRunAt = evt.RejectedAt;
+        next.LastError = evt.Reason ?? string.Empty;
         next.ErrorCount += 1;
         return next;
     }
