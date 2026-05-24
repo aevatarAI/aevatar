@@ -12,6 +12,17 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansActorTransportDispatchTests
 {
     [Fact]
+    public void Constructor_WhenStreamProviderIsNull_ShouldThrowArgumentNullException()
+    {
+        var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
+
+        var act = () => new OrleansActorDispatchPort(grainFactory, null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("streams");
+    }
+
+    [Fact]
     public async Task DispatchPortAsync_ShouldHandoffViaStreamProvider()
     {
         var grain = new RecordingRuntimeActorGrain();
