@@ -161,6 +161,56 @@ public class ScriptArtifactCoverageTests
         compiler.CallCount.Should().Be(2);
     }
 
+    [Fact]
+    public async Task EvictedArtifact_CanBeCreatedThenAsyncDisposed_ReleasesLease()
+    {
+        var disposed = new List<string>();
+        var disposeObserved = new ManualResetEventSlim(false);
+        var compiler = new RequestEchoCompiler(
+            onDispose: request =>
+            {
+                disposed.Add(request.ScriptId);
+                disposeObserved.Set();
+            },
+            behaviorFactory: static () => new AsyncDisposableNoopBehavior());
+        using var resolver = new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts: 1);
+
+        var first = resolver.Resolve(CreateRequest(scriptId: "script-1"));
+        var firstBehavior = first.CreateBehavior();
+        var firstBehaviorAsyncDisposable = firstBehavior.Should().BeAssignableTo<IAsyncDisposable>().Subject;
+        var second = resolver.Resolve(CreateRequest(scriptId: "script-2"));
+
+        second.Should().NotBeSameAs(first);
+        disposeObserved.Wait(TimeSpan.FromMilliseconds(100)).Should().BeFalse();
+        await firstBehaviorAsyncDisposable.DisposeAsync();
+        disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        disposed.Should().Contain("script-1");
+        compiler.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task EvictedArtifact_DirectDisposeAsync_ReleasesLease_WithoutCreatingBehavior()
+    {
+        var disposed = new List<string>();
+        var disposeObserved = new ManualResetEventSlim(false);
+        var compiler = new RequestEchoCompiler(request =>
+        {
+            disposed.Add(request.ScriptId);
+            disposeObserved.Set();
+        });
+        using var resolver = new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts: 1);
+
+        var first = resolver.Resolve(CreateRequest(scriptId: "script-1"));
+        var second = resolver.Resolve(CreateRequest(scriptId: "script-2"));
+
+        second.Should().NotBeSameAs(first);
+        disposeObserved.Wait(TimeSpan.FromMilliseconds(100)).Should().BeFalse();
+        await first.DisposeAsync();
+        disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        disposed.Should().Contain("script-1");
+        compiler.CallCount.Should().Be(2);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -272,16 +322,18 @@ public class ScriptArtifactCoverageTests
     private static ScriptBehaviorArtifact CreateArtifact(
         string scriptId,
         string revision,
-        Action? onDispose = null)
+        Action? onDispose = null,
+        Func<IScriptBehaviorBridge>? behaviorFactory = null)
     {
-        var behavior = new NoopBehavior();
+        behaviorFactory ??= static () => new NoopBehavior();
+        var behavior = behaviorFactory();
         return new ScriptBehaviorArtifact(
             scriptId,
             revision,
             "hash-1",
             behavior.Descriptor,
             behavior.Descriptor.ToContract(),
-            static () => new NoopBehavior(),
+            behaviorFactory,
             () =>
             {
                 onDispose?.Invoke();
@@ -329,7 +381,8 @@ public class ScriptArtifactCoverageTests
 
     private sealed class RequestEchoCompiler(
         Action<ScriptBehaviorCompilationRequest>? onDispose = null,
-        Action<ScriptBehaviorCompilationRequest>? onCompile = null) : IScriptBehaviorCompiler
+        Action<ScriptBehaviorCompilationRequest>? onCompile = null,
+        Func<IScriptBehaviorBridge>? behaviorFactory = null) : IScriptBehaviorCompiler
     {
         private int _callCount;
 
@@ -341,12 +394,16 @@ public class ScriptArtifactCoverageTests
             onCompile?.Invoke(request);
             return new ScriptBehaviorCompilationResult(
                 true,
-                CreateArtifact(request.ScriptId, request.Revision, () => onDispose?.Invoke(request)),
+                CreateArtifact(
+                    request.ScriptId,
+                    request.Revision,
+                    () => onDispose?.Invoke(request),
+                    behaviorFactory),
                 Array.Empty<string>());
         }
     }
 
-    private sealed class NoopBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    private class NoopBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
@@ -380,5 +437,10 @@ public class ScriptArtifactCoverageTests
             });
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class AsyncDisposableNoopBehavior : NoopBehavior, IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
