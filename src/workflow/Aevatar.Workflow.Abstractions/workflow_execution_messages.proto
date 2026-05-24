@@ -188,6 +188,8 @@ message WorkflowSuspendedEvent
   map<string, string> metadata = 7;
   string content = 8;
   string delivery_target_id = 9;
+  bool secure = 10;
+  string redacted_output = 11;
 }
 message WorkflowResumedEvent
 {
