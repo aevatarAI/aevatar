@@ -6,6 +6,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -443,6 +444,51 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task ConnectorRegistration_ShouldRegisterBootstrapConnectorsAsRegistryOwned()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"connector-ownership-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var filePath = Path.Combine(tempDir, "connectors.json");
+
+        File.WriteAllText(filePath,
+            """
+            {
+              "connectors": [
+                {
+                  "name": "owned_connector",
+                  "type": "recording"
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            await using var registry = new ConfiguredConnectorRegistry();
+            var connector = new RecordingConnector("owned_connector", "recording");
+            var builders = new IConnectorBuilder[] { new RecordingConnectorBuilder("recording", connector) };
+
+            var added = await ConnectorRegistration.RegisterConnectorsAsync(
+                registry,
+                builders,
+                NullLogger.Instance,
+                filePath);
+
+            added.Should().Be(1);
+            registry.TryGet("owned_connector", out var resolved).Should().BeTrue();
+            resolved.Should().BeSameAs(connector);
+
+            await registry.DisposeAsync();
+
+            connector.DisposeCount.Should().Be(1);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ConnectorBootstrapHostedService_ShouldSkipWithoutRegistryAndLoadWithRegistry()
     {
         var servicesWithoutRegistry = new ServiceCollection();
@@ -489,6 +535,51 @@ public class ConnectorAndHostingCoverageTests
 
             var registry = provider.GetRequiredService<IConnectorRegistry>();
             registry.ListNames().Should().Contain("h1");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Directory.Delete(tempHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectorBootstrapHostedService_StopAsync_ShouldDisposeRegistryOwnedConnectors()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), $"connector-stop-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempHome);
+        var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempHome, "connectors.json"),
+                """
+                {
+                  "connectors": [
+                    {
+                      "name": "owned_stop_connector",
+                      "type": "recording"
+                    }
+                  ]
+                }
+                """);
+
+            var connector = new RecordingConnector("owned_stop_connector", "recording");
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
+            services.AddSingleton<IConnectorBuilder>(new RecordingConnectorBuilder("recording", connector));
+
+            await using var provider = services.BuildServiceProvider();
+            var service = new ConnectorBootstrapHostedService(
+                provider,
+                NullLogger<ConnectorBootstrapHostedService>.Instance);
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StopAsync(CancellationToken.None);
+
+            connector.DisposeCount.Should().Be(1);
         }
         finally
         {
@@ -743,6 +834,41 @@ public class ConnectorAndHostingCoverageTests
             _ = cancellationToken;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(scheme, token);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingConnectorBuilder(string type, IConnector connector) : IConnectorBuilder
+    {
+        public string Type { get; } = type;
+
+        public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? builtConnector)
+        {
+            _ = entry;
+            _ = logger;
+            builtConnector = connector;
+            return true;
+        }
+    }
+
+    private sealed class RecordingConnector(string name, string type) : IConnector, IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public string Name { get; } = name;
+
+        public string Type { get; } = type;
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new ConnectorResponse { Success = true });
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
         }
     }
 
