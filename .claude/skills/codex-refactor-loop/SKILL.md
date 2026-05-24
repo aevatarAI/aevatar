@@ -224,6 +224,42 @@ rollup PR(#690-style):
   注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
 ```
 
+### ❌ 禁止嵌套 dispatcher pattern(强制,per 2026-05-25 9-codex 假装 spawn 事故)
+
+**反模式**:把多个 spawn 包在一个 Bash `run_in_background: true` 里:
+
+```bash
+# ❌ BAD — silent fail
+for role in architect tests quality; do
+  cat > prompt.md << EOF
+  ...
+EOF
+  spawn-codex.sh ... &  # 后台跑
+done
+wait                     # 等所有 spawn 完成
+```
+
+**为什么坏**:
+- `<<EOF` heredoc 在嵌套 `&` 子 shell 里写文件**可能丢**(zsh + bash interaction race)
+- spawn-codex.sh 通过 `&` 启动后,harness 看不到内层进程(只看到 wrapper Bash),task-notification 不会针对内层 codex fire
+- wrapper Bash 完成 → harness 报 "completed" → controller 以为 spawn 成功 → 实际 0 codex 真在跑 → concurrency floor 立刻失保
+
+**正确模式**:每个 codex spawn **独立** Bash tool call with `run_in_background: true`:
+
+```bash
+# Step 1: 用 Write tool 或 printf 写 prompt 文件(同步 Bash 不嵌套)
+printf '%s' '<prompt content>' > .refactor-loop/prompts/review-prN-role.md
+
+# Step 2: 每 spawn 独立 Bash tool call
+Bash(
+  command=".claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd ... --prompt ... --log ... --timeout 3600",
+  run_in_background=True
+)
+# 3 reviewers = 3 独立 Bash 调用
+```
+
+**事故记录(2026-05-25)**:9 个 r2 reviewer(#995/#996/#997 各 3)用嵌套 dispatcher → controller 以为已派 → 实际 spawn-codex.sh 全 exit 2(因 prompt file 不存在) → 9 codex 全失败 → floor=0。controller 当 turn 内必须发现 + 单独重派。
+
 ### Spawn pattern — Bash `run_in_background: true`(强制,per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到")
 
 **关键架构铁律**:codex spawn 必须用 **Bash tool with `run_in_background: true`** 跑 `spawn-codex.sh`。这样 harness 会跟踪 Bash → codex 进程链,**codex exit 时 harness 立即 fire `<task-notification>` 唤醒 controller**,不用等 ScheduleWakeup。
