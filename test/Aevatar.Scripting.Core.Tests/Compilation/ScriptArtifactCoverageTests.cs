@@ -91,12 +91,89 @@ public class ScriptArtifactCoverageTests
             .WithMessage("Script artifact resolution failed: compile-failed");
     }
 
+    [Fact]
+    public void CachedResolver_ShouldRetryAfterFailedCompilation()
+    {
+        var compiler = new FailOnceCompiler();
+        var resolver = new CachedScriptBehaviorArtifactResolver(compiler);
+        var request = CreateRequest();
+
+        Action first = () => resolver.Resolve(request);
+        first.Should().Throw<InvalidOperationException>();
+
+        var resolved = resolver.Resolve(request);
+
+        resolved.ScriptId.Should().Be("script-1");
+        compiler.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void CachedResolver_ShouldUseTypedCompositeKey_WithoutDelimiterCollision()
+    {
+        var compiler = new RequestEchoCompiler();
+        var resolver = new CachedScriptBehaviorArtifactResolver(compiler);
+
+        var first = resolver.Resolve(CreateRequest(
+            scriptId: "script",
+            revision: "rev|hash",
+            sourceHash: "entry",
+            entryBehaviorTypeName: "type"));
+        var second = resolver.Resolve(CreateRequest(
+            scriptId: "script|rev",
+            revision: "hash",
+            sourceHash: "entry",
+            entryBehaviorTypeName: "type"));
+
+        second.Should().NotBeSameAs(first);
+        first.ScriptId.Should().Be("script");
+        first.Revision.Should().Be("rev|hash");
+        second.ScriptId.Should().Be("script|rev");
+        second.Revision.Should().Be("hash");
+        compiler.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void CachedResolver_ShouldEvictByConfiguredSizeLimit_AndDisposeEvictedArtifact()
+    {
+        var disposed = new List<string>();
+        var disposeObserved = new ManualResetEventSlim(false);
+        var compiler = new RequestEchoCompiler(request =>
+        {
+            disposed.Add(request.ScriptId);
+            disposeObserved.Set();
+        });
+        using var resolver = new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts: 1);
+
+        var first = resolver.Resolve(CreateRequest(scriptId: "script-1"));
+        var second = resolver.Resolve(CreateRequest(scriptId: "script-2"));
+
+        second.Should().NotBeSameAs(first);
+        disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        disposed.Should().Contain("script-1");
+        compiler.CallCount.Should().Be(2);
+    }
+
     private static ScriptBehaviorArtifactRequest CreateRequest() =>
+        CreateRequest(
+            scriptId: "script-1",
+            revision: "rev-1",
+            sourceHash: "hash-1",
+            entryBehaviorTypeName: string.Empty);
+
+    private static ScriptBehaviorArtifactRequest CreateRequest(
+        string scriptId,
+        string revision = "rev-1",
+        string sourceHash = "hash-1",
+        string entryBehaviorTypeName = "") =>
         new(
-            "script-1",
-            "rev-1",
-            ScriptSourcePackageSerializer.DeserializeOrWrapCSharp("public sealed class DraftBehavior {}"),
-            "hash-1");
+            scriptId,
+            revision,
+            new ScriptSourcePackage(
+                ScriptSourcePackage.CurrentFormat,
+                [new ScriptSourceFile("Behavior.cs", "public sealed class DraftBehavior {}")],
+                Array.Empty<ScriptSourceFile>(),
+                entryBehaviorTypeName),
+            sourceHash);
 
     private static ScriptBehaviorArtifact CreateArtifact(
         string scriptId,
@@ -136,6 +213,37 @@ public class ScriptArtifactCoverageTests
         {
             _ = request;
             return new ScriptBehaviorCompilationResult(false, null, ["compile-failed"]);
+        }
+    }
+
+    private sealed class FailOnceCompiler : IScriptBehaviorCompiler
+    {
+        public int CallCount { get; private set; }
+
+        public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
+        {
+            CallCount += 1;
+            if (CallCount == 1)
+                return new ScriptBehaviorCompilationResult(false, null, ["compile-failed"]);
+
+            return new ScriptBehaviorCompilationResult(
+                true,
+                CreateArtifact(request.ScriptId, request.Revision),
+                Array.Empty<string>());
+        }
+    }
+
+    private sealed class RequestEchoCompiler(Action<ScriptBehaviorCompilationRequest>? onDispose = null) : IScriptBehaviorCompiler
+    {
+        public int CallCount { get; private set; }
+
+        public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
+        {
+            CallCount += 1;
+            return new ScriptBehaviorCompilationResult(
+                true,
+                CreateArtifact(request.ScriptId, request.Revision, () => onDispose?.Invoke(request)),
+                Array.Empty<string>());
         }
     }
 
