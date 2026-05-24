@@ -1,4 +1,6 @@
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -27,51 +29,50 @@ public sealed class AgentRunGAgentTests
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance);
 
-        var outcome = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-dispatch",
+            RunId = "run-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-dispatch",
         }, CancellationToken.None);
 
-        outcome.Phase.Should().Be(DispatchPhase.Accepted);
-        outcome.CommandId.Should().Be("agent-run-start:corr-dispatch");
-        outcome.RunActorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
-        outcome.AcceptedAtUnixMs.Should().BeGreaterThan(0);
-        streamProvider.Produced.Should().ContainSingle();
-        var (actorId, envelope) = streamProvider.Produced.Single();
-        actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
-        envelope.Id.Should().Be(outcome.CommandId);
-        envelope.Runtime.Deduplication.OperationId.Should().Be(outcome.CommandId);
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var (actorId, envelope) = dispatchPort.Dispatches.Single();
+        actorId.Should().Be(AgentRunGAgent.BuildActorId("run-dispatch"));
+        envelope.Id.Should().Be("agent-run-start:run-dispatch");
+        envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
+        command.Request.RunId.Should().Be("run-dispatch");
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
         command.Request.ReplyToken.Should().Be("relay-token-dispatch");
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldRejectDuplicate_WhenRunActorAlreadyExists()
+    public async Task DispatchAsync_ShouldAcceptDuplicateStarts_ForActorOwnedAdmission()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-duplicate-dispatch",
+            RunId = "run-duplicate-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -79,36 +80,33 @@ public sealed class AgentRunGAgentTests
             RequestedAtUnixMs = now.ToUnixTimeMilliseconds(),
         };
 
-        var outcomes = await Task.WhenAll(
+        await Task.WhenAll(
             dispatcher.DispatchAsync(request, CancellationToken.None),
             dispatcher.DispatchAsync(request.Clone(), CancellationToken.None));
 
-        outcomes.Should().ContainSingle(outcome => outcome.Phase == DispatchPhase.Accepted);
-        var duplicate = outcomes.Should()
-            .ContainSingle(outcome => outcome.Phase == DispatchPhase.RejectedDuplicate)
-            .Subject;
-        duplicate.Phase.Should().Be(DispatchPhase.RejectedDuplicate);
-        duplicate.CommandId.Should().BeEmpty();
-        duplicate.RunActorId.Should().Be(AgentRunGAgent.BuildActorId("corr-duplicate-dispatch"));
-        duplicate.AcceptedAtUnixMs.Should().Be(0);
-        streamProvider.Produced.Should().ContainSingle(
-            "duplicate suppression happens at the dispatcher boundary before enqueueing another start command");
+        dispatchPort.Dispatches.Should().HaveCount(2);
+        dispatchPort.Dispatches.Select(x => x.ActorId)
+            .Should().OnlyContain(id => id == AgentRunGAgent.BuildActorId("run-duplicate-dispatch"));
+        dispatchPort.Dispatches.Select(x => x.Envelope.Id)
+            .Should().OnlyContain(id => id == "agent-run-start:run-duplicate-dispatch");
+        actorRuntime.DestroyedIds.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenEnqueueFails_ShouldDestroyCreatedActorSoRetryCanDispatch()
+    public async Task DispatchAsync_WhenDispatchPortFails_ShouldPropagateWithoutDestroyCompensation()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new FailingOnceStreamProvider();
+        var dispatchPort = new ThrowingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-retry-after-enqueue-failure",
+            RunId = "run-retry-after-enqueue-failure",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -120,30 +118,26 @@ public sealed class AgentRunGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("simulated enqueue failure");
-        actorRuntime.DestroyedIds.Should()
-            .ContainSingle(id => id == AgentRunGAgent.BuildActorId("corr-retry-after-enqueue-failure"));
-
-        var retry = await dispatcher.DispatchAsync(request.Clone(), CancellationToken.None);
-
-        retry.Phase.Should().Be(DispatchPhase.Accepted);
-        streamProvider.Produced.Should().ContainSingle();
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldRejectStaleWithoutCreatingRunActor()
+    public async Task DispatchAsync_ShouldHandStaleRequestToRunActorAdmission()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
+        var dispatchPort = new RecordingActorDispatchPort();
         var now = new DateTimeOffset(2026, 5, 15, 9, 0, 0, TimeSpan.Zero);
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            dispatchPort,
             NullLogger<AgentRunDispatcher>.Instance,
             new FakeTimeProvider(now));
 
-        var outcome = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stale-dispatch",
+            RunId = "run-stale-dispatch",
             TargetActorId = "conversation-actor",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -153,12 +147,9 @@ public sealed class AgentRunGAgentTests
                 .ToUnixTimeMilliseconds(),
         }, CancellationToken.None);
 
-        outcome.Phase.Should().Be(DispatchPhase.RejectedStale);
-        outcome.CommandId.Should().BeEmpty();
-        outcome.RunActorId.Should().BeNull();
-        outcome.AcceptedAtUnixMs.Should().Be(0);
-        streamProvider.Produced.Should().BeEmpty();
-        (await actorRuntime.ExistsAsync(AgentRunGAgent.BuildActorId("corr-stale-dispatch"))).Should().BeFalse();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        dispatchPort.Dispatches.Single().ActorId.Should().Be(AgentRunGAgent.BuildActorId("run-stale-dispatch"));
+        (await actorRuntime.ExistsAsync(AgentRunGAgent.BuildActorId("run-stale-dispatch"))).Should().BeTrue();
     }
 
     [Fact]
@@ -273,6 +264,135 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenAccepted_PersistsGenerationRequestedAndHandsOffToExecutor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-requested",
+            RunId = "run-generation-requested",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-requested",
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        runtime.State.GenerationAttempt.Should().Be(1);
+        runtime.State.GenerationRequestedAtUnixMs.Should().BeGreaterThan(0);
+        generationExecutor.Starts.Should().ContainSingle();
+        generationExecutor.Starts[0].RunId.Should().Be("run-generation-requested");
+        generationExecutor.Starts[0].RunActorId.Should().Be(runtime.Id);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenGenerationRequested_DoesNotStartSecondExecutor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-duplicate",
+            RunId = "run-generation-duplicate",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-duplicate",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        generationExecutor.Starts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+                ResponseTimeoutSeconds = 1,
+            },
+            callbackScheduler: scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-timeout-race",
+            RunId = "run-generation-timeout-race",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-timeout-race",
+        });
+
+        var timeout = scheduler.Timeouts.Should().ContainSingle(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor)).Subject;
+
+        await runtime.HandleReplyGenerationTimedOutAsync(
+            timeout.TriggerEnvelope.Payload.Unpack<AgentRunReplyGenerationTimedOut>());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("llm_reply_timeout");
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        var dropped = handled.Single().Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-generation-timeout-race");
+        dropped.Reason.Should().Be("llm_reply_timeout");
+
+        await runtime.HandleReplyGenerationCompletedAsync(new AgentRunReplyGenerationCompleted
+        {
+            RunId = "run-generation-timeout-race",
+            CorrelationId = "corr-generation-timeout-race",
+            TargetActorId = "actor-1",
+            ReplyText = "late executor reply",
+            TerminalState = LlmReplyTerminalState.Completed,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Attempt = generationExecutor.Starts.Single().Attempt,
+            Request = generationExecutor.Starts.Single().Request.Clone(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ProducedReplyText.Should().BeEmpty();
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        handled.Should().NotContain(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task ProduceAndDispatch_WhenPersistDispatchedFails_DoesNotDeliverDuplicateFallbackReply()
     {
         // Once DispatchReadyEventAsync delivers the reply to the conversation actor, the user
@@ -380,18 +500,18 @@ public sealed class AgentRunGAgentTests
     public async Task HandleStartAsync_WhenTargetRefForwardsToModel_InjectsModelOverrideMetadata()
     {
         // Regression: ForwardToModel.model_name from the chat-route policy
-        // must inject LLMRequestMetadataKeys.ModelOverride so the LLM
-        // provider sees the policy-chosen model. Bot-owner default model
+        // must flow through the typed LLM control carrier so the LLM provider
+        // sees the policy-chosen model. Bot-owner default model
         // intentionally loses to the chat-route override — chat route is
         // the more specific decision (caller-scope + rule match).
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("conversation:c");
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
-        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        LLMControlContext? observedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ok",
-            MetadataObserver = m => observedMetadata = m,
+            LlmControlObserver = control => observedControl = control,
         };
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -412,11 +532,10 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
-        observedMetadata!.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride);
-        observedMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be(
+        observedControl.Should().NotBeNull("the LLM provider must have been invoked");
+        observedControl!.ModelOverride.Should().Be(
             "anthropic/claude-sonnet-4-6",
-            "ForwardToModel.model_name must reach the LLM provider via the ModelOverride metadata key");
+            "ForwardToModel.model_name must reach the LLM provider via the typed llm_control field");
     }
 
     [Fact]
@@ -425,11 +544,11 @@ public sealed class AgentRunGAgentTests
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("conversation:c");
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
-        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        LLMControlContext? observedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ok",
-            MetadataObserver = m => observedMetadata = m,
+            LlmControlObserver = control => observedControl = control,
         };
 
         var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
@@ -470,11 +589,11 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
-        observedMetadata![LLMRequestMetadataKeys.ModelOverride].Should().Be(
+        observedControl.Should().NotBeNull("the LLM provider must have been invoked");
+        observedControl!.ModelOverride.Should().Be(
             "anthropic/claude-sonnet-4-6",
             "chat-route policy is more specific than the bot owner's default model");
-        observedMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be(
+        observedControl.NyxIdRoutePreference.Should().Be(
             "/api/v1/proxy/s/anthropic-via-bot-owner",
             "the route preference is independent from the model override");
     }
@@ -534,6 +653,7 @@ public sealed class AgentRunGAgentTests
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-duplicate",
+            RunId = "run-duplicate",
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -547,6 +667,7 @@ public sealed class AgentRunGAgentTests
         // REPLY_HANDED_OFF (ADR-0021). The duplicate start must short-circuit on
         // terminal-status check and NOT re-run the LLM or re-dispatch.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.RunId.Should().Be("run-duplicate");
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -1030,17 +1151,141 @@ public sealed class AgentRunGAgentTests
         handled.Should().BeEmpty();
 
         var retry = scheduler.Timeouts.Should().ContainSingle(
-            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor)).Subject;
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor)).Subject;
         retry.ActorId.Should().Be(runtime.Id);
         retry.DueTime.Should().Be(AgentRunGAgent.OutputDispatchRetryDelay);
-        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+        retryCommand.RunId.Should().Be("corr-retry-ready");
+        retryCommand.CorrelationId.Should().Be("corr-retry-ready");
+        retryCommand.TargetActorId.Should().Be("actor-1");
+        Encoding.UTF8.GetString(retry.TriggerEnvelope.ToByteArray()).Should().NotContain("relay-token-retry-ready");
 
-        await runtime.HandleStartAsync(retryCommand);
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
 
-        // After the retry the same persisted reply is delivered — but the LLM was not
-        // re-invoked. Status promoted to REPLY_HANDED_OFF by ApplyReplyDispatched (ADR-0021).
+        // Durable retry cannot rehydrate runtime-only relay reply_token, so it is
+        // explicitly non-retryable after reconciling the produced reply from state.
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("missing_relay_reply_token_for_durable_retry");
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleOutputDispatchRetryAsync_ForNonRelay_ReDispatchesPersistedReplyWithoutRerunningLlm()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-nonrelay-retry-ready",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "msg-nonrelay-retry-ready",
+                Content = new MessageContent { Text = "hello" },
+            },
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().BeEmpty();
+
+        var retryCommand = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
+
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleOutputDispatchRetryAsync_WhenTargetActorIdOrGenerationDoesNotMatch_DropsStaleRetry()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-retry-ready",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = "msg-stale-retry-ready",
+                Content = new MessageContent { Text = "hello" },
+            },
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        var retryCommand = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+
+        var wrongTarget = retryCommand.Clone();
+        wrongTarget.TargetActorId = "actor-2";
+        await runtime.HandleOutputDispatchRetryAsync(wrongTarget);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        handled.Should().BeEmpty();
+
+        var wrongGeneration = retryCommand.Clone();
+        wrongGeneration.Generation = retryCommand.Generation + 1;
+        await runtime.HandleOutputDispatchRetryAsync(wrongGeneration);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        handled.Should().BeEmpty();
+
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
 
@@ -1085,14 +1330,14 @@ public sealed class AgentRunGAgentTests
         replyGenerator.CallCount.Should().Be(0);
 
         var retryCommand = scheduler.Timeouts.Should().ContainSingle(
-                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor))
-            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
 
-        await runtime.HandleStartAsync(retryCommand);
+        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        runtime.State.Status.Should().Be(AgentRunStatus.Started);
         replyGenerator.CallCount.Should().Be(0);
-        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        handled.Should().BeEmpty();
     }
 
     [Fact]
@@ -1426,6 +1671,7 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stale",
+            RunId = "run-stale",
             TargetActorId = "actor-1",
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
@@ -1434,6 +1680,7 @@ public sealed class AgentRunGAgentTests
         });
 
         replyGenerator.CaptureSucceeded.Should().BeFalse();
+        runtime.State.RunId.Should().Be("run-stale");
         handled.Should().NotBeNull();
         var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
         dropped.CorrelationId.Should().Be("corr-stale");
@@ -1754,15 +2001,11 @@ public sealed class AgentRunGAgentTests
         // (it is the bot owner's own NyxID session, freshly issued per callback) while
         // taking model / route / max-tool-rounds from the owner's pre-configured
         // UserConfig.
-        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        LLMControlContext? capturedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ack",
-            MetadataObserver = m =>
-            {
-                foreach (var pair in m)
-                    capturedMetadata[pair.Key] = pair.Value;
-            },
+            LlmControlObserver = control => capturedControl = control,
         };
 
         var actor = Substitute.For<IActor>();
@@ -1808,16 +2051,12 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-bot-owner",
         });
 
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride)
-            .WhoseValue.Should().Be("gpt-4o-bot-owner");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride)
-            .WhoseValue.Should().Be("11");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedControl.Should().NotBeNull();
+        capturedControl!.ModelOverride.Should().Be("gpt-4o-bot-owner");
+        capturedControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
+        capturedControl.MaxToolRoundsOverride.Should().Be(11);
+        capturedControl.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
+        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
     }
 
     [Fact]
@@ -1829,15 +2068,11 @@ public sealed class AgentRunGAgentTests
         // LLM call. The stale-pending GC plus the direct-enqueue + run-echoed
         // token flow keeps it fresh through the window where the LLM call actually
         // fires.
-        var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        LLMControlContext? capturedControl = null;
         var replyGenerator = new RecordingReplyGenerator(() => false)
         {
             ReplyText = "ack",
-            MetadataObserver = m =>
-            {
-                foreach (var pair in m)
-                    capturedMetadata[pair.Key] = pair.Value;
-            },
+            LlmControlObserver = control => capturedControl = control,
         };
 
         var actor = Substitute.For<IActor>();
@@ -1865,10 +2100,9 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-1",
         });
 
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdAccessToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
-        capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
-            .WhoseValue.Should().Be("bot-owner-session-jwt");
+        capturedControl.Should().NotBeNull();
+        capturedControl!.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
+        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
     }
 
     private static AgentRunGAgent CreateRunAgent(
@@ -1882,15 +2116,39 @@ public sealed class AgentRunGAgentTests
         IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
-        var agent = new AgentRunGAgent(
-            actorRuntime,
+        var generationExecutor = new RecordingReplyGenerationExecutor(
             dispatchPort,
             replyGenerator,
             collector,
             relayOptions,
-            NullLogger<AgentRunGAgent>.Instance,
             scopeResolver,
-            userConfigQueryPort,
+            userConfigQueryPort);
+        var agent = new AgentRunGAgent(
+            actorRuntime,
+            generationExecutor,
+            relayOptions,
+            NullLogger<AgentRunGAgent>.Instance,
+            callbackScheduler);
+        SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        generationExecutor.Bind(agent);
+        agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
+            InvokeAgentTransition(agent, current, evt));
+        agent.EventPublisher = eventPublisher ?? new DispatchingEventPublisher(actorRuntime);
+        return agent;
+    }
+
+    private static AgentRunGAgent CreateRunAgentWithExecutor(
+        IActorRuntime actorRuntime,
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+        IEventPublisher? eventPublisher = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+    {
+        var agent = new AgentRunGAgent(
+            actorRuntime,
+            generationExecutor,
+            relayOptions,
+            NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
         SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
@@ -2019,6 +2277,81 @@ public sealed class AgentRunGAgentTests
             if (!_actors.TryGetValue(actorId, out var actor))
                 throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+        }
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class PausedReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
+
+        public Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+        {
+            Starts.Add(request with { Request = request.Request.Clone() });
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        private readonly AgentRunReplyGenerationExecutor _inner;
+        private AgentRunGAgent? _agent;
+
+        public RecordingReplyGenerationExecutor(
+            IActorDispatchPort dispatchPort,
+            IConversationReplyGenerator replyGenerator,
+            IInteractiveReplyCollector? collector,
+            Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+            INyxIdRelayScopeResolver? scopeResolver,
+            IUserConfigQueryPort? userConfigQueryPort)
+        {
+            _inner = new AgentRunReplyGenerationExecutor(
+                dispatchPort,
+                replyGenerator,
+                collector,
+                relayOptions,
+                NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+                scopeResolver,
+                userConfigQueryPort);
+            DispatchPort = dispatchPort;
+        }
+
+        public IActorDispatchPort DispatchPort { get; }
+
+        public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
+
+        public void Bind(AgentRunGAgent agent)
+        {
+            _agent = agent;
+        }
+
+        public async Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+        {
+            Starts.Add(request with { Request = request.Request.Clone() });
+            var completed = await _inner.ExecuteAsync(request);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            await agent.HandleReplyGenerationCompletedAsync(completed);
+        }
+    }
+
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            throw new InvalidOperationException("simulated enqueue failure");
         }
     }
 
@@ -2230,99 +2563,7 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    private sealed class RecordingStreamProvider : IStreamProvider
-    {
-        private readonly Dictionary<string, RecordingStream> _streams = new(StringComparer.Ordinal);
-
-        public List<(string StreamId, EventEnvelope Envelope)> Produced =>
-            _streams.Values.SelectMany(stream => stream.Produced.Select(envelope => (stream.StreamId, envelope))).ToList();
-
-        public IStream GetStream(string actorId)
-        {
-            if (!_streams.TryGetValue(actorId, out var stream))
-            {
-                stream = new RecordingStream(actorId);
-                _streams[actorId] = stream;
-            }
-
-            return stream;
-        }
-    }
-
-    private sealed class RecordingStream(string streamId) : IStream
-    {
-        public string StreamId { get; } = streamId;
-
-        public List<EventEnvelope> Produced { get; } = [];
-
-        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
-        {
-            if (message is EventEnvelope envelope)
-                Produced.Add(envelope.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-            where T : IMessage, new() =>
-            Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
-
-        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
-    }
-
-    private sealed class FailingOnceStreamProvider : IStreamProvider
-    {
-        private readonly RecordingStreamProvider _inner = new();
-        private bool _failNextProduce = true;
-
-        public List<(string StreamId, EventEnvelope Envelope)> Produced => _inner.Produced;
-
-        public IStream GetStream(string actorId) =>
-            new FailingOnceStream(_inner.GetStream(actorId), this);
-
-        private sealed class FailingOnceStream(IStream inner, FailingOnceStreamProvider owner) : IStream
-        {
-            public string StreamId => inner.StreamId;
-
-            public async Task ProduceAsync<T>(T message, CancellationToken ct = default)
-                where T : IMessage
-            {
-                if (owner._failNextProduce)
-                {
-                    owner._failNextProduce = false;
-                    throw new InvalidOperationException("simulated enqueue failure");
-                }
-
-                await inner.ProduceAsync(message, ct);
-            }
-
-            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-                where T : IMessage, new() =>
-                inner.SubscribeAsync(handler, ct);
-
-            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
-                inner.UpsertRelayAsync(binding, ct);
-
-            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
-                inner.RemoveRelayAsync(targetStreamId, ct);
-
-            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
-                inner.ListRelaysAsync(ct);
-        }
-    }
-
-    private sealed class NoopAsyncDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
+    private sealed class RecordingReplyGenerator(Func<bool> captureAction) : ITypedConversationReplyGenerator
     {
         public string ReplyText { get; init; } = string.Empty;
 
@@ -2332,17 +2573,34 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
+        public Action<LLMControlContext>? LlmControlObserver { get; init; }
+
+        public Action<AgentToolExecutionContext>? ToolContextObserver { get; init; }
+
         public IReadOnlyList<string>? StreamingSnapshots { get; init; }
 
         public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            await GenerateReplyAsync(activity, metadata, null, null, streamingSink, ct);
+
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
             CallCount++;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
+            if (llmControl is not null)
+                LlmControlObserver?.Invoke(llmControl);
+            if (toolContext is not null)
+                ToolContextObserver?.Invoke(toolContext);
             if (streamingSink is not null)
             {
                 if (StreamingSnapshots is { Count: > 0 })

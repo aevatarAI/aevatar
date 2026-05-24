@@ -4,6 +4,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -40,6 +41,174 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+        {
+            Item = BuildCatalogDocument("alpha", updatedAt),
+            Items =
+            [
+                BuildCatalogDocument("beta", updatedAt.AddMinutes(1), sortOrder: 2),
+                BuildCatalogDocument("alpha", updatedAt, sortOrder: 1),
+            ],
+        };
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>
+        {
+            Item = new WorkflowCapabilitiesCurrentStateDocument
+            {
+                Id = "workflow-capabilities",
+                ActorId = "workflow-capabilities",
+                StateVersion = 3,
+                LastEventId = "startup-materialization",
+                UpdatedAt = updatedAt.AddMinutes(2),
+                SchemaVersion = "capabilities.v1",
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapabilityReadModel
+                    {
+                        Name = "assign",
+                        Aliases = ["assign"],
+                        Category = "data",
+                        Description = "Assigns a value.",
+                        RuntimeModule = "AssignModule",
+                        Parameters =
+                        [
+                            new WorkflowPrimitiveParameterCapabilityReadModel
+                            {
+                                Name = "target",
+                                Type = "string",
+                                Required = true,
+                                Description = "Target variable.",
+                                DefaultValue = "result",
+                                Enum = ["result"],
+                            },
+                        ],
+                    },
+                ],
+                Connectors =
+                [
+                    new WorkflowConnectorCapabilityReadModel
+                    {
+                        Name = "aevatar_cli",
+                        Type = "cli",
+                        Enabled = true,
+                        TimeoutMs = 1000,
+                        Retry = 1,
+                        AllowedInputKeys = ["prompt"],
+                        AllowedOperations = ["run"],
+                        FixedArguments = ["--json"],
+                    },
+                ],
+            },
+        };
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            capabilitiesReader,
+            new WorkflowCatalogReadModelMapper());
+
+        var catalog = await port.ListWorkflowCatalogAsync();
+        var detail = await port.GetWorkflowDetailAsync("alpha");
+        var capabilities = await port.GetCapabilitiesAsync();
+
+        catalog.Select(x => x.Name).Should().Equal("alpha", "beta");
+        catalog[0].AuthorityStateVersion.Should().Be(11);
+        catalog[0].ProjectionWatermark.Should().Be(updatedAt);
+        detail.Should().NotBeNull();
+        detail!.Definition.Steps.Should().ContainSingle(step => step.Id == "start");
+        detail.Definition.Roles.Should().ContainSingle(role => role.Id == "operator");
+        detail.Definition.Roles[0].EventModules.Should().Equal("audit", "trace");
+        detail.Definition.Steps[0].Children.Should().ContainSingle(child => child.Id == "child");
+        detail.Edges.Should().ContainSingle(edge => edge.From == "start" && edge.To == "child" && edge.Label == "child");
+        capabilities.Workflows.Should().HaveCount(2);
+        capabilities.AuthorityStateVersion.Should().Be(12);
+        capabilities.ProjectionWatermark.Should().Be(updatedAt.AddMinutes(2));
+        capabilities.Primitives.Should().ContainSingle(primitive =>
+            primitive.Name == "assign" &&
+            primitive.Parameters.Single().Default == "result");
+        capabilities.Connectors.Should().ContainSingle(connector =>
+            connector.Name == "aevatar_cli" &&
+            connector.FixedArguments.Single() == "--json");
+        catalogReader.QueryCalls.Should().Be(2);
+        catalogReader.GetCalls.Should().Be(1);
+        capabilitiesReader.GetCalls.Should().Be(1);
+        capabilitiesReader.QueryCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
+    {
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>();
+        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>();
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            capabilitiesReader,
+            new WorkflowCatalogReadModelMapper());
+
+        (await port.GetWorkflowDetailAsync("   ")).Should().BeNull();
+        (await port.GetWorkflowDetailAsync("missing")).Should().BeNull();
+        var capabilities = await port.GetCapabilitiesAsync();
+
+        capabilities.SchemaVersion.Should().Be("capabilities.v1");
+        capabilities.AuthorityStateVersion.Should().Be(0);
+        capabilities.ProjectionWatermark.Should().Be(default);
+        capabilities.Workflows.Should().BeEmpty();
+        catalogReader.GetCalls.Should().Be(1);
+        catalogReader.QueryCalls.Should().Be(1);
+        capabilitiesReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogReadModelQueryPort_ShouldAwaitReadModelReadersWithoutBlocking()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new DeferredQueryDocumentReader<WorkflowCatalogCurrentStateDocument>(
+            [BuildCatalogDocument("alpha", updatedAt)]);
+        var port = new WorkflowCatalogReadModelQueryPort(
+            catalogReader,
+            new RecordingDocumentReader<WorkflowCapabilitiesCurrentStateDocument>(),
+            new WorkflowCatalogReadModelMapper());
+
+        var catalogTask = port.ListWorkflowCatalogAsync();
+
+        catalogTask.IsCompleted.Should().BeFalse();
+        catalogReader.CompleteQuery();
+        var catalog = await catalogTask;
+        catalog.Should().ContainSingle(item => item.Name == "alpha");
+    }
+
+    [Theory]
+    [InlineData("custom", "home", "deterministic", "your-workflows", 0, "Saved")]
+    [InlineData("custom", "cwd", "deterministic", "your-workflows", 0, "Workspace")]
+    [InlineData("counter-addition", "turing", "deterministic", "advanced-patterns", 901, "Advanced")]
+    [InlineData("minsky-inc-dec-jz", "turing", "deterministic", "advanced-patterns", 902, "Advanced")]
+    [InlineData("machine", "turing", "deterministic", "advanced-patterns", 999, "Advanced")]
+    [InlineData("transform", "builtin", "deterministic", "primitive-examples", 1, "Mini")]
+    [InlineData("llm_call", "builtin", "llm", "ai-workflows", 8, "Starter")]
+    [InlineData("human_input_basic_auto_resume", "builtin", "llm", "ai-workflows", 39, "Interactive")]
+    [InlineData("connector_cli_demo", "builtin", "llm", "integration-workflows", 50, "Integration")]
+    [InlineData("demo_template", "builtin", "deterministic", "advanced-patterns", 17, "Advanced")]
+    [InlineData("48_custom", "app", "deterministic", "advanced-patterns", 48, "Advanced")]
+    [InlineData("49_custom", "demo", "deterministic", "advanced-patterns", 49, "Advanced")]
+    [InlineData("custom", "repo", "llm", "starter-workflows", 100, "Starter")]
+    [InlineData("custom", "external", "deterministic", "starter-workflows", 200, "Workflow")]
+    [InlineData("", "builtin", "deterministic", "starter-workflows", 200, "Built-in")]
+    public void WorkflowCatalogClassificationPolicy_ShouldClassifyCatalogGroups(
+        string workflowName,
+        string sourceKind,
+        string category,
+        string expectedGroup,
+        int expectedSortOrder,
+        string expectedSourceLabel)
+    {
+        var classification = WorkflowCatalogClassificationPolicy.Classify(workflowName, sourceKind, category);
+
+        classification.Group.Should().Be(expectedGroup);
+        classification.SortOrder.Should().Be(expectedSortOrder);
+        classification.SourceLabel.Should().Be(expectedSourceLabel);
+    }
+
+    [Fact]
     public async Task ArtifactQueryPort_WhenDisabled_ShouldReturnEmptyGraphResultsWithoutTouchingStores()
     {
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
@@ -49,10 +218,10 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         });
 
         harness.ArtifactPort.EnableActorQueryEndpoints.Should().BeFalse();
-        (await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1")).Should().BeEmpty();
-        (await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
         harness.CurrentStateReader.GetCalls.Should().Be(0);
-        harness.TimelineReader.GetCalls.Should().Be(0);
+        harness.ReportReader.GetCalls.Should().Be(0);
         harness.GraphStore.GetNeighborsCalls.Should().Be(0);
         harness.GraphStore.GetSubgraphCalls.Should().Be(0);
     }
@@ -66,9 +235,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        (await harness.ArtifactPort.GetActorGraphEdgesAsync("   ")).Should().BeEmpty();
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("   ")).Should().BeEmpty();
 
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync("   ");
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("   ");
         subgraph.RootNodeId.Should().BeEmpty();
         subgraph.Nodes.Should().BeEmpty();
         subgraph.Edges.Should().BeEmpty();
@@ -86,7 +255,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync(null!);
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync(null!);
 
         subgraph.RootNodeId.Should().BeEmpty();
         subgraph.Nodes.Should().BeEmpty();
@@ -141,6 +310,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         projectionState!.ActorId.Should().Be("actor-1");
         harness.CurrentStateReader.GetCalls.Should().Be(2);
         harness.CurrentStateReader.QueryCalls.Should().Be(1);
+        harness.ReportReader.GetCalls.Should().Be(0);
     }
 
     [Fact]
@@ -171,7 +341,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
-    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldOrderClampAndMapEventData()
+    public async Task ArtifactQueryPort_ListWorkflowRunTimelineExportAsync_ShouldDeriveFromReportArtifact()
     {
         var harness = CreateHarness(
             new WorkflowExecutionProjectionOptions
@@ -179,9 +349,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
-            timelineReader: new RecordingDocumentReader<WorkflowRunTimelineDocument>
+            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
             {
-                Item = new WorkflowRunTimelineDocument
+                Item = new WorkflowRunInsightReportDocument
                 {
                     Id = "actor-1",
                     RootActorId = "actor-1",
@@ -214,32 +384,32 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 },
             });
 
-        var items = await harness.ArtifactPort.ListActorTimelineAsync("actor-1", take: 2);
+        var items = await harness.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-1", take: 2);
 
         items.Select(x => x.Stage).Should().Equal("newer", "middle");
         items[0].Data.Should().Contain("k2", "v2");
-        harness.TimelineReader.GetCalls.Should().Be(1);
+        harness.ReportReader.GetCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldShortCircuitWhenDisabledBlankOrMissing()
+    public async Task ArtifactQueryPort_ListWorkflowRunTimelineExportAsync_ShouldShortCircuitWhenDisabledBlankOrMissing()
     {
         var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = false,
             EnableActorQueryEndpoints = true,
         });
-        (await disabled.ArtifactPort.ListActorTimelineAsync("actor-1")).Should().BeEmpty();
-        disabled.TimelineReader.GetCalls.Should().Be(0);
+        (await disabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-1")).Should().BeEmpty();
+        disabled.ReportReader.GetCalls.Should().Be(0);
 
         var enabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
             EnableActorQueryEndpoints = true,
         });
-        (await enabled.ArtifactPort.ListActorTimelineAsync("   ")).Should().BeEmpty();
-        (await enabled.ArtifactPort.ListActorTimelineAsync("actor-404")).Should().BeEmpty();
-        enabled.TimelineReader.GetCalls.Should().Be(1);
+        (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("   ")).Should().BeEmpty();
+        (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-404")).Should().BeEmpty();
+        enabled.ReportReader.GetCalls.Should().Be(1);
     }
 
     [Fact]
@@ -292,14 +462,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 },
             });
 
-        var options = new WorkflowActorGraphQueryOptions
+        var options = new WorkflowRunGraphExportQueryOptions
         {
-            Direction = WorkflowActorGraphDirection.Inbound,
+            Direction = WorkflowRunGraphExportDirection.Inbound,
             EdgeTypes = ["CHILD_OF"],
         };
 
-        var edges = await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1", take: 7, options: options);
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1", depth: 4, take: 11, options: options);
+        var edges = await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 7, options: options);
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 4, take: 11, options: options);
 
         edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
         subgraph.RootNodeId.Should().Be("actor-1");
@@ -325,14 +495,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        var options = new WorkflowActorGraphQueryOptions
+        var options = new WorkflowRunGraphExportQueryOptions
         {
-            Direction = (WorkflowActorGraphDirection)99,
+            Direction = (WorkflowRunGraphExportDirection)99,
             EdgeTypes = [" CHILD_OF ", "", "CHILD_OF", "  ", "OWNS"],
         };
 
-        await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1", take: 0, options: options);
-        await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
+        await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 0, options: options);
+        await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
 
         harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
         harness.GraphStore.LastGraphEdgesQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
@@ -349,28 +519,23 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         WorkflowExecutionProjectionOptions options,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
         RecordingDocumentReader<WorkflowRunInsightReportDocument>? reportReader = null,
-        RecordingDocumentReader<WorkflowRunTimelineDocument>? timelineReader = null,
         RecordingProjectionGraphStore? graphStore = null)
     {
         currentStateReader ??= new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
         reportReader ??= new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
-        timelineReader ??= new RecordingDocumentReader<WorkflowRunTimelineDocument>();
         graphStore ??= new RecordingProjectionGraphStore();
         return new QueryPortHarness(
             new WorkflowExecutionCurrentStateQueryPort(
                 currentStateReader,
-                reportReader,
                 new WorkflowExecutionReadModelMapper(),
                 options),
             new WorkflowExecutionArtifactQueryPort(
                 reportReader,
-                timelineReader,
                 new WorkflowExecutionReadModelMapper(),
                 graphStore,
                 options),
             currentStateReader,
             reportReader,
-            timelineReader,
             graphStore);
     }
 
@@ -379,8 +544,80 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         IWorkflowExecutionArtifactQueryPort ArtifactPort,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
         RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
-        RecordingDocumentReader<WorkflowRunTimelineDocument> TimelineReader,
         RecordingProjectionGraphStore GraphStore);
+
+    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(
+        string workflowName,
+        DateTimeOffset updatedAt,
+        int sortOrder = 1) =>
+        new()
+        {
+            Id = workflowName,
+            ActorId = $"workflow-definition:{workflowName}",
+            WorkflowName = workflowName,
+            WorkflowYaml = $"name: {workflowName}",
+            Description = "Workflow description",
+            Category = "deterministic",
+            Group = "starter-workflows",
+            GroupLabel = "Starter Workflows",
+            SortOrder = sortOrder,
+            Source = "repo",
+            SourceLabel = "Starter",
+            ShowInLibrary = true,
+            StateVersion = 10 + sortOrder,
+            LastEventId = $"evt-{sortOrder}",
+            UpdatedAt = updatedAt,
+            Primitives = ["assign"],
+            Roles =
+            [
+                new WorkflowCatalogRoleReadModel
+                {
+                    Id = "operator",
+                    Name = "Operator",
+                    SystemPrompt = "Operate.",
+                    Provider = "openai",
+                    Model = "gpt-test",
+                    Temperature = 0.1f,
+                    MaxTokens = 512,
+                    MaxToolRounds = 2,
+                    MaxHistoryMessages = 3,
+                    EventModules = ["audit", "trace"],
+                    EventRoutes = "route:*",
+                    Connectors = ["aevatar_cli"],
+                },
+            ],
+            Steps =
+            [
+                new WorkflowCatalogStepReadModel
+                {
+                    Id = "start",
+                    Type = "assign",
+                    TargetRole = "operator",
+                    Parameters = { ["target"] = "result" },
+                    Branches = { ["done"] = "child" },
+                    Children =
+                    [
+                        new WorkflowCatalogChildStepReadModel
+                        {
+                            Id = "child",
+                            Type = "assign",
+                            TargetRole = "operator",
+                        },
+                    ],
+                },
+            ],
+            Edges =
+            [
+                new WorkflowCatalogEdgeReadModel
+                {
+                    From = "start",
+                    To = "child",
+                    Label = "child",
+                },
+            ],
+            RequiredConnectors = ["aevatar_cli"],
+            WorkflowCalls = ["child_workflow"],
+        };
 
     private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
         where TReadModel : class, IProjectionReadModel
@@ -408,6 +645,43 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
             {
                 Items = Items,
+            });
+        }
+    }
+
+    private sealed class DeferredQueryDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        private readonly TaskCompletionSource<ProjectionDocumentQueryResult<TReadModel>> _query =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly IReadOnlyList<TReadModel> _items;
+
+        public DeferredQueryDocumentReader(IReadOnlyList<TReadModel> items)
+        {
+            _items = items;
+        }
+
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
+        {
+            _ = key;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TReadModel?>(null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            _ = query;
+            ct.ThrowIfCancellationRequested();
+            return _query.Task;
+        }
+
+        public void CompleteQuery()
+        {
+            _query.SetResult(new ProjectionDocumentQueryResult<TReadModel>
+            {
+                Items = _items,
             });
         }
     }

@@ -339,7 +339,8 @@ public class EventSourcingBehaviorTests
         // arbitrary domain GAgents because it builds new authoritative state
         // on top of facts that were never applied. Default behavior must
         // surface the drift so an operator decides; the projection-scope
-        // recovery path is opt-in via RecoverFromVersionDriftOnReplay.
+        // recovery path is opt-in via actor-type marker or the provider-wide
+        // RecoverFromVersionDriftOnReplay emergency switch.
         var store = new InMemoryEventStore();
         var behavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
 
@@ -438,40 +439,43 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
-    public async Task DefaultEventSourcingBehaviorFactory_AppliesPerAgentRecoveryPredicate()
+    public async Task DefaultEventSourcingBehaviorFactory_AppliesActorTypeRecoveryMarker()
     {
-        // Per-actor opt-in (EventSourcingRuntimeOptions.ShouldRecoverFromVersionDriftOnReplay)
-        // is the production wiring point for projection scope actors: they
-        // get drift recovery while domain GAgents keep the safe default.
+        // Refactor (iter56/cluster-921-runtime-recovery-actor-type-marker): old=hosting actorId prefix recovery, new=actor-type marker in factory
         var store = new InMemoryEventStore();
         var options = new EventSourcingRuntimeOptions
         {
             EnableSnapshots = false,
             EnableEventCompaction = false,
-            ShouldRecoverFromVersionDriftOnReplay = id => id.StartsWith("recoverable:", StringComparison.Ordinal),
         };
         var factory = new DefaultEventSourcingBehaviorFactory<CounterState>(store, options);
 
         await store.AppendAsync(
-            "recoverable:agent-1",
+            "projection.durable.scope:agent-1",
             [BuildEvent(version: 1, amount: 5)],
             expectedVersion: 0);
-        await store.DeleteEventsUpToAsync("recoverable:agent-1", 1);
+        await store.DeleteEventsUpToAsync("projection.durable.scope:agent-1", 1);
 
-        var recoverable = factory.Create("recoverable:agent-1", static (state, _) => state);
-        var recovered = await recoverable.ReplayAsync("recoverable:agent-1");
+        var recoverable = factory.Create(
+            "projection.durable.scope:agent-1",
+            typeof(RecoverableProjectionActor),
+            static (state, _) => state);
+        var recovered = await recoverable.ReplayAsync("projection.durable.scope:agent-1");
         recovered.ShouldBeNull();
         recoverable.CurrentVersion.ShouldBe(1);
 
         await store.AppendAsync(
-            "strict:agent-2",
+            "projection.durable.scope:fake-domain-agent",
             [BuildEvent(version: 1, amount: 7)],
             expectedVersion: 0);
-        await store.DeleteEventsUpToAsync("strict:agent-2", 1);
+        await store.DeleteEventsUpToAsync("projection.durable.scope:fake-domain-agent", 1);
 
-        var strict = factory.Create("strict:agent-2", static (state, _) => state);
+        var strict = factory.Create(
+            "projection.durable.scope:fake-domain-agent",
+            typeof(StrictDomainActor),
+            static (state, _) => state);
         await Should.ThrowAsync<EventStoreVersionDriftException>(
-            () => strict.ReplayAsync("strict:agent-2"));
+            () => strict.ReplayAsync("projection.durable.scope:fake-domain-agent"));
     }
 
     [Fact]
@@ -643,6 +647,10 @@ public class EventSourcingBehaviorTests
             throw new InvalidOperationException("snapshot-store-failure");
         }
     }
+
+    private sealed class RecoverableProjectionActor : IEventSourcingVersionDriftRecoverableActor;
+
+    private sealed class StrictDomainActor;
 
     private sealed class MalformedConflictEventStore : IEventStore
     {

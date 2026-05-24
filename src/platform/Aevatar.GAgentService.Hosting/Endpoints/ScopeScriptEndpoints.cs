@@ -1,5 +1,6 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
@@ -51,7 +52,7 @@ public static class ScopeScriptEndpoints
                 new ScopeScriptUpsertRequest(
                     scopeId,
                     scriptId,
-                    request.SourceText,
+                    ScriptPackageSpecExtensions.CreateSingleSource(request.SourceText ?? string.Empty),
                     request.RevisionId,
                     request.ExpectedBaseRevision),
                 ct);

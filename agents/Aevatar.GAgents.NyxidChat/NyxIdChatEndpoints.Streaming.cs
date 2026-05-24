@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Hosting;
@@ -19,14 +18,12 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdChatStreamRequest request,
-        [FromServices] IActorRuntime actorRuntime,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        IActor? actor = null;
         var accessToken = string.Empty;
         var prompt = string.Empty;
         var messageId = request.SessionId ?? Guid.NewGuid().ToString("N");
@@ -61,13 +58,6 @@ public static partial class NyxIdChatEndpoints
                     ScopeResourceOperation.Stream,
                     ct))
                 return;
-
-            actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
         }
         catch (OperationCanceledException)
         {
@@ -86,19 +76,23 @@ public static partial class NyxIdChatEndpoints
             await writer.StartAsync(ct);
             await writer.WriteRunStartedAsync(actorId, ct);
             var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-            await InjectUserConfigMetadataAsync(http, metadata, ct);
-            await InjectUserMemoryAsync(http, metadata, ct);
+            var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
             await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
 
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Streaming endpoints no longer pre-read runtime state before command dispatch.
+            // The CQRS command target resolver owns actor lookup and reports typed start errors.
+            // Endpoint responsibility stays at auth, admission, input mapping, and SSE writing.
             var result = await interactionService.ExecuteAsync(
                 new NyxIdChatCommand(
-                    actor.Id,
+                    actorId,
                     scopeId,
                     prompt,
                     messageId,
                     accessToken,
                     request.InputParts,
-                    metadata),
+                    metadata,
+                    llmControl),
                 async (evt, _) =>
                 {
                     await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);
@@ -127,14 +121,12 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdApprovalRequest request,
-        [FromServices] IActorRuntime actorRuntime,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        IActor? actor = null;
         var messageId = request.SessionId ?? scopeId;
 
         try
@@ -166,13 +158,6 @@ public static partial class NyxIdChatEndpoints
                     ScopeResourceOperation.Approve,
                     ct))
                 return;
-
-            actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
         }
         catch (OperationCanceledException)
         {
@@ -190,9 +175,13 @@ public static partial class NyxIdChatEndpoints
         {
             await writer.StartAsync(ct);
             await writer.WriteRunStartedAsync(actorId, ct);
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Approval continuation follows the same resolver-owned lookup path as chat streaming.
+            // Missing actors are typed command start failures, not Host-side runtime probes.
+            // This keeps endpoint lifecycle independent from the actor runtime implementation.
             var result = await interactionService.ExecuteAsync(
                 new NyxIdApprovalCommand(
-                    actor.Id,
+                    actorId,
                     request.RequestId,
                     request.Approved,
                     request.Reason ?? string.Empty,
@@ -225,9 +214,12 @@ public static partial class NyxIdChatEndpoints
             return;
 
         await writer.WriteRunErrorAsync(
-            result.Error == NyxIdChatStartError.ProjectionUnavailable
-                ? "NyxID chat projection pipeline is unavailable."
-                : message,
+            result.Error switch
+            {
+                NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
+                _ => message,
+            },
             CancellationToken.None);
     }
 

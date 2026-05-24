@@ -49,6 +49,8 @@ public sealed class ScriptingProjectWiringTests
             .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptCatalogEntryProjector>(x));
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>>()
             .Should().ContainSingle(x => IsObservedCurrentStateMaterializerFor<ScriptEvolutionReadModelProjector>(x));
+        provider.GetServices<IProjectionActivationPlanProvider>()
+            .Should().ContainSingle(x => x is ScriptingCommittedStateProjectionActivationPlanProvider);
     }
 
     private static bool IsObservedCurrentStateMaterializerFor<TProjector>(object materializer)

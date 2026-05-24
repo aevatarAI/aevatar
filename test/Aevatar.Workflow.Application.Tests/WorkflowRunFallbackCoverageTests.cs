@@ -185,10 +185,9 @@ public sealed class WorkflowRunFallbackCoverageTests
         string commandId)
     {
         var target = new WorkflowRunCommandTarget(
-            new FakeActor(actorId),
+            actorId,
             workflowName,
             [actorId],
-            projectionPort,
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
@@ -356,29 +355,22 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
-
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
@@ -390,15 +382,11 @@ public sealed class WorkflowRunFallbackCoverageTests
             Task.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string> DestroyCalls { get; } = [];
         public TaskCompletionSource<bool> Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

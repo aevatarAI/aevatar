@@ -8,6 +8,9 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
+// Refactor (iter39/cluster-039-public-chatasync-adapter):
+//   Old pattern: ChatRuntime 暴露 public ChatAsync 方法作为 non-streaming adapter,callers 可以选 non-streaming conversation API。
+//   New principle: Public runtime surface 仅暴露 ChatStreamAsync;explicit offline aggregation 放到 narrowly named offline/test adapter(明确不能与 realtime chat 混淆)。Provider contract stream-only。
 public class ContextCompressorTests
 {
     // ═══════════════════════════════════════════════════════════
@@ -373,7 +376,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(1);
         hook.CompactEndCount.Should().Be(1);
@@ -674,7 +679,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);
         hook.CompactEndCount.Should().Be(0);
@@ -705,7 +712,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);
     }

@@ -80,7 +80,7 @@ internal static class ChatCompletionsApiEndpoints
         ResponsesCallerScope callerScope;
         try
         {
-            callerScope = await callerScopeResolver.ResolveAsync(bearerToken, http, ct);
+            callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
         }
         catch (ResponsesCallerScopeUnavailableException ex)
         {

@@ -172,7 +172,6 @@ public class WorkflowGAgentCoverageTests
         initializeEvent.MaxTokens.Should().Be(256);
         initializeEvent.MaxToolRounds.Should().Be(4);
         initializeEvent.MaxHistoryMessages.Should().Be(30);
-        initializeEvent.StreamBufferCapacity.Should().Be(64);
         initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
         initializeEvent.EventRoutes.Should().Contain("event.type");
     }
@@ -207,6 +206,108 @@ public class WorkflowGAgentCoverageTests
         roleAgent.LastInitializeEvent.Should().NotBeNull();
         roleAgent.LastInitializeEvent!.ProviderName.Should().BeEmpty();
         roleAgent.LastInitializeEvent.Model.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindConfigured_ShouldCreateRoleActorByKindAndInitializeIt()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-kind");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_kind
+            roles:
+              - id: telegram_user_bridge
+                name: Telegram User Bridge
+                agent_kind: " workflow.telegram-user-bridge "
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: telegram_user_bridge
+            """,
+            "wf_kind",
+            runId: "run-kind");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateCalls.Should().Be(0);
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            "workflow.telegram-user-bridge",
+            "workflow-run-kind:telegram_user_bridge"));
+        runtime.Linked.Should().ContainSingle()
+            .Which.Should().Be(("workflow-run-kind", "workflow-run-kind:telegram_user_bridge"));
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        roleAgent.LastInitializeEvent!.RoleId.Should().Be("telegram_user_bridge");
+        roleAgent.LastInitializeEvent.RoleName.Should().Be("Telegram User Bridge");
+
+        var persisted = await ((InMemoryEventStore)agent.Services.GetRequiredService<IEventStore>()).GetEventsAsync(agent.Id);
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(WorkflowRoleActorLinkedEvent), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindMissing_ShouldUseDefaultRoleAgentTypeResolver()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-default-role");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA", workflowName: "wf_default_role"),
+            "wf_default_role",
+            runId: "run-default-role");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateByKindCalls.Should().BeEmpty();
+        runtime.CreateCalls.Should().Be(1);
+        runtime.CreatedActors.Single().Id.Should().Be("workflow-run-default-role:role_a");
+        runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindCannotCreate_ShouldFailBeforeLinkingRole()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            CreateByKindException = new InvalidOperationException("unknown agent kind"),
+        };
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-invalid-kind");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_invalid_kind
+            roles:
+              - id: bridge
+                name: Bridge
+                agent_kind: workflow.missing-kind
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: bridge
+            """,
+            "wf_invalid_kind",
+            runId: "run-invalid-kind");
+
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*unknown agent kind*");
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            "workflow.missing-kind",
+            "workflow-run-invalid-kind:bridge"));
+        runtime.Linked.Should().BeEmpty();
+        runtime.CreatedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -1451,7 +1552,6 @@ public class WorkflowGAgentCoverageTests
                    max_tokens: 256
                    max_tool_rounds: 4
                    max_history_messages: 30
-                   stream_buffer_capacity: 64
                    event_modules: "llm_handler,tool_handler"
                    event_routes: |
                      event.type == ChatRequestEvent -> llm_handler
@@ -1513,12 +1613,14 @@ public class WorkflowGAgentCoverageTests
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         public int CreateCalls { get; private set; }
+        public List<(string agentKind, string actorId)> CreateByKindCalls { get; } = [];
         public List<FakeActor> CreatedActors { get; } = [];
         public List<FakeWorkflowRunChildAgent> CreatedChildWorkflowAgents { get; } = [];
         public List<(string parent, string child)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
         public string? ThrowOnGetAsyncActorId { get; set; }
+        public Exception? CreateByKindException { get; set; }
 
         public void RegisterAgent(string actorId, IAgent agent)
         {
@@ -1548,6 +1650,22 @@ public class WorkflowGAgentCoverageTests
                         : throw new InvalidOperationException($"Unsupported agent type '{agentType.FullName}'.");
 
             var actor = new FakeActor(actorId, agent);
+            CreatedActors.Add(actor);
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? $"{agentKind}:actor-{CreateByKindCalls.Count + 1}";
+            CreateByKindCalls.Add((agentKind.Trim(), actorId));
+            if (CreateByKindException != null)
+                throw CreateByKindException;
+
+            var existing = CreatedActors.FirstOrDefault(x => x.Id == actorId);
+            if (existing != null)
+                return Task.FromResult<IActor>(existing);
+
+            var actor = new FakeActor(actorId, new FakeRoleAgent(actorId));
             CreatedActors.Add(actor);
             return Task.FromResult<IActor>(actor);
         }

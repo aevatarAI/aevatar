@@ -35,6 +35,10 @@ public class ClaimComplexBusinessScenarioTests
             var analystActor = await ClaimIntegrationTestKit.CreateFreshSinkActorAsync(runtime, "role-claim-analyst-" + runId);
             var fraudActor = await ClaimIntegrationTestKit.CreateFreshSinkActorAsync(runtime, "fraud-risk-agent-" + runId);
             var complianceActor = await ClaimIntegrationTestKit.CreateFreshSinkActorAsync(runtime, "compliance-rule-agent-" + runId);
+            var manualReviewActorId = "human-review-" + runId;
+            var manualReviewActor = claimCase.ManualReviewRequired
+                ? await ClaimIntegrationTestKit.CreateFreshSinkActorAsync(runtime, manualReviewActorId)
+                : null;
             var runtimeActorId = "claim-complex-runtime-" + claimCase.CaseId.ToLowerInvariant();
             var aiCountBefore = aiCapability.Calls.Count;
 
@@ -104,11 +108,9 @@ public class ClaimComplexBusinessScenarioTests
             ClaimIntegrationTestKit.ReadMessages(fraudActor).Should().ContainSingle(x => x == nameof(ClaimFraudScoringRequested));
             ClaimIntegrationTestKit.ReadMessages(complianceActor).Should().ContainSingle(x => x == nameof(ClaimComplianceCheckRequested));
 
-            var manualReviewActorId = "human-review-" + runId;
             if (claimCase.ManualReviewRequired)
             {
                 (await runtime.ExistsAsync(manualReviewActorId)).Should().BeTrue();
-                var manualReviewActor = await runtime.GetAsync(manualReviewActorId);
                 manualReviewActor.Should().NotBeNull();
                 await ClaimIntegrationTestKit.WaitForMessageAsync(
                     runtime,

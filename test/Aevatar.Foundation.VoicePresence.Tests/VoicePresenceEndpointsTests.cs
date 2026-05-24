@@ -39,9 +39,7 @@ public class VoicePresenceEndpointsTests
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
@@ -62,9 +60,7 @@ public class VoicePresenceEndpointsTests
         context.Request.RouteValues["actorId"] = "agent-1";
         context.Request.QueryString = new QueryString("?module=voice_presence_openai");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
@@ -147,12 +143,10 @@ public class VoicePresenceEndpointsTests
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
         socket.CloseCalls.ShouldBe(1);
     }
 
@@ -176,7 +170,7 @@ public class VoicePresenceEndpointsTests
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status409Conflict);
         (await ReadBodyAsync(context)).ShouldContain("Voice transport already attached.");
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
         existingTransport.Disposed.ShouldBeFalse();
         socket.CloseCalls.ShouldBe(0);
     }
@@ -240,9 +234,7 @@ public class VoicePresenceEndpointsTests
         context.Request.RouteValues["moduleName"] = "voice_presence_openai";
         context.Request.QueryString = new QueryString("?module=voice_presence_minicpm");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        context.RequestAborted = cts.Token;
-
+        socket.CompleteReceiveClose();
         await GetVoiceEndpoint(app, "/voice/{actorId}/{moduleName}").RequestDelegate!(context);
 
         resolver.Requests.ShouldContain(request =>
@@ -413,12 +405,16 @@ public class VoicePresenceEndpointsTests
 
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
+        public Task<VoicePresenceSessionResolution> ResolveAsync(
+            VoicePresenceSessionRequest request,
+            CancellationToken ct = default)
         {
             _ = ct;
             Requests.Add(request);
             RequestedActorIds.Add(request.ActorId);
-            return Task.FromResult(session);
+            return Task.FromResult(session == null
+                ? VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound)
+                : VoicePresenceSessionResolution.LeaseAcceptedAttached(session));
         }
     }
 

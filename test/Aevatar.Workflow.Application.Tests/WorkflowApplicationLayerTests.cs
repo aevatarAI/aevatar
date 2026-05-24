@@ -283,8 +283,7 @@ public sealed class WorkflowApplicationLayerTests
     public async Task AcceptedOnlyCommandDispatchService_ShouldReturnReceipt_WithoutConsumingRunEvents()
     {
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = new WorkflowRunAcceptedCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
             "direct",
             ["definition-1", "actor-1"],
             actorPort);
@@ -348,13 +347,11 @@ public sealed class WorkflowApplicationLayerTests
         string commandId,
         IReadOnlyList<string>? createdActorIds = null)
     {
-        var readModelActivationPort = projectionPort;
         var target = new WorkflowRunCommandTarget(
-            new FakeActor(actorId),
+            actorId,
             workflowName,
             createdActorIds ?? [],
             projectionPort,
-            readModelActivationPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var projectionLease = new FakeProjectionLease(actorId, commandId);
@@ -569,8 +566,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<IAsyncDisposable?> DetachCalls { get; } = [];
@@ -582,20 +578,6 @@ public sealed class WorkflowApplicationLayerTests
         public int DetachFailureCount { get; set; }
         public int ReleaseFailureCount { get; set; }
         public int ReleaseAttemptCount => ReleaseAttempts.Count;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
-
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
@@ -608,6 +590,19 @@ public sealed class WorkflowApplicationLayerTests
             }
 
             return Task.FromResult<IAsyncDisposable?>(null);
+        }
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            var lease = new FakeProjectionLease(rootActorId, commandId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>(lease, liveSinkLease);
         }
 
         public Task DetachLiveSinkAsync(
@@ -671,17 +666,13 @@ public sealed class WorkflowApplicationLayerTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string> DestroyCalls { get; } = [];
         public int ExpectedDestroyCount { get; set; } = int.MaxValue;
         public TaskCompletionSource<bool> DestroyCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DestroyException { get; set; }
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

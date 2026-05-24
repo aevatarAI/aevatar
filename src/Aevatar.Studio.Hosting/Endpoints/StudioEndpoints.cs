@@ -10,7 +10,6 @@ using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Storage;
-using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
@@ -18,6 +17,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
@@ -130,11 +130,11 @@ internal static class StudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetAppScriptEvolutionDecisionAsync(proposalId, services, ct));
-        app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
+        app.MapGet("/api/app/scripts/runtimes/{actorId}/activity", (
             string actorId,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleGetAppScriptReadModelAsync(actorId, services, ct));
+            HandleGetAppScriptRuntimeActivityAsync(actorId, services, ct));
 
         app.MapPost("/api/scopes/{scopeId}/scripts/draft-run", (
             HttpContext http,
@@ -381,8 +381,9 @@ internal static class StudioEndpoints
             });
         }
 
-        var source = AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.Source);
-        if (string.IsNullOrWhiteSpace(source))
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.Source);
+        var primarySource = scriptPackage.GetPrimaryCSharpSource();
+        if (string.IsNullOrWhiteSpace(primarySource))
         {
             return Results.BadRequest(new
             {
@@ -400,15 +401,13 @@ internal static class StudioEndpoints
         var runtimeActorId = string.IsNullOrWhiteSpace(request.RuntimeActorId)
             ? $"app-script-runtime:{scopeToken}:{scriptId}:{revision}"
             : request.RuntimeActorId.Trim();
-        var sourceHash = AppScriptPackagePayloads.ComputeSourceHash(request.Package, source);
 
         try
         {
             var upsert = await definitionPort.UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                source,
-                sourceHash,
+                scriptPackage,
                 definitionActorId,
                 normalizedScopeId,
                 ct);
@@ -445,9 +444,9 @@ internal static class StudioEndpoints
                 definitionActorId = upsert.ActorId,
                 runtimeActorId = resolvedRuntimeActorId,
                 runId,
-                sourceHash,
+                sourceHash = upsert.Snapshot.SourceHash,
                 commandTypeUrl = payload.TypeUrl,
-                readModelUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
+                activityUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/activity",
             });
         }
         catch (InvalidOperationException ex)
@@ -752,14 +751,14 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
         try
         {
-            return Results.Ok(await service.ListRuntimeSnapshotsAsync(take, ct));
+            return Results.Ok(await service.ListRuntimeActivitiesAsync(take, ct));
         }
         catch (AppApiException ex)
         {
@@ -791,7 +790,7 @@ internal static class StudioEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> HandleGetAppScriptReadModelAsync(
+    private static async Task<IResult> HandleGetAppScriptRuntimeActivityAsync(
         string actorId,
         IServiceProvider services,
         CancellationToken ct)
@@ -801,15 +800,15 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
-        ScriptReadModelSnapshotHttpResponse? snapshot;
+        ScriptRuntimeActivitySnapshot? snapshot;
         try
         {
-            snapshot = await service.GetRuntimeSnapshotAsync(actorId, ct);
+            snapshot = await service.GetRuntimeActivityAsync(actorId, ct);
         }
         catch (AppApiException ex)
         {
@@ -892,7 +891,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
             // Refactor (iter21/cluster-001):
             //   Old pattern: Host resolved fake workflow generator services and executed authoring loops.
             //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
@@ -902,7 +901,8 @@ internal static class StudioEndpoints
                                    request.Prompt.Trim(),
                                    CurrentYaml: request.CurrentYaml,
                                    AvailableWorkflowNames: request.AvailableWorkflowNames,
-                                   Metadata: metadata),
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
                                ct))
             {
                 await WriteWorkflowAuthoringFrameAsync(http.Response, previewEvent, ct);
@@ -995,7 +995,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
             // Refactor (iter21/cluster-001):
             //   Old pattern: Host resolved fake script generator services and executed authoring loops.
             //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
@@ -1006,7 +1006,8 @@ internal static class StudioEndpoints
                                    CurrentSource: request.CurrentSource,
                                    CurrentPackage: request.CurrentPackage,
                                    CurrentFilePath: request.CurrentFilePath,
-                                   Metadata: metadata),
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
                                ct))
             {
                 await WriteScriptAuthoringFrameAsync(http.Response, previewEvent, ct);
@@ -1167,7 +1168,7 @@ internal static class StudioEndpoints
             : null;
     }
 
-    private static async Task<Dictionary<string, string>> InjectLLMMetadataAsync(
+    private static async Task<(Dictionary<string, string> Metadata, LLMControlContext LlmControl)> BuildPreviewContextAsync(
         HttpContext http,
         IReadOnlyDictionary<string, string>? clientMetadata,
         CancellationToken ct)
@@ -1176,11 +1177,18 @@ internal static class StudioEndpoints
             ? new Dictionary<string, string>(clientMetadata)
             : new Dictionary<string, string>();
 
-        // Forward caller's Bearer token so NyxID-backed providers and connectors can authenticate.
+        var llmControl = LLMControlContext.Empty;
+
+        // Forward caller's Bearer token through typed LLM control. Metadata
+        // keeps only connector/tool authorization.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
         {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+            llmControl = llmControl with
+            {
+                NyxIdAccessToken = bearerToken,
+                NyxIdOrgToken = bearerToken,
+            };
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
 
@@ -1195,9 +1203,9 @@ internal static class StudioEndpoints
                 // with a sender-specific binding-id.
                 var preferences = await llmPreferencesStore.GetOwnerAsync(ct);
                 if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                    llmControl = llmControl with { ModelOverride = preferences.DefaultModel.Trim() };
                 if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+                    llmControl = llmControl with { NyxIdRoutePreference = preferences.PreferredRoute.Trim() };
             }
             catch
             {
@@ -1205,7 +1213,7 @@ internal static class StudioEndpoints
             }
         }
 
-        return metadata;
+        return (metadata, llmControl);
     }
 
     internal sealed record AppScriptDraftRunRequest(

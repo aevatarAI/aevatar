@@ -12,12 +12,14 @@ using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
@@ -218,6 +220,60 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public async Task AddGAgentServiceCapabilityBundle_ShouldStartStandaloneWithoutMainnetWorkflowProviders()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Host.UseDefaultServiceProvider(options =>
+        {
+            options.ValidateOnBuild = false;
+            options.ValidateScopes = false;
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["GAgentService:Demo:Enabled"] = "false",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Projection:Policies:Environment"] = "Development",
+        });
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.ServiceName = "Aevatar.GAgentService.StandaloneStartup.Tests";
+            options.EnableConnectorBootstrap = false;
+            options.EnableHealthEndpoints = false;
+            options.MapRootHealthEndpoint = false;
+            options.EnableOpenApiDocument = false;
+            options.AutoMapCapabilities = false;
+        });
+        builder.AddGAgentServiceCapabilityBundle();
+
+        await using var app = builder.Build();
+        app.MapAevatarCapabilities();
+
+        await app.StartAsync();
+
+        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        var capabilitiesReader = app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>();
+        var capabilities = await capabilitiesReader.GetAsync(
+            "workflow-capabilities",
+            CancellationToken.None);
+
+        capabilities.Should().NotBeNull();
+        capabilities!.Id.Should().Be("workflow-capabilities");
+    }
+
+    [Fact]
     public void AddGAgentServiceCapabilityBundle_ShouldRejectNullBuilder()
     {
         WebApplicationBuilder? builder = null;
@@ -285,6 +341,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>().Should().NotBeNull();
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
 
@@ -335,6 +393,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>().Should().NotBeNull();
     }
 
     [Fact]

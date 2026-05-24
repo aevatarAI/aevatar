@@ -176,4 +176,29 @@ public class VoicePresenceStateMachineTests
         stateMachine.State.ShouldBe(VoicePresenceState.Idle);
         stateMachine.IsSafeToInject.ShouldBeTrue();
     }
+
+    [Fact]
+    public void Restore_should_reinstate_response_epoch_and_drain_ack_fence()
+    {
+        var stateMachine = new VoicePresenceStateMachine();
+
+        stateMachine.Restore(
+            VoicePresenceState.AudioDraining,
+            currentResponseId: 7,
+            lastDrainAckResponseId: 6,
+            lastDrainAckPlayoutSequence: 2400);
+
+        stateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        stateMachine.CurrentResponseId.ShouldBe(7);
+        stateMachine.LastDrainAckResponseId.ShouldBe(6);
+        stateMachine.LastDrainAckPlayoutSequence.ShouldBe(2400);
+        stateMachine.IsSafeToInject.ShouldBeFalse();
+
+        stateMachine.OnDrainAcknowledged(7, 2600);
+
+        stateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        stateMachine.LastDrainAckResponseId.ShouldBe(7);
+        stateMachine.LastDrainAckPlayoutSequence.ShouldBe(2600);
+        stateMachine.IsSafeToInject.ShouldBeTrue();
+    }
 }

@@ -49,6 +49,13 @@ message NeedsLlmReplyEvent {
   // command copy may carry it so AgentRunGAgent can apply the route before execution.
   // Never persist to event store, projection, read model, or actor state.
   aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
+  // Stable run identity owned by AgentRunGAgent. Dispatcher adapters may use
+  // correlation_id only as a bounded fallback for older persisted requests.
+  string run_id = 11;
+  // Runtime command-only LLM control carrier. ConversationGAgent clears this on
+  // the copy persisted to actor state; the run-bound command may carry it to the
+  // LLM call owner.
+  aevatar.ai.LLMControlContextPayload llm_control = 12;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single
@@ -139,6 +146,20 @@ enum ConversationReplyLifecyclePhase {
   CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATION_FAILED = 13;
 }
 
+enum LarkCardOperationPhase {
+  LARK_CARD_OPERATION_PHASE_UNSPECIFIED = 0;
+  LARK_CARD_OPERATION_PHASE_CREATE = 1;
+  LARK_CARD_OPERATION_PHASE_STREAM = 2;
+  LARK_CARD_OPERATION_PHASE_FINALIZE = 3;
+}
+
+enum NyxRelayTextOperationKind {
+  NYX_RELAY_TEXT_OPERATION_KIND_UNSPECIFIED = 0;
+  NYX_RELAY_TEXT_OPERATION_KIND_INTERIM = 1;
+  NYX_RELAY_TEXT_OPERATION_KIND_FAILURE_SELF_HEAL = 2;
+  NYX_RELAY_TEXT_OPERATION_KIND_FINAL = 3;
+}
+
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
@@ -156,6 +177,16 @@ message ConversationReplyLifecycleState {
   string streaming_element_id = 11;
   string terminal_reason = 12;
   int64 updated_at_unix_ms = 13;
+  LarkCardOperationPhase lark_card_in_flight_operation = 14;
+  int64 lark_card_in_flight_sequence = 15;
+  int64 lark_card_operation_generation = 16;
+  string pending_accumulated_text = 17;
+  string pending_finalize_text = 18;
+  string pending_finalize_command_id = 19;
+  NyxRelayTextOperationKind nyx_relay_in_flight_operation = 20;
+  int64 nyx_relay_in_flight_sequence = 21;
+  int64 nyx_relay_operation_generation = 22;
+  LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
 }
 
 // Refactor (iter20/cluster-004):
@@ -226,6 +257,116 @@ message LlmReplyCardStreamChunkEvent {
   // actor state/event store/read models.
   string reply_token = 6;
   int64 reply_token_expires_at_unix_ms = 7;
+}
+
+// Refactor (iter57/cluster-065-lark-card-signal-only):
+//   Old pattern: Lark CardKit Task.Run helpers built rich create/stream/finalize continuation
+//   payloads outside the actor turn, including timestamps, error codes, and lifecycle field
+//   mapping. New principle: helpers only report the typed operation signal and minimal raw
+//   external result; ConversationGAgent handlers interpret it against actor-owned state.
+enum LarkCardOperationResultState {
+  LARK_CARD_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
+  LARK_CARD_OPERATION_RESULT_STATE_SUCCEEDED = 1;
+  LARK_CARD_OPERATION_RESULT_STATE_FAILED = 2;
+  LARK_CARD_OPERATION_RESULT_STATE_FAULTED = 3;
+}
+
+message LarkCardOperationRawResult {
+  string card_id = 1;
+  string card_message_id = 2;
+  bool is_rate_limited = 3;
+  bool is_table_limit_exceeded = 4;
+  bool is_card_unavailable = 5;
+  bool is_post_send_failure = 6;
+  bool final_text_written = 7;
+  string raw_error_code = 8;
+  string raw_error_summary = 9;
+  string exception_type = 10;
+  string exception_message = 11;
+}
+
+message LarkCardOperationCompletedEvent {
+  string operation_id = 1;
+  string correlation_id = 2;
+  LarkCardOperationPhase operation = 3;
+  int64 sequence = 4;
+  int64 operation_generation = 5;
+  LarkCardOperationResultState state = 6;
+  LarkCardOperationRawResult raw_result = 7;
+  LlmReplyCardStreamChunkEvent chunk = 8;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
+  string command_id = 10;
+  string final_text = 11;
+  string last_flushed_text = 12;
+  string card_id = 13;
+  string card_message_id = 14;
+  string streaming_element_id = 15;
+}
+
+message LarkCardOperationTimeoutFiredEvent {
+  // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+  //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+  //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+  reserved 8;
+  reserved "chunk";
+
+  string correlation_id = 1;
+  LarkCardOperationPhase operation = 2;
+  int64 sequence = 3;
+  int64 operation_generation = 4;
+  string card_id = 5;
+  string card_message_id = 6;
+  string command_id = 7;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 9;
+  string final_text = 10;
+  string last_flushed_text = 11;
+  int64 fired_at_unix_ms = 12;
+}
+
+enum NyxRelayTextOperationResultState {
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_SUCCEEDED = 1;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAILED = 2;
+  NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAULTED = 3;
+}
+
+message NyxRelayTextOperationRawResult {
+  string platform_message_id = 1;
+  bool edit_unsupported = 2;
+  string raw_error_code = 3;
+  string raw_error_summary = 4;
+  string exception_type = 5;
+  string exception_message = 6;
+}
+
+message NyxRelayTextOperationCompletedEvent {
+  string operation_id = 1;
+  string correlation_id = 2;
+  NyxRelayTextOperationKind operation = 3;
+  int64 sequence = 4;
+  int64 operation_generation = 5;
+  NyxRelayTextOperationResultState state = 6;
+  NyxRelayTextOperationRawResult raw_result = 7;
+  LlmReplyStreamChunkEvent chunk = 8;
+  string current_platform_message_id = 9;
+  string command_id = 10;
+  string final_text = 11;
+  string last_flushed_text = 12;
+  int32 edit_count = 13;
+}
+
+message NyxRelayTextOperationTimeoutFiredEvent {
+  string correlation_id = 1;
+  NyxRelayTextOperationKind operation = 2;
+  int64 sequence = 3;
+  int64 operation_generation = 4;
+  LlmReplyStreamChunkEvent chunk = 5;
+  string current_platform_message_id = 6;
+  string command_id = 7;
+  string final_text = 8;
+  string last_flushed_text = 9;
+  int32 edit_count = 10;
+  int64 fired_at_unix_ms = 11;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

@@ -1,4 +1,7 @@
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Studio.Infrastructure.Serialization;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -128,5 +131,57 @@ public sealed class WorkflowCompatibilityProfileTests
     public void ShouldMirrorTimeoutMsToParameters_ShouldMatchExpectedTypes(string type, bool expected)
     {
         _profile.ShouldMirrorTimeoutMsToParameters(type).Should().Be(expected);
+    }
+
+    [Fact]
+    public void AllowedRoleFields_ShouldRejectRetiredStreamBufferCapacity()
+    {
+        _profile.AllowedRoleFields.Should().NotContain("stream_buffer_capacity");
+    }
+
+    [Fact]
+    public void Parse_WhenRoleUsesRetiredStreamBufferCapacity_ShouldReportUnknownField()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+
+        var result = service.Parse("""
+            name: retired-field
+            roles:
+              - id: assistant
+                stream_buffer_capacity: 128
+            steps:
+              - id: ask
+                type: llm_call
+                target_role: assistant
+            """);
+
+        result.Findings.Should().Contain(f =>
+            f.Path == "/roles/0/stream_buffer_capacity" &&
+            f.Code == "unknown_field");
+    }
+
+    [Fact]
+    public void Serialize_WhenRoleHasStreamSettings_ShouldOmitRetiredStreamBufferCapacity()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var document = new WorkflowDocument
+        {
+            Name = "retired-field",
+            Roles =
+            [
+                new RoleModel
+                {
+                    Id = "assistant",
+                    MaxHistoryMessages = 32,
+                    EventModules = "llm_handler",
+                },
+            ],
+        };
+
+        var yaml = service.Serialize(document);
+
+        yaml.Should().Contain("max_history_messages");
+        yaml.Should().Contain("event_modules");
+        yaml.Should().NotContain("stream_buffer_capacity");
     }
 }

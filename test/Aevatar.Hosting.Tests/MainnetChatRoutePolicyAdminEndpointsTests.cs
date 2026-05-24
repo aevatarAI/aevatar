@@ -1,9 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 using System.Text;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
@@ -23,11 +23,15 @@ namespace Aevatar.Hosting.Tests;
 
 /// <summary>
 /// REST admin surface for ChatRoutePolicyGAgent. Without these tests it is
-/// easy to regress the JSON parsing, scope-stamp behavior, or the dispatch
-/// shape (commandId / actor id / envelope route) — the actor itself
+/// easy to regress the JSON parsing, scope-stamp behavior, or the command-port
+/// admission shape (accepted scope / stamped owner scope / rule command) — the actor itself
 /// (validated by ChatRoutePolicyGAgentTests) is fire-and-forget on the
 /// stream, so an endpoint bug surfaces only in operator pain.
 /// </summary>
+// Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+//   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+//   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+//   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
 public sealed class MainnetChatRoutePolicyAdminEndpointsTests
 {
     private const string Scope = "5d0d7b72-acff-49af-bb1b-9f30bbb7c102";
@@ -35,9 +39,8 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
     [Fact]
     public async Task PutPolicy_StampsOwnerScopeAndDispatchesUpsertCommandToScopeActor()
     {
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort);
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
         var client = app.GetTestClient();
 
         var body = """
@@ -60,14 +63,9 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         var response = await client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
-        actorRuntime.CreatedActors.Should().ContainSingle()
-            .Which.Should().Be($"chat-route-policy:{Scope}");
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var (dispatchedActorId, envelope) = dispatchPort.Dispatches[0];
-        dispatchedActorId.Should().Be($"chat-route-policy:{Scope}");
-        envelope.Route.RouteCase.Should().Be(EnvelopeRoute.RouteOneofCase.Direct);
-        envelope.Payload.Is(UpsertChatRoutePolicyRequested.Descriptor).Should().BeTrue();
-        var command = envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
+        commandPort.Upserts.Should().ContainSingle();
+        var (acceptedScope, command) = commandPort.Upserts[0];
+        acceptedScope.Should().Be(Scope);
         command.OwnerScope.NyxUserId.Should().Be(Scope,
             "server must stamp owner_scope from the URL, ignoring whatever the client sent");
         command.OwnerScope.Platform.Should().Be(OwnerScope.NyxIdPlatform);
@@ -83,9 +81,8 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         // default_target; catch the error synchronously at the REST boundary
         // so operators see a 400 + reason instead of a silent fire-and-forget
         // dispatch that drops on the actor side.
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort);
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/scopes/{Scope}/chat-route-policy")
@@ -98,33 +95,31 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
         body.Should().Contain("default_target_required");
-        dispatchPort.Dispatches.Should().BeEmpty(
+        commandPort.Upserts.Should().BeEmpty(
             "REST validation must short-circuit before fire-and-forget dispatch when the body is invalid");
     }
 
     [Fact]
     public async Task DeleteRule_DispatchesRemoveCommandWithTrimmedRuleId()
     {
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort);
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort);
         var client = app.GetTestClient();
 
         var response = await client.DeleteAsync($"/api/scopes/{Scope}/chat-route-policy/rules/  claude-for-responses  ");
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var command = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<RemoveChatRouteRuleRequested>();
+        commandPort.Removals.Should().ContainSingle();
+        var (_, command) = commandPort.Removals[0];
         command.RuleId.Should().Be("claude-for-responses");
     }
 
     [Fact]
     public async Task GetPolicy_ReturnsNotFoundWhenSnapshotMissing()
     {
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
         var queryPort = new StaticPolicyQueryPort(snapshot: null);
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, queryPort);
+        await using var app = await CreateAppAsync(commandPort, queryPort);
         var client = app.GetTestClient();
 
         var response = await client.GetAsync($"/api/scopes/{Scope}/chat-route-policy");
@@ -151,10 +146,9 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
                     Description = "test rule",
                 },
             ]);
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
         var queryPort = new StaticPolicyQueryPort(snapshot);
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, queryPort);
+        await using var app = await CreateAppAsync(commandPort, queryPort);
         var client = app.GetTestClient();
 
         var response = await client.GetAsync($"/api/scopes/{Scope}/chat-route-policy");
@@ -192,9 +186,8 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
                     },
                 },
             ]);
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, new StaticPolicyQueryPort(snapshot));
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort, new StaticPolicyQueryPort(snapshot));
         var client = app.GetTestClient();
 
         var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate", content: null);
@@ -207,7 +200,7 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("aevatar_invoke_team");
         body.Should().NotContain("\"forwardToGagent\"");
         body.Should().NotContain("\"forwardToTeam\"");
-        dispatchPort.Dispatches.Should().BeEmpty();
+        commandPort.Upserts.Should().BeEmpty();
     }
 
     [Fact]
@@ -227,17 +220,16 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
                     },
                 },
             ]);
-        var actorRuntime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        await using var app = await CreateAppAsync(actorRuntime, dispatchPort, new StaticPolicyQueryPort(snapshot));
+        var commandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(commandPort, new StaticPolicyQueryPort(snapshot));
         var client = app.GetTestClient();
 
         var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate?apply=true", content: null);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted, body);
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var command = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
+        commandPort.Upserts.Should().ContainSingle();
+        var (_, command) = commandPort.Upserts[0];
         command.OwnerScope.NyxUserId.Should().Be(Scope);
         command.Rules.Should().ContainSingle();
         var migratedAction = command.Rules[0].Action;
@@ -248,11 +240,53 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             .Be("workflow-1");
     }
 
+    [Fact]
+    public void RequestPathSources_ShouldNotContainProjectionPrimingOutsideRefactorComments()
+    {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: tests only proved endpoint business responses, not absence of projection priming calls.
+        //   New principle: source-regression assertion locks request paths to dispatch-only behavior.
+        var adminSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "ChatRouting",
+            "ChatRoutePolicyAdminEndpoints.cs")));
+        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "Voice",
+            "VoiceDemoBootstrapEndpoints.cs")));
+        var requestPathSource = adminSource + voiceSource;
+
+        requestPathSource.Should().NotContain("ChatRoutePolicyProjectionPort");
+        requestPathSource.Should().NotContain("EnsureProjectionForActorAsync");
+    }
+
+    [Fact]
+    public void MainnetHostEndpoints_ShouldNotInjectActorRuntimeOrDispatchPortOutsideRefactorComments()
+    {
+        var adminSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "ChatRouting",
+            "ChatRoutePolicyAdminEndpoints.cs")));
+        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "Voice",
+            "VoiceDemoBootstrapEndpoints.cs")));
+        var requestPathSource = adminSource + voiceSource;
+
+        requestPathSource.Should().NotContain("IActorRuntime");
+        requestPathSource.Should().NotContain("IActorDispatchPort");
+        requestPathSource.Should().NotContain("EventEnvelope");
+        requestPathSource.Should().NotContain("CreateDirect");
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
-        RecordingActorRuntime actorRuntime,
-        RecordingActorDispatchPort dispatchPort,
+        RecordingChatRoutePolicyCommandPort commandPort,
         IChatRoutePolicyQueryPort? queryPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -269,15 +303,8 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         builder.Services.AddAuthentication("test")
             .AddScheme<AuthenticationSchemeOptions, AlwaysSucceedAuthHandler>("test", _ => { });
         builder.Services.AddAuthorization();
-        builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
-        builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        builder.Services.AddSingleton<IChatRoutePolicyCommandPort>(commandPort);
         builder.Services.AddSingleton(queryPort ?? new StaticPolicyQueryPort(snapshot: null));
-        // Admin endpoints require ChatRoutePolicyProjectionPort to activate
-        // the per-scope projection runtime before dispatch — stub it with a
-        // no-op activation service for tests.
-        builder.Services.AddSingleton<Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>,
-            NoopActivationService>();
-        builder.Services.AddSingleton<ChatRoutePolicyProjectionPort>();
 
         var app = builder.Build();
         app.MapChatRoutePolicyAdminEndpoints();
@@ -285,67 +312,52 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         return app;
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
-    {
-        public List<string> CreatedActors { get; } = [];
+    private static string StripLineComments(string source) =>
+        Regex.Replace(source, @"^\s*//.*$", string.Empty, RegexOptions.Multiline);
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent
+    private static string GetSourcePath(params string[] relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
         {
-            ArgumentNullException.ThrowIfNull(id);
-            CreatedActors.Add(id);
-            return Task.FromResult<IActor>(new StubActor(id));
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
         }
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            CreateAsync<IAgent>(id, ct);
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new StubActor(id));
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
     }
 
-    private sealed class StubActor(string id) : IActor
+    private sealed class RecordingChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
     {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
-    }
+        public List<(string ScopeId, UpsertChatRoutePolicyRequested Command)> Upserts { get; } = [];
+        public List<(string ScopeId, RemoveChatRouteRuleRequested Command)> Removals { get; } = [];
 
-    private sealed class RecordingActorDispatchPort : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertAsync(
+            string scopeId,
+            UpsertChatRoutePolicyRequested command,
+            CancellationToken ct = default)
         {
-            Dispatches.Add((actorId, envelope));
-            return Task.CompletedTask;
+            Upserts.Add((scopeId, command.Clone()));
+            return Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "accepted-upsert",
+                "accepted-upsert"));
         }
-    }
 
-    private sealed class NoopActivationService
-        : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>
-    {
-        public Task<ChatRoutePolicyMaterializationRuntimeLease> EnsureAsync(
-            Aevatar.CQRS.Projection.Core.Abstractions.ProjectionScopeStartRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ChatRoutePolicyMaterializationRuntimeLease(
-                new ChatRoutePolicyMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                }));
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
+            string scopeId,
+            RemoveChatRouteRuleRequested command,
+            CancellationToken ct = default)
+        {
+            Removals.Add((scopeId, command.Clone()));
+            return Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "accepted-remove",
+                "accepted-remove"));
+        }
     }
 
     private sealed class StaticPolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort

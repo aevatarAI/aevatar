@@ -20,7 +20,7 @@ public sealed class ChannelBotRegistrationStartupServiceTests
                 new ChannelBotRegistrationMaterializationContext
                 {
                     RootActorId = ChannelBotRegistrationGAgent.WellKnownId,
-                    ProjectionKind = ChannelBotRegistrationProjectionPort.ProjectionKind,
+                    ProjectionKind = ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind,
                 })));
 
         EventEnvelope? capturedEnvelope = null;
@@ -33,9 +33,9 @@ public sealed class ChannelBotRegistrationStartupServiceTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        var projectionPort = new ChannelBotRegistrationProjectionPort(activationService);
+        var projectionActivator = new ChannelBotRegistrationProjectionBootstrapActivator(activationService);
         var startupService = new ChannelBotRegistrationStartupService(
-            projectionPort,
+            projectionActivator,
             actorRuntime,
             (IActorDispatchPort)actorRuntime,
             NullLogger<ChannelBotRegistrationStartupService>.Instance);
@@ -45,7 +45,7 @@ public sealed class ChannelBotRegistrationStartupServiceTests
         await activationService.Received(1).EnsureAsync(
             Arg.Is<ProjectionScopeStartRequest>(request =>
                 request.RootActorId == ChannelBotRegistrationGAgent.WellKnownId &&
-                request.ProjectionKind == ChannelBotRegistrationProjectionPort.ProjectionKind &&
+                request.ProjectionKind == ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind &&
                 request.Mode == ProjectionRuntimeMode.DurableMaterialization),
             Arg.Any<CancellationToken>());
         capturedEnvelope.Should().NotBeNull();

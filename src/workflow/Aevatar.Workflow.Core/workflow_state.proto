@@ -63,6 +63,7 @@ message WorkflowState
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 12;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
   string scope_id = 14;
+  string source_kind = 15;
 }
 
 message WorkflowRunState
@@ -149,6 +150,7 @@ message WorkflowRuntimeCallbackLeaseState
   string callback_id = 2;
   int64 generation = 3;
   WorkflowRuntimeCallbackBackendState backend = 4;
+  int32 slot_epoch = 5;
 }
 
 message RetryBackoffState

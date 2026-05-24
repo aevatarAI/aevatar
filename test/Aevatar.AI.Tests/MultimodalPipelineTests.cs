@@ -171,8 +171,7 @@ public class MultimodalPipelineTests
             {
                 Messages = history.BuildMessages("You are a helpful assistant."),
                 Tools = null,
-            },
-            streamBufferCapacity: 64);
+            });
     }
 
     private sealed class StreamingProvider : ILLMProvider

@@ -327,11 +327,14 @@ public sealed class ChatRunToolCompletionCoordinatorTests
 
         public IReadOnlyList<string> ListWorkflows() => [];
 
-        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => [];
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
 
-        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) => null;
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
 
-        public WorkflowCapabilitiesDocument GetCapabilities() => new();
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowCapabilitiesDocument());
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {
@@ -339,28 +342,28 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             return Task.FromResult(Snapshot);
         }
 
-        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowRunReport?>(null);
 
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
-            string actorId,
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
+            string workflowRunId,
             int take = 200,
             CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
 
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
-            string actorId,
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
+            string workflowRunId,
             int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
+            WorkflowRunGraphExportQueryOptions? options = null,
             CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
 
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
+            string workflowRunId,
             int depth = 2,
             int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
+            WorkflowRunGraphExportQueryOptions? options = null,
             CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph());
+            Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 }

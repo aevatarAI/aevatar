@@ -130,7 +130,8 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 WorkflowYamls: request.WorkflowYamls,
                 Metadata: scopedHeaders,
-                ScopeId: scopeId);
+                ScopeId: scopeId,
+                LlmControl: await BuildScopedLlmControlAsync(http, ct));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -151,6 +152,7 @@ public static class ScopeServiceEndpoints
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
                     Metadata = scopedHeaders,
+                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
                 ct);
@@ -575,93 +577,31 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        // Try to resolve a bound default service first.
-        // If none is bound, fall back to a built-in simple llm_call workflow (draft-run).
+        // Refactor (iter39/cluster-039-scope-service-host-orchestration):
+        //   Old pattern: ScopeServiceEndpoints.HandleInvokeDefaultChatStreamAsync 在 unbound default service 情况下 launch Host-inline DefaultChatWorkflowYaml 作为 hidden fallback,把 Host 当成 business orchestrator。
+        //   New principle: Host endpoint 仅做 routing + bound service stream;unbound case 返回 explicit error;stream registration / static orchestration 归 Application owner。
         var serviceId = ResolveDefaultScopeServiceId(options.Value);
-        var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId);
-        var hasBoundService = await resolutionService.HasServiceAsync(identity, ct);
-
-        if (hasBoundService)
-        {
-            await HandleInvokeStreamAsync(
-                http,
-                scopeId,
-                serviceId,
-                "chat",
-                request,
-                appId: null,
-                resolutionService,
-                admissionAuthorizer,
-                serviceRunRegistrationPort,
-                chatRunService,
-                gagentDraftRunService,
-                scriptServiceRunService,
-                options,
-                ct);
-            return;
-        }
-
-        // No service bound — run a built-in default chat workflow as draft-run.
-        try
-        {
-            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
-                return;
-
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
-            var chatInputParts = MapInputParts(request.InputParts);
-            var chatRequest = new WorkflowChatRunRequest(
-                Prompt: request.Prompt?.Trim() ?? string.Empty,
-                WorkflowName: null,
-                ActorId: null,
-                SessionId: request.SessionId,
-                WorkflowYamls: [DefaultChatWorkflowYaml],
-                Metadata: scopedHeaders,
-                ScopeId: scopeId);
-
-            await WorkflowCapabilityEndpoints.HandleChat(
-                http,
-                new ChatInput
-                {
-                    Prompt = chatRequest.Prompt,
-                    InputParts = chatInputParts,
-                    WorkflowYamls = chatRequest.WorkflowYamls,
-                    SessionId = chatRequest.SessionId,
-                    ScopeId = scopeId,
-                    Metadata = scopedHeaders,
-                },
-                chatRunService,
-                ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            await WriteJsonErrorResponseAsync(
-                http,
-                StatusCodes.Status400BadRequest,
-                "INVALID_SERVICE_STREAM_REQUEST",
-                ex.Message,
-                ct);
-        }
+        await HandleInvokeStreamAsync(
+            http,
+            scopeId,
+            serviceId,
+            "chat",
+            request,
+            appId: null,
+            resolutionService,
+            admissionAuthorizer,
+            serviceRunRegistrationPort,
+            chatRunService,
+            scriptServiceRunService,
+            staticGAgentStreamInvocationPort,
+            options,
+            ct);
     }
-
-    private const string DefaultChatWorkflowYaml = """
-        name: default_chat
-        description: Built-in default single-turn chat.
-        roles:
-          - id: assistant
-            name: Assistant
-            system_prompt: |
-              You are a helpful assistant.
-        steps:
-          - id: answer
-            type: llm_call
-            role: assistant
-            parameters: {}
-        """;
 
     private static Task<IResult> HandleInvokeDefaultAsync(
         HttpContext http,
@@ -697,8 +637,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -724,8 +664,8 @@ public static class ScopeServiceEndpoints
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
-                gagentDraftRunService,
                 scriptServiceRunService,
+                staticGAgentStreamInvocationPort,
                 options,
                 ct);
         }
@@ -771,7 +711,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 request,
                 null,
-                BuildMemberApiPath(memberResolution.ScopeId, memberResolution.MemberId),
+                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId),
                 invocationPort,
                 catalogReader,
                 artifactStore,
@@ -795,8 +735,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -817,8 +757,8 @@ public static class ScopeServiceEndpoints
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
-                gagentDraftRunService,
                 scriptServiceRunService,
+                staticGAgentStreamInvocationPort,
                 options,
                 ct);
         }
@@ -868,7 +808,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 request,
                 null,
-                BuildTeamApiPath(teamResolution.ScopeId, teamResolution.TeamId),
+                BuildScopeServiceRunBasePath(teamResolution.ScopeId, teamResolution.PublishedServiceId, teamResolution.EntryMemberId),
                 invocationPort,
                 catalogReader,
                 artifactStore,
@@ -1189,7 +1129,7 @@ public static class ScopeServiceEndpoints
                 resolution.Deployments,
                 workflowExecutionQueryService,
                 ct);
-            var report = await workflowExecutionQueryService.GetActorReportAsync(resolution.Binding!.ActorId, ct);
+            var report = await workflowExecutionQueryService.GetWorkflowRunReportArtifactAsync(resolution.Binding!.ActorId, ct);
             if (report == null)
             {
                 return Results.NotFound(new
@@ -1464,7 +1404,7 @@ public static class ScopeServiceEndpoints
             });
         }
 
-        var report = await workflowExecutionQueryService.GetActorReportAsync(snapshot.TargetActorId, ct);
+        var report = await workflowExecutionQueryService.GetWorkflowRunReportArtifactAsync(snapshot.TargetActorId, ct);
         if (report == null)
         {
             return Results.NotFound(new
@@ -1543,8 +1483,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1586,6 +1526,7 @@ public static class ScopeServiceEndpoints
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
                             Metadata = scopedHeaders,
+                            LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                         },
                         chatRunService,
                         ct,
@@ -1607,17 +1548,14 @@ public static class ScopeServiceEndpoints
                 case ServiceImplementationKind.Static:
                     await HandleStaticGAgentChatStreamAsync(
                         http,
-                        target,
                         normalizedPrompt,
                         request.ActorId,
                         request.SessionId,
-                        scopeId,
-                        serviceId,
                         scopedHeaders,
                         request.InputParts,
-                        gagentDraftRunService,
+                        request.RevisionId,
                         invocationRequest,
-                        serviceRunRegistrationPort,
+                        staticGAgentStreamInvocationPort,
                         ct);
                     break;
 
@@ -1662,24 +1600,19 @@ public static class ScopeServiceEndpoints
 
     private static async Task HandleStaticGAgentChatStreamAsync(
         HttpContext http,
-        ServiceInvocationResolvedTarget target,
         string prompt,
         string? actorId,
         string? sessionId,
-        string scopeId,
-        string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IReadOnlyList<StreamContentPartHttpRequest>? inputParts,
-        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        string? revisionId,
         ServiceInvocationRequest invocationRequest,
-        IServiceRunRegistrationPort serviceRunRegistrationPort,
+        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         CancellationToken ct)
     {
-        var plan = target.Artifact.DeploymentPlan.StaticPlan;
-        var resolvedActorId = string.IsNullOrWhiteSpace(actorId)
-            ? null
-            : actorId.Trim();
-
+        // Refactor (iter39/cluster-039-scope-service-host-orchestration):
+        //   Old pattern: Host built the static GAgent draft-run command, registered service-run state from the endpoint callback, and owned timeout/SSE lifecycle around that orchestration.
+        //   New principle: Host only adapts HTTP/SSE callbacks; Application-owned IStaticGAgentStreamInvocationPort<AGUIEvent> owns static invocation and service-run registration semantics.
         var writer = new AGUISseWriter(http.Response);
         var responseStarted = false;
 
@@ -1702,30 +1635,17 @@ public static class ScopeServiceEndpoints
             await writer.WriteAsync(aguiEvent, token);
         }
 
-        async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
+        async ValueTask OnAcceptedAsync(StaticGAgentStreamAcceptedReceipt receipt, CancellationToken token)
         {
-            http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-            // Register the service run with the same id we are about to send to the client
-            // so /runs/{runId} resolves immediately on refresh.
-            await RegisterStreamServiceRunAsync(
-                serviceRunRegistrationPort,
-                target,
-                invocationRequest,
-                scopeId,
-                serviceId,
-                runId: receipt.CommandId,
-                commandId: receipt.CommandId,
-                correlationId: receipt.CorrelationId,
-                targetActorId: receipt.ActorId,
-                token);
+            http.Response.Headers["X-Correlation-Id"] = receipt.GAgentReceipt.CorrelationId;
             await EnsureSseStartedAsync(token);
             await writer.WriteAsync(
                 new AGUIEvent
                 {
                     RunStarted = new RunStartedEvent
                     {
-                        ThreadId = receipt.ActorId,
-                        RunId = receipt.CommandId,
+                        ThreadId = receipt.GAgentReceipt.ActorId,
+                        RunId = receipt.GAgentReceipt.CommandId,
                     },
                 },
                 token);
@@ -1733,32 +1653,34 @@ public static class ScopeServiceEndpoints
 
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
-
-            var interaction = await interactionService.ExecuteAsync(
-                new GAgentDraftRunCommand(
-                    ScopeId: scopeId,
-                    ActorTypeName: plan.ActorTypeName,
-                    Prompt: prompt,
-                    PreferredActorId: resolvedActorId,
-                    SessionId: sessionId,
-                    Headers: headers,
-                    InputParts: MapGAgentDraftRunInputParts(inputParts)),
+            var result = await staticGAgentStreamInvocationPort.InvokeAsync(
+                new StaticGAgentStreamInvocationRequest(
+                    invocationRequest.Identity?.Clone()
+                        ?? throw new InvalidOperationException("service identity is required."),
+                    invocationRequest.EndpointId,
+                    new StaticGAgentStreamInvocationInput(
+                        Prompt: prompt,
+                        PreferredActorId: actorId,
+                        SessionId: sessionId,
+                        RevisionId: revisionId,
+                        Headers: headers,
+                        InputParts: MapGAgentDraftRunInputParts(inputParts),
+                        Caller: invocationRequest.Caller?.Clone(),
+                        Timeout: TimeSpan.FromMinutes(2))),
                 EmitAsync,
                 OnAcceptedAsync,
-                timeoutCts.Token);
+                ct);
 
-            if (!interaction.Succeeded && interaction.Error == GAgentDraftRunStartError.UnknownActorType)
+            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.UnknownActorType)
             {
                 throw new InvalidOperationException(
-                    $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
+                    "GAgent type could not be resolved.");
             }
 
-            if (!interaction.Succeeded && interaction.Error == GAgentDraftRunStartError.ActorTypeMismatch)
+            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.ActorTypeMismatch)
             {
                 throw new InvalidOperationException(
-                    $"Actor '{resolvedActorId}' is not compatible with requested type '{plan.ActorTypeName}'.");
+                    $"Actor '{actorId}' is not compatible with requested static GAgent service.");
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -1969,10 +1891,12 @@ public static class ScopeServiceEndpoints
                     AppId = string.Empty,
                 },
             }, ct);
-            var locationPath = string.IsNullOrWhiteSpace(acceptedResourcePath)
-                ? $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}"
-                : acceptedResourcePath;
-            return Results.Accepted(locationPath, receipt);
+            receipt.StatusUrl = BuildScopeServiceRunStatusUrl(
+                scopeId,
+                serviceId,
+                receipt,
+                acceptedResourcePath);
+            return Results.Accepted(receipt.StatusUrl, receipt);
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
         {
@@ -2019,6 +1943,29 @@ public static class ScopeServiceEndpoints
 
         return (ServiceJsonPayloads.PackBase64(typeUrl, request.PayloadBase64), requestedRevisionId);
     }
+
+    private static string BuildScopeServiceRunStatusUrl(
+        string scopeId,
+        string serviceId,
+        ServiceInvocationAcceptedReceipt receipt,
+        string? acceptedResourcePath)
+    {
+        var basePath = string.IsNullOrWhiteSpace(acceptedResourcePath)
+            ? BuildScopeServiceRunBasePath(scopeId, serviceId)
+            : acceptedResourcePath.TrimEnd('/');
+        return $"{basePath}/runs/{Uri.EscapeDataString(ResolveAcceptedRunId(receipt))}";
+    }
+
+    private static string BuildScopeServiceRunBasePath(
+        string scopeId,
+        string serviceId,
+        string? memberId = null) =>
+        string.IsNullOrWhiteSpace(memberId)
+            ? $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}"
+            : $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
+
+    private static string ResolveAcceptedRunId(ServiceInvocationAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.RunId) ? receipt.CommandId : receipt.RunId;
 
     private static async Task<IResult> HandleResumeRunAsync(
         HttpContext http,
@@ -2503,12 +2450,6 @@ public static class ScopeServiceEndpoints
     private static string BuildScopeServiceStreamInvokePath(string scopeId, string serviceId, string endpointId) =>
         $"{BuildScopeServiceInvokePath(scopeId, serviceId, endpointId)}:stream";
 
-    private static string BuildMemberApiPath(string scopeId, string memberId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
-
-    private static string BuildTeamApiPath(string scopeId, string teamId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
-
     private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted) =>
         ServiceEndpointContractMath.BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted);
 
@@ -2939,28 +2880,68 @@ const response = await fetch("{{invokePath}}", {
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         InjectBearerToken(http, scopedHeaders);
-        if (http != null)
+        return scopedHeaders;
+    }
+
+    private static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
+        if (control == null)
+            return null;
+
+        return new ChatLlmControlInput
         {
-            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-            if (userConfigStore != null)
+            NyxIdAccessToken = control.NyxIdAccessToken,
+            NyxIdOrgToken = control.NyxIdOrgToken,
+            ModelOverride = control.ModelOverride,
+            NyxIdRoutePreference = control.NyxIdRoutePreference,
+            MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+            UserMemoryPrompt = control.UserMemoryPrompt,
+        };
+    }
+
+    private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        if (http == null)
+            return null;
+
+        var bearerToken = ExtractBearerToken(http);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: bearerToken,
+            NyxIdOrgToken: bearerToken,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore != null)
+        {
+            try
             {
-                try
+                var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                control = control with
                 {
-                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
-                        !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
-                        !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort; fall back to provider defaults if config unavailable.
-                }
+                    ModelOverride = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                        ? control.ModelOverride
+                        : userConfig.DefaultModel.Trim(),
+                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                        ? control.NyxIdRoutePreference
+                        : userConfig.PreferredLlmRoute.Trim(),
+                };
+            }
+            catch
+            {
+                // Best-effort; fall back to provider defaults if config unavailable.
             }
         }
-        return scopedHeaders;
+
+        return control == LLMControlContext.Empty ? null : control;
     }
 
     private static void InjectBearerToken(HttpContext? http, Dictionary<string, string> metadata)
@@ -2971,9 +2952,18 @@ const response = await fetch("{{invokePath}}", {
         if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var bearerToken = auth["Bearer ".Length..].Trim();
-            metadata["nyxid.access_token"] = bearerToken;
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     private static void CopyHeaders(

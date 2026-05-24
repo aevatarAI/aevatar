@@ -13,7 +13,9 @@ DIFF_RANGE_VALUE="${DIFF_RANGE:-}"
 if [[ -n "${DIFF_RANGE_VALUE}" ]]; then
   DIFF_MODE="range"
 elif [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" && -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+  if ! git rev-parse --verify "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+    git fetch --no-tags --depth=1 origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+  fi
   DIFF_RANGE_VALUE="origin/${GITHUB_BASE_REF}...HEAD"
   DIFF_MODE="range"
 elif [[ -n "${GITHUB_EVENT_BEFORE:-}" && "${GITHUB_EVENT_BEFORE}" != "${ZERO_SHA}" && -n "${GITHUB_SHA:-}" ]]; then
@@ -52,6 +54,54 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+# Refactor (iter56/cluster-920-workflow-catalog-async-query):
+#   Old pattern: production workflow query ports could hide async readmodel I/O behind sync .Result/.Wait calls.
+#   New principle: catalog/capabilities query seams are async end-to-end, and query ports await readmodel readers.
+workflow_query_port_files=()
+while IFS= read -r query_port_file; do
+  workflow_query_port_files+=("${query_port_file}")
+done < <(
+  find src/workflow \
+    -type f \
+    \( -name '*QueryPort.cs' -o -path '*/Queries/*.cs' -o -path '*/Workflows/*ReadModelQueryPort.cs' \) \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if (( ${#workflow_query_port_files[@]} > 0 )); then
+  set +e
+  workflow_query_port_sync_blocking_report="$(
+    rg -n "\.Result|\.Wait[[:space:]]*\(|GetAwaiter\(\)\.GetResult\(\)" "${workflow_query_port_files[@]}" \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+  )"
+  workflow_query_port_sync_blocking_status=$?
+  set -e
+
+  if [[ ${workflow_query_port_sync_blocking_status} -ne 0 && ${workflow_query_port_sync_blocking_status} -ne 1 ]]; then
+    echo "Workflow query-port sync-blocking guard execution failed."
+    exit "${workflow_query_port_sync_blocking_status}"
+  fi
+
+  if [ -n "${workflow_query_port_sync_blocking_report}" ]; then
+    echo "${workflow_query_port_sync_blocking_report}"
+    echo "Workflow production query ports must not sync-block async reads. Use async query seams and await readmodel readers."
+    exit 1
+  fi
+fi
+
 # Refactor (iter18/cluster-001):
 #   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
 #   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
@@ -83,6 +133,45 @@ fi
 
 if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver|ProjectionReadModelBindingException" src test; then
   echo "BindingResolver-based projection routing is forbidden. Use capability-based Document/Graph routing."
+  exit 1
+fi
+
+# Refactor (iter56/cluster-933-channel-registration-rebuild-narrow):
+#   Old: channel registration projection rebuild was exposed through HTTP, tool,
+#   prompts, docs, facade, and relay-local DI.
+#   New: rebuild is only the internal Runtime startup refresh path.
+set +e
+channel_registration_public_rebuild_report="$(
+  rg -n "rebuild_projection|/registrations/rebuild|RebuildProjectionAsync|ChannelBotRebuildProjectionCommand" \
+    src/Aevatar.AI.ToolProviders.ChannelAdmin \
+    agents/channels/Aevatar.GAgents.Channel.NyxIdRelay \
+    agents/Aevatar.GAgents.NyxidChat \
+    docs/operations \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /Refactor \(iter56\/cluster-933-channel-registration-rebuild-narrow\)/)
+    next;
+
+  print $0;
+}'
+)"
+channel_registration_public_rebuild_status=$?
+set -e
+
+if [[ ${channel_registration_public_rebuild_status} -ne 0 && ${channel_registration_public_rebuild_status} -ne 1 ]]; then
+  echo "Channel registration public rebuild guard execution failed."
+  exit "${channel_registration_public_rebuild_status}"
+fi
+
+if [ -n "${channel_registration_public_rebuild_report}" ]; then
+  echo "${channel_registration_public_rebuild_report}"
+  echo "Channel registration projection rebuild must not be exposed through public/tool/prompt/docs/facade/relay DI surfaces."
   exit 1
 fi
 
@@ -290,6 +379,9 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
+bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"
+bash "${SCRIPT_DIR}/public_projection_ensure_ports_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
@@ -303,7 +395,28 @@ bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
 bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
+bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
+bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
+
+studio_catalog_query_ports=(
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IRoleCatalogQueryPort.cs"
+)
+
+for query_port in "${studio_catalog_query_ports[@]}"; do
+  if [ ! -f "${query_port}" ]; then
+    echo "Studio catalog query port is missing: ${query_port}"
+    exit 1
+  fi
+done
+
+if rg -n "Task(<[^>]+>)?[[:space:]]+(Import|Save|Delete|Create|Update|Ensure|Dispatch|Send)[A-Za-z0-9_]*Async[[:space:]]*\(" \
+  "${studio_catalog_query_ports[@]}"
+then
+  echo "Studio catalog query ports must remain read-only. Move mutating methods to catalog command ports."
+  exit 1
+fi
 
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do
@@ -343,11 +456,6 @@ fi
 
 if rg -n "project:\s*static|project:\s*\(" test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
   echo "Legacy OnEvent(..., project: ...) scripting authoring is forbidden. Register ProjectState(...) explicitly."
-  exit 1
-fi
-
-if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
-  echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
   exit 1
 fi
 
@@ -1156,6 +1264,130 @@ if [ -n "${command_side_readmodel_violations}" ]; then
   exit 1
 fi
 
+# Refactor (iter57/cluster-065-lark-card-signal-only):
+#   Old pattern: ConversationGAgent Lark CardKit Task.Run helpers built rich business
+#   continuation payloads outside the actor turn.
+#   New principle: helpers only dispatch LarkCardOperationCompletedEvent with minimal raw
+#   operation result; actor handlers own error-code interpretation, timestamps, and lifecycle
+#   field mapping.
+lark_card_streaming_file="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.LarkCardStreaming.cs"
+if [ -f "${lark_card_streaming_file}" ]; then
+  lark_card_taskrun_helper_report="$(
+    awk '
+      /private async Task ExecuteLarkCard(Create|Stream|Finalize)OperationAsync/ {
+        in_helper = 1
+        body_started = 0
+        brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
+      }
+      in_helper {
+        line = $0
+        hard_forbidden = "LarkCard(Create|Stream|Finalize)ContinuationEvent|To(Create|Stream|Finalize)Continuation|CompletedAtUnixMs|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|ErrorCode[[:space:]]*=|\\$\"(create|stream|finalize)_threw"
+        lifecycle_mapping = "CardMessageId[[:space:]]*=|FinalTextWritten[[:space:]]*="
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/
+
+        if (body_started && line ~ hard_forbidden) {
+          print FILENAME ":" FNR ":" $0
+        }
+        if (body_started && !inside_completed_signal && line ~ lifecycle_mapping) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
+          in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
+        }
+      }
+    ' "${lark_card_streaming_file}"
+  )"
+  if [ -n "${lark_card_taskrun_helper_report}" ]; then
+    echo "${lark_card_taskrun_helper_report}"
+    echo "ConversationGAgent Lark CardKit Task.Run helpers must stay signal-only: no rich continuation types, business error-code strings, timestamps, or lifecycle field mapping in ExecuteLarkCard*OperationAsync."
+    exit 1
+  fi
+fi
+
+# Refactor (iter57/cluster-068-lark-extend-signal):
+#   Old pattern: ConversationGAgent Nyx relay text streaming awaited external relay writes
+#   inside the actor turn and interpreted their result inline.
+#   New principle: text helpers only dispatch NyxRelayTextOperationCompletedEvent with
+#   minimal raw result; actor handlers own lifecycle, timestamps, terminal reasons, and
+#   completion persistence.
+conversation_gagent_file="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"
+if [ -f "${conversation_gagent_file}" ]; then
+  nyx_relay_text_helper_report="$(
+    awk '
+      /private async Task ExecuteNyxRelayTextOperationAsync/ {
+        in_helper = 1
+        body_started = 0
+        brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
+      }
+      in_helper {
+        line = $0
+        hard_forbidden = "TransitionNyxRelayStreamingPhaseAsync|PersistStreamedCompletionAsync|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|TerminalSucceeded|TerminalPartial|DisabledPreSend|SuppressingInterim|terminalReason|failed_self_heal|final_edit_failed|interim_edit_failed|first_send_failed"
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/
+
+        if (body_started && !inside_completed_signal && line ~ hard_forbidden) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
+          in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
+        }
+      }
+    ' "${conversation_gagent_file}"
+  )"
+  if [ -n "${nyx_relay_text_helper_report}" ]; then
+    echo "${nyx_relay_text_helper_report}"
+    echo "ConversationGAgent Nyx relay text helper must stay signal-only: no lifecycle transitions, terminal reasons, timestamps, or persistence in ExecuteNyxRelayTextOperationAsync."
+    exit 1
+  fi
+fi
+
 check_orchestration_class_guard() {
   local file_path="$1"
   local max_non_empty_lines="$2"
@@ -1200,6 +1432,9 @@ bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
+
+echo "Running projection activation provider coverage guard..."
+bash tools/ci/projection_activation_provider_coverage_guard.sh
 
 echo "Running scripting runtime snapshot guard..."
 bash tools/ci/scripting_runtime_snapshot_guard.sh

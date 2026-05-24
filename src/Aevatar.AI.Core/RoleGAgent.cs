@@ -21,6 +21,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
@@ -28,7 +29,7 @@ namespace Aevatar.AI.Core;
 /// <summary>
 /// Role-based AI GAgent. Receives ChatRequestEvent and streams LLM response.
 /// </summary>
-public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
+public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePresenceRuntimeStateOwner
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
@@ -66,6 +67,41 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+        {
+            runtimeState = stored.Clone();
+            return true;
+        }
+
+        runtimeState = new VoicePresenceRuntimeState();
+        return false;
+    }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public async Task PersistVoicePresenceRuntimeStateAsync(
+        string moduleName,
+        VoicePresenceRuntimeState runtimeState,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentNullException.ThrowIfNull(runtimeState);
+
+        await PersistDomainEventAsync(new VoicePresenceRuntimeStateChangedEvent
+        {
+            ModuleName = moduleName,
+            State = runtimeState.Clone(),
+        }, ct);
+    }
 
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
@@ -543,6 +579,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         return next;
     }
 
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    private static RoleGAgentState ApplyVoicePresenceRuntimeStateChanged(
+        RoleGAgentState current,
+        VoicePresenceRuntimeStateChangedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.ModuleName))
+            return current;
+
+        var next = current.Clone();
+        next.VoicePresence[evt.ModuleName] = evt.State?.Clone() ?? new VoicePresenceRuntimeState();
+        return next;
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
@@ -556,6 +607,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
+            .On<VoicePresenceRuntimeStateChangedEvent>(ApplyVoicePresenceRuntimeStateChanged)
             .OrCurrent();
 
     protected override async Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
@@ -570,6 +622,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
         var overrides = state.ConfigOverrides;
         if (overrides == null)
             return new AIAgentConfigStateOverrides();
@@ -590,8 +645,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxToolRounds = overrides.HasMaxToolRounds ? overrides.MaxToolRounds : null,
             HasMaxHistoryMessages = overrides.HasMaxHistoryMessages,
             MaxHistoryMessages = overrides.HasMaxHistoryMessages ? overrides.MaxHistoryMessages : null,
-            HasStreamBufferCapacity = overrides.HasStreamBufferCapacity,
-            StreamBufferCapacity = overrides.HasStreamBufferCapacity ? overrides.StreamBufferCapacity : null,
             HasMaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget,
             MaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget ? overrides.MaxPromptTokenBudget : null,
             HasCompressionThreshold = overrides.HasCompressionThreshold,
@@ -746,18 +799,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
-        IReadOnlyDictionary<string, string>? metadata = null;
-        if (request.Headers.Count > 0 || request.Metadata.Count > 0)
-        {
-            var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var kv in request.Headers) merged[kv.Key] = kv.Value;
-            // Metadata takes precedence (contains NyxID token, model override, etc.)
-            foreach (var kv in request.Metadata) merged[kv.Key] = kv.Value;
-            metadata = merged;
-        }
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
+            ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
+                new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
+            : null;
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         var inputParts = ResolveRequestInputParts(request);
 
-        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
@@ -1061,10 +1112,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             overrides.MaxHistoryMessages = evt.MaxHistoryMessages;
         else
             overrides.ClearMaxHistoryMessages();
-        if (evt.StreamBufferCapacity > 0)
-            overrides.StreamBufferCapacity = evt.StreamBufferCapacity;
-        else
-            overrides.ClearStreamBufferCapacity();
         if (evt.MaxPromptTokenBudget > 0)
             overrides.MaxPromptTokenBudget = evt.MaxPromptTokenBudget;
         else

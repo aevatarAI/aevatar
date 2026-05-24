@@ -132,9 +132,13 @@ public sealed record StudioMemberRosterResponse(
     IReadOnlyList<StudioMemberSummaryResponse> Members,
     string? NextPageToken = null);
 
+// Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+//   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+//   New principle: ReadModel query port owns scope_id+team_id filter before pagination
 public sealed record StudioMemberRosterPageRequest(
     int? PageSize = null,
-    string? PageToken = null);
+    string? PageToken = null,
+    string? TeamId = null);
 
 public sealed record CreateStudioMemberRequest(
     string DisplayName,

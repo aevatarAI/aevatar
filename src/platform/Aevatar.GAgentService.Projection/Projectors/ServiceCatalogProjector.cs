@@ -14,134 +14,45 @@ public sealed class ServiceCatalogProjector
     : IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceCatalogReadModel> _storeDispatcher;
-    private readonly IProjectionDocumentReader<ServiceCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceCatalogProjector(
         IProjectionWriteDispatcher<ServiceCatalogReadModel> storeDispatcher,
-        IProjectionDocumentReader<ServiceCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
+    // Refactor (iter34/cluster-006-artifact-projectors-state-root):
+    //   Old pattern: Service artifact projectors injected document reader and incrementally mutated prior readmodel state.
+    //   New principle: 服务投影器仅做 state-root overwrite; catalog definition-only, deployment/serving facts come from their readmodels.
+    //   No new actor, envelope kind, projection phase, layer, or docs/canon change.
     public async ValueTask ProjectAsync(ServiceCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
-        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+        if (!ServiceCommittedStateSupport.TryGetObservedState<ServiceDefinitionState>(
                 envelope,
                 _clock,
-                out var payload,
+                out var state,
                 out var eventId,
                 out var stateVersion,
                 out var observedAt) ||
-            payload == null)
+            state?.Spec?.Identity == null)
         {
             return;
         }
 
-        if (payload.Is(ServiceDefinitionCreatedEvent.Descriptor))
+        var readModel = new ServiceCatalogReadModel
         {
-            var evt = payload.Unpack<ServiceDefinitionCreatedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Spec.Identity);
-                readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
-                readModel.Endpoints = evt.Spec.Endpoints.Select(MapEndpoint).ToList();
-                readModel.PolicyIds = [.. evt.Spec.PolicyIds];
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceDefinitionUpdatedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDefinitionUpdatedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Spec.Identity);
-                readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
-                readModel.Endpoints = evt.Spec.Endpoints.Select(MapEndpoint).ToList();
-                readModel.PolicyIds = [.. evt.Spec.PolicyIds];
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<DefaultServingRevisionChangedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Identity);
-                readModel.DefaultServingRevisionId = evt.RevisionId ?? string.Empty;
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceDeploymentActivatedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDeploymentActivatedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Identity);
-                readModel.ActiveServingRevisionId = evt.RevisionId ?? string.Empty;
-                readModel.DeploymentId = evt.DeploymentId ?? string.Empty;
-                readModel.PrimaryActorId = evt.PrimaryActorId ?? string.Empty;
-                readModel.DeploymentStatus = evt.Status.ToString();
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceDeploymentDeactivatedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDeploymentDeactivatedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Identity);
-                readModel.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceDeploymentHealthChangedEvent>();
-            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
-            {
-                ApplyIdentity(readModel, evt.Identity);
-                readModel.DeploymentStatus = evt.Status.ToString();
-            }, ct);
-        }
-    }
-
-    private async Task UpsertDefinitionAsync(
-        string actorId,
-        ServiceIdentity identity,
-        string eventId,
-        long stateVersion,
-        DateTimeOffset observedAt,
-        Action<ServiceCatalogReadModel> mutate,
-        CancellationToken ct)
-    {
-        var serviceKey = ServiceKeys.Build(identity);
-        var existing = await _documentReader.GetAsync(serviceKey, ct);
-        if (existing == null)
-        {
-            existing = new ServiceCatalogReadModel
-            {
-                Id = serviceKey,
-            };
-            ApplyIdentity(existing, identity);
-            mutate(existing);
-            ApplyProjectionStamp(existing, actorId, eventId, stateVersion, observedAt);
-            await _storeDispatcher.UpsertAsync(existing, ct);
-            return;
-        }
-
-        mutate(existing);
-        ApplyProjectionStamp(existing, actorId, eventId, stateVersion, observedAt);
-        await _storeDispatcher.UpsertAsync(existing, ct);
+            DisplayName = state.Spec.DisplayName ?? string.Empty,
+            DefaultServingRevisionId = state.DefaultServingRevisionId ?? string.Empty,
+            Endpoints = state.Spec.Endpoints.Select(MapEndpoint).ToList(),
+            PolicyIds = [.. state.Spec.PolicyIds],
+        };
+        ApplyIdentity(readModel, state.Spec.Identity);
+        ApplyProjectionStamp(readModel, context.RootActorId, eventId, stateVersion, observedAt);
+        await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 
     private static void ApplyProjectionStamp(
@@ -152,7 +63,7 @@ public sealed class ServiceCatalogProjector
         DateTimeOffset observedAt)
     {
         readModel.ActorId = actorId;
-        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.StateVersion = stateVersion;
         readModel.LastEventId = eventId;
         readModel.UpdatedAt = observedAt;
     }

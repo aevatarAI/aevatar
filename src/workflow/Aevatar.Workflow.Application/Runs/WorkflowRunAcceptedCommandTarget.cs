@@ -1,6 +1,5 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -9,29 +8,30 @@ namespace Aevatar.Workflow.Application.Runs;
 //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
 //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
 internal sealed class WorkflowRunAcceptedCommandTarget
-    : IActorCommandDispatchTarget,
+    : ICommandDispatchTarget,
       ICommandDispatchCleanupAware
 {
-    private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunAcceptedCommandTarget(
-        IActor actor,
+        string actorId,
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunProvisioningPort runProvisioningPort)
     {
-        Actor = actor ?? throw new ArgumentNullException(nameof(actor));
+        ActorId = string.IsNullOrWhiteSpace(actorId)
+            ? throw new ArgumentException("Actor id is required.", nameof(actorId))
+            : actorId;
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
             ? throw new ArgumentException("Workflow name is required.", nameof(workflowName))
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
     }
 
-    public IActor Actor { get; }
-    public string ActorId => Actor.Id;
-    public string TargetId => Actor.Id;
+    public string ActorId { get; }
+    public string TargetId => ActorId;
     public string WorkflowName { get; }
     public IReadOnlyList<string> CreatedActorIds { get; }
 
@@ -56,7 +56,7 @@ internal sealed class WorkflowRunAcceptedCommandTarget
         {
             try
             {
-                await _actorPort.DestroyAsync(actorId, ct);
+                await _runProvisioningPort.DestroyAsync(actorId, ct);
             }
             catch (Exception ex)
             {

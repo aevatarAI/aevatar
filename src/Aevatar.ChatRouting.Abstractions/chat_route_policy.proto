@@ -243,6 +243,12 @@ message UpsertChatRoutePolicyRequested {
   repeated ChatRouteRule rules = 3;
 }
 
+message UpsertChatRouteRuleRequested {
+  ChatRouteCallerScope owner_scope = 1;
+  ChatRouteAction default_target_if_uninitialized = 2;
+  ChatRouteRule rule = 3;
+}
+
 message RemoveChatRouteRuleRequested {
   string rule_id = 1;
 }
@@ -288,4 +294,9 @@ message ChatRouteDecision {
   // policy actor didn't exist or readmodel snapshot was unavailable.
   bool used_fallback = 4;
   repeated ChatRouteDeprecation deprecations = 5;
+  // Original matched policy action before runtime canonicalization. This is
+  // transient ingress context for non-LLM actor-bound entries that still need
+  // actor-specific fields (for example voice_module_name); it must not be
+  // persisted.
+  ChatRouteAction original_action = 6;
 }

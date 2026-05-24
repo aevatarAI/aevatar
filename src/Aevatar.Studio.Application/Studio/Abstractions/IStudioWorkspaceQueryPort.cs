@@ -2,12 +2,14 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: workspace reads could observe local store files that doubled as business state.
-//   New principle: queries read the projected current-state replica for the workspace actor; write-side state is not side-read.
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public interface IStudioWorkspaceQueryPort
 {
     Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default);
+
+    Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default);
 }
 
 public sealed record StudioWorkspaceSnapshot(

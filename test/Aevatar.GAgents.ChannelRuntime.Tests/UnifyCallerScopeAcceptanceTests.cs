@@ -446,7 +446,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var context = new UserAgentCatalogMaterializationContext
         {
             RootActorId = UserAgentCatalogGAgent.WellKnownId,
-            ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+            ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
         };
 
         // Project a synthesized post-upsert state for a lark caller. This mirrors what

@@ -17,6 +17,37 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansActorRuntimeForwardingTests
 {
     [Fact]
+    public async Task CreateByKindAsync_WithExplicitId_ShouldInitializeTrimmedKindAndReturnOrleansActor()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+
+        var actor = await runtime.CreateByKindAsync("  workflow.telegram-user-bridge  ", "bridge:telegram");
+
+        actor.Should().BeOfType<OrleansActor>();
+        actor.Id.Should().Be("bridge:telegram");
+        grains.Should().ContainKey("bridge:telegram");
+        grains["bridge:telegram"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.telegram-user-bridge");
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenInitializationFails_ShouldThrow()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.ExistsAsync("bridge:telegram");
+        grains["bridge:telegram"].InitializeAgentByKindResult = false;
+
+        var act = () => runtime.CreateByKindAsync("workflow.telegram-user-bridge", "bridge:telegram");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Failed to initialize Orleans actor bridge:telegram for kind 'workflow.telegram-user-bridge'.*");
+        grains["bridge:telegram"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.telegram-user-bridge");
+    }
+
+    [Fact]
     public async Task LinkAsync_ShouldRegisterForwardingBinding_AndUpdateTopology()
     {
         var runtime = CreateRuntime(out var registry, out var grains, out _);
@@ -248,8 +279,11 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public bool Initialized { get; set; } = true;
 
+        public bool InitializeAgentByKindResult { get; set; } = true;
+
         public List<string> Calls { get; } = [];
         public List<Guid> ObservedReentrancyIds { get; } = [];
+        public List<string> InitializedKinds { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
 
@@ -262,9 +296,9 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<bool> InitializeAgentByKindAsync(string kind)
         {
-            _ = kind;
+            InitializedKinds.Add(kind);
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
-            return Task.FromResult(true);
+            return Task.FromResult(InitializeAgentByKindResult);
         }
 
         public Task<bool> IsInitializedAsync()
@@ -361,12 +395,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = deliveryMode;
             throw new NotSupportedException();
@@ -374,23 +408,27 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = periodMs;
             _ = deliveryMode;
             throw new NotSupportedException();
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             _ = expectedGeneration;
+            _ = expectedSlotEpoch;
             return Task.CompletedTask;
         }
 

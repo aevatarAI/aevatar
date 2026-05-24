@@ -8,9 +8,10 @@ using Microsoft.Extensions.Options;
 namespace Aevatar.GAgents.StatusDashboard;
 
 /// <summary>
-/// Primes one probe-target actor + projection scope per manifest entry at host
-/// startup. Once active, each actor self-reschedules its probe tick from inside
-/// its own event loop — the startup service does not own the ongoing schedule.
+/// Dispatches one probe-target actor configuration command per manifest entry
+/// at host startup. Once active, each actor self-reschedules its probe tick
+/// from inside its own event loop — the startup service does not own the
+/// ongoing schedule or projection lifecycle.
 ///
 /// Failures here only affect the affected target's first activation; the host
 /// continues to start so unrelated services are not blocked by a single bad
@@ -18,11 +19,7 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// </summary>
 public sealed class HealthProbeStartupService : IHostedService
 {
-    private const int MaxRetriesPerTarget = 3;
-    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(1);
-
     private readonly StatusDashboardManifest _manifest;
-    private readonly HealthProbeProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IHealthProbeExecutorRegistry _executorRegistry;
@@ -30,7 +27,6 @@ public sealed class HealthProbeStartupService : IHostedService
 
     public HealthProbeStartupService(
         IOptions<StatusDashboardOptions> options,
-        HealthProbeProjectionPort projectionPort,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         IHealthProbeExecutorRegistry executorRegistry,
@@ -38,7 +34,6 @@ public sealed class HealthProbeStartupService : IHostedService
     {
         ArgumentNullException.ThrowIfNull(options);
         _manifest = StatusDashboardManifest.FromOptions(options.Value ?? new StatusDashboardOptions());
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _executorRegistry = executorRegistry ?? throw new ArgumentNullException(nameof(executorRegistry));
@@ -108,39 +103,26 @@ public sealed class HealthProbeStartupService : IHostedService
 
     private async Task EnsureProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
     {
-        var actorId = HealthProbeStoreCommands.BuildActorId(descriptor.Slug);
-        var delay = InitialRetryDelay;
-
-        for (var attempt = 1; attempt <= MaxRetriesPerTarget; attempt++)
+        // Refactor (iter47/cluster-005-status-dashboard-startup-projection-activation):
+        //   Old pattern: Startup service explicitly ensures projection scopes and uses Task.Delay retry before dispatching configure commands.
+        //   New principle: Startup path dispatches actor configuration only; projection activation owned by committed-state hooks; retry uses hosted-service scheduling.
+        try
         {
-            try
-            {
-                await _projectionPort.EnsureProjectionForActorAsync(actorId, ct);
-                await HealthProbeStoreCommands.DispatchConfigureAsync(
-                    _actorRuntime, _dispatchPort, descriptor, ct);
-                _logger.LogInformation(
-                    "Status probe {Slug} activated (probe={Kind}, interval={Interval}s) on attempt {Attempt}",
-                    descriptor.Slug, descriptor.ProbeKind, descriptor.IntervalSeconds, attempt);
-                return;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to activate probe {Slug} (attempt {Attempt}/{Max})",
-                    descriptor.Slug, attempt, MaxRetriesPerTarget);
-                if (attempt < MaxRetriesPerTarget)
-                    await Task.Delay(delay, ct);
-                delay *= 2;
-            }
+            await HealthProbeStoreCommands.DispatchConfigureAsync(
+                _actorRuntime, _dispatchPort, descriptor, ct);
+            _logger.LogInformation(
+                "Status probe {Slug} configuration dispatched (probe={Kind}, interval={Interval}s)",
+                descriptor.Slug, descriptor.ProbeKind, descriptor.IntervalSeconds);
         }
-
-        _logger.LogError(
-            "Status probe {Slug} failed to activate after {Max} attempts — it will appear with unknown status on /status until the host is restarted",
-            descriptor.Slug, MaxRetriesPerTarget);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to dispatch status probe {Slug} configuration; it will appear with unknown status on /status until configuration is dispatched again",
+                descriptor.Slug);
+        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

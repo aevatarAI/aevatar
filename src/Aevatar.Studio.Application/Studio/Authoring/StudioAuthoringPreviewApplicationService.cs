@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Studio.Application.Studio.Authoring;
 
@@ -51,6 +52,7 @@ internal sealed class StudioAuthoringPreviewApplicationService : IStudioAuthorin
                         StudioAuthoringKind.Workflow,
                         turnPrompt,
                         metadata,
+                        request.LlmControl,
                         events,
                         token),
                     (progress, token) =>
@@ -84,6 +86,7 @@ internal sealed class StudioAuthoringPreviewApplicationService : IStudioAuthorin
                         StudioAuthoringKind.Script,
                         turnPrompt,
                         metadata,
+                        request.LlmControl,
                         events,
                         token),
                     (progress, token) =>
@@ -113,12 +116,13 @@ internal sealed class StudioAuthoringPreviewApplicationService : IStudioAuthorin
         StudioAuthoringKind kind,
         string prompt,
         IReadOnlyDictionary<string, string>? metadata,
+        LLMControlContext? llmControl,
         List<StudioAuthoringPreviewEvent> events,
         CancellationToken ct)
     {
         var content = new StringBuilder();
         await foreach (var chunk in _llmStreamPort.StreamAsync(
-                           new StudioAuthoringLLMRequest(kind, prompt, BuildRequestId(), metadata),
+                           new StudioAuthoringLLMRequest(kind, prompt, BuildRequestId(), metadata, llmControl),
                            ct))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))

@@ -27,8 +27,6 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
             Settings = new ProtoWorkspaceSettings
             {
                 RuntimeBaseUrl = "http://127.0.0.1:5100",
-                AppearanceTheme = "teal",
-                ColorMode = "dark",
             },
             LastAppliedEventVersion = 12,
         };
@@ -50,21 +48,6 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
             CreatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddHours(-1)),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
             Version = 3,
-            Layout = new StudioWorkflowLayout
-            {
-                EntryWorkflow = "workflow-one",
-                Viewport = new StudioWorkflowViewport { X = 1, Y = 2, Zoom = 0.75 },
-                Nodes = { new StudioWorkflowNodeLayout { NodeId = "start", X = 10, Y = 20 } },
-                Groups =
-                {
-                    new StudioWorkflowLayoutGroup
-                    {
-                        GroupId = "group-1",
-                        NodeIds = { "start" },
-                    },
-                },
-                Collapsed = { "group-1" },
-            },
         });
         var reader = new StubDocumentReader();
         reader.Set(actorId, new StudioWorkspaceCurrentStateDocument
@@ -85,19 +68,14 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
         snapshot.StateVersion.Should().Be(17);
         snapshot.UpdatedAtUtc.Should().Be(updatedAt);
         snapshot.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
-        snapshot.Settings.AppearanceTheme.Should().Be("teal");
-        snapshot.Settings.ColorMode.Should().Be("dark");
+        snapshot.Settings.AppearanceTheme.Should().Be("blue");
+        snapshot.Settings.ColorMode.Should().Be("light");
         snapshot.Directories.Should().ContainSingle().Which.DirectoryId.Should().Be("dir-1");
 
         var draft = snapshot.Drafts.Should().ContainSingle().Subject;
         draft.WorkflowId.Should().Be("workflow-1");
         draft.FilePath.Should().Be(Path.Combine("Drafts", "workflow-one.yaml"));
-        draft.Layout.Should().NotBeNull();
-        draft.Layout!.EntryWorkflow.Should().Be("workflow-one");
-        draft.Layout.NodePositions["start"].X.Should().Be(10);
-        draft.Layout.Groups["group-1"].Should().Equal("start");
-        draft.Layout.Collapsed.Should().Equal("group-1");
-        draft.Layout.Viewport.Zoom.Should().Be(0.75);
+        draft.Layout.Should().BeNull();
         draft.Version.Should().Be(3);
     }
 
@@ -118,6 +96,22 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
         snapshot.Settings.AppearanceTheme.Should().Be("blue");
         snapshot.Settings.ColorMode.Should().Be("light");
         snapshot.Directories.Should().BeEmpty();
+        snapshot.Drafts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WithExplicitScope_ShouldReadRequestedScopeInsteadOfAmbientScope()
+    {
+        var reader = new StubDocumentReader();
+        var port = new ProjectionStudioWorkspaceQueryPort(
+            reader,
+            new StubScopeResolver { ScopeId = "ambient-scope" });
+
+        var snapshot = await port.GetAsync(" requested-scope ");
+
+        reader.ReadKeys.Should().ContainSingle().Which.Should().Be("studio-workspace:requested-scope");
+        snapshot.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        snapshot.ScopeId.Should().Be("requested-scope");
         snapshot.Drafts.Should().BeEmpty();
     }
 
@@ -179,13 +173,18 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
     {
         private readonly Dictionary<string, StudioWorkspaceCurrentStateDocument> _documents = new(StringComparer.Ordinal);
 
+        public List<string> ReadKeys { get; } = [];
+
         public void Set(string key, StudioWorkspaceCurrentStateDocument document) =>
             _documents[key] = document;
 
         public Task<StudioWorkspaceCurrentStateDocument?> GetAsync(
             string key,
-            CancellationToken ct = default) =>
-            Task.FromResult(_documents.GetValueOrDefault(key));
+            CancellationToken ct = default)
+        {
+            ReadKeys.Add(key);
+            return Task.FromResult(_documents.GetValueOrDefault(key));
+        }
 
         public Task<ProjectionDocumentQueryResult<StudioWorkspaceCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,

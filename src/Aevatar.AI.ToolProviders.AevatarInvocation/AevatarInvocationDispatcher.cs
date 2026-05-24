@@ -660,7 +660,7 @@ public sealed class AevatarInvocationDispatcher
             });
         }
 
-        var items = await _workflowQueryService.ListActorTimelineAsync(
+        var items = await _workflowQueryService.ListWorkflowRunTimelineExportAsync(
             query.ActorId.Trim(),
             BoundTake(query.Take),
             ct);

@@ -25,8 +25,11 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
@@ -34,6 +37,9 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Orleans.Client" />
+    <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NSubstitute" />
@@ -45,5 +51,8 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
   </ItemGroup>
 </Project>

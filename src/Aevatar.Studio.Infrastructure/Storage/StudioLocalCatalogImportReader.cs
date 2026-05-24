@@ -8,10 +8,17 @@ internal sealed class StudioLocalCatalogImportReader :
     IStudioLocalRoleCatalogImportReader
 {
     private readonly StudioStorageOptions _options;
+    private readonly IConnectorCatalogImportParser _connectorImportParser;
+    private readonly IRoleCatalogImportParser _roleImportParser;
 
-    public StudioLocalCatalogImportReader(IOptions<StudioStorageOptions> options)
+    public StudioLocalCatalogImportReader(
+        IOptions<StudioStorageOptions> options,
+        IConnectorCatalogImportParser connectorImportParser,
+        IRoleCatalogImportParser roleImportParser)
     {
         _options = (options ?? throw new ArgumentNullException(nameof(options))).Value.ResolveRootDirectory();
+        _connectorImportParser = connectorImportParser ?? throw new ArgumentNullException(nameof(connectorImportParser));
+        _roleImportParser = roleImportParser ?? throw new ArgumentNullException(nameof(roleImportParser));
     }
 
     public async Task<StoredConnectorCatalog> ReadAsync(CancellationToken ct = default)
@@ -27,7 +34,7 @@ internal sealed class StudioLocalCatalogImportReader :
         }
 
         await using var stream = File.OpenRead(path);
-        var connectors = await ConnectorCatalogStorageSerializer.ReadCatalogAsync(stream, ct);
+        var connectors = await _connectorImportParser.ParseCatalogAsync(stream, ct);
         return new StoredConnectorCatalog(
             HomeDirectory: _options.RootDirectory,
             FilePath: path,
@@ -48,7 +55,7 @@ internal sealed class StudioLocalCatalogImportReader :
         }
 
         await using var stream = File.OpenRead(path);
-        var roles = await RoleCatalogStorageSerializer.ReadCatalogAsync(stream, ct);
+        var roles = await _roleImportParser.ParseCatalogAsync(stream, ct);
         return new StoredRoleCatalog(
             HomeDirectory: _options.RootDirectory,
             FilePath: path,

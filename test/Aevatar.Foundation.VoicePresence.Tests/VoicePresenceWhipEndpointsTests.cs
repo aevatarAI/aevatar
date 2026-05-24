@@ -170,7 +170,7 @@ public class VoicePresenceWhipEndpointsTests
         context.Response.ContentType.ShouldBe("application/sdp");
         context.Response.Headers.Location.ToString().ShouldBe("/voice/webrtc/agent-1");
         (await ReadBodyAsync(context)).ShouldBe("v=0\r\nanswer");
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
         factory.Calls.Count.ShouldBe(1);
         factory.Calls[0].RemoteOfferSdp.ShouldBe("v=0\r\noffer");
         factory.Calls[0].Options.PcmSampleRateHz.ShouldBe(16000);
@@ -178,7 +178,7 @@ public class VoicePresenceWhipEndpointsTests
 
         completion.SetResult();
         await detachCompleted.Task;
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
     }
 
@@ -198,8 +198,73 @@ public class VoicePresenceWhipEndpointsTests
         await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context);
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status204NoContent);
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Delete_should_detach_actor_owned_attached_session()
+    {
+        var detachCalls = 0;
+        var releaseCalls = 0;
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => true,
+            attachTransportAsync: static (_, _) => throw new InvalidOperationException("attach should not run"),
+            detachTransportAsync: (_, _) =>
+            {
+                detachCalls++;
+                releaseCalls++;
+                return Task.CompletedTask;
+            },
+            pcmSampleRateHz: 24000);
+        var resolver = new RecordingSessionResolver(VoicePresenceSessionResolution.LeaseAcceptedAttached(session));
+        using var app = CreateApp(resolver);
+        var context = CreateContext(app, HttpMethods.Delete, string.Empty);
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status204NoContent);
+        resolver.Requests.ShouldHaveSingleItem().Purpose.ShouldBe(VoicePresenceSessionRequestPurpose.Detach);
+        detachCalls.ShouldBe(1);
+        releaseCalls.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Delete_should_detach_transport_already_attached_typed_preflight_session()
+    {
+        var attachCalls = 0;
+        var detachCalls = 0;
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => true,
+            attachTransportAsync: (_, _) =>
+            {
+                attachCalls++;
+                return Task.CompletedTask;
+            },
+            detachTransportAsync: (_, _) =>
+            {
+                detachCalls++;
+                return Task.CompletedTask;
+            },
+            pcmSampleRateHz: 24000);
+        var resolver = new RecordingSessionResolver(new VoicePresenceSessionResolution(
+            VoicePresenceSessionResolutionKind.PreflightFailed,
+            session,
+            VoicePresencePreflightFailureKind.TransportAlreadyAttached));
+        using var app = CreateApp(resolver);
+        var context = CreateContext(app, HttpMethods.Delete, string.Empty);
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Delete).RequestDelegate!(context)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status204NoContent);
+        resolver.Requests.ShouldHaveSingleItem().Purpose.ShouldBe(VoicePresenceSessionRequestPurpose.Detach);
+        attachCalls.ShouldBe(0);
+        detachCalls.ShouldBe(1);
     }
 
     [Fact]
@@ -306,18 +371,18 @@ public class VoicePresenceWhipEndpointsTests
         var post2 = CreateContext(app, HttpMethods.Post, "offer-2");
         post2.Request.RouteValues["actorId"] = "agent-1";
         await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(post2);
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
         transport2.Disposed.ShouldBeFalse();
 
         completion1.SetResult();
         await transport1DetachCompleted.Task;
 
-        module.IsTransportAttached.ShouldBeTrue();
+        module.HasVolatileTransportLease.ShouldBeTrue();
         transport2.Disposed.ShouldBeFalse();
 
         completion2.SetResult();
         await transport2DetachCompleted.Task;
-        module.IsTransportAttached.ShouldBeFalse();
+        module.HasVolatileTransportLease.ShouldBeFalse();
     }
 
     private static VoicePresenceSession CreateTrackingSession(
@@ -326,7 +391,7 @@ public class VoicePresenceWhipEndpointsTests
         int pcmSampleRateHz = 24000) =>
         new(
             isInitialized: () => module.IsInitialized,
-            isTransportAttached: () => module.IsTransportAttached,
+            isTransportAttached: () => module.HasVolatileTransportLease,
             attachTransportAsync: (transport, _) =>
             {
                 module.AttachTransport(transport, static (_, _) => Task.CompletedTask);
@@ -471,18 +536,34 @@ public class VoicePresenceWhipEndpointsTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
+    private sealed class RecordingSessionResolver : IVoicePresenceSessionResolver
     {
+        private readonly VoicePresenceSessionResolution _resolution;
+
+        public RecordingSessionResolver(VoicePresenceSession? session)
+            : this(session == null
+                ? VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound)
+                : VoicePresenceSessionResolution.LeaseAcceptedAttached(session))
+        {
+        }
+
+        public RecordingSessionResolver(VoicePresenceSessionResolution resolution)
+        {
+            _resolution = resolution;
+        }
+
         public List<VoicePresenceSessionRequest> Requests { get; } = [];
 
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
+        public Task<VoicePresenceSessionResolution> ResolveAsync(
+            VoicePresenceSessionRequest request,
+            CancellationToken ct = default)
         {
             _ = ct;
             Requests.Add(request);
             RequestedActorIds.Add(request.ActorId);
-            return Task.FromResult(session);
+            return Task.FromResult(_resolution);
         }
     }
 

@@ -405,7 +405,6 @@ public sealed class MainnetChatCompletionsEndpointsTests
     {
         public Task<ResponsesCallerScope> ResolveAsync(
             string nyxIdAccessToken,
-            HttpContext http,
             CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
     }
@@ -485,6 +484,12 @@ public sealed class MainnetChatCompletionsEndpointsTests
             string sessionActorId,
             string responseId,
             LlmSessionForwardedToolCall call,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task ReceiveForwardedToolResultAsync(

@@ -1,9 +1,11 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +41,13 @@ public static class ScheduledServiceCollectionExtensions
         // ─── Retired-actor cleanup contribution ───
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ScheduledRetiredActorSpec>());
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            UserAgentCatalogCommittedStateProjectionActivationPlanProvider>());
 
         // ─── User Agent Catalog projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -67,7 +76,7 @@ public static class ScheduledServiceCollectionExtensions
         // IAgentTool implementation; LLM tools see only the caller-scoped public port
         // (which excludes NyxApiKey by DTO shape).
         services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
-        services.TryAddSingleton<UserAgentCatalogProjectionPort>();
+        services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so

@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -78,8 +79,12 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .NotBeNull();
         app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
-        app.Services.GetRequiredService<IProjectionReadinessPort>().Should().NotBeNull();
-        app.Services.GetRequiredService<ExternalIdentityBindingProjectionPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
+            .Should()
+            .NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();
@@ -224,9 +229,9 @@ public sealed class MainnetHostCompositionTests
 
         var cleanupIndex = HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services);
 
-        HostedServiceIndex<ChannelBotRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex<DeviceRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex<UserAgentCatalogStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex(builder.Services, "ChannelBotRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex(builder.Services, "DeviceRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex(builder.Services, "UserAgentCatalogStartupService").Should().BeGreaterThan(cleanupIndex);
     }
 
     private static WebApplicationBuilder CreateBuilder()
@@ -252,6 +257,9 @@ public sealed class MainnetHostCompositionTests
 
     private static int HostedServiceIndex<THostedService>(IServiceCollection services)
         where THostedService : IHostedService
+        => HostedServiceIndex(services, typeof(THostedService).Name);
+
+    private static int HostedServiceIndex(IServiceCollection services, string implementationTypeName)
     {
         var index = services
             .Select((descriptor, position) => new
@@ -260,7 +268,10 @@ public sealed class MainnetHostCompositionTests
                 position,
             })
             .Where(x => x.descriptor.ServiceType == typeof(IHostedService))
-            .Single(x => x.descriptor.ImplementationType == typeof(THostedService))
+            .Single(x => string.Equals(
+                x.descriptor.ImplementationType?.Name,
+                implementationTypeName,
+                StringComparison.Ordinal))
             .position;
         return index;
     }

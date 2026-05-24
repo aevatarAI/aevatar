@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -16,7 +17,10 @@ public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
     string Prompt,
-    string SessionId)
+    string SessionId,
+    string? AccessToken = null,
+    string? PreferredRoute = null,
+    string? DefaultModel = null)
     : ICommandContextSeed
 {
     public string? CommandId => SessionId;
@@ -73,9 +77,9 @@ internal sealed class StreamingProxyRoomChatCommandTarget
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         string sessionId)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
-        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
+        // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+        //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+        //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
         ProjectionLease = projectionLease ?? throw new ArgumentNullException(nameof(projectionLease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -181,6 +185,9 @@ internal sealed class StreamingProxyRoomChatCommandTargetResolver
 internal sealed class StreamingProxyRoomObservationLifecycle
     : ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>
 {
+    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
     private readonly IStreamingProxyRoomSessionProjectionPort _projectionPort;
 
     public StreamingProxyRoomObservationLifecycle(
@@ -194,9 +201,9 @@ internal sealed class StreamingProxyRoomObservationLifecycle
         CommandDispatchExecution<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: target binder attached projection/session leases during command preparation.
-        //   New principle: interaction observation lifecycle attaches live sinks before dispatch and keeps dispatch-only PrepareAsync free of read-side work.
+        // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+        //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+        //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -204,11 +211,9 @@ internal sealed class StreamingProxyRoomObservationLifecycle
         var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
         try
         {
-            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-                token => _projectionPort.EnsureChatProjectionAsync(
-                    target.ActorId,
-                    command.SessionId,
-                    token),
+            var attachment = await _projectionPort.AttachExistingChatProjectionAsync(
+                target.ActorId,
+                command.SessionId,
                 sink,
                 ct);
             if (attachment == null)
@@ -252,6 +257,14 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             SessionId = command.SessionId,
             ScopeId = command.ScopeId,
         };
+        chatRequest.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: Normalize(command.AccessToken),
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: Normalize(command.DefaultModel),
+            NyxIdRoutePreference: Normalize(command.PreferredRoute),
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
 
         return new EventEnvelope
         {
@@ -265,6 +278,9 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             },
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 internal sealed class StreamingProxyRoomChatAcceptedReceiptFactory

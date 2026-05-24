@@ -124,7 +124,7 @@ For `current_issue`:
      --log .implement-loop/logs/implement-issue-${issue_number}.log \
      --timeout 5400
    ```
-   Use Bash with `run_in_background: true`. 5400s (90 min) is the recommended budget for an issue-sized implement (per CLAUDE.md "Codex CLI 调用规范"; 3600s is the absolute minimum).
+   Use Bash with `run_in_background: true`. 5400s (90 min) is the recommended budget for an issue-sized implement (per this skill's spawn wrapper rules; 3600s is the absolute minimum).
 
 5. Record `current_issue.phase = "implement"`, save `bg_task` id. Schedule wakeup 1500–1800s as safety net. **End turn.**
 
@@ -346,7 +346,7 @@ PushNotification (each pointer advance): "issue #N passed review (round R); adva
 
 1. **Sequential only**: never dispatch two codexes concurrently in this loop. The PR stack is linear by construction; parallel work breaks the base-branch chain.
 2. **No PR merging**: the controller never runs `gh pr merge`. The whole stack stays open for human review.
-3. **Controller owns git topology**: codex prompts must not run `git commit` / `git push` / `git checkout` / `gh pr create` (per CLAUDE.md "Codex CLI 调用规范"). Codex stages changes; controller commits and pushes.
+3. **Controller owns git topology**: codex prompts must not run `git commit` / `git push` / `git checkout` / `gh pr create` (per this skill's controller rules). Codex stages changes; controller commits and pushes.
 4. **Hard cap on rework**: `max_review_rounds` (default 5) per issue. After cap, fail the issue and halt the train — don't burn unbounded codex time on one issue.
 5. **No external repo changes**: codex prompts forbid touching NyxID / chrono-* (per CLAUDE.md "外部仓库无改动权").
 6. **No `[Skip]` / disabled tests** to make CI green.

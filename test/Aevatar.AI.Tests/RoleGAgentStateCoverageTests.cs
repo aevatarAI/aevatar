@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,10 @@ public sealed class RoleGAgentStateCoverageTests
     private static readonly MethodInfo ApplyRemoteApprovalSubmittedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyRemoteApprovalSubmitted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyRemoteApprovalSubmitted not found.");
+
+    private static readonly MethodInfo ApplyVoicePresenceRuntimeStateChangedMethod = typeof(RoleGAgent)
+        .GetMethod("ApplyVoicePresenceRuntimeStateChanged", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ApplyVoicePresenceRuntimeStateChanged not found.");
 
     private static readonly MethodInfo SanitizeFailureMessageMethod = typeof(RoleGAgent)
         .GetMethod("SanitizeFailureMessage", BindingFlags.NonPublic | BindingFlags.Static)
@@ -122,6 +127,103 @@ public sealed class RoleGAgentStateCoverageTests
         next.PendingApproval.Should().NotBeNull();
         next.PendingApproval!.RequestId.Should().Be("req-1");
         next.PendingApproval.ToolName.Should().Be("dangerous_tool");
+    }
+
+    [Fact]
+    public void ApplyVoicePresenceRuntimeStateChanged_ShouldStoreClonedModuleState()
+    {
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.ResponseInProgress,
+            CurrentResponseId = 3,
+            NextResponseId = 4,
+            ActiveProviderResponseId = "provider-response-1",
+            Initialized = true,
+            TransportAttached = true,
+            PcmSampleRateHz = 24000,
+            ActiveSessionId = "lease-1",
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+        };
+
+        var next = InvokePrivateStatic<RoleGAgentState>(
+            ApplyVoicePresenceRuntimeStateChangedMethod,
+            new RoleGAgentState(),
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = "voice_presence",
+                State = runtimeState,
+            });
+        runtimeState.CurrentResponseId = 99;
+
+        next.VoicePresence.Should().ContainKey("voice_presence");
+        next.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(3);
+        next.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-1");
+        next.VoicePresence["voice_presence"].ActiveSessionId.Should().Be("lease-1");
+        next.VoicePresence["voice_presence"].Initialized.Should().BeTrue();
+        next.VoicePresence["voice_presence"].TransportAttached.Should().BeTrue();
+        next.VoicePresence["voice_presence"].PcmSampleRateHz.Should().Be(24000);
+        next.VoicePresence["voice_presence"].RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.LocalOnly);
+    }
+
+    [Fact]
+    public void ApplyVoicePresenceRuntimeStateChanged_ShouldIgnoreBlankModuleName()
+    {
+        var current = new RoleGAgentState();
+
+        var next = InvokePrivateStatic<RoleGAgentState>(
+            ApplyVoicePresenceRuntimeStateChangedMethod,
+            current,
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = " ",
+                State = new VoicePresenceRuntimeState
+                {
+                    Status = VoicePresenceRuntimeStatus.UserSpeaking,
+                },
+            });
+
+        next.Should().BeSameAs(current);
+        next.VoicePresence.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldPersistAndReturnClonedState()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-presence");
+        await agent.ActivateAsync();
+
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.AudioDraining,
+            CurrentResponseId = 5,
+            LastDrainAckResponseId = 4,
+            LastDrainAckPlayoutSequence = 1200,
+            NextResponseId = 6,
+        };
+
+        await agent.PersistVoicePresenceRuntimeStateAsync("voice_presence", runtimeState);
+        runtimeState.CurrentResponseId = 99;
+
+        agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
+        agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeTrue();
+        stored.CurrentResponseId.Should().Be(5);
+
+        stored.CurrentResponseId = 77;
+
+        agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldReturnFalseForMissingModule()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-presence-missing");
+        await agent.ActivateAsync();
+
+        agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeFalse();
+        stored.Should().NotBeNull();
+        stored.Status.Should().Be(VoicePresenceRuntimeStatus.Unspecified);
     }
 
     [Fact]

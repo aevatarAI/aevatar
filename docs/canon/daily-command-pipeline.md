@@ -179,7 +179,7 @@ QA 关注点：
 4. `NyxIdConversationReplyGenerator.GenerateReplyAsync(...)`
    - 文件：`agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs`
    - 构造 `ChatRuntime.ChatStreamAsync` 主链；`use_skill` 与 `ornn_search_skills` 作为工具注入
-   - `UseSkillTool` 从本地 registry 或远程 `IRemoteSkillFetcher` 加载 skill；远程路径由 `OrnnRemoteSkillFetcher` / `OrnnSkillClient` 通过 NyxID proxy 访问 Ornn
+   - `UseSkillTool` 从本地 `LocalSkillCatalog` 或远程 `IRemoteSkillFetcher` 加载 skill；远程路径由 `OrnnRemoteSkillFetcher` / `OrnnSkillClient` 通过 NyxID proxy 访问 Ornn
    - skill 指令负责 GitHub daily 的后续工具调用、格式与错误文案；aevatar 本地不再复制一套 daily 创建/调度语义
 
 5. `AgentBuilderTool.ExecuteAsync(argumentsJson, ct)` 只管理 catalog 中已有 agents
@@ -202,7 +202,7 @@ QA 关注点：
 
 **Skill 加载**：
 - `UseSkillTool` 参数：`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本。
-- 本地 registry 缓存未命中或远程缓存超过 `RemoteSkillCacheTtl=5m` 时，`OrnnRemoteSkillFetcher.FetchSkillAsync()` 调 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")`。
+- 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
 - `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问 Ornn API；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
 - 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径，而不是阻塞 actor turn 到外层超时。
 - `../chrono-ornn` 不在本 worktree 同级目录时，本文只描述 aevatar 可验证的 skill bridge 契约，不复制 Ornn skill 内部实现。

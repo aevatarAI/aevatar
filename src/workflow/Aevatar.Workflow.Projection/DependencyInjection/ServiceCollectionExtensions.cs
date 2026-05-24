@@ -4,6 +4,7 @@ using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Workflows;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -34,11 +35,14 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>, WorkflowRunTimelineDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>, WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowCapabilitiesCurrentStateDocument>, WorkflowCapabilitiesCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
+        services.TryAddSingleton<WorkflowCatalogReadModelMapper>();
+        services.TryAddSingleton<WorkflowCatalogReadModelQueryPort>();
         services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportGraphMaterializer>();
         services.AddProjectionMaterializationRuntimeCore<
             WorkflowExecutionMaterializationContext,
@@ -76,8 +80,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
-        services.TryAddSingleton<WorkflowBindingProjectionPort>();
-        services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -91,12 +93,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());
         services.TryAddSingleton<IWorkflowRunBindingReader>(sp =>
             sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());
-        services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort>(sp =>
-            sp.GetRequiredService<WorkflowExecutionMaterializationPort>());
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
-        services.TryAddSingleton<IWorkflowBindingProjectionActivationPort>(sp =>
-            sp.GetRequiredService<WorkflowBindingProjectionPort>());
         services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
@@ -105,6 +103,9 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,
             WorkflowActorBindingProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            WorkflowBindingProjectionContext,
+            WorkflowCatalogCurrentStateProjector>();
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();

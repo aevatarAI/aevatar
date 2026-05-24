@@ -8,9 +8,8 @@ namespace Aevatar.Studio.Projection.CommandServices;
 
 /// <summary>
 /// Dispatches user-config write commands to the <see cref="UserConfigGAgent"/>.
-/// Uses <see cref="IStudioActorBootstrap"/> so the actor is created (if
-/// absent) and its projection scope is activated atomically before we
-/// dispatch the command through <see cref="IActorDispatchPort"/>.
+/// Uses <see cref="IStudioActorBootstrap"/> so the actor is created if absent
+/// before we dispatch the command through <see cref="IActorDispatchPort"/>.
 /// </summary>
 internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommandService
 {
@@ -75,6 +74,10 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
     private async Task DispatchAsync(string scopeId, IMessage payload, CancellationToken ct)
     {
         var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   user-config commands no longer synchronously start materialization.
         var actor = await _bootstrap.EnsureAsync<UserConfigGAgent>(actorId, ct);
 
         var envelope = new EventEnvelope

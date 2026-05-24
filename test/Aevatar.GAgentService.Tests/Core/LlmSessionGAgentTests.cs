@@ -259,6 +259,158 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldRecordCompletedFact()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("done"),
+        });
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.OutputText.Should().Be("done");
+        actor.State.Completion.ToolCalls.Should().ContainSingle()
+            .Which.CallId.Should().Be("call_done");
+        actor.State.LastAppliedEventVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldRecordFailureFact()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = new LlmSessionCompletion
+            {
+                FailureCode = "gagent_invocation_failed",
+                FailureMessage = "GAgent invocation failed.",
+            },
+        });
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.Completion!.FailureCode.Should().Be("gagent_invocation_failed");
+        actor.State.Completion.FailureMessage.Should().Be("GAgent invocation failed.");
+    }
+
+    [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldIgnoreDuplicateSameFact()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("done"),
+        });
+        var versionAfterFirstCompletion = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("done"),
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstCompletion);
+    }
+
+    [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldRejectDuplicateDifferentFact()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("done"),
+        });
+
+        var act = () => actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("different"),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*completion cannot be rebound to different facts*");
+    }
+
+    [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldRejectInvalidCompletion()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var act = () => actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = new LlmSessionCompletion { FailureCode = "failed_without_message" },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*failure_message is required*");
+    }
+
+    [Theory]
+    [InlineData(LlmSessionStatus.Cancelled)]
+    [InlineData(LlmSessionStatus.Expired)]
+    public async Task HandleRecordCompletionAsync_ShouldRejectAfterTerminalNonCompletionStatus(LlmSessionStatus status)
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        if (status == LlmSessionStatus.Cancelled)
+        {
+            await actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
+            {
+                ResponseId = "resp_1",
+                Status = LlmSessionStatus.Cancelled,
+            });
+        }
+        else
+        {
+            var record = actor.State.Record!;
+            await actor.HandleExpireResponseSessionAsync(new ExpireResponseSessionRequested
+            {
+                ResponseId = "resp_1",
+                ObservedAt = Timestamp.FromDateTimeOffset(ResolveExpiry(record).AddSeconds(1)),
+            });
+        }
+
+        var act = () => actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = BuildCompletion("late"),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*is {status} and cannot record completion*");
+    }
+
+    [Fact]
     public async Task HandleExpireResponseSessionAsync_ShouldExpirePendingToolCallsWithSyntheticError()
     {
         var actor = CreateActor("resp_1");
@@ -320,4 +472,24 @@ public sealed class LlmSessionGAgentTests
             EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             Expiry = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1)),
         };
+
+    private static LlmSessionCompletion BuildCompletion(string text) =>
+        new()
+        {
+            OutputText = text,
+            CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ToolCalls =
+            {
+                new LlmSessionCompletedToolCall
+                {
+                    CallId = "call_done",
+                    ToolName = "get_weather",
+                    Result = ResponsesJsonValues.ParseBoundaryPayload("""{"ok":true}"""),
+                },
+            },
+        };
+
+    private static DateTimeOffset ResolveExpiry(LlmSessionRecord record) =>
+        (record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow)
+        .Add(record.Ttl?.ToTimeSpan() ?? TimeSpan.FromHours(24));
 }

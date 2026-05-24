@@ -6,6 +6,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 // Refactor (iter17/cluster-034):
 //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
 //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
+[ProjectionExempt(
+    Category = ProjectionExemptionCategory.ProjectionCoreStatus,
+    Reason = "Projection runtime status is activated internally when projection scopes start; it is not a feature readmodel with a committed-state plan provider.")]
 public sealed class ProjectionScopeStatusProjector
     : ICurrentStateProjectionMaterializer<ProjectionScopeStatusMaterializationContext>
 {

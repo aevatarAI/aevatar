@@ -708,10 +708,12 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
@@ -760,7 +762,6 @@ public sealed class MainnetMessagesEndpointsTests
     {
         public Task<ResponsesCallerScope> ResolveAsync(
             string nyxIdAccessToken,
-            HttpContext http,
             CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
     }
@@ -852,6 +853,12 @@ public sealed class MainnetMessagesEndpointsTests
             string sessionActorId,
             string responseId,
             LlmSessionForwardedToolCall call,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task ReceiveForwardedToolResultAsync(

@@ -91,6 +91,7 @@ public sealed class ChatRouteResolver
         new()
         {
             Action = ChatRouteActionTranslator.ToRuntimeDecisionAction(action),
+            OriginalAction = action.Clone(),
             MatchedRuleId = matchedRuleId,
             UsedFallback = usedFallback,
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),

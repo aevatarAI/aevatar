@@ -8,6 +8,9 @@ using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed class LlmSessionCurrentStateProjector
     : ICurrentStateProjectionMaterializer<LlmSessionCurrentStateProjectionContext>
 {
@@ -82,6 +85,28 @@ public sealed class LlmSessionCurrentStateProjector
                 ResolvedAt = call.ResolvedAt?.ToDateTimeOffset(),
             })
             .ToArray();
+        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+        if (state.Completion != null)
+        {
+            document.Completion = new LlmSessionCompletionReadModel
+            {
+                OutputText = state.Completion.OutputText ?? string.Empty,
+                CompletedAt = state.Completion.CompletedAt?.ToDateTimeOffset(),
+                FailureCode = state.Completion.FailureCode ?? string.Empty,
+                FailureMessage = state.Completion.FailureMessage ?? string.Empty,
+            };
+            foreach (var call in state.Completion.ToolCalls)
+            {
+                document.Completion.ToolCalls.Add(new LlmSessionCompletedToolCallReadModel
+                {
+                    CallId = call.CallId ?? string.Empty,
+                    ToolName = call.ToolName ?? string.Empty,
+                    Result = call.Result?.Clone(),
+                });
+            }
+        }
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

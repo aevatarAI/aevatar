@@ -40,7 +40,6 @@ public sealed class ProjectionHotspotCoverageTests
         message.ScopeId.Should().Be("scope-1");
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("native");
-        message.LegacyPayload.Should().Be("legacy:native:ok");
         message.Payload.Should().NotBeNull();
         message.Payload.IsEmpty.Should().BeFalse();
 
@@ -52,8 +51,11 @@ public sealed class ProjectionHotspotCoverageTests
         await invalidSubscribe.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    // Refactor (iter34/cluster-003-projection-session-legacy-payload):
+    //   Old pattern: Projection session event transport carries both protobuf bytes and legacy string payload compatibility (legacy_payload string field in proto + legacy codec interface + legacy payload write path).
+    //   New principle: Projection session event transport carries protobuf payload only; obsolete legacy codec surface is deleted; tests/docs updated; protobuf legacy_payload field reserved per protobuf evolution rules; no concrete codec depended on the legacy interface.
     [Fact]
-    public async Task ProjectionSessionEventHub_ShouldHandleNativeLegacyAndUndecodableMessages()
+    public async Task ProjectionSessionEventHub_ShouldHandleNativeAndUndecodableProtobufMessages()
     {
         var streamProvider = new RecordingStreamProvider();
         var stream = streamProvider.GetOrAdd("projection-run:scope-1:session-1");
@@ -99,7 +101,6 @@ public sealed class ProjectionHotspotCoverageTests
                 SessionId = "session-1",
                 EventType = "legacy",
                 Payload = ByteString.CopyFromUtf8("broken"),
-                LegacyPayload = "legacy:fallback",
             });
         await stream.ProduceAsync(
             new ProjectionSessionEventTransportMessage
@@ -108,10 +109,9 @@ public sealed class ProjectionHotspotCoverageTests
                 SessionId = "session-1",
                 EventType = "legacy",
                 Payload = ByteString.CopyFromUtf8("broken"),
-                LegacyPayload = "broken",
             });
 
-        received.Should().Equal("native:ok", "fallback");
+        received.Should().Equal("native:ok");
     }
 
     [Fact]
@@ -305,9 +305,7 @@ public sealed class ProjectionHotspotCoverageTests
         await nullLease.Should().ThrowAsync<ArgumentNullException>().WithParameterName("runtimeLease");
     }
 
-    private sealed class TestSessionCodec
-        : IProjectionSessionEventCodec<StringValue>,
-          ILegacyProjectionSessionEventCodec<StringValue>
+    private sealed class TestSessionCodec : IProjectionSessionEventCodec<StringValue>
     {
         public TestSessionCodec(string channel)
         {
@@ -339,23 +337,6 @@ public sealed class ProjectionHotspotCoverageTests
                 : null;
         }
 
-        public string SerializeLegacy(StringValue evt)
-        {
-            ArgumentNullException.ThrowIfNull(evt);
-            return "legacy:" + evt.Value;
-        }
-
-        public StringValue? DeserializeLegacy(string eventType, string payload)
-        {
-            if (!string.Equals(eventType, "legacy", StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(payload) ||
-                !payload.StartsWith("legacy:", StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return new StringValue { Value = payload["legacy:".Length..] };
-        }
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

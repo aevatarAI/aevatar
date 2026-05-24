@@ -304,6 +304,7 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
@@ -312,20 +313,23 @@ public static class ScopeWorkflowEndpoints
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = await BuildScopedHeadersAsync(scopeId, headers, http, ct),
+                    Metadata = scopedHeaders,
+                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
                 ct);
             return;
         }
 
+        var aguiHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
         await HandleAguiStreamAsync(
             http,
             scopeId,
             workflow,
             prompt,
             sessionId,
-            await BuildScopedHeadersAsync(scopeId, headers, http, ct),
+            aguiHeaders,
+            await BuildScopedLlmControlAsync(http, ct),
             chatRunService,
             ct);
     }
@@ -412,6 +416,7 @@ public static class ScopeWorkflowEndpoints
         string prompt,
         string? sessionId,
         IReadOnlyDictionary<string, string>? headers,
+        LLMControlContext? llmControl,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
@@ -424,8 +429,9 @@ public static class ScopeWorkflowEndpoints
                 workflow.ActorId,
                 sessionId,
                 WorkflowYamls: null,
-                Metadata: await BuildScopedHeadersAsync(scopeId, headers, http, ct),
-                ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+                Metadata: headers,
+                ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
+                LlmControl: llmControl),
             chatRunService,
             ct);
     }
@@ -527,29 +533,82 @@ public static class ScopeWorkflowEndpoints
             if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
                 var bearerToken = auth["Bearer ".Length..].Trim();
-                scopedHeaders["nyxid.access_token"] = bearerToken;
                 scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-            }
-
-            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-            if (userConfigStore != null)
-            {
-                try
-                {
-                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort; fall back to provider default if config unavailable.
-                }
             }
         }
 
         return scopedHeaders;
+    }
+
+    internal static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
+        if (control == null)
+            return null;
+
+        return new ChatLlmControlInput
+        {
+            NyxIdAccessToken = control.NyxIdAccessToken,
+            NyxIdOrgToken = control.NyxIdOrgToken,
+            ModelOverride = control.ModelOverride,
+            NyxIdRoutePreference = control.NyxIdRoutePreference,
+            MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+            UserMemoryPrompt = control.UserMemoryPrompt,
+        };
+    }
+
+    internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
+        HttpContext? http,
+        CancellationToken cancellationToken = default)
+    {
+        if (http == null)
+            return null;
+
+        var bearerToken = ExtractBearerToken(http);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: bearerToken,
+            NyxIdOrgToken: bearerToken,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore != null)
+        {
+            try
+            {
+                var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                control = control with
+                {
+                    ModelOverride = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                        ? control.ModelOverride
+                        : userConfig.DefaultModel.Trim(),
+                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                        ? control.NyxIdRoutePreference
+                        : userConfig.PreferredLlmRoute.Trim(),
+                };
+            }
+            catch
+            {
+                // Best-effort; fall back to provider defaults if config unavailable.
+            }
+        }
+
+        return control == LLMControlContext.Empty ? null : control;
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
