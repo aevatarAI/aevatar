@@ -890,20 +890,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(CancellationToken ct)
     {
-#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
-        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
-        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
-        var ownerScope = State.OutboundConfig?.OwnerScope
-                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+        var ownerScope = State.OutboundConfig?.OwnerScope;
 
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -915,10 +909,23 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
-#pragma warning restore CS0612
 
         if (ownerScope is not null)
-            command.OwnerScope = ownerScope;
+        {
+            command.OwnerScope = ownerScope.Clone();
+        }
+        else
+        {
+#pragma warning disable CS0612 // legacy field write only for pre-owner_scope state
+            var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+            var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+            command.Platform = legacyPlatform;
+            command.OwnerNyxUserId = legacyOwnerNyxUserId;
+            var legacyScope = OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+#pragma warning restore CS0612
+            if (legacyScope is not null)
+                command.OwnerScope = legacyScope;
+        }
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
     }

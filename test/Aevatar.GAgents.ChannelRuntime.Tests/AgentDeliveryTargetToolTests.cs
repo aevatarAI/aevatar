@@ -189,7 +189,7 @@ public sealed class AgentDeliveryTargetToolTests
                 .Should().Contain("accepted")
                 .And.Contain("propagating");
 
-#pragma warning disable CS0612 // legacy fields kept on the command for rollback safety
+#pragma warning disable CS0612 // assert deprecated ownership fields are no longer emitted
             await commandPort.Received(1).UpsertAsync(
                 Arg.Is<UserAgentCatalogUpsertCommand>(c =>
                     c.AgentId == "agent-1" &&
@@ -198,7 +198,10 @@ public sealed class AgentDeliveryTargetToolTests
                     // Tool no longer accepts NyxApiKey as an argument; the credential
                     // is preserved through the actor's MergeNonEmpty upsert policy.
                     c.NyxApiKey == string.Empty &&
-                    c.OwnerNyxUserId == "user-1"),
+                    c.OwnerScope != null &&
+                    c.OwnerScope.MatchesStrictly(caller) &&
+                    c.Platform == string.Empty &&
+                    c.OwnerNyxUserId == string.Empty),
                 Arg.Any<CancellationToken>());
 #pragma warning restore CS0612
         }

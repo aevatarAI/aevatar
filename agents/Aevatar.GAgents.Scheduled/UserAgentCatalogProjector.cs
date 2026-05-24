@@ -118,14 +118,8 @@ public sealed class UserAgentCatalogProjector
     {
         var document = existing?.Clone() ?? new UserAgentCatalogDocument();
         document.Id = entry.AgentId;
-#pragma warning disable CS0612 // legacy fields kept for backward read compat (issue #466 migration)
-        document.Platform = entry.Platform ?? string.Empty;
-#pragma warning restore CS0612
         document.ConversationId = entry.ConversationId ?? string.Empty;
         document.NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty;
-#pragma warning disable CS0612
-        document.OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty;
-#pragma warning restore CS0612
         document.AgentType = entry.AgentType ?? string.Empty;
         document.TemplateName = entry.TemplateName ?? string.Empty;
         document.ScopeId = entry.ScopeId ?? string.Empty;
@@ -146,6 +140,16 @@ public sealed class UserAgentCatalogProjector
         // the caller-scoped readmodel filter rather than recomputing or inferring it.
 #pragma warning disable CS0612
         var entryScope = entry.OwnerScope ?? OwnerScope.FromLegacyFields(entry.OwnerNyxUserId, entry.Platform);
+        if (entry.OwnerScope is null)
+        {
+            document.Platform = entry.Platform ?? string.Empty;
+            document.OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty;
+        }
+        else
+        {
+            document.Platform = string.Empty;
+            document.OwnerNyxUserId = string.Empty;
+        }
 #pragma warning restore CS0612
         if (entryScope is not null)
             document.OwnerScope = entryScope;

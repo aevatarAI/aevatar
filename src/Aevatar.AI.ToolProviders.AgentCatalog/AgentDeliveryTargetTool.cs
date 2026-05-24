@@ -216,7 +216,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
         // Refactor (iter4/cluster-009):
         //   Old pattern: Upsert mapped command-port Observed to a synchronous upserted status.
         //   New principle: Upsert ACK is accepted-only; projection freshness is observed by explicit list/get queries.
@@ -227,18 +226,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             new UserAgentCatalogUpsertCommand
             {
                 AgentId = agentId.value!,
-                Platform = platform,
                 ConversationId = conversationId.value!,
                 NyxProviderSlug = nyxProviderSlug.value!,
                 // NyxApiKey intentionally not accepted as a tool argument; the LLM
                 // should never see / pass plaintext credentials. Existing credentials
                 // are preserved through the actor's MergeNonEmpty upsert policy.
                 NyxApiKey = string.Empty,
-                OwnerNyxUserId = caller.NyxUserId,
                 OwnerScope = caller.Clone(),
             },
             ct);
-#pragma warning restore CS0612
 
         return JsonSerializer.Serialize(new
         {

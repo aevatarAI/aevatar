@@ -33,15 +33,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-#pragma warning disable CS0612 // legacy fields preserved during owner_scope migration
         var entry = new UserAgentCatalogEntry
         {
             AgentId = command.AgentId.Trim(),
-            Platform = MergeNonEmpty(command.Platform, existing?.Platform),
             ConversationId = MergeNonEmpty(command.ConversationId, existing?.ConversationId),
             NyxProviderSlug = MergeNonEmpty(command.NyxProviderSlug, existing?.NyxProviderSlug),
+#pragma warning disable CS0612 // legacy credential field preserved for internal delivery compatibility
             NyxApiKey = MergeNonEmpty(command.NyxApiKey, existing?.NyxApiKey),
-            OwnerNyxUserId = MergeNonEmpty(command.OwnerNyxUserId, existing?.OwnerNyxUserId),
+#pragma warning restore CS0612
             CreatedAt = existing?.CreatedAt ?? now,
             UpdatedAt = now,
             Tombstoned = false,
@@ -56,7 +55,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
         };
-#pragma warning restore CS0612
 
         // Issue #466 critical: copy OwnerScope from the command (or inherit existing on
         // partial upserts from older membership update paths that don't recompute scope).
@@ -65,7 +63,16 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         // returns null for the lark surface, and `/agents` would always be empty.
         var mergedScope = command.OwnerScope ?? existing?.OwnerScope;
         if (mergedScope is not null)
+        {
             entry.OwnerScope = mergedScope.Clone();
+        }
+        else
+        {
+#pragma warning disable CS0612 // legacy fields persisted only when owner_scope is absent
+            entry.Platform = MergeNonEmpty(command.Platform, existing?.Platform);
+            entry.OwnerNyxUserId = MergeNonEmpty(command.OwnerNyxUserId, existing?.OwnerNyxUserId);
+#pragma warning restore CS0612
+        }
 
         await PersistDomainEventAsync(new UserAgentCatalogUpsertedEvent
         {
