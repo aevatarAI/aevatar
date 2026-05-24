@@ -1147,20 +1147,20 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenHostAuthEnabledAndChatRouteForwardsToGAgent_ResolvesAndInvokesThroughFullPipeline()
+    public async Task PostResponses_WhenHostAuthEnabledAndChatRouteForwardsToStudioMember_ResolvesAndInvokesThroughFullPipeline()
     {
         // Companion to the AllowAnonymous test: that one proves the JwtBearer
         // FallbackPolicy doesn't short-circuit before our handler runs. This
         // one proves the POSITIVE path also threads through correctly — under
         // the real AddAevatarAuthentication pipeline, with a valid bearer, a
-        // ForwardToGAgent chat-route rule resolves via IMemberPublishedServiceResolver
+        // ForwardToStudioMember chat-route rule resolves via IMemberPublishedServiceResolver
         // and reaches the static invocation port. Catches regressions where
         // someone adds a new DI dependency to HandleCreateResponseAsync but
         // forgets to register it in the hardened production-auth fixture.
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("auth-pipeline-member"),
+            ForwardToStudioMemberAction("auth-pipeline-member"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-auth-member");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("auth ok");
@@ -1207,7 +1207,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().BeNull(
-            "ForwardToGAgent must bypass the LLM provider even under production auth");
+            "ForwardToStudioMember must bypass the LLM provider even under production auth");
         staticPort.LastRequest.Should().NotBeNull();
         staticPort.LastRequest!.Identity!.ServiceId.Should().Be("published-svc-auth-member");
         staticPort.LastRequest.EndpointId.Should().Be("chat");
@@ -1660,17 +1660,14 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToGAgent_InvokesMemberPublishedServiceAndAggregatesAguiText()
+    public async Task PostResponses_WhenChatRouteForwardsToStudioMember_InvokesMemberPublishedServiceAndAggregatesAguiText()
     {
-        // Mirrors ForwardToTeam shape: the chat-route policy returns ForwardToGAgent
-        // with the proto's `actor_id` field, /v1/responses interprets it as a Studio
-        // memberId, resolves it via IMemberPublishedServiceResolver, then invokes the
-        // resolved publishedServiceId through IStaticGAgentStreamInvocationPort. The
-        // raw-actor interpretation used by Voice / NyxIdChat-relay does not apply on
-        // the LLM facade (no raw-actor binding path).
+        // Mirrors ForwardToTeam shape: /v1/responses resolves the explicit Studio
+        // member route via IMemberPublishedServiceResolver, then invokes the
+        // resolved publishedServiceId through IStaticGAgentStreamInvocationPort.
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-7"),
+            ForwardToStudioMemberAction("member-7"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-member-7");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hello", " ", "agent");
@@ -1695,9 +1692,9 @@ public sealed class MainnetResponsesEndpointsTests
         responseSessions.Registered.Should().ContainSingle();
         responseSessions.RecordedCompletions.Should().ContainSingle();
         provider.LastRequest.Should().BeNull(
-            "ForwardToGAgent must bypass the LLM provider entirely");
+            "ForwardToStudioMember must bypass the LLM provider entirely");
         staticPort.LastRequest.Should().NotBeNull();
-        // ForwardToGAgent has no endpoint_id, so the handler steers to the default
+        // ForwardToStudioMember without endpoint_id steers to the default
         // chat endpoint convention.
         staticPort.LastRequest!.EndpointId.Should().Be("chat");
         staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-member-7");
@@ -1719,14 +1716,52 @@ public sealed class MainnetResponsesEndpointsTests
         content.GetProperty("text").GetString().Should().Be("hello agent");
         var snapshot = await responseSessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!);
         snapshot!.Completion!.OutputText.Should().Be("hello agent");
+        memberResolver.CallCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenChatRouteForwardsToGAgent_EmitsResponsesSseFromAguiEvents()
+    public async Task PostResponses_WhenChatRouteForwardsToGAgent_ReturnsRouteContractErrorWithoutMemberResolution()
     {
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-stream"),
+            ForwardToGAgentAction("direct-actor-1"),
+            []));
+        var memberResolver = StubMemberPublishedServiceResolver.CountingIdentity();
+        var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
+        await using var app = await CreateAppAsync(
+            provider,
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort,
+            memberPublishedServiceResolver: memberResolver,
+            staticGAgentStreamInvocationPort: staticPort);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"original-model","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gagent-direct-secret");
+
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError, body);
+        using var doc = JsonDocument.Parse(body);
+        var error = doc.RootElement.GetProperty("error");
+        error.GetProperty("code").GetString().Should().Be("chat_route_action_not_supported");
+        error.GetProperty("message").GetString().Should().Contain("direct actor target");
+        memberResolver.CallCount.Should().Be(0);
+        staticPort.LastRequest.Should().BeNull();
+        responseSessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_StreamWhenChatRouteForwardsToStudioMember_EmitsResponsesSseFromAguiEvents()
+    {
+        var provider = new RecordingLLMProvider();
+        var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToStudioMemberAction("member-stream"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-stream");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("alpha ", "beta");
@@ -1763,15 +1798,15 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenForwardToGAgentEmitsRunError_UsesGenericGAgentFailureDefaults()
+    public async Task PostResponses_StreamWhenForwardToStudioMemberEmitsRunError_UsesGenericGAgentFailureDefaults()
     {
         // AGUIEventToResponsesSseAdapter is shared by ForwardToTeam and
-        // ForwardToGAgent. If the upstream run error omits a code/message, the
+        // ForwardToStudioMember. If the upstream run error omits a code/message, the
         // fallback must stay target-neutral instead of leaking the older
-        // ForwardToTeam-only naming.
+        // target-specific naming.
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-run-error"),
+            ForwardToStudioMemberAction("member-run-error"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
@@ -1809,7 +1844,7 @@ public sealed class MainnetResponsesEndpointsTests
     public async Task PostResponses_WhenStreamingInitialSseWriteIsCancelled_ShouldRecordFailureCompletionBeforeForwarding()
     {
         var commandFacade = new StaticResponsesCommandFacade(
-            ResponsesCreateCommandResult.FromForward(BuildForwardPlan(ForwardToGAgentAction("member-stream-cancel"))));
+            ResponsesCreateCommandResult.FromForward(BuildForwardPlan(ForwardToStudioMemberAction("member-stream-cancel"))));
         var forwardingService = new RecordingForwardingApplicationService();
         var context = new DefaultHttpContext
         {
@@ -1839,11 +1874,11 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentEmitsRunError_ReturnsFailureInsteadOfCompletedResponse()
+    public async Task PostResponses_WhenForwardToStudioMemberEmitsRunError_ReturnsFailureInsteadOfCompletedResponse()
     {
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-run-error"),
+            ForwardToStudioMemberAction("member-run-error"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
@@ -1875,11 +1910,11 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToGAgentWithEmptyActorId_Returns500WithoutInvokingResolver()
+    public async Task PostResponses_WhenChatRouteForwardsToStudioMemberWithEmptyMemberId_Returns500WithoutInvokingResolver()
     {
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction(string.Empty),
+            ForwardToStudioMemberAction(string.Empty),
             []));
         var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
         var responseSessions = new RecordingResponseSessionStore();
@@ -1909,7 +1944,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentTargetServiceNotFound_Returns404WithResolvedKey()
+    public async Task PostResponses_WhenForwardToStudioMemberTargetServiceNotFound_Returns404WithResolvedKey()
     {
         // The resolver normalizes memberId fine, but the downstream
         // IStaticGAgentStreamInvocationPort's resolution layer raises
@@ -1920,7 +1955,7 @@ public sealed class MainnetResponsesEndpointsTests
         // distinguish "policy points at unbound member" from runtime crashes.
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("ghost-member"),
+            ForwardToStudioMemberAction("ghost-member"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.Identity();
         var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
@@ -1952,11 +1987,11 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenForwardToGAgentTargetServiceNotFound_EmitsResponseFailedFrame()
+    public async Task PostResponses_StreamWhenForwardToStudioMemberTargetServiceNotFound_EmitsResponseFailedFrame()
     {
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("ghost-member"),
+            ForwardToStudioMemberAction("ghost-member"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.Identity();
         var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
@@ -1989,14 +2024,14 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentResolverThrows_ReturnsBadRequestWithoutInvokingStaticPort()
+    public async Task PostResponses_WhenForwardToStudioMemberResolverThrows_ReturnsBadRequestWithoutInvokingStaticPort()
     {
         // The resolver normalizes memberId and throws InvalidOperationException for
         // disallowed separator chars. Surface as structured 400 chat_route_invalid
         // rather than a generic 500.
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("bad/member"),
+            ForwardToStudioMemberAction("bad/member"),
             []));
         var memberResolver = StubMemberPublishedServiceResolver.Throwing(
             "memberId must not contain ':', '/', '\\\\', '?' or '#'.");
@@ -2351,6 +2386,11 @@ public sealed class MainnetResponsesEndpointsTests
         ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
     };
 
+    private static ChatRouteAction ForwardToStudioMemberAction(string memberId, string endpointId = "") => new()
+    {
+        ForwardToStudioMember = new ForwardToStudioMember { MemberId = memberId, EndpointId = endpointId },
+    };
+
     private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()
     {
         ForwardToTeam = new ForwardToTeam { TeamId = teamId, EndpointId = endpointId },
@@ -2419,6 +2459,9 @@ public sealed class MainnetResponsesEndpointsTests
                 request.MemberId,
                 request.MemberId));
 
+        public static StubMemberPublishedServiceResolver CountingIdentity() =>
+            Identity();
+
         public static StubMemberPublishedServiceResolver ForPublishedService(string publishedServiceId) =>
             new(request => new MemberPublishedServiceResolution(
                 request.ScopeId,
@@ -2430,8 +2473,13 @@ public sealed class MainnetResponsesEndpointsTests
 
         public Task<MemberPublishedServiceResolution> ResolveAsync(
             MemberPublishedServiceResolveRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(_resolve(request));
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromResult(_resolve(request));
+        }
+
+        public int CallCount { get; private set; }
     }
 
     private sealed class RecordingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>

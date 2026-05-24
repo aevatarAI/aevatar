@@ -90,10 +90,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
-        // Transitional platform fallback. It is replaced by Studio's
-        // actor-readmodel resolver when Studio is registered, and should be
-        // removed once Team authority no longer lives in GAgentService.
-        services.TryAddSingleton<ITeamEntryMemberResolver, DefaultTeamEntryMemberResolver>();
         services.AddOptions<ScopeScriptCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeScriptQueryApplicationService>();

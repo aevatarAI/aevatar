@@ -173,12 +173,17 @@ public sealed class MessagesCommandFacade(
         if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
             return RouteTargetResult.FromModel(routeDecision.Action.ForwardToModel.ModelName.Trim());
 
-        if (routeDecision.Action.ForwardToGagent is not null)
+        if (routeDecision.Action.ForwardToGagent is not null ||
+            routeDecision.Action.ForwardToStudioMember is not null ||
+            routeDecision.Action.ForwardToTeam is not null)
         {
+            var actionName = routeDecision.Action.ActionCase == ChatRouteAction.ActionOneofCase.ForwardToGagent
+                ? "ForwardToGAgent"
+                : routeDecision.Action.ActionCase.ToString();
             return RouteTargetResult.FromError(
                 501,
                 "chat_route_action_not_supported",
-                "ForwardToGAgent is not supported by /v1/messages in v1.");
+                $"{actionName} is not supported by /v1/messages in v1.");
         }
 
         return RouteTargetResult.FromModel(normalized.Model);

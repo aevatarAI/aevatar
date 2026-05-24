@@ -276,8 +276,16 @@ public sealed class ResponsesCommandFacade(
                     : routeDecision.Action.Reject.Reason);
         }
 
+        if (routeDecision.Action.ForwardToGagent is not null)
+        {
+            return RouteTargetResult.FromError(
+                500,
+                "chat_route_action_not_supported",
+                "ForwardToGAgent is a direct actor target and is not supported by /v1/responses. Use ForwardToStudioMember or ForwardToTeam.");
+        }
+
         if (routeDecision.Action.ForwardToTeam is not null ||
-            routeDecision.Action.ForwardToGagent is not null)
+            routeDecision.Action.ForwardToStudioMember is not null)
         {
             return RouteTargetResult.FromForward(routeDecision.Action);
         }
