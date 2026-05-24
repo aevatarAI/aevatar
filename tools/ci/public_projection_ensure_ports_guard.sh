@@ -13,7 +13,7 @@ cd "${REPO_ROOT}"
 #   Old pattern: Internal production ProjectionPort/CurrentStateProjectionPort classes kept actorId Ensure* helpers after public surfaces were removed.
 #   New principle: Production projection ports must not carry actorId ensure helpers at all; tests that need bootstrap use typed IProjectionScopeActivationService<TLease> directly.
 ensure_declaration_hits="$(
-  rg -n "^[[:space:]]*(public[[:space:]]+)?(async[[:space:]]+)?Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\\(" \
+  rg -n "^[[:space:]]*((public|internal|private|protected)[[:space:]]+){0,2}((static|async|virtual|override|new|sealed|partial)[[:space:]]+)*Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\\(" \
     src \
     agents \
     -g '*.cs' \
@@ -49,14 +49,59 @@ public_projection_surface_hits="$(
 )"
 
 production_projection_actorid_ensure_hits="$(
-  rg -n "^[[:space:]]*(public|internal|private|protected)?[[:space:]]*(async[[:space:]]+)?Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\\([^)]*\\b(actorId|sessionActorId|rootActorId)\\b" \
+  while IFS= read -r file; do
+    awk '
+      function paren_delta(text, opens, closes, copy) {
+        copy = text
+        opens = gsub(/\(/, "", copy)
+        copy = text
+        closes = gsub(/\)/, "", copy)
+        return opens - closes
+      }
+
+      function collapse(text) {
+        gsub(/[[:space:]]+/, " ", text)
+        sub(/^[[:space:]]+/, "", text)
+        sub(/[[:space:]]+$/, "", text)
+        return text
+      }
+
+      function finish_signature() {
+        if (signature ~ /(^|[^[:alnum:]_])(actorId|sessionActorId|rootActorId)([^[:alnum:]_]|$)/) {
+          print FILENAME ":" start_line ":" collapse(signature)
+        }
+        in_signature = 0
+        signature = ""
+        depth = 0
+      }
+
+      /^[[:space:]]*((public|internal|private|protected)[[:space:]]+){0,2}((static|async|virtual|override|new|sealed|partial)[[:space:]]+)*Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\(/ {
+        in_signature = 1
+        start_line = FNR
+        signature = $0
+        depth = paren_delta($0)
+        if (depth <= 0 || $0 ~ /[;{]/) {
+          finish_signature()
+        }
+        next
+      }
+
+      in_signature {
+        signature = signature " " $0
+        depth += paren_delta($0)
+        if (depth <= 0 || $0 ~ /[;{]/) {
+          finish_signature()
+        }
+      }
+    ' "${file}"
+  done < <(rg --files \
     src \
     agents \
     -g '*ProjectionPort.cs' \
     -g '*CurrentStateProjectionPort.cs' \
     -g '*MaterializationPort.cs' \
     -g '!**/bin/**' \
-    -g '!**/obj/**' \
+    -g '!**/obj/**') \
     || true
 )"
 

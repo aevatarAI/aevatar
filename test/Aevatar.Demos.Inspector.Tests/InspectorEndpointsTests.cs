@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading.Channels;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Demos.Inspector;
 using Aevatar.Demos.Inspector.Demo;
@@ -62,15 +63,30 @@ public sealed class InspectorEndpointsTests
     {
         await using var host = await InspectorTestHost.StartAsync();
         var registry = host.Services.GetRequiredService<InspectorGAgentRegistryService>();
+        var readModelUpserts = new ReadModelUpsertSignal();
+        using var listener = CreateGAgentRegistryReadModelUpsertListener(readModelUpserts);
 
         await registry.RegisterActorAsync(nameof(InspectorTransformerAgent), "inspector-parent", CancellationToken.None);
         await registry.RegisterActorAsync(nameof(InspectorTransformerAgent), "stale-parent", CancellationToken.None);
+
+        var registered = await WaitForInspectorTransformerGroupAsync(
+            host.Client,
+            readModelUpserts,
+            group =>
+                group.ActorIds.Contains("inspector-parent") &&
+                group.ActorIds.Contains("stale-parent"));
+        registered.Groups.Should().ContainSingle();
+
         await registry.UnregisterActorAsync(nameof(InspectorTransformerAgent), "stale-parent", CancellationToken.None);
 
-        var response = await host.Client.GetFromJsonAsync<InspectorActorsResponse>("/api/inspector/actors");
+        var response = await WaitForInspectorTransformerGroupAsync(
+            host.Client,
+            readModelUpserts,
+            group =>
+                group.ActorIds.SequenceEqual(["inspector-parent"]) &&
+                !group.ActorIds.Contains("stale-parent"));
 
-        response.Should().NotBeNull();
-        var group = response!.Groups.Should().ContainSingle().Subject;
+        var group = response.Groups.Should().ContainSingle().Subject;
         group.ActorIds.Should().Equal("inspector-parent");
         group.ActorIds.Should().NotContain("stale-parent");
     }
@@ -232,6 +248,71 @@ public sealed class InspectorEndpointsTests
             activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
             actorId,
             StringComparison.Ordinal);
+
+    private static async Task<InspectorActorsResponse> WaitForInspectorTransformerGroupAsync(
+        HttpClient client,
+        ReadModelUpsertSignal readModelUpserts,
+        Func<InspectorActorGroupDto, bool> isExpected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (true)
+        {
+            var response = await client.GetFromJsonAsync<InspectorActorsResponse>(
+                "/api/inspector/actors",
+                timeout.Token);
+            response.Should().NotBeNull();
+
+            var group = response!.Groups.SingleOrDefault(group =>
+                group.Type == nameof(InspectorTransformerAgent));
+            if (group != null && isExpected(group))
+                return response;
+
+            await readModelUpserts.WaitForNextAsync(timeout.Token);
+        }
+    }
+
+    private static ActivityListener CreateGAgentRegistryReadModelUpsertListener(ReadModelUpsertSignal signal)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.DisplayName != AevatarActivitySource.ReadModelUpsertActivityName ||
+                    !string.Equals(
+                        activity.GetTagItem(AevatarActivitySource.ReadModelNameTag) as string,
+                        nameof(GAgentRegistryCurrentStateDocument),
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                signal.Notify();
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
+    private sealed class ReadModelUpsertSignal
+    {
+        private readonly Channel<bool> _signals = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+
+        public void Notify() => _signals.Writer.TryWrite(true);
+
+        public async ValueTask WaitForNextAsync(CancellationToken ct)
+        {
+            await _signals.Reader.ReadAsync(ct);
+        }
+    }
 
     private sealed class InspectorTestHost : IAsyncDisposable
     {
