@@ -17,12 +17,23 @@ namespace Aevatar.GAgents.StreamingProxy;
 
 public static class StreamingProxyEndpoints
 {
+    public const string DeprecationHeaderName = "Deprecation";
+    public const string SunsetHeaderName = "Sunset";
+    public const string LinkHeaderName = "Link";
+    public const string DeprecationHeaderValue = "true";
+    public const string SunsetHeaderValue = "Wed, 25 Nov 2026 00:00:00 GMT";
+    public const string SuccessorRoute = "/v1/responses";
+    public const string SuccessorLinkHeaderValue =
+        "</v1/responses>; rel=\"successor-version\"; title=\"Migrate direct model streaming to /v1/responses; StreamingProxy room fan-out has no one-to-one replacement\"";
+
     // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
     //   Old pattern: endpoints built post-message, join, and terminal-state room envelopes directly in Host code.
     //   New principle: endpoints validate HTTP concerns and delegate typed room commands to the existing room command service.
     public static IEndpointRouteBuilder MapStreamingProxyEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/scopes").WithTags("StreamingProxy");
+        var group = app.MapGroup("/api/scopes")
+            .WithTags("StreamingProxy")
+            .AddEndpointFilter(AddDeprecationHeadersAsync);
 
         // Room management
         group.MapPost("/{scopeId}/streaming-proxy/rooms", HandleCreateRoomAsync);
@@ -43,6 +54,21 @@ public static class StreamingProxyEndpoints
         group.MapPost("/{scopeId}/streaming-proxy/rooms/{roomId}/participants", HandleJoinAsync);
 
         return app;
+    }
+
+    private static async ValueTask<object?> AddDeprecationHeadersAsync(
+        EndpointFilterInvocationContext context,
+        EndpointFilterDelegate next)
+    {
+        AddDeprecationHeaders(context.HttpContext.Response);
+        return await next(context);
+    }
+
+    internal static void AddDeprecationHeaders(HttpResponse response)
+    {
+        response.Headers[DeprecationHeaderName] = DeprecationHeaderValue;
+        response.Headers[SunsetHeaderName] = SunsetHeaderValue;
+        response.Headers[LinkHeaderName] = SuccessorLinkHeaderValue;
     }
 
     // ─── Room CRUD ───

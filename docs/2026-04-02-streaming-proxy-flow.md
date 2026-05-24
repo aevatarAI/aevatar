@@ -2,6 +2,8 @@
 
 本文只整理当前仓库里 `Streaming Proxy` 这条真实实现链路，对应宿主是 `Aevatar.Mainnet.Host.Api`，入口是 `/api/scopes/{scopeId}/streaming-proxy/...`。
 
+2026-05-25 更新：`Streaming Proxy` route 保留用于 backward compatibility，但已软废弃，sunset 日期为 2026-11-25 00:00:00 GMT。所有 response 都会带 `Deprecation: true`、`Sunset: Wed, 25 Nov 2026 00:00:00 GMT` 与指向 `/v1/responses` 的 `Link: rel="successor-version"` header。迁移时，直接模型 streaming / tool / continuation 场景改走 `/v1/responses`；Streaming Proxy 的 room CRUD、participant join/post、room fan-out 语义不等价于 `/v1/responses`，依赖这些语义的客户端不能把 `/v1/responses` 当作无损替代。
+
 2026-04-27 更新：room ownership 已切换到 [GAgent Registry Ownership](canon/gagent-registry-ownership.md) 定义的 registry command/query/admission ports。下文若出现 `StreamingProxyActorStore` 或 `IGAgentActorStore`，应视为旧实现残留描述，不再对应当前代码里的真实类型或文件路径。
 
 2026-05-23 更新：participant membership 的唯一权威状态是每个 room 的 `StreamingProxyGAgentState.Participants`。旧 `IStreamingProxyParticipantStore` / `StreamingProxyParticipantGAgent` singleton / singleton participant readmodel 已删除；participant 查询读取 room current-state projection。
@@ -49,6 +51,8 @@ flowchart TB
 ```
 
 ## 3. 对外接口
+
+状态：deprecated，retained until `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`。
 
 | 接口 | 作用 |
 |---|---|

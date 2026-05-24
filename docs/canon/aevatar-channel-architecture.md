@@ -1092,7 +1092,7 @@ adapter 在构造 `ChatActivity` 时**必须**：
 - `Aevatar.GAgents.ChatHistory` —— 独立 GAgent（`ChatConversationGAgent` / `ChatHistoryIndexGAgent`）。**但当前 ChannelRuntime 未集成它**；对话历史实际上是 `AIGAgentBase` 里的进程内 `ChatHistory`（见 `src/Aevatar.AI.Core/AIGAgentBase.cs`）。`ConversationGAgent` 要集成它是**新工作**，不是"复用现有集成"
 - `Aevatar.GAgents.UserMemory` —— 同样独立 GAgent 存在，但当前无集成。`ConversationGAgent` 的 long-term memory 集成是新工作
 - `Aevatar.GAgents.ChatbotClassifier` —— 按需包成 `ClassificationMiddleware`
-- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— LLM streaming 底层可复用
+- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— deprecated compatibility surface only. It is not reusable LLM streaming infrastructure for new channel work; direct model streaming should use `/v1/responses`, while room/fan-out semantics require a named room contract.
 - `Aevatar.GAgents.Registry` —— 平台级 GAgent registry，和拟改名的 `UserAgentCatalog` 各司其职（platform actor routing vs user agent metadata）
 
 **诚实承认**：早期 RFC 版本措辞是 "必须调用 ChatHistory / UserMemory，不重复存"——暗示已有集成。实际上这些是**未来集成目标**，不是现状复用。本 RFC 实施时需要把这层集成**新建**出来，不要误以为是捡现成。
@@ -1512,7 +1512,7 @@ agents/                                ← production code
 ├── Aevatar.GAgents.NyxidChat/
 ├── Aevatar.GAgents.Registry/          ← 平台级 registry
 ├── Aevatar.GAgents.RoleCatalog/
-├── Aevatar.GAgents.StreamingProxy/
+├── Aevatar.GAgents.StreamingProxy/    ← deprecated compatibility surface; no new channel consumer
 ├── Aevatar.GAgents.UserConfig/
 └── Aevatar.GAgents.UserMemory/        ← ConversationGAgent 与其集成
 

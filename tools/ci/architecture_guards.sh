@@ -180,6 +180,55 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Issue #645:
+#   StreamingProxy stays mapped only as a deprecated public compatibility route.
+#   New production consumers must not call, wrap, or re-map it; direct model
+#   streaming moves to /v1/responses, while room fan-out needs a named contract.
+set +e
+streaming_proxy_consumer_report="$(
+  rg -n "streaming-proxy|MapStreamingProxyEndpoints|AddStreamingProxy|Aevatar\.GAgents\.StreamingProxy" \
+    src agents apps \
+    -g '*.{cs,ts,tsx,js,jsx,md,json,yml,yaml,sh}' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["tools/ci/architecture_guards.sh"] = 1;
+  allowed["tools/ci/README.md"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\//)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\./)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  print $0;
+}'
+)"
+streaming_proxy_consumer_status=$?
+set -e
+
+if [[ ${streaming_proxy_consumer_status} -ne 0 && ${streaming_proxy_consumer_status} -ne 1 ]]; then
+  echo "StreamingProxy consumer guard execution failed."
+  exit "${streaming_proxy_consumer_status}"
+fi
+
+if [ -n "${streaming_proxy_consumer_report}" ]; then
+  echo "${streaming_proxy_consumer_report}"
+  echo "StreamingProxy is deprecated compatibility surface only. Do not add new production consumers; use /v1/responses for direct model streaming."
+  exit 1
+fi
+
 # Refactor (iter7/cluster-016):
 #   Old: Direct actor.HandleEventAsync calls and raw SubscribeAsync<EventEnvelope>
 #   subscriptions were guarded only by capability-local source assertions, so new
