@@ -26,6 +26,12 @@ enum AgentRunStatus {
   // ConversationGAgentState.last_reply_delivery; REPLY_HANDED_OFF is a
   // necessary-not-sufficient precondition. See ADR-0021.
   AGENT_RUN_STATUS_REPLY_HANDED_OFF = 5;
+  // The run actor has committed the generation request and handed the
+  // transient LLM/tool/streaming work to the stateless generation executor.
+  // Duplicate starts in this status must not start a second executor. The
+  // executor reports back through typed completion/failure commands; the run
+  // actor remains the sole owner of produced/dispatched/terminal facts.
+  AGENT_RUN_STATUS_REPLY_GENERATION_REQUESTED = 6;
 }
 
 message AgentRunGAgentState {
@@ -53,6 +59,11 @@ message AgentRunGAgentState {
   // marks the run as finalized (chain.finalized) — late ready/dropped/failed
   // /cleanup signals must no-op from this point.
   int64 cleanup_completed_at_unix_ms = 13;
+  // Generation stage request facts. Runtime-only credentials remain outside
+  // this state; the values here only gate duplicate starts and stale
+  // completion/timeout continuations.
+  int64 generation_requested_at_unix_ms = 14;
+  int32 generation_attempt = 15;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -88,6 +99,61 @@ message AgentRunReplyProducedEvent {
   // external API calls and incur duplicate billing).
   string reply_text = 8;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
+}
+
+// Persisted after admission gates pass and before the transient generation
+// executor is asked to start. This event intentionally carries no reply_token,
+// user access token, Activity, or other runtime-only credentials.
+message AgentRunReplyGenerationRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 requested_at_unix_ms = 4;
+  int32 attempt = 5;
+}
+
+// Transient command sent back by the stateless generation executor after it
+// has produced an immutable reply payload. The nested request may still carry
+// command-only credentials such as reply_token; AgentRunGAgent must use them
+// only for the accepted-only LlmReplyReadyEvent handoff and must never persist
+// them into AgentRunGAgentState or AgentRun*Event facts.
+message AgentRunReplyGenerationCompleted {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string reply_text = 4;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 5;
+  aevatar.gagents.channel.runtime.LlmReplyTerminalState terminal_state = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  int64 completed_at_unix_ms = 9;
+  int32 attempt = 10;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 11;
+}
+
+// Transient command for executor failures that did not produce a normal reply
+// payload. It is not a persisted fact; the run actor converts it into its
+// existing failed/produced terminal facts.
+message AgentRunReplyGenerationFailed {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+  int32 attempt = 7;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 8;
+}
+
+// Transient timeout signal emitted by the callback scheduler. It carries only
+// stable identifiers so runtime-only credentials are never written into the
+// scheduler backend.
+message AgentRunReplyGenerationTimedOut {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 timed_out_at_unix_ms = 4;
+  int32 attempt = 5;
 }
 
 // Persisted after the LlmReplyReadyEvent has been successfully delivered to

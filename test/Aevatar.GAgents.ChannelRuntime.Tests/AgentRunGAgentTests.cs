@@ -262,6 +262,135 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenAccepted_PersistsGenerationRequestedAndHandsOffToExecutor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-requested",
+            RunId = "run-generation-requested",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-requested",
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        runtime.State.GenerationAttempt.Should().Be(1);
+        runtime.State.GenerationRequestedAtUnixMs.Should().BeGreaterThan(0);
+        generationExecutor.Starts.Should().ContainSingle();
+        generationExecutor.Starts[0].RunId.Should().Be("run-generation-requested");
+        generationExecutor.Starts[0].RunActorId.Should().Be(runtime.Id);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenGenerationRequested_DoesNotStartSecondExecutor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-duplicate",
+            RunId = "run-generation-duplicate",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-duplicate",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        generationExecutor.Starts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+                ResponseTimeoutSeconds = 1,
+            },
+            callbackScheduler: scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-timeout-race",
+            RunId = "run-generation-timeout-race",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-timeout-race",
+        });
+
+        var timeout = scheduler.Timeouts.Should().ContainSingle(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor)).Subject;
+
+        await runtime.HandleReplyGenerationTimedOutAsync(
+            timeout.TriggerEnvelope.Payload.Unpack<AgentRunReplyGenerationTimedOut>());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("llm_reply_timeout");
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        var dropped = handled.Single().Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-generation-timeout-race");
+        dropped.Reason.Should().Be("llm_reply_timeout");
+
+        await runtime.HandleReplyGenerationCompletedAsync(new AgentRunReplyGenerationCompleted
+        {
+            RunId = "run-generation-timeout-race",
+            CorrelationId = "corr-generation-timeout-race",
+            TargetActorId = "actor-1",
+            ReplyText = "late executor reply",
+            TerminalState = LlmReplyTerminalState.Completed,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Attempt = generationExecutor.Starts.Single().Attempt,
+            Request = generationExecutor.Starts.Single().Request.Clone(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ProducedReplyText.Should().BeEmpty();
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        handled.Should().NotContain(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task ProduceAndDispatch_WhenPersistDispatchedFails_DoesNotDeliverDuplicateFallbackReply()
     {
         // Once DispatchReadyEventAsync delivers the reply to the conversation actor, the user
@@ -1875,15 +2004,39 @@ public sealed class AgentRunGAgentTests
         IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
-        var agent = new AgentRunGAgent(
-            actorRuntime,
+        var generationExecutor = new RecordingReplyGenerationExecutor(
             dispatchPort,
             replyGenerator,
             collector,
             relayOptions,
-            NullLogger<AgentRunGAgent>.Instance,
             scopeResolver,
-            userConfigQueryPort,
+            userConfigQueryPort);
+        var agent = new AgentRunGAgent(
+            actorRuntime,
+            generationExecutor,
+            relayOptions,
+            NullLogger<AgentRunGAgent>.Instance,
+            callbackScheduler);
+        SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        generationExecutor.Bind(agent);
+        agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
+            InvokeAgentTransition(agent, current, evt));
+        agent.EventPublisher = eventPublisher ?? new DispatchingEventPublisher(actorRuntime);
+        return agent;
+    }
+
+    private static AgentRunGAgent CreateRunAgentWithExecutor(
+        IActorRuntime actorRuntime,
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+        IEventPublisher? eventPublisher = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+    {
+        var agent = new AgentRunGAgent(
+            actorRuntime,
+            generationExecutor,
+            relayOptions,
+            NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
         SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
@@ -2023,6 +2176,59 @@ public sealed class AgentRunGAgentTests
         {
             Dispatches.Add((actorId, envelope));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class PausedReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
+
+        public Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+        {
+            Starts.Add(request with { Request = request.Request.Clone() });
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        private readonly AgentRunReplyGenerationExecutor _inner;
+        private AgentRunGAgent? _agent;
+
+        public RecordingReplyGenerationExecutor(
+            IActorDispatchPort dispatchPort,
+            IConversationReplyGenerator replyGenerator,
+            IInteractiveReplyCollector? collector,
+            Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+            INyxIdRelayScopeResolver? scopeResolver,
+            IUserConfigQueryPort? userConfigQueryPort)
+        {
+            _inner = new AgentRunReplyGenerationExecutor(
+                dispatchPort,
+                replyGenerator,
+                collector,
+                relayOptions,
+                NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+                scopeResolver,
+                userConfigQueryPort);
+            DispatchPort = dispatchPort;
+        }
+
+        public IActorDispatchPort DispatchPort { get; }
+
+        public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
+
+        public void Bind(AgentRunGAgent agent)
+        {
+            _agent = agent;
+        }
+
+        public async Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+        {
+            Starts.Add(request with { Request = request.Request.Clone() });
+            var completed = await _inner.ExecuteAsync(request);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            await agent.HandleReplyGenerationCompletedAsync(completed);
         }
     }
 
