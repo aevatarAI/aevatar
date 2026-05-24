@@ -82,7 +82,6 @@ internal static partial class ResponsesApiEndpoints
             return await HandleForwardedAguiAsync(
                 http,
                 result.Forward.Normalized,
-                result.Forward.CallerScope,
                 result.Forward,
                 forwardingService,
                 bearerToken,
@@ -310,7 +309,6 @@ internal static partial class ResponsesApiEndpoints
     private static async Task<IResult> HandleForwardedAguiAsync(
         HttpContext http,
         NormalizedResponsesRequest normalized,
-        ResponsesCallerScope callerScope,
         ResponsesForwardCommandResult forwardPlan,
         IResponsesForwardingApplicationService forwardingService,
         string bearerToken,

@@ -133,6 +133,7 @@ public sealed class ResponsesForwardingApplicationService(
 
         if (plan.Action.ForwardToGagent is not null)
         {
+            // Refactor (iter92/cluster-793): Old: /v1/responses treated ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only the direct actor target; Studio member routing uses ForwardToStudioMember.
             return InvocationRequestResult.FromError(
                 500,
                 "chat_route_action_not_supported",

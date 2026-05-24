@@ -445,9 +445,17 @@ public sealed class ResponsesCommandFacadeTests
         ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
     };
 
-    private static ChatRouteAction ForwardToStudioMemberAction(string memberId, string endpointId = "") => new()
+    private static ChatRouteAction ForwardToStudioMemberAction(
+        string memberId,
+        string endpointId = "",
+        string scopeId = "") => new()
     {
-        ForwardToStudioMember = new ForwardToStudioMember { MemberId = memberId, EndpointId = endpointId },
+        ForwardToStudioMember = new ForwardToStudioMember
+        {
+            MemberId = memberId,
+            EndpointId = endpointId,
+            ScopeId = scopeId,
+        },
     };
 
     private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()

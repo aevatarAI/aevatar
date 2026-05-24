@@ -1667,9 +1667,11 @@ public sealed class MainnetResponsesEndpointsTests
         // resolved publishedServiceId through IStaticGAgentStreamInvocationPort.
         var provider = new RecordingLLMProvider();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToStudioMemberAction("member-7"),
+            ForwardToStudioMemberAction("member-7", endpointId: "notify", scopeId: "override-scope"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-member-7");
+        var memberResolver = StubMemberPublishedServiceResolver.ForResolution(
+            resolvedScopeId: "resolved-scope",
+            publishedServiceId: "published-svc-member-7");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hello", " ", "agent");
         var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
@@ -1693,10 +1695,12 @@ public sealed class MainnetResponsesEndpointsTests
         responseSessions.RecordedCompletions.Should().ContainSingle();
         provider.LastRequest.Should().BeNull(
             "ForwardToStudioMember must bypass the LLM provider entirely");
+        memberResolver.LastRequest.Should().BeEquivalentTo(new MemberPublishedServiceResolveRequest(
+            "override-scope",
+            "member-7"));
         staticPort.LastRequest.Should().NotBeNull();
-        // ForwardToStudioMember without endpoint_id steers to the default
-        // chat endpoint convention.
-        staticPort.LastRequest!.EndpointId.Should().Be("chat");
+        staticPort.LastRequest!.EndpointId.Should().Be("notify");
+        staticPort.LastRequest.Identity!.TenantId.Should().Be("resolved-scope");
         staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-member-7");
         staticPort.LastRequest.Input.Prompt.Should().Be("hi gagent");
         var headers = staticPort.LastRequest.Input.Headers;
@@ -2386,9 +2390,17 @@ public sealed class MainnetResponsesEndpointsTests
         ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
     };
 
-    private static ChatRouteAction ForwardToStudioMemberAction(string memberId, string endpointId = "") => new()
+    private static ChatRouteAction ForwardToStudioMemberAction(
+        string memberId,
+        string endpointId = "",
+        string scopeId = "") => new()
     {
-        ForwardToStudioMember = new ForwardToStudioMember { MemberId = memberId, EndpointId = endpointId },
+        ForwardToStudioMember = new ForwardToStudioMember
+        {
+            MemberId = memberId,
+            EndpointId = endpointId,
+            ScopeId = scopeId,
+        },
     };
 
     private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()
@@ -2468,6 +2480,14 @@ public sealed class MainnetResponsesEndpointsTests
                 request.MemberId,
                 publishedServiceId));
 
+        public static StubMemberPublishedServiceResolver ForResolution(
+            string resolvedScopeId,
+            string publishedServiceId) =>
+            new(request => new MemberPublishedServiceResolution(
+                resolvedScopeId,
+                request.MemberId,
+                publishedServiceId));
+
         public static StubMemberPublishedServiceResolver Throwing(string message) =>
             new(_ => throw new InvalidOperationException(message));
 
@@ -2476,10 +2496,13 @@ public sealed class MainnetResponsesEndpointsTests
             CancellationToken ct = default)
         {
             CallCount++;
+            LastRequest = request;
             return Task.FromResult(_resolve(request));
         }
 
         public int CallCount { get; private set; }
+
+        public MemberPublishedServiceResolveRequest? LastRequest { get; private set; }
     }
 
     private sealed class RecordingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>

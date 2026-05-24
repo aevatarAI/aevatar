@@ -95,6 +95,9 @@ message ForwardToModel {
   string model_name = 1;
 }
 
+// Refactor (iter92/cluster-793): Old: /v1/responses treated
+// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
+// the direct actor target; Studio member routing uses ForwardToStudioMember.
 message ForwardToGAgent {
   // Direct actor / Orleans grain key target. Used only by GAgent-native
   // ingress paths that can bind to a raw actor address (Voice, Nyx Relay,
@@ -140,6 +143,9 @@ message ForwardToTeam {
 }
 
 // ForwardToStudioMember targets one Studio member's published GAgent service.
+// Refactor (iter92/cluster-793): Old: /v1/responses treated
+// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
+// the direct actor target; Studio member routing uses ForwardToStudioMember.
 // LLM facades resolve member_id via IMemberPublishedServiceResolver, then
 // dispatch through IStaticGAgentStreamInvocationPort<AGUIEvent>. This keeps
 // Studio member identity separate from ForwardToGAgent's direct actor target.
