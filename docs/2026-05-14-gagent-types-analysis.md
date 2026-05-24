@@ -109,8 +109,6 @@ GAgentBase                              ← 无状态底座
 | `AgentRunGAgent` | `GAgentBase<AgentRunGAgentState>` | `AgentRunGAgentState` | NyxID 运行 Actor |
 | `SkillRunnerGAgent` | `AIGAgentBase<SkillRunnerState>` | `SkillRunnerState` | 定时技能运行 |
 | `UserAgentCatalogGAgent` | `GAgentBase<UserAgentCatalogState>` | `UserAgentCatalogState` | 用户 Agent 目录 |
-| `TelegramBridgeGAgent` | `GAgentBase` | _(无状态)_ | Telegram 桥接 |
-| `TelegramUserBridgeGAgent` | `TelegramBridgeGAgent` | _(无状态)_ | Telegram 用户桥接 |
 
 ---
 
@@ -211,8 +209,6 @@ GAgentBase                              ← 无状态底座
 
 | Agent | 桥接物 |
 |---|---|
-| `TelegramBridgeGAgent` | Telegram API ↔ Actor |
-| `TelegramUserBridgeGAgent` | Telegram user ↔ Agent user |
 | `UserMemoryGAgent` | User memory store |
 | `ChatConversationGAgent` | Chat conversation store |
 
