@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -124,7 +125,10 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ThrowIfDynamicReadModelWritesUnsupportedForDelete();
 
         var trimmedId = id.Trim();
-        var startedAt = DateTimeOffset.UtcNow;
+        // Refactor (iter89/cluster-089-projection-provider-elapsed-clock):
+        // Old: elapsedMs used DateTimeOffset.UtcNow subtraction, so wall-clock changes could skew duration logs.
+        // New: elapsedMs uses a monotonic Stopwatch timestamp; projection clocks remain for semantic timestamps only.
+        var startedAtTimestamp = Stopwatch.GetTimestamp();
         try
         {
             using var response = await _httpClient.DeleteAsync(
@@ -144,7 +148,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                 result = ResolveDeleteResultFromPayload(payload);
             }
 
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model delete completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
                 ProviderName,
@@ -156,7 +160,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         }
         catch (Exception ex)
         {
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
             _logger.LogError(
                 ex,
                 "Projection read-model delete failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
