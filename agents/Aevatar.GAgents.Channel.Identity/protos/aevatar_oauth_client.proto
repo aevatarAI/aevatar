@@ -130,6 +130,14 @@ message RotateAevatarOAuthClientHmacKeyCommand {}
 // broker_capability_enabled on this client.
 message ObserveBrokerCapabilityCommand {}
 
+// Tombstone for the removed projection-only event. Keep its message name and
+// field numbers reserved so old event-store payloads remain replay-safe and
+// future events cannot reuse the same wire shape accidentally.
+message AevatarOAuthClientProjectionRebuildRequestedEvent {
+  reserved 1, 2;
+  reserved "reason", "requested_at";
+}
+
 // Persisted after a failed actor-owned provisioning attempt schedules a
 // durable self-callback for the next retry.
 message AevatarOAuthClientProvisioningRetryScheduledEvent {

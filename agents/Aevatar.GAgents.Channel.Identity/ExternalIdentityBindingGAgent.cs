@@ -86,6 +86,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.ExternalUserId,
                 State.BindingId,
                 cmd.BindingId);
+            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -143,6 +144,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
                 reason);
+            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -185,6 +187,26 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             expected,
             Id);
         return false;
+    }
+
+    private Task EnsureCommittedStateActivatedAsync()
+    {
+        var activation = Services.GetService(typeof(IChannelIdentityCommittedStateActivationService))
+            as IChannelIdentityCommittedStateActivationService;
+        if (activation == null)
+            return Task.CompletedTask;
+
+        var actorId = !string.IsNullOrWhiteSpace(Id)
+            ? Id
+            : State.ExternalSubject?.ToActorId() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(actorId) || EventSourcing == null)
+            return Task.CompletedTask;
+
+        return activation.EnsureExternalIdentityCommittedStateActivatedAsync(
+            actorId,
+            State.Clone(),
+            EventSourcing.CurrentVersion,
+            CancellationToken.None);
     }
 
     // ─── State transitions ───

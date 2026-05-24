@@ -158,6 +158,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 "Aevatar OAuth client already provisioned: actorId={ActorId}, authority={Authority}; no OAuth client fact changed",
                 Id,
                 cmd.NyxidAuthority);
+            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -659,6 +660,20 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // Fall back to a timestamp-derived kid so rotation still uniquely
         // labels the new key even if state has been hand-edited or migrated.
         return $"v{now.ToUnixTimeSeconds()}";
+    }
+
+    private Task EnsureCommittedStateActivatedAsync()
+    {
+        var activation = Services.GetService(typeof(IChannelIdentityCommittedStateActivationService))
+            as IChannelIdentityCommittedStateActivationService;
+        if (activation == null || string.IsNullOrWhiteSpace(Id) || EventSourcing == null)
+            return Task.CompletedTask;
+
+        return activation.EnsureAevatarOAuthClientCommittedStateActivatedAsync(
+            Id,
+            State.Clone(),
+            EventSourcing.CurrentVersion,
+            CancellationToken.None);
     }
 
     // ─── State transitions ───

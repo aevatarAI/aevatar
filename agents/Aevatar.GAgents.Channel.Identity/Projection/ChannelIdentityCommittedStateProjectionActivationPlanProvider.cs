@@ -13,9 +13,6 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
     //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
     //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
-    private const string ExternalIdentityBindingProjectionKind = "external-identity-binding";
-    private const string AevatarOAuthClientProjectionKind = "aevatar-oauth-client";
-
     public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -30,14 +27,14 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
             [
                 DurablePlan<ExternalIdentityBindingMaterializationRuntimeLease>(
                     context.ActorId,
-                    ExternalIdentityBindingProjectionKind),
+                    ChannelIdentityCommittedStateActivationService.ExternalIdentityBindingProjectionKind),
             ],
             var type when type == typeof(AevatarOAuthClientGAgent) &&
                           IsAevatarOAuthClientEvent(payload) =>
             [
                 DurablePlan<AevatarOAuthClientMaterializationRuntimeLease>(
                     context.ActorId,
-                    AevatarOAuthClientProjectionKind),
+                    ChannelIdentityCommittedStateActivationService.AevatarOAuthClientProjectionKind),
             ],
             _ => [],
         };

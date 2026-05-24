@@ -59,6 +59,14 @@ message ExternalIdentityBindingRevokedEvent {
   string reason = 3;
 }
 
+// Tombstone for the removed projection-only event. Keep its message name and
+// field numbers reserved so old event-store payloads remain replay-safe and
+// future events cannot reuse the same wire shape accidentally.
+message ExternalIdentityBindingProjectionRebuildRequestedEvent {
+  reserved 1, 2;
+  reserved "reason", "requested_at";
+}
+
 // Stateless OAuth `state` token payload (HMAC-sealed, never in grain state).
 // Carries the correlation id, the originating external subject, the PKCE
 // verifier, and the absolute expiry. See ADR-0018 §Implementation Notes #1.
