@@ -39,6 +39,31 @@ if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   exit 1
 fi
 
+set +e
+# Refactor (iter92/cluster-644):
+#   Old pattern: workflow-local Telegram bridge GAgents/proto owned Telegram send/wait-reply behavior inside workflow extensions.
+#   New principle: workflow must not reintroduce those bridge actors; Telegram traffic stays on the NyxID relay path.
+workflow_telegram_bridge_report="$(
+  rg -n "workflow\.telegram-(bridge|user-bridge|wait-reply)|TelegramBridgeGAgent|TelegramUserBridgeGAgent|TelegramWaitReplyGAgent|TelegramGetUpdatesExternalLinkTransport|telegram_wait_reply|AddWorkflowBridgeExtensions|Aevatar\.Workflow\.Extensions\.Bridge" \
+    src test tools docs .cursor/skills aevatar.slnx \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!tools/ci/architecture_guards.sh'
+)"
+workflow_telegram_bridge_status=$?
+set -e
+
+if [[ ${workflow_telegram_bridge_status} -ne 0 && ${workflow_telegram_bridge_status} -ne 1 ]]; then
+  echo "Workflow Telegram bridge retired-token guard execution failed."
+  exit "${workflow_telegram_bridge_status}"
+fi
+
+if [ -n "${workflow_telegram_bridge_report}" ]; then
+  echo "${workflow_telegram_bridge_report}"
+  echo "Workflow-local Telegram bridge is retired. Keep Telegram traffic on the NyxID relay path."
+  exit 1
+fi
+
 if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
   echo "Working audit documents must not be added to solution."
   exit 1

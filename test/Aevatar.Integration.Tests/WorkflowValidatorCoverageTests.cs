@@ -485,7 +485,7 @@ public class WorkflowValidatorCoverageTests
                     TargetRole = "missing-role",
                     Parameters = new Dictionary<string, string>
                     {
-                        ["agent_type"] = "Aevatar.Workflow.Extensions.Bridge.TelegramBridgeGAgent, Aevatar.Workflow.Extensions.Bridge",
+                        ["agent_type"] = "Aevatar.Workflow.Core.WorkflowRunGAgent, Aevatar.Workflow.Core",
                     },
                 },
             ],
@@ -511,7 +511,7 @@ public class WorkflowValidatorCoverageTests
                     Type = "llm_call",
                     Parameters = new Dictionary<string, string>
                     {
-                        ["agent_type"] = "TelegramBridgeGAgent",
+                        ["agent_type"] = "WorkflowRunGAgent",
                         ["agent_id"] = " ",
                     },
                 },
