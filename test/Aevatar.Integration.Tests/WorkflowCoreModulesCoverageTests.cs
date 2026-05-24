@@ -133,6 +133,55 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ConcurrentFirstUse_ShouldStartSourceDiscoveryOnce()
+    {
+        using var source = new BlockingCountingToolSource(
+            [
+                new FakeAgentTool("parallel_echo", args => args),
+            ]);
+        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyCount = 0;
+
+        var tasks = Enumerable.Range(0, 32)
+            .Select(i => Task.Run(async () =>
+            {
+                if (Interlocked.Increment(ref readyCount) == 32)
+                    ready.TrySetResult(true);
+
+                await start.Task;
+                var ctx = CreateContext();
+                await module.HandleAsync(
+                    Envelope(new StepRequestEvent
+                    {
+                        StepId = $"step-parallel-{i}",
+                        StepType = "tool_call",
+                        Input = """{"ok":true}""",
+                        Parameters = { ["tool"] = "parallel_echo" },
+                    }),
+                    ctx,
+                    CancellationToken.None);
+                return ctx;
+            }))
+            .ToArray();
+
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        start.SetResult(true);
+        await source.WaitForFirstDiscoveryAsync();
+        source.Release();
+
+        var contexts = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        source.DiscoverCalls.Should().Be(1);
+        contexts.SelectMany(ctx => ctx.Published.Select(x => x.evt))
+            .OfType<ToolResultEvent>()
+            .Should()
+            .HaveCount(32)
+            .And.OnlyContain(x => x.Success);
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldHonorDiscoveryCancellation_AndRetryOnNextCall()
     {
         var source = new CancellableToolSource(
@@ -1498,6 +1547,32 @@ public sealed class WorkflowCoreModulesCoverageTests
             });
 
             return await pending.Task;
+        }
+    }
+
+    private sealed class BlockingCountingToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource, IDisposable
+    {
+        private readonly TaskCompletionSource<bool> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _discoverCalls;
+
+        public int DiscoverCalls => Volatile.Read(ref _discoverCalls);
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _discoverCalls);
+            _entered.TrySetResult(true);
+            await _release.Task.WaitAsync(ct);
+            return tools;
+        }
+
+        public Task WaitForFirstDiscoveryAsync() =>
+            _entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public void Release() => _release.SetResult(true);
+
+        public void Dispose()
+        {
         }
     }
 }

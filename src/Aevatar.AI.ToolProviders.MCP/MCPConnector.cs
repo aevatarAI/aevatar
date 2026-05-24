@@ -14,12 +14,12 @@ namespace Aevatar.AI.ToolProviders.MCP;
 /// </summary>
 public sealed class MCPConnector : IConnector, IAsyncDisposable
 {
-    private readonly MCPClientManager _clientManager;
+    private readonly IMCPToolDiscoveryPort _clientManager;
     private readonly MCPServerConfig _serverConfig;
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
-    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _tools;
+    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _tools;
     private readonly ILogger _logger;
 
     public MCPConnector(
@@ -28,7 +28,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         string? defaultTool = null,
         IEnumerable<string>? allowedTools = null,
         IEnumerable<string>? allowedInputKeys = null,
-        MCPClientManager? clientManager = null,
+        IMCPToolDiscoveryPort? clientManager = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -134,11 +134,46 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {
-        var current = _tools;
-        if (current is { IsCompletedSuccessfully: true }) return current;
-        var task = ConnectAndIndexToolsAsync(ct);
-        var winner = Interlocked.CompareExchange(ref _tools, task, current);
-        return ReferenceEquals(winner, current) ? task : winner!;
+        while (true)
+        {
+            var current = _tools;
+            if (TryGetReusableTask(current, out var cached))
+                return cached;
+
+            // Refactor (iter88/cluster-088):
+            // Old: cache miss started ConnectAndIndexToolsAsync before CompareExchange, so losing callers
+            // could still open external MCP clients.
+            // New: publish a non-started Lazy<Task<T>> first; ExecutionAndPublication lets only the
+            // winning Lazy start discovery, while losing Lazy instances are never evaluated.
+            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+                () => ConnectAndIndexToolsAsync(ct),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var winner = Interlocked.CompareExchange(ref _tools, candidate, current);
+            if (ReferenceEquals(winner, current))
+                return candidate.Value;
+        }
+    }
+
+    private static bool TryGetReusableTask(
+        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
+        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
+    {
+        task = null!;
+        if (current == null)
+            return false;
+
+        if (!current.IsValueCreated)
+        {
+            task = current.Value;
+            return true;
+        }
+
+        var existing = current.Value;
+        if (existing.IsFaulted || existing.IsCanceled)
+            return false;
+
+        task = existing;
+        return true;
     }
 
     private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(CancellationToken ct)
@@ -148,7 +183,10 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() => _clientManager.DisposeAsync();
+    public ValueTask DisposeAsync() =>
+        _clientManager is IAsyncDisposable disposable
+            ? disposable.DisposeAsync()
+            : ValueTask.CompletedTask;
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {
