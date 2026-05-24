@@ -61,8 +61,11 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             agentName: BuildAgentName(request.Kind));
 
         await foreach (var chunk in runtime.ChatStreamAsync(
-                           request.Prompt,
+                           [ContentPart.TextPart(request.Prompt)],
+                           config.MaxToolRounds,
                            request.RequestId,
+                           request.LlmControl,
+                           toolContext: null,
                            request.Metadata,
                            ct))
         {

@@ -14,6 +14,29 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ConversationReplyGeneratorTests
 {
+    private static LLMControlContext Control(
+        string? model = null,
+        string? route = null,
+        int? rounds = null,
+        string? token = null,
+        string? senderToken = null) =>
+        new(
+            NyxIdAccessToken: token,
+            NyxIdOrgToken: token,
+            SenderNyxIdAccessToken: senderToken,
+            ModelOverride: model,
+            NyxIdRoutePreference: route,
+            MaxToolRoundsOverride: rounds,
+            UserMemoryPrompt: null);
+
+    private static AgentToolExecutionContext? ToolContext(string? senderBindingId) =>
+        string.IsNullOrWhiteSpace(senderBindingId)
+            ? null
+            : AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext(senderBindingId),
+            };
+
     [Fact]
     public async Task GenerateReplyAsync_UsesConfiguredRelayCallbackUrlInSystemPrompt()
     {
@@ -291,15 +314,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                // Owner prefs pre-pinned upstream (mirrors what
-                // OwnerLlmConfigApplier writes from the registration scope).
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 9),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -332,12 +349,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-only-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
             streamingSink: null,
             CancellationToken.None);
 
@@ -369,13 +383,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-fallback-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-fallback-model", "owner-route", 5),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -414,16 +424,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
-                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-                [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token", "sender-token"),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -437,7 +440,7 @@ public sealed class ConversationReplyGeneratorTests
         senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
         senderMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("sender-token");
         senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
-        senderMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        senderMetadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken].Should().Be("sender-token");
 
         var ownerRequest = providerFactory.Requests[1];
         ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -474,15 +477,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
-                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token"),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -552,18 +549,16 @@ public sealed class ConversationReplyGeneratorTests
         }
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (bindingState != MatrixUnbound)
-            metadata[LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender";
+        var toolContext = bindingState == MatrixUnbound ? null : ToolContext("bnd_sender");
 
+        LLMControlContext? control = null;
         switch (ownerState)
         {
             case MatrixOwnerPartial:
-                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                control = Control(model: "owner-model");
                 break;
             case MatrixOwnerFull:
-                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner";
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9";
+                control = Control("owner-model", "/api/v1/proxy/s/owner", 9);
                 break;
         }
 
@@ -576,6 +571,8 @@ public sealed class ConversationReplyGeneratorTests
                 Content = new MessageContent { Text = "hello" },
             },
             metadata,
+            control,
+            toolContext,
             streamingSink: null,
             CancellationToken.None);
 
@@ -589,7 +586,7 @@ public sealed class ConversationReplyGeneratorTests
 
         if (bindingState == MatrixUnbound)
             prefsStore.Lookups.Should().BeEmpty(
-                "no binding-id in metadata → generator must not consult the prefs store");
+                "no typed sender binding → generator must not consult the prefs store");
         else
             prefsStore.Lookups.Should().ContainSingle().Which.Should().Be("bnd_sender");
     }

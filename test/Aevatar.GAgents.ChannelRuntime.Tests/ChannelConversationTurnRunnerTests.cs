@@ -97,7 +97,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldApplyOwnerUserConfigOverridesToLlmMetadata_WhenSourceRegistered()
+    public async Task RunInboundAsync_ShouldApplyOwnerUserConfigOverridesToLlmControl_WhenSourceRegistered()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -117,9 +117,10 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
-        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
-        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("12");
+        var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest!.LlmControl);
+        llmControl.ModelOverride.Should().Be("gpt-5.5");
+        llmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        llmControl.MaxToolRoundsOverride.Should().Be(12);
         ownerSource.Calls.Should().ContainSingle();
         ownerSource.Calls[0].Should().Be("scope-1");
     }
@@ -183,9 +184,10 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
-        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest!.LlmControl);
+        llmControl.ModelOverride.Should().BeNull();
+        llmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        llmControl.MaxToolRoundsOverride.Should().BeNull();
     }
 
     [Fact]
@@ -1108,8 +1110,10 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Metadata[LLMRequestMetadataKeys.SenderBindingId].Should().Be("bnd-user-1");
-        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken].Should().Be("test-access-token-for-bnd-user-1");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
     }
 

@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.AI.Abstractions.LLMProviders;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -29,7 +30,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 "actor-1",
                 SessionId: "session-1",
                 WorkflowYamls: ["name: inline"],
-                Metadata: new Dictionary<string, string>()));
+                Metadata: new Dictionary<string, string>(),
+                Source: WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1")));
     }
 
     [Fact]
@@ -52,7 +54,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 "actor-1",
                 SessionId: null,
                 WorkflowYamls: ["name: inline"],
-                Metadata: new Dictionary<string, string>()));
+                Metadata: new Dictionary<string, string>(),
+                Source: WorkflowChatSource.InlineYamlBundle(["name: inline"], actorId: "actor-1")));
     }
 
     [Fact]
@@ -103,7 +106,45 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 null,
                 null,
                 null,
-                Metadata: new Dictionary<string, string>()));
+                Metadata: new Dictionary<string, string>(),
+                Source: WorkflowChatSource.Direct()));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAndLlmControl()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                WorkflowName = " auto ",
+                WorkflowYamls = ["name: auto"],
+            },
+            LlmControl = new ChatLlmControlInput
+            {
+                NyxIdAccessToken = " token ",
+                ModelOverride = " model ",
+                NyxIdRoutePreference = " route ",
+                MaxToolRoundsOverride = 3,
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Should().BeEquivalentTo(
+            WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
+        result.Request.LlmControl.Should().Be(new LLMControlContext(
+            "token",
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            "model",
+            "route",
+            3,
+            UserMemoryPrompt: null));
+        result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
@@ -152,7 +193,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                         Name = "cat",
                     },
                 ],
-                Metadata: new Dictionary<string, string>()));
+                Metadata: new Dictionary<string, string>(),
+                Source: WorkflowChatSource.Direct()));
     }
 
     [Fact]

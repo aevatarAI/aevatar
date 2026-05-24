@@ -464,9 +464,6 @@ public sealed class ResponsesCommandFacade(
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
             [RegistrationScopeMetadataKey] = callerScope.ScopeId,
         };
-        if (resolvedRouteValue is not null)
-            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
-
         return new LLMRequest
         {
             Messages = BuildLlmMessages(normalized, previousSnapshot),
@@ -478,6 +475,14 @@ public sealed class ResponsesCommandFacade(
                 normalized.ResponseId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: null,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: null,
+                ModelOverride: null,
+                NyxIdRoutePreference: resolvedRouteValue,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null),
             Model = effectiveModel,
             Temperature = normalized.Temperature,
             MaxTokens = normalized.MaxOutputTokens,

@@ -891,7 +891,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
             // Refactor (iter21/cluster-001):
             //   Old pattern: Host resolved fake workflow generator services and executed authoring loops.
             //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
@@ -901,7 +901,8 @@ internal static class StudioEndpoints
                                    request.Prompt.Trim(),
                                    CurrentYaml: request.CurrentYaml,
                                    AvailableWorkflowNames: request.AvailableWorkflowNames,
-                                   Metadata: metadata),
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
                                ct))
             {
                 await WriteWorkflowAuthoringFrameAsync(http.Response, previewEvent, ct);
@@ -994,7 +995,7 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
             // Refactor (iter21/cluster-001):
             //   Old pattern: Host resolved fake script generator services and executed authoring loops.
             //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
@@ -1005,7 +1006,8 @@ internal static class StudioEndpoints
                                    CurrentSource: request.CurrentSource,
                                    CurrentPackage: request.CurrentPackage,
                                    CurrentFilePath: request.CurrentFilePath,
-                                   Metadata: metadata),
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
                                ct))
             {
                 await WriteScriptAuthoringFrameAsync(http.Response, previewEvent, ct);
@@ -1166,7 +1168,7 @@ internal static class StudioEndpoints
             : null;
     }
 
-    private static async Task<Dictionary<string, string>> InjectLLMMetadataAsync(
+    private static async Task<(Dictionary<string, string> Metadata, LLMControlContext LlmControl)> BuildPreviewContextAsync(
         HttpContext http,
         IReadOnlyDictionary<string, string>? clientMetadata,
         CancellationToken ct)
@@ -1175,11 +1177,18 @@ internal static class StudioEndpoints
             ? new Dictionary<string, string>(clientMetadata)
             : new Dictionary<string, string>();
 
-        // Forward caller's Bearer token so NyxID-backed providers and connectors can authenticate.
+        var llmControl = LLMControlContext.Empty;
+
+        // Forward caller's Bearer token through typed LLM control. Metadata
+        // keeps only connector/tool authorization.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
         {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+            llmControl = llmControl with
+            {
+                NyxIdAccessToken = bearerToken,
+                NyxIdOrgToken = bearerToken,
+            };
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
 
@@ -1194,9 +1203,9 @@ internal static class StudioEndpoints
                 // with a sender-specific binding-id.
                 var preferences = await llmPreferencesStore.GetOwnerAsync(ct);
                 if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                    llmControl = llmControl with { ModelOverride = preferences.DefaultModel.Trim() };
                 if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+                    llmControl = llmControl with { NyxIdRoutePreference = preferences.PreferredRoute.Trim() };
             }
             catch
             {
@@ -1204,7 +1213,7 @@ internal static class StudioEndpoints
             }
         }
 
-        return metadata;
+        return (metadata, llmControl);
     }
 
     internal sealed record AppScriptDraftRunRequest(

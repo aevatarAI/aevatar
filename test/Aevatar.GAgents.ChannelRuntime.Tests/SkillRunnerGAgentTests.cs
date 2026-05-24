@@ -735,7 +735,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
+    public async Task BuildExecutionLlmControl_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
     {
         // Regression for the "/daily failed: Provider 'openai' not connected" report:
         // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
@@ -752,28 +752,29 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
-        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+        var control = await InvokeBuildExecutionLlmControlAsync(agent);
 
-        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
-        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
-        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        control.ModelOverride.Should().Be("gpt-5.5");
+        control.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        control.MaxToolRoundsOverride.Should().Be(7);
+        control.NyxIdAccessToken.Should().Be("nyx-api-key");
         source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigSourceIsAbsent()
+    public async Task BuildExecutionLlmControl_ShouldOmitOverrides_WhenOwnerLlmConfigSourceIsAbsent()
     {
         // No host wiring (e.g. tests that don't compose Studio + the bridge): valid metadata
         // still comes out, no override keys leak, NyxIdLLMProvider falls through to its
         // compile-time defaults.
         await _agent.HandleInitializeAsync(CreateInitializeCommand());
 
-        var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
+        var control = await InvokeBuildExecutionLlmControlAsync(_agent);
 
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
-        metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("nyx-api-key");
+        control.ModelOverride.Should().BeNull();
+        control.NyxIdRoutePreference.Should().BeNull();
+        control.MaxToolRoundsOverride.Should().BeNull();
+        control.NyxIdAccessToken.Should().Be("nyx-api-key");
     }
 
     [Fact]
@@ -789,11 +790,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
-        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+        var control = await InvokeBuildExecutionLlmControlAsync(agent);
 
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        control.ModelOverride.Should().BeNull();
+        control.NyxIdRoutePreference.Should().BeNull();
+        control.MaxToolRoundsOverride.Should().BeNull();
     }
 
     [Fact]
@@ -808,10 +809,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
-        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+        var control = await InvokeBuildExecutionLlmControlAsync(agent);
 
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        control.ModelOverride.Should().BeNull();
+        control.NyxIdRoutePreference.Should().BeNull();
     }
 
     [Fact]
@@ -876,14 +877,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         ExtractLarkText(handler.Bodies[0]!).Should().Be(SkillRunnerStreamingReplySink.TruncateForLark(longText));
     }
 
-    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
+    private static async Task<LLMControlContext> InvokeBuildExecutionLlmControlAsync(
         SkillRunnerGAgent agent)
     {
         var method = typeof(SkillRunnerGAgent).GetMethod(
-            "BuildExecutionMetadataAsync",
+            "BuildExecutionLlmControlAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull();
-        var task = (Task<IReadOnlyDictionary<string, string>>)method!.Invoke(agent, [CancellationToken.None])!;
+        var task = (Task<LLMControlContext>)method!.Invoke(agent, [CancellationToken.None])!;
         return await task;
     }
 

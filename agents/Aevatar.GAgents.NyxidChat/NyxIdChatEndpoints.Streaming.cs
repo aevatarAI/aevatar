@@ -76,8 +76,7 @@ public static partial class NyxIdChatEndpoints
             await writer.StartAsync(ct);
             await writer.WriteRunStartedAsync(actorId, ct);
             var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-            await InjectUserConfigMetadataAsync(http, metadata, ct);
-            await InjectUserMemoryAsync(http, metadata, ct);
+            var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
             await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
 
             // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
@@ -92,7 +91,8 @@ public static partial class NyxIdChatEndpoints
                     messageId,
                     accessToken,
                     request.InputParts,
-                    metadata),
+                    metadata,
+                    llmControl),
                 async (evt, _) =>
                 {
                     await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);

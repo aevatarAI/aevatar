@@ -52,6 +52,10 @@ message NeedsLlmReplyEvent {
   // Stable run identity owned by AgentRunGAgent. Dispatcher adapters may use
   // correlation_id only as a bounded fallback for older persisted requests.
   string run_id = 11;
+  // Runtime command-only LLM control carrier. ConversationGAgent clears this on
+  // the copy persisted to actor state; the run-bound command may carry it to the
+  // LLM call owner.
+  aevatar.ai.LLMControlContextPayload llm_control = 12;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single

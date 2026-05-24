@@ -437,14 +437,14 @@ public sealed class ChatRuntimeStreamingBufferTests
         }
 
         provider.LastStreamRequest.Should().NotBeNull();
-        provider.LastStreamRequest!.RoutingContext.Should().Be(LLMRequestRoutingContext.Empty);
+        provider.LastStreamRequest!.RoutingContext.Should().BeNull();
         provider.LastStreamRequest.ToolContext!.Routing.ModelOverride.Should().BeNull();
         provider.LastStreamRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
         provider.LastStreamRequest.Metadata.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenBaseRoutingAndTypedToolRoutingOverlap_ShouldMergeTypedValues()
+    public async Task ChatStreamAsync_WhenBaseRoutingAndToolRoutingOverlap_ShouldIgnoreToolRoutingForLlmControl()
     {
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
@@ -473,10 +473,40 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         provider.LastStreamRequest.Should().NotBeNull();
         provider.LastStreamRequest!.RoutingContext.Should().NotBeNull();
-        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("typed-model");
+        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("base-model");
         provider.LastStreamRequest.RoutingContext.NyxIdRoutePreference.Should().Be("base-route");
-        provider.LastStreamRequest.RoutingContext.MaxToolRoundsOverride.Should().Be(9);
+        provider.LastStreamRequest.RoutingContext.MaxToolRoundsOverride.Should().Be(3);
         provider.LastStreamRequest.RoutingContext.UserMemoryPrompt.Should().Be("base-memory");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenLlmControlProvided_ShouldCarryControlOutsideMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(provider);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: "token-1",
+            NyxIdOrgToken: "org-1",
+            SenderNyxIdAccessToken: null,
+            ModelOverride: "control-model",
+            NyxIdRoutePreference: "/api/v1/proxy/s/control",
+            MaxToolRoundsOverride: 2,
+            UserMemoryPrompt: "memory");
+
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           [ContentPart.TextPart("hello")],
+                           maxToolRounds: 2,
+                           requestId: "session-control",
+                           llmControl: control,
+                           toolContext: null))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.LlmControl.Should().Be(control);
+        provider.LastStreamRequest.Metadata.Should().BeEmpty();
+        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("control-model");
+        provider.LastStreamRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-1");
     }
 
     [Fact]

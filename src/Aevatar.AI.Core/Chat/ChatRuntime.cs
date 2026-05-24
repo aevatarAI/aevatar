@@ -108,10 +108,20 @@ public sealed class ChatRuntime
         IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
         string? requestId,
+        LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext, ct);
+        ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext, llmControl, ct);
+
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        int maxToolRounds,
+        string? requestId,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext, llmControl: null, ct);
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata + tool 轮数。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -140,7 +150,14 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var chunk in ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, toolContext: null, ct))
+        await foreach (var chunk in ChatStreamAsync(
+                           userContent,
+                           maxToolRounds,
+                           requestId,
+                           metadata,
+                           toolContext: null,
+                           llmControl: null,
+                           ct))
         {
             yield return chunk;
         }
@@ -152,6 +169,7 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var normalizedUserContent = NormalizeUserContent(userContent);
@@ -185,6 +203,7 @@ public sealed class ChatRuntime
                     requestId,
                     metadata,
                     toolContext,
+                    llmControl,
                     runContext,
                     runToken)
                 .GetAsyncEnumerator(runToken);
@@ -224,6 +243,7 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl,
         AgentRunContext runContext,
         [EnumeratorCancellation] CancellationToken runToken)
     {
@@ -240,6 +260,7 @@ public sealed class ChatRuntime
                            requestId,
                            metadata,
                            toolContext,
+                           llmControl,
                            runContext,
                            pendingHistoryMessages,
                            wroteOutput,
@@ -255,6 +276,7 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
         AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl,
         AgentRunContext runContext,
         List<ChatMessage> pendingHistoryMessages,
         bool wroteOutput,
@@ -268,7 +290,7 @@ public sealed class ChatRuntime
         //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
         var userMsg = ChatMessage.User(normalizedUserContent, runContext.UserMessage);
         pendingHistoryMessages.Add(userMsg);
-        var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata, toolContext);
+        var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata, toolContext, llmControl);
         var provider = _providerFactory();
         runContext.Items["gen_ai.provider.name"] = provider.Name;
         var messages = BuildMessagesWithPending(baseRequest, userMsg);
@@ -302,6 +324,7 @@ public sealed class ChatRuntime
                     baseRequest,
                     ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
                 RoutingContext = baseRequest.RoutingContext,
+                LlmControl = baseRequest.LlmControl,
                 Tools = baseRequest.Tools,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
@@ -476,6 +499,7 @@ public sealed class ChatRuntime
                     baseRequest,
                     ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
                 RoutingContext = baseRequest.RoutingContext,
+                LlmControl = baseRequest.LlmControl,
                 Tools = null,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
@@ -524,6 +548,7 @@ public sealed class ChatRuntime
                     CallerContext = finalRequest.CallerContext,
                     ToolContext = finalRequest.ToolContext,
                     RoutingContext = finalRequest.RoutingContext,
+                    LlmControl = finalRequest.LlmControl,
                     Tools = null,
                     Model = finalRequest.Model,
                     Temperature = finalRequest.Temperature,
@@ -757,10 +782,12 @@ public sealed class ChatRuntime
         LLMRequest baseRequest,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
-        AgentToolExecutionContext? toolContext)
+        AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl)
     {
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+        var effectiveLlmControl = llmControl ?? baseRequest.LlmControl;
         var effectiveToolContext = toolContext ?? baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        effectiveToolContext = effectiveLlmControl?.ToToolContext(effectiveToolContext) ?? effectiveToolContext;
         if (!string.IsNullOrWhiteSpace(requestId))
         {
             effectiveToolContext = effectiveToolContext with
@@ -776,28 +803,13 @@ public sealed class ChatRuntime
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(MergeMetadata(baseRequest.Metadata, metadata)),
             CallerContext = baseRequest.CallerContext,
             ToolContext = effectiveToolContext,
-            RoutingContext = MergeRouting(baseRequest.RoutingContext, effectiveToolContext.Routing),
+            RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
+            LlmControl = effectiveLlmControl,
             Tools = baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
-        };
-    }
-
-    private static LLMRequestRoutingContext? MergeRouting(
-        LLMRequestRoutingContext? baseRouting,
-        LLMRequestRoutingContext typedRouting)
-    {
-        if (baseRouting == null)
-            return typedRouting;
-
-        return baseRouting with
-        {
-            ModelOverride = typedRouting.ModelOverride ?? baseRouting.ModelOverride,
-            NyxIdRoutePreference = typedRouting.NyxIdRoutePreference ?? baseRouting.NyxIdRoutePreference,
-            MaxToolRoundsOverride = typedRouting.MaxToolRoundsOverride ?? baseRouting.MaxToolRoundsOverride,
-            UserMemoryPrompt = typedRouting.UserMemoryPrompt ?? baseRouting.UserMemoryPrompt,
         };
     }
 

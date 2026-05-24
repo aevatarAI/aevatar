@@ -32,8 +32,21 @@ message ChatRequestEvent  {
   AgentToolExecutionContextPayload tool_context = 8;
   // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
   TelegramBridgeRequest telegram = 9;
+  // Narrow LLM-control carrier. Model routing, NyxID credentials and tool-round limits
+  // belong here, not in metadata or tool_context.
+  LLMControlContextPayload llm_control = 10;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+message LLMControlContextPayload {
+  string nyx_id_access_token = 1;
+  string nyx_id_org_token = 2;
+  string sender_nyx_id_access_token = 3;
+  string model_override = 4;
+  string nyx_id_route_preference = 5;
+  optional int32 max_tool_rounds_override = 6;
+  string user_memory_prompt = 7;
+}
 
 enum TelegramBridgeOperation {
   TELEGRAM_BRIDGE_OPERATION_UNSPECIFIED = 0;

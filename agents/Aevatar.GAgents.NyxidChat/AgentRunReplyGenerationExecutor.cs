@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -105,12 +106,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
 
-        IReadOnlyDictionary<string, string> effectiveMetadata;
+        ReplyGenerationContext generationContext;
         using (var metadataCts = new CancellationTokenSource(AgentRunGAgent.MetadataBuildBudget))
         {
             try
             {
-                effectiveMetadata = await BuildEffectiveMetadataAsync(request, metadataCts.Token)
+                generationContext = await BuildGenerationContextAsync(request, metadataCts.Token)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (metadataCts.IsCancellationRequested)
@@ -145,12 +146,21 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 if (ShouldCaptureInteractiveReply(request.Activity))
                     interactiveReplyScope = _interactiveReplyCollector?.BeginScope();
 
-                var replyResult = await _replyGenerator.GenerateReplyAsync(
-                        request.Activity!,
-                        effectiveMetadata,
-                        streamingState,
-                        timeoutCts.Token)
-                    .ConfigureAwait(false);
+                var replyResult = _replyGenerator is ITypedConversationReplyGenerator typedReplyGenerator
+                    ? await typedReplyGenerator.GenerateReplyAsync(
+                            request.Activity!,
+                            generationContext.Metadata,
+                            generationContext.LlmControl,
+                            generationContext.ToolContext,
+                            streamingState,
+                            timeoutCts.Token)
+                        .ConfigureAwait(false)
+                    : await _replyGenerator.GenerateReplyAsync(
+                            request.Activity!,
+                            generationContext.Metadata,
+                            streamingState,
+                            timeoutCts.Token)
+                        .ConfigureAwait(false);
                 replyText = replyResult.Text ?? string.Empty;
                 if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
                 {
@@ -332,38 +342,50 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return new StreamingReplyRunState(sink, throttle, maxInterimChunks, _timeProvider);
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
+    private sealed record ReplyGenerationContext(
+        IReadOnlyDictionary<string, string> Metadata,
+        LLMControlContext LlmControl,
+        AgentToolExecutionContext ToolContext);
+
+    private async Task<ReplyGenerationContext> BuildGenerationContextAsync(
         NeedsLlmReplyEvent request,
         CancellationToken ct)
     {
         var routedModel = NormalizeOptional(request.TargetRef?.ForwardToModel?.ModelName);
         var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
 
-        await ApplyBotOwnerLlmConfigAsync(request, metadata, ct).ConfigureAwait(false);
+        var control = LLMControlContextMapper.FromPayload(request.LlmControl);
+        control = await ApplyBotOwnerLlmConfigAsync(request, control, ct).ConfigureAwait(false);
         if (routedModel is not null)
-            metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
+            control = control with { ModelOverride = routedModel };
 
         var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(userAccessToken))
         {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
+            control = control with
+            {
+                NyxIdAccessToken = userAccessToken,
+                NyxIdOrgToken = userAccessToken,
+            };
         }
 
-        return metadata;
+        return new ReplyGenerationContext(
+            metadata,
+            control,
+            AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
     }
 
-    private async Task ApplyBotOwnerLlmConfigAsync(
+    private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(
         NeedsLlmReplyEvent request,
-        IDictionary<string, string> metadata,
+        LLMControlContext control,
         CancellationToken ct)
     {
         if (_scopeResolver is null || _userConfigQueryPort is null)
-            return;
+            return control;
 
         var apiKeyId = request.Activity?.Bot?.Value?.Trim();
         if (string.IsNullOrWhiteSpace(apiKeyId))
-            return;
+            return control;
 
         string? scopeId;
         try
@@ -382,7 +404,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 "Failed to resolve bot owner scope id for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
                 request.CorrelationId,
                 apiKeyId);
-            return;
+            return control;
         }
 
         if (string.IsNullOrWhiteSpace(scopeId))
@@ -391,19 +413,24 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 "No bot owner scope id resolved for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
                 request.CorrelationId,
                 apiKeyId);
-            return;
+            return control;
         }
 
         try
         {
             var config = await _userConfigQueryPort.GetAsync(scopeId, ct).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
-                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
-            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
-            if (config.MaxToolRounds > 0)
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
-                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            control = control with
+            {
+                ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
+                    ? control.ModelOverride
+                    : config.DefaultModel.Trim(),
+                NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
+                    ? control.NyxIdRoutePreference
+                    : config.PreferredLlmRoute.Trim(),
+                MaxToolRoundsOverride = config.MaxToolRounds > 0
+                    ? config.MaxToolRounds
+                    : control.MaxToolRoundsOverride,
+            };
 
             _logger.LogInformation(
                 "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
@@ -424,6 +451,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 request.CorrelationId,
                 scopeId);
         }
+
+        return control;
     }
 
     private TimeSpan ResolveFallbackTimeout()

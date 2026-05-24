@@ -227,67 +227,75 @@ public static partial class NyxIdChatEndpoints
         return false;
     }
 
-    private static async Task InjectUserConfigMetadataAsync(
+    private static async Task<LLMControlContext> BuildLlmControlAsync(
         HttpContext http,
-        IDictionary<string, string> metadata,
+        string accessToken,
         CancellationToken ct)
     {
+        var control = new LLMControlContext(
+            NyxIdAccessToken: accessToken,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
         var logger = http.RequestServices.GetService<ILoggerFactory>()
             ?.CreateLogger("Aevatar.NyxId.Chat.UserConfig");
 
         var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
-        if (preferencesStore == null)
+        if (preferencesStore != null)
         {
-            logger?.LogWarning("INyxIdUserLlmPreferencesStore not registered — skipping user config injection");
-            return;
+            try
+            {
+                // Studio chat endpoint always uses the ambient (bot owner) scope —
+                // the channel inbound path passes the sender binding-id explicitly.
+                var preferences = await preferencesStore.GetOwnerAsync(ct);
+                logger?.LogInformation(
+                    "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
+                    preferences.DefaultModel ?? "<empty>",
+                    preferences.PreferredRoute ?? "<empty>",
+                    preferences.MaxToolRounds);
+
+                control = control with
+                {
+                    ModelOverride = string.IsNullOrWhiteSpace(preferences.DefaultModel)
+                        ? control.ModelOverride
+                        : preferences.DefaultModel.Trim(),
+                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(preferences.PreferredRoute)
+                        ? control.NyxIdRoutePreference
+                        : preferences.PreferredRoute.Trim(),
+                    MaxToolRoundsOverride = preferences.MaxToolRounds > 0
+                        ? preferences.MaxToolRounds
+                        : control.MaxToolRoundsOverride,
+                };
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to load user config from the projection read model; falling back to server defaults");
+            }
         }
 
-        try
-        {
-            // Studio chat endpoint always uses the ambient (bot owner) scope —
-            // the channel inbound path passes the sender binding-id explicitly.
-            var preferences = await preferencesStore.GetOwnerAsync(ct);
-            logger?.LogInformation(
-                "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
-                preferences.DefaultModel ?? "<empty>",
-                preferences.PreferredRoute ?? "<empty>",
-                preferences.MaxToolRounds);
-
-            if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-            if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
-            if (preferences.MaxToolRounds > 0)
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to load user config from the projection read model; falling back to server defaults");
-        }
-    }
-
-    private static async Task InjectUserMemoryAsync(
-        HttpContext http,
-        IDictionary<string, string> metadata,
-        CancellationToken ct)
-    {
         var memoryStore = http.RequestServices.GetService<IUserMemoryStore>();
         if (memoryStore == null)
-            return;
+            return control;
 
-        var logger = http.RequestServices.GetService<ILoggerFactory>()
+        var memoryLogger = http.RequestServices.GetService<ILoggerFactory>()
             ?.CreateLogger("Aevatar.NyxId.Chat.UserMemory");
 
         try
         {
             var section = await memoryStore.BuildPromptSectionAsync(2000, ct);
             if (!string.IsNullOrWhiteSpace(section))
-                metadata[LLMRequestMetadataKeys.UserMemoryPrompt] = section;
+                control = control with { UserMemoryPrompt = section };
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
+            memoryLogger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
         }
+
+        return control;
     }
 
     private static string? ExtractBearerToken(HttpContext http)
