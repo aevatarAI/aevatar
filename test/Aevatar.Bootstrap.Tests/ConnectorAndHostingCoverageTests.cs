@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ConnectorRegistryEntry = Aevatar.Foundation.Abstractions.Connectors.ConnectorRegistration;
 
 namespace Aevatar.Bootstrap.Tests;
 
@@ -401,7 +402,7 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public void ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
+    public async Task ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"connector-reg-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
@@ -430,7 +431,7 @@ public class ConnectorAndHostingCoverageTests
             var logger = NullLogger.Instance;
             var builders = new IConnectorBuilder[] { new HttpConnectorBuilder() };
 
-            var added = ConnectorRegistration.RegisterConnectors(registry, builders, logger, filePath);
+            var added = await ConnectorRegistration.RegisterConnectorsAsync(registry, builders, logger, filePath);
 
             added.Should().Be(1);
             registry.ListNames().Should().ContainSingle().Which.Should().Be("valid_http");
@@ -479,7 +480,7 @@ public class ConnectorAndHostingCoverageTests
             services.AddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
             services.AddSingleton<IConnectorBuilder, HttpConnectorBuilder>();
 
-            using var provider = services.BuildServiceProvider();
+            await using var provider = services.BuildServiceProvider();
             var service = new ConnectorBootstrapHostedService(
                 provider,
                 NullLogger<ConnectorBootstrapHostedService>.Instance);
@@ -749,7 +750,12 @@ public class ConnectorAndHostingCoverageTests
     {
         private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(IConnector connector) => _connectors[connector.Name] = connector;
+        public ValueTask RegisterAsync(ConnectorRegistryEntry registration, CancellationToken ct = default)
+        {
+            _ = ct;
+            _connectors[registration.Connector.Name] = registration.Connector;
+            return ValueTask.CompletedTask;
+        }
 
         public bool TryGet(string name, out IConnector? connector)
         {
@@ -759,6 +765,8 @@ public class ConnectorAndHostingCoverageTests
         }
 
         public IReadOnlyList<string> ListNames() => _connectors.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingHttpClientFactory(Func<string, HttpClient> clientFactory) : IHttpClientFactory

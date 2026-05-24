@@ -812,6 +812,27 @@ public class AIComponentCoverageTests
         await manager.DisposeAsync();
     }
 
+    [Fact]
+    public async Task MCPConnector_DisposeAsync_BeforeConnect_ShouldDisposeOwnedRemoteHttpClient()
+    {
+        var handler = new RecordingDisposeHandler();
+        var client = new HttpClient(handler);
+        var connector = new MCPConnector(
+            name: "mcp-owned-http",
+            serverConfig: new MCPServerConfig
+            {
+                Name = "server-owned-http",
+                Url = "https://example.com/mcp",
+                HttpClient = client,
+                OwnsHttpClient = true,
+            });
+
+        await connector.DisposeAsync();
+        await connector.DisposeAsync();
+
+        handler.DisposeCount.Should().Be(1);
+    }
+
     private static async IAsyncEnumerable<ChatResponseUpdate> Stream(IEnumerable<string> parts)
     {
         foreach (var part in parts)
@@ -1060,5 +1081,26 @@ public class AIComponentCoverageTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
             onSend(request);
+    }
+
+    private sealed class RecordingDisposeHandler : HttpMessageHandler
+    {
+        public int DisposeCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _ = request;
+            _ = cancellationToken;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                DisposeCount++;
+
+            base.Dispose(disposing);
+        }
     }
 }
