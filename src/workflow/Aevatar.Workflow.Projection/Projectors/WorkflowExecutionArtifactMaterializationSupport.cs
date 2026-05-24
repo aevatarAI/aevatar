@@ -222,7 +222,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.StepType = evt.StepType ?? string.Empty;
         step.TargetRole = evt.TargetRole ?? string.Empty;
         step.RequestedAt = observedAt;
-        ReplaceMap(step.RequestParameters, evt.Parameters);
+        var parameters = WorkflowStepParameterProjectionSource.From(evt);
+        ReplaceMap(step.RequestParameters, parameters);
         AddTimeline(
             readModel.Timeline,
             observedAt,
@@ -232,7 +233,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             evt.StepId,
             evt.StepType,
             eventType,
-            evt.Parameters);
+            parameters);
     }
 
     private static void ApplyStepCompleted(
