@@ -113,6 +113,29 @@ public sealed class WorkflowCustomEventParserTests
     }
 
     [Fact]
+    public void TryParseHumanInputRequest_ShouldPreferTypedSecureInputOverLegacyMetadata()
+    {
+        var frame = new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.HumanInputRequest,
+            Value = ParseObject("""{"runId":"run-1","stepId":"approve","suspensionType":"secure_input","prompt":"approve?","timeoutSeconds":30,"variableName":"decision","secure":true,"redactedOutput":"[captured]","metadata":{"variable":"legacy_decision","secure":"false","input_mode":"password","redacted_output":"[legacy captured]","source":"test"}}"""),
+        };
+
+        var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.VariableName.Should().Be("decision");
+        data.Secure.Should().BeTrue();
+        data.RedactedOutput.Should().Be("[captured]");
+        data.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("test");
+        data.Metadata.Should().NotContainKey("variable");
+        data.Metadata.Should().NotContainKey("secure");
+        data.Metadata.Should().NotContainKey("input_mode");
+        data.Metadata.Should().NotContainKey("redacted_output");
+    }
+
+    [Fact]
     public void TryParseHumanInputRequest_ShouldFallbackLegacySecureInputMetadata()
     {
         var frame = new WorkflowOutputFrame
