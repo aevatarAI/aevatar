@@ -19,12 +19,13 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansDirectDispatchFailurePropagationTests
 {
     [Fact]
-    public async Task DispatchAsync_ShouldThrow_WhenRuntimeRetryIsDisabled()
+    public async Task DispatchAsync_ShouldReturn_WhenRuntimeRetryIsDisabledAndHandlerFails()
     {
         RetryAwareDirectDispatchAgent.Reset();
         var actorId = $"actor-{Guid.NewGuid():N}";
         var siloPort = ReserveTcpPort();
         var gatewayPort = ReserveTcpPort();
+        var logProbe = new RuntimeRetryLogProbe();
 
         using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
         {
@@ -34,7 +35,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
         });
 
-        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+        var host = await StartSiloHostAsync(siloPort, gatewayPort, logProbe);
 
         try
         {
@@ -43,10 +44,9 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-no-retry");
 
-            Func<Task> act = () => dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
-
-            var failure = await act.Should().ThrowAsync<Exception>();
-            failure.Which.ToString().Should().Contain("always-fail-no-retry");
+            await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
+            await logProbe.WaitForRuntimeHandlingFailureAsync(TimeSpan.FromSeconds(20));
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
         }
         finally
@@ -57,12 +57,13 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldThrow_WhenRuntimeRetryIsAlreadyExhausted()
+    public async Task DispatchAsync_ShouldReturn_WhenRuntimeRetryIsAlreadyExhaustedAndHandlerFails()
     {
         RetryAwareDirectDispatchAgent.Reset();
         var actorId = $"actor-{Guid.NewGuid():N}";
         var siloPort = ReserveTcpPort();
         var gatewayPort = ReserveTcpPort();
+        var logProbe = new RuntimeRetryLogProbe();
 
         using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
         {
@@ -72,7 +73,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
         });
 
-        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+        var host = await StartSiloHostAsync(siloPort, gatewayPort, logProbe);
 
         try
         {
@@ -88,10 +89,9 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 },
             };
 
-            Func<Task> act = () => dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
-
-            var failure = await act.Should().ThrowAsync<Exception>();
-            failure.Which.ToString().Should().Contain("always-fail-retry-exhausted");
+            await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
+            await logProbe.WaitForRuntimeHandlingFailureAsync(TimeSpan.FromSeconds(20));
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
         }
         finally
@@ -214,6 +214,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     {
         private readonly TaskCompletionSource<bool> _runtimeRetryScheduledDetected =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _runtimeHandlingFailureDetected =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ILogger CreateLogger(string categoryName)
         {
@@ -245,6 +247,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             var message = formatter(state, exception);
             if (message.Contains("Runtime envelope retry scheduled", StringComparison.Ordinal))
                 _runtimeRetryScheduledDetected.TrySetResult(true);
+            if (message.Contains("Runtime envelope handling failed after retry exhausted", StringComparison.Ordinal))
+                _runtimeHandlingFailureDetected.TrySetResult(true);
         }
 
         public async Task WaitForRuntimeRetryScheduledAsync(TimeSpan timeout)
@@ -257,6 +261,19 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             {
                 throw new TimeoutException(
                     $"Timed out after {timeout} waiting for runtime retry scheduling to be logged.");
+            }
+        }
+
+        public async Task WaitForRuntimeHandlingFailureAsync(TimeSpan timeout)
+        {
+            try
+            {
+                await _runtimeHandlingFailureDetected.Task.WaitAsync(timeout);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {timeout} waiting for runtime handling failure to be logged.");
             }
         }
 
@@ -274,6 +291,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     {
         private static readonly Lock SyncLock = new();
         private static readonly Dictionary<string, int> AttemptsByEnvelopeId = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, TaskCompletionSource<int>> AttemptSourcesByEnvelopeId =
+            new(StringComparer.Ordinal);
         private static TaskCompletionSource<EventEnvelope> _successfulEnvelopeSource = CreateSuccessSource();
 
         public static void Reset()
@@ -281,6 +300,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             lock (SyncLock)
             {
                 AttemptsByEnvelopeId.Clear();
+                AttemptSourcesByEnvelopeId.Clear();
                 _successfulEnvelopeSource = CreateSuccessSource();
             }
         }
@@ -305,6 +325,19 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             {
                 throw new TimeoutException(
                     $"Timed out after {timeout} waiting for successful direct-dispatch retry of '{envelopeId}'.");
+            }
+        }
+
+        public static async Task<int> WaitForAttemptAsync(string envelopeId, TimeSpan timeout)
+        {
+            try
+            {
+                return await GetAttemptSource(envelopeId).Task.WaitAsync(timeout);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {timeout} waiting for direct-dispatch attempt of '{envelopeId}'.");
             }
         }
 
@@ -356,8 +389,33 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             lock (SyncLock)
             {
-                AttemptsByEnvelopeId[envelopeId] = AttemptsByEnvelopeId.GetValueOrDefault(envelopeId, 0) + 1;
+                var attempt = AttemptsByEnvelopeId.GetValueOrDefault(envelopeId, 0) + 1;
+                AttemptsByEnvelopeId[envelopeId] = attempt;
+                GetAttemptSourceUnderLock(envelopeId).TrySetResult(attempt);
             }
+        }
+
+        private static TaskCompletionSource<int> GetAttemptSource(string envelopeId)
+        {
+            lock (SyncLock)
+            {
+                var existingAttempt = AttemptsByEnvelopeId.GetValueOrDefault(envelopeId, 0);
+                var source = GetAttemptSourceUnderLock(envelopeId);
+                if (existingAttempt > 0)
+                    source.TrySetResult(existingAttempt);
+                return source;
+            }
+        }
+
+        private static TaskCompletionSource<int> GetAttemptSourceUnderLock(string envelopeId)
+        {
+            if (!AttemptSourcesByEnvelopeId.TryGetValue(envelopeId, out var source))
+            {
+                source = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                AttemptSourcesByEnvelopeId[envelopeId] = source;
+            }
+
+            return source;
         }
     }
 }

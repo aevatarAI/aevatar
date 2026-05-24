@@ -6,7 +6,7 @@ owner: eanzhao
 
 # Lark Reply Chain Completion Semantics
 
-ADR-0021 决策的工程参考。本文档面向实现者，给出每个阶段的可观察 state、事件时序、故障矩阵、状态机图与实现 checklist。决策依据见 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)。
+ADR-0021 决策的工程参考。本文档面向实现者，给出每个阶段的可观察 state、事件时序、故障矩阵、状态机图与实现 checklist。基础决策见 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)；dispatcher plain `Task` handoff 修订见 [`docs/adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md`](../adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)。
 
 ## 1. 链路与四阶段定位
 
@@ -261,6 +261,7 @@ internal static bool IsTerminal(AgentRunState s) =>
 ## 12. 参考
 
 - ADR-0021 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)
+- ADR-0027 [`docs/adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md`](../adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)
 - Issue #647 / #648 / #649
 - 关联 ADR-0009 channel-bot-callback-architecture（callback 流上下游）
 - 关联 ADR-0014 interactive-reply-abstraction
