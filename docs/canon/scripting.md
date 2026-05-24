@@ -49,7 +49,7 @@ owner: eanzhao
 3. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
 4. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
 5. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
-6. 写侧 dispatcher 会基于 post-event state 调 `BuildReadModel(...)`，再把 semantic/native committed fact 一并发布出去。
+6. projection materializer 从 committed `state_root + ScriptDomainFactCommitted` 派生当前态 readmodel / native_doc / native_graph；actor write-side 只发布 committed business fact 与 state root。
 7. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` / `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 基于 committed observation 构建当前态与 native readmodel。
 8. 查询只通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 读取 persisted snapshot/document；read-side 不再执行 behavior query，也不再暴露 declared-query authoring/runtime 契约。
 9. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
@@ -191,7 +191,7 @@ flowchart LR
 3. 运行期 `publish/send/self-signal/durable-timeout` 语义必须保持 runtime-neutral。
 4. 影响业务语义、控制流、稳定读取的数据必须强类型建模，不重新退回 bag。
 5. Scripting 与 Workflow/CQRS Core 继续共享统一 envelope / projection 主链，不引入第二套 read-side pipeline。
-6. projection 不得再解析 behavior artifact 或编译 native materialization plan；native materialization 必须来自 actor write-side durable contract。
+6. projection 阶段负责解析 behavior artifact 并编译 native materialization plan；actor write-side 只保留 committed business fact，不承担 readmodel / native_doc / native_graph 物化职责。
 7. runtime semantics 必须 descriptor-first，禁止再依赖 `google.protobuf.*` wrapper fallback 推断 command / signal / event 语义。
 
 ## 9. 历史文档整理结论

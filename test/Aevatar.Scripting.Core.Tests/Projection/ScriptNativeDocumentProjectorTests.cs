@@ -109,7 +109,7 @@ public sealed class ScriptNativeDocumentProjectorTests
             DomainEventPayload = Any.Pack(new ScriptProfileUpdated
             {
                 CommandId = "command-derived-document",
-                Current = readModel.Clone(),
+                Current = BuildIgnoredProfileReadModel(),
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
             StateVersion = 11,
@@ -240,6 +240,31 @@ public sealed class ScriptNativeDocumentProjectorTests
         };
         readModel.Tags.Add("gold");
         readModel.Tags.Add("vip");
+        return readModel;
+    }
+
+    private static ScriptProfileReadModel BuildIgnoredProfileReadModel()
+    {
+        var readModel = new ScriptProfileReadModel
+        {
+            HasValue = true,
+            ActorId = "ignored-actor",
+            PolicyId = "ignored-policy",
+            LastCommandId = "IGNORED-BY-PROJECTOR",
+            InputText = "ignored-by-projector",
+            NormalizedText = "IGNORED-BY-PROJECTOR",
+            Search = new ScriptProfileSearchIndex
+            {
+                LookupKey = "ignored-actor:ignored-policy",
+                SortKey = "IGNORED-BY-PROJECTOR",
+            },
+            Refs = new ScriptProfileDocumentRef
+            {
+                ActorId = "ignored-actor",
+                PolicyId = "ignored-policy",
+            },
+        };
+        readModel.Tags.Add("ignored-by-projector");
         return readModel;
     }
 

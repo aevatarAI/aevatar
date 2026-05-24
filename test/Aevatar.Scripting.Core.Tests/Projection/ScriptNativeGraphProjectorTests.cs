@@ -117,7 +117,7 @@ public sealed class ScriptNativeGraphProjectorTests
             DomainEventPayload = Any.Pack(new ClaimDecisionRecorded
             {
                 CommandId = "command-derived-graph",
-                Current = readModel.Clone(),
+                Current = BuildIgnoredClaimReadModel(),
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
             StateVersion = 13,
@@ -428,6 +428,32 @@ public sealed class ScriptNativeGraphProjectorTests
             {
                 PolicyId = "POLICY-B",
                 OwnerActorId = "claim-runtime",
+            },
+        };
+    }
+
+    private static ClaimReadModel BuildIgnoredClaimReadModel()
+    {
+        return new ClaimReadModel
+        {
+            HasValue = true,
+            CaseId = "IGNORED-BY-PROJECTOR",
+            PolicyId = "POLICY-IGNORED",
+            DecisionStatus = "Ignored",
+            ManualReviewRequired = false,
+            AiSummary = "ignored-by-projector",
+            RiskScore = 0.01d,
+            CompliancePassed = false,
+            LastCommandId = "IGNORED-BY-PROJECTOR",
+            Search = new ClaimSearchIndex
+            {
+                LookupKey = "ignored-by-projector:policy-ignored",
+                DecisionKey = "ignored",
+            },
+            Refs = new ClaimRefs
+            {
+                PolicyId = "POLICY-IGNORED",
+                OwnerActorId = "ignored-runtime",
             },
         };
     }
