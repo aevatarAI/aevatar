@@ -33,7 +33,7 @@ public sealed class WorkflowBridgeExtensionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowBridgeExtensions_ShouldRegisterTelegramGetUpdatesExternalLinkTransportFactory()
+    public async Task AddWorkflowBridgeExtensions_ShouldRegisterTelegramGetUpdatesExternalLinkTransportFactory()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IConnectorRegistry, EmptyConnectorRegistry>();
@@ -42,7 +42,7 @@ public sealed class WorkflowBridgeExtensionRegistrationTests
 
         services.AddWorkflowBridgeExtensions();
 
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var factories = provider.GetServices<IExternalLinkTransportFactory>();
         var factory = factories.Should().ContainSingle(x =>
@@ -53,9 +53,11 @@ public sealed class WorkflowBridgeExtensionRegistrationTests
 
     private sealed class EmptyConnectorRegistry : IConnectorRegistry
     {
-        public void Register(IConnector connector)
+        public ValueTask RegisterAsync(ConnectorRegistration registration, CancellationToken ct = default)
         {
-            _ = connector;
+            _ = registration;
+            _ = ct;
+            return ValueTask.CompletedTask;
         }
 
         public bool TryGet(string name, out IConnector? connector)
@@ -66,5 +68,7 @@ public sealed class WorkflowBridgeExtensionRegistrationTests
         }
 
         public IReadOnlyList<string> ListNames() => [];
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

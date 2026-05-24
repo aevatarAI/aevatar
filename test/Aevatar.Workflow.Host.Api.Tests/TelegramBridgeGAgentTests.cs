@@ -26,7 +26,7 @@ public sealed class TelegramBridgeGAgentTests
             Output = """{"ok":true,"result":{"text":"telegram-ok"}}""",
         });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
@@ -100,7 +100,7 @@ public sealed class TelegramBridgeGAgentTests
             Output = """{"ok":true,"result":{"text":"telegram-ok"}}""",
         });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
@@ -135,7 +135,7 @@ public sealed class TelegramBridgeGAgentTests
             Output = """{"ok":true,"result":{"text":"ok"}}""",
         });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
@@ -173,7 +173,7 @@ public sealed class TelegramBridgeGAgentTests
                 Output = "raw-telegram-output",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
@@ -244,7 +244,7 @@ public sealed class TelegramBridgeGAgentTests
                 Output = """{"ok":true,"result":{"text":"ok"}}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramUserBridgeGAgent(
             new NoopActorRuntime(),
@@ -280,7 +280,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new RecordingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var runtime = new NoopActorRuntime();
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
@@ -490,7 +490,7 @@ public sealed class TelegramBridgeGAgentTests
                 Output = """{"ok":true,"result":[]}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -593,7 +593,7 @@ public sealed class TelegramBridgeGAgentTests
                 Output = """{"ok":true,"result":[]}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -633,7 +633,7 @@ public sealed class TelegramBridgeGAgentTests
                     """{"ok":true,"result":[{"update_id":201,"message":{"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"[AEVATAR_STREAM_REPLY] bootstrap-reply"}}]}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -677,7 +677,7 @@ public sealed class TelegramBridgeGAgentTests
                     """{"ok":true,"result":[{"update_id":301,"message":{"chat":{"id":"10001"},"from":{"id":"2002"},"text":"[AEVATAR_STREAM_REPLY] no-username-reply"}}]}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -714,7 +714,7 @@ public sealed class TelegramBridgeGAgentTests
             Output = """{"ok":false,"description":"telegram denied getUpdates"}""",
         });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -773,7 +773,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -805,7 +805,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher, scheduler);
@@ -837,7 +837,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher);
 
@@ -871,7 +871,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new RecordingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -900,7 +900,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new RecordingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
@@ -937,7 +937,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher);
 
@@ -965,7 +965,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher);
 
@@ -999,7 +999,7 @@ public sealed class TelegramBridgeGAgentTests
     {
         var connector = new AsyncFaultingConnector(new InvalidOperationException("remote fault"));
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher);
 
@@ -1039,7 +1039,7 @@ public sealed class TelegramBridgeGAgentTests
                 Output = """{"ok":true,"result":{"text":"telegram-user-ok"}}""",
             });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramUserBridgeGAgent(
             new NoopActorRuntime(),
@@ -1256,11 +1256,18 @@ public sealed class TelegramBridgeGAgentTests
     {
         private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(IConnector connector) => _connectors[connector.Name] = connector;
+        public ValueTask RegisterAsync(ConnectorRegistration registration, CancellationToken ct = default)
+        {
+            _ = ct;
+            _connectors[registration.Connector.Name] = registration.Connector;
+            return ValueTask.CompletedTask;
+        }
 
         public bool TryGet(string name, out IConnector? connector) => _connectors.TryGetValue(name, out connector);
 
         public IReadOnlyList<string> ListNames() => _connectors.Keys.ToList();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher

@@ -19,7 +19,7 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
             Output = """{"ok":true,"result":[]}""",
         });
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var transport = CreateTransport(registry);
         var sink = new RecordingExternalLinkSignalSink();
         transport.SignalSink = sink;
@@ -68,7 +68,7 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
     public async Task SendAsync_WhenConnectorThrowsSynchronously_ShouldPublishFailureResult()
     {
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(new ThrowingConnector(new InvalidOperationException("sync broke")));
+        await registry.RegisterAsync(ConnectorRegistration.External(new ThrowingConnector(new InvalidOperationException("sync broke"))));
         var transport = CreateTransport(registry);
         var sink = new RecordingExternalLinkSignalSink();
         transport.SignalSink = sink;
@@ -84,7 +84,7 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
     public async Task SendAsync_WhenConnectorFaultsAsynchronously_ShouldPublishFailureResult()
     {
         var registry = new InMemoryConnectorRegistry();
-        registry.Register(new FaultingConnector(new InvalidOperationException("async broke")));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FaultingConnector(new InvalidOperationException("async broke"))));
         var transport = CreateTransport(registry);
         var sink = new RecordingExternalLinkSignalSink();
         transport.SignalSink = sink;
@@ -223,8 +223,15 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
     {
         private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Register(IConnector connector) => _connectors[connector.Name] = connector;
+        public ValueTask RegisterAsync(ConnectorRegistration registration, CancellationToken ct = default)
+        {
+            _ = ct;
+            _connectors[registration.Connector.Name] = registration.Connector;
+            return ValueTask.CompletedTask;
+        }
+
         public bool TryGet(string name, out IConnector? connector) => _connectors.TryGetValue(name, out connector);
         public IReadOnlyList<string> ListNames() => _connectors.Keys.ToList();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

@@ -19,8 +19,11 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
+    private readonly CancellationTokenSource _disposeCts = new();
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _tools;
     private readonly ILogger _logger;
+    private readonly bool _ownsClientManager;
+    private int _disposed;
 
     public MCPConnector(
         string name,
@@ -38,6 +41,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _allowedTools = new HashSet<string>(allowedTools ?? [], StringComparer.OrdinalIgnoreCase);
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _clientManager = clientManager ?? new MCPClientManager(logger);
+        _ownsClientManager = clientManager == null;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -136,6 +140,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     {
         while (true)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
             var current = _tools;
             if (TryGetReusableTask(current, out var cached))
                 return cached;
@@ -146,7 +152,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             // New: publish a non-started Lazy<Task<T>> first; ExecutionAndPublication lets only the
             // winning Lazy start discovery, while losing Lazy instances are never evaluated.
             var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-                () => ConnectAndIndexToolsAsync(ct),
+                () => ConnectAndIndexToolsAsync(ct, _disposeCts.Token),
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var winner = Interlocked.CompareExchange(ref _tools, candidate, current);
             if (ReferenceEquals(winner, current))
@@ -176,17 +182,53 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         return true;
     }
 
-    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(CancellationToken ct)
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(
+        CancellationToken requestCt,
+        CancellationToken disposeCt)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(requestCt, disposeCt);
+        var ct = linkedCts.Token;
         var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
         return discovered.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() =>
-        _clientManager is IAsyncDisposable disposable
-            ? disposable.DisposeAsync()
-            : ValueTask.CompletedTask;
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        await _disposeCts.CancelAsync();
+        var toolsTask = TryGetCreatedToolsTask(_tools);
+        if (toolsTask != null)
+        {
+            try
+            {
+                await toolsTask;
+            }
+            catch
+            {
+                // Discovery may be canceled or faulted while shutdown is releasing the transport.
+            }
+        }
+
+        if (_ownsClientManager && _clientManager is IAsyncDisposable disposableClientManager)
+            await disposableClientManager.DisposeAsync();
+
+        // Refactor (iter87/cluster-087):
+        //   Old pattern: remote MCP HttpClient was transferred into connector config but only connected sessions were disposed.
+        //   New principle: connector lifecycle releases owned transport resources even when disposed before first connect.
+        if (_serverConfig.OwnsHttpClient)
+            _serverConfig.HttpClient?.Dispose();
+
+        _disposeCts.Dispose();
+    }
+
+    private static Task<IReadOnlyDictionary<string, IAgentTool>>? TryGetCreatedToolsTask(
+        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current)
+    {
+        return current is { IsValueCreated: true } ? current.Value : null;
+    }
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {
