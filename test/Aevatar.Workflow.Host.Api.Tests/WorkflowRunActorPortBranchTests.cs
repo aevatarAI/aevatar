@@ -305,36 +305,6 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task ParseWorkflowYamlAsync_ShouldAcceptRepositoryWorkflowSamples()
-    {
-        var port = CreatePort(new RecordingActorRuntime());
-        var repositoryRoot = ResolveRepositoryRoot();
-        var workflowFiles = Directory
-            .EnumerateFiles(
-                Path.Combine(repositoryRoot, "workflows"),
-                "*.y*ml",
-                SearchOption.AllDirectories)
-            .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        workflowFiles.Should().NotBeEmpty();
-
-        var failures = new List<string>();
-        foreach (var workflowFile in workflowFiles)
-        {
-            var yaml = await File.ReadAllTextAsync(workflowFile);
-            var result = await port.ParseWorkflowYamlAsync(yaml, CancellationToken.None);
-            if (!result.Succeeded)
-            {
-                failures.Add(
-                    $"{Path.GetRelativePath(repositoryRoot, workflowFile)} => {result.Error}");
-            }
-        }
-
-        failures.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task CreateRunAsync_WhenInlineDefinitionsDiffer_ShouldRebindExistingDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();

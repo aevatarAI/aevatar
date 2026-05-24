@@ -1,9 +1,0 @@
-SCOPE_EXTEND: src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContext.cs add typed tool execution context required by cluster decision
-SCOPE_EXTEND: src/Aevatar.AI.Abstractions/ToolProviders/AgentToolContextScope.cs add request-local typed context scope helper, no behavior change
-SCOPE_EXTEND: src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContextMapper.cs isolate legacy metadata key mapping outside control flow
-SCOPE_EXTEND: src/Aevatar.AI.Abstractions/LLMProviders/LLMRequestRoutingContext.cs add typed LLM route controls required by cluster decision
-SCOPE_EXTEND: agents/Aevatar.GAgents.Channel.Runtime/Aevatar.GAgents.Channel.Runtime.csproj import AI proto context type for NeedsLlmReplyEvent
-SCOPE_EXTEND: tools/ci/architecture_guards.sh add static guard for generic tool metadata control-plane regressions
-SCOPE_EXTEND: agents/Aevatar.GAgents.NyxidChat/Aevatar.GAgents.NyxidChat.csproj add AI proto import dir because it compiles channel runtime protos
-SCOPE_EXTEND: buf.work.yaml include AI abstractions proto root so buf lint resolves AgentToolExecutionContextPayload import
-⟦AI:AUTO-LOOP⟧

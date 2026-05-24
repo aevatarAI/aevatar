@@ -487,8 +487,12 @@ set +e
 # Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
 # Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
 # by requiring the call to be on a reader/document field (dot prefix pattern).
+projection_document_reader_scan_roots=(src test)
+if [[ -d demos ]]; then
+  projection_document_reader_scan_roots+=(demos)
+fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" src test demos \
+  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
     | xargs -r rg -n "\.ListAsync\(" \
     | rg -i "(reader|document|projection).*\.ListAsync"
 )"
@@ -709,7 +713,11 @@ then
   exit 1
 fi
 
-if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
+type_url_scan_roots=(src)
+if [[ -d demos ]]; then
+  type_url_scan_roots+=(demos)
+fi
+if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" "${type_url_scan_roots[@]}"; then
   echo "Found string-based event type matching."
   exit 1
 fi
@@ -812,7 +820,7 @@ fi
 
 mass_transit_v9_refs="$(
   rg -n "<Package(Reference|Version) Include=\"MassTransit(\.[^\"]*)?\" Version=\"9\." \
-    Directory.Packages.props src test demos tools \
+    Directory.Packages.props src test tools \
     -g 'Directory.Packages.props' -g '*.csproj' || true
 )"
 

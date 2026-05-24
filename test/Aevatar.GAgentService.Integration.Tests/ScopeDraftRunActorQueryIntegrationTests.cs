@@ -36,18 +36,10 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
     public async Task DraftRunEndpoint_ShouldExposeCompletedActorSnapshotViaActorQuery()
     {
         await using var host = await DraftRunActorQueryHost.StartAsync();
-        var workflowYamls = host.LoadWorkflowYamls(
-        [
-            "workflow_call_multilevel.yaml",
-            "subworkflow_level1.yaml",
-            "subworkflow_level2.yaml",
-            "subworkflow_level3.yaml",
-        ]);
-
         using var response = await host.Client.PostAsJsonAsync($"/api/scopes/{host.ScopeId}/workflow/draft-run", new
         {
             prompt = "  z\nz\ny  ",
-            workflowYamls,
+            workflowYamls = MultilevelWorkflowYamls,
         });
         var body = await response.Content.ReadAsStringAsync();
 
@@ -186,14 +178,6 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             return new DraftRunActorQueryHost(app, client, repoRoot, scopeId);
         }
 
-        public IReadOnlyList<string> LoadWorkflowYamls(IReadOnlyList<string> names)
-        {
-            var workflowDir = Path.Combine(RepoRoot, "demos", "Aevatar.Demos.Workflow", "workflows");
-            return names
-                .Select(name => File.ReadAllText(Path.Combine(workflowDir, name)))
-                .ToArray();
-        }
-
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
@@ -271,6 +255,66 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             CancellationToken ct = default) =>
             inner.ReleaseActorProjectionAsync(lease, ct);
     }
+
+    private static readonly string[] MultilevelWorkflowYamls =
+    [
+        """
+        name: workflow_call_multilevel
+        description: Parent workflow calls nested sub-workflows (L1 -> L2 -> L3), then formats final output.
+
+        steps:
+          - id: call_level1
+            type: workflow_call
+            parameters:
+              workflow: "subworkflow_level1"
+
+          - id: format_final_output
+            type: transform
+            parameters:
+              op: "join"
+              separator: " | "
+        """,
+        """
+        name: subworkflow_level1
+        description: Level 1 sub-workflow calls level 2, then reverses line order.
+
+        steps:
+          - id: call_level2
+            type: workflow_call
+            parameters:
+              workflow: "subworkflow_level2"
+
+          - id: reverse_lines_level1
+            type: transform
+            parameters:
+              op: "reverse_lines"
+        """,
+        """
+        name: subworkflow_level2
+        description: Level 2 sub-workflow calls level 3, then deduplicates lines.
+
+        steps:
+          - id: call_level3
+            type: workflow_call
+            parameters:
+              workflow: "subworkflow_level3"
+
+          - id: distinct_level2
+            type: transform
+            parameters:
+              op: "distinct"
+        """,
+        """
+        name: subworkflow_level3
+        description: Level 3 sub-workflow normalizes the input text.
+
+        steps:
+          - id: trim_level3
+            type: transform
+            parameters:
+              op: "trim"
+        """,
+    ];
 
     private sealed class InMemoryGAgentActorStore :
         IGAgentActorRegistryCommandPort,
