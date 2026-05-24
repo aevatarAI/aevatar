@@ -55,7 +55,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -142,7 +142,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -208,12 +208,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -268,12 +263,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -328,12 +318,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -398,12 +383,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -463,12 +443,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
@@ -512,12 +487,78 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public void Constructor_Requires_Typed_Dependencies()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+
+        var missingQuery = () => new AgentBuilderTool(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingNyxFactory = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingSourceNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsStructuredError_WhenCallerScopeUnavailable()
+    {
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("caller_scope_unavailable");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authenticate");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ToolSource_Always_ReturnsTool()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(new RoutingJsonHandler()) { BaseAddress = new Uri("https://nyx.example.com") });
+        var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -528,7 +569,7 @@ public sealed class AgentBuilderToolTests
 
         var source = new AgentBuilderToolSource(
             queryPort,
-            nyxClient,
+            nyxClientFactory,
             skillRunnerPort,
             catalogCommandPort,
             callerScopeResolver);
@@ -562,11 +603,28 @@ public sealed class AgentBuilderToolTests
         var provider = services.BuildServiceProvider();
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
-            provider.GetRequiredService<NyxIdApiClient>(),
+            provider.GetRequiredService<INyxIdApiClientFactory>(),
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetService<ILogger<AgentBuilderTool>>());
+    }
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient? client = null)
+        {
+            _client = client ?? new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(new RoutingJsonHandler())
+                {
+                    BaseAddress = new Uri("https://nyx.example.com"),
+                });
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
     }
 
     private sealed class RoutingJsonHandler : HttpMessageHandler

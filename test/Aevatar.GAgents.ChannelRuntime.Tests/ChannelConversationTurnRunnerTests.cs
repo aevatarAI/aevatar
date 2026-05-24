@@ -953,12 +953,12 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
-            .AddSingleton(new NyxIdApiClient(
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://example.com" },
                 new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
                 {
                     BaseAddress = new Uri("https://example.com"),
-                }))
+                })))
             .BuildServiceProvider();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -2461,7 +2461,7 @@ public sealed class ChannelConversationTurnRunnerTests
         HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
-        services ??= new ServiceCollection().BuildServiceProvider();
+        services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
         nyxHandler ??= new RecordingJsonHandler("""{"code":0,"data":{}}""");
         var relayClient = new NyxIdApiClient(
@@ -2504,6 +2504,28 @@ public sealed class ChannelConversationTurnRunnerTests
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>());
+    }
+
+    private static IServiceProvider BuildAgentBuilderToolServices()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
+                "nyx-user-1",
+                "lark",
+                "scope-1",
+                "ou_user_1")));
+
+        return new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .BuildServiceProvider();
     }
 
     private static ConversationTurnRuntimeContext RelayRuntimeContext(
@@ -2689,6 +2711,23 @@ public sealed class ChannelConversationTurnRunnerTests
                 "scope-1",
                 "ou_user_1"));
         }
+    }
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient? client = null)
+        {
+            _client = client ?? new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://example.com" },
+                new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
+                {
+                    BaseAddress = new Uri("https://example.com"),
+                });
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
     }
 
     private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService
