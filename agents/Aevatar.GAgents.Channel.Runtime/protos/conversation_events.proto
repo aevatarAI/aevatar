@@ -160,10 +160,12 @@ enum NyxRelayTextOperationKind {
   NYX_RELAY_TEXT_OPERATION_KIND_FINAL = 3;
 }
 
-// Refactor (iter20/cluster-004):
-//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
-//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
-message ConversationReplyLifecycleState {
+// Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+//   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+//   New principle: event describes transition facts; reducer derives current state from event + actor state
+// Legacy wire-compatible parser for historical ConversationReplyLifecycleChangedEvent.lifecycle = 1 bytes.
+// New writers MUST NOT populate this snapshot; it exists only so old events can replay.
+message LegacyConversationReplyLifecycleSnapshot {
   string correlation_id = 1;
   ConversationReplyLifecycleMode mode = 2;
   ConversationReplyLifecyclePhase phase = 3;
@@ -189,12 +191,37 @@ message ConversationReplyLifecycleState {
   LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
 }
 
-// Refactor (iter20/cluster-004):
-//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
-//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+//   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+//   New principle: event describes transition facts; reducer derives current state from event + actor state
 message ConversationReplyLifecycleChangedEvent {
-  ConversationReplyLifecycleState lifecycle = 1;
+  reserved "lifecycle";
+
+  LegacyConversationReplyLifecycleSnapshot legacy_lifecycle_snapshot = 1;
   int64 changed_at_unix_ms = 2;
+  string correlation_id = 3;
+  ConversationReplyLifecycleMode mode = 4;
+  ConversationReplyLifecyclePhase previous_phase = 5;
+  ConversationReplyLifecyclePhase phase = 6;
+  optional string platform_message_id = 7;
+  optional string card_id = 8;
+  optional string card_message_id = 9;
+  optional string original_card_id = 10;
+  optional string last_flushed_text = 11;
+  optional int32 edit_count = 12;
+  optional int64 sequence = 13;
+  optional string streaming_element_id = 14;
+  optional string terminal_reason = 15;
+  optional LarkCardOperationPhase lark_card_in_flight_operation = 16;
+  optional int64 lark_card_in_flight_sequence = 17;
+  optional int64 lark_card_operation_generation = 18;
+  optional string pending_accumulated_text = 19;
+  optional string pending_finalize_text = 20;
+  optional string pending_finalize_command_id = 21;
+  optional NyxRelayTextOperationKind nyx_relay_in_flight_operation = 22;
+  optional int64 nyx_relay_in_flight_sequence = 23;
+  optional int64 nyx_relay_operation_generation = 24;
+  optional LlmReplyTerminalState pending_nyx_relay_terminal_state = 25;
 }
 
 // Refactor (iter20/cluster-004):

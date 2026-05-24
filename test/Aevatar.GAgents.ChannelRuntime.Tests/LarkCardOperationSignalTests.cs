@@ -88,10 +88,11 @@ public sealed class LarkCardOperationSignalTests
             .Where(e => e.EventType == ConversationReplyLifecycleChangedEvent.Descriptor.FullName)
             .Select(e => ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(e.EventData.Value))
             .Last();
-        changed.Lifecycle.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardTerminated);
-        changed.Lifecycle.CardId.Should().Be("card_orphan");
-        changed.Lifecycle.CardMessageId.Should().Be("om_orphan");
-        changed.Lifecycle.TerminalReason.Should().Be("create_post_send_failed:card_first_stream_failed");
+        changed.LegacyLifecycleSnapshot.Should().BeNull();
+        changed.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardTerminated);
+        changed.CardId.Should().Be("card_orphan");
+        changed.CardMessageId.Should().Be("om_orphan");
+        changed.TerminalReason.Should().Be("create_post_send_failed:card_first_stream_failed");
 
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
         completed.SentActivityId.Should().Be("lark-card-stream:om_orphan");

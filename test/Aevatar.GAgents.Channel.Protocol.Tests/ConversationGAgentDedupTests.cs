@@ -1658,6 +1658,128 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_LegacyReplyLifecycleSnapshotEvent_FallbackReplacesCurrentState()
+    {
+        var store = new InMemoryEventStore();
+        await AppendStateEventAsync(
+            store,
+            "conv-legacy-lifecycle-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                LegacyLifecycleSnapshot = new LegacyConversationReplyLifecycleSnapshot
+                {
+                    CorrelationId = "corr-legacy",
+                    Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                    Phase = ConversationReplyLifecyclePhase.TextStreaming,
+                    PlatformMessageId = "om_legacy",
+                    LastFlushedText = "legacy text",
+                    EditCount = 2,
+                    UpdatedAtUnixMs = 123,
+                    NyxRelayInFlightOperation = NyxRelayTextOperationKind.Interim,
+                    NyxRelayInFlightSequence = 7,
+                    NyxRelayOperationGeneration = 9,
+                    PendingAccumulatedText = "pending legacy",
+                },
+                ChangedAtUnixMs = 456,
+            },
+            1);
+
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-legacy-lifecycle-replay", store: store);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.CorrelationId.ShouldBe("corr-legacy");
+        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextStreaming);
+        lifecycle.PlatformMessageId.ShouldBe("om_legacy");
+        lifecycle.LastFlushedText.ShouldBe("legacy text");
+        lifecycle.EditCount.ShouldBe(2);
+        lifecycle.UpdatedAtUnixMs.ShouldBe(123);
+        lifecycle.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        lifecycle.NyxRelayInFlightSequence.ShouldBe(7);
+        lifecycle.NyxRelayOperationGeneration.ShouldBe(9);
+        lifecycle.PendingAccumulatedText.ShouldBe("pending legacy");
+        agent.State.LastUpdatedUnixMs.ShouldBe(456);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossNyxRelayTransitions()
+    {
+        var store = new InMemoryEventStore();
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextIdle,
+                Phase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
+                ChangedAtUnixMs = 100,
+                PlatformMessageId = "om_fact",
+                LastFlushedText = "first",
+                EditCount = 1,
+                NyxRelayOperationGeneration = 1,
+            },
+            1);
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
+                Phase = ConversationReplyLifecyclePhase.TextStreaming,
+                ChangedAtUnixMs = 200,
+                LastFlushedText = "second",
+                EditCount = 2,
+                NyxRelayInFlightOperation = NyxRelayTextOperationKind.Final,
+                NyxRelayInFlightSequence = 2,
+                NyxRelayOperationGeneration = 2,
+                PendingFinalizeText = "final",
+                PendingFinalizeCommandId = "cmd-final",
+                PendingNyxRelayTerminalState = LlmReplyTerminalState.Completed,
+            },
+            2);
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextStreaming,
+                Phase = ConversationReplyLifecyclePhase.TextTerminalSucceeded,
+                ChangedAtUnixMs = 300,
+                NyxRelayInFlightOperation = NyxRelayTextOperationKind.Unspecified,
+                NyxRelayInFlightSequence = 0,
+                PendingFinalizeText = string.Empty,
+                PendingFinalizeCommandId = string.Empty,
+                PendingNyxRelayTerminalState = LlmReplyTerminalState.Unspecified,
+                TerminalReason = "completed",
+            },
+            3);
+
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-nyx-fact-replay", store: store);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.CorrelationId.ShouldBe("corr-nyx-fact");
+        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextTerminalSucceeded);
+        lifecycle.PlatformMessageId.ShouldBe("om_fact");
+        lifecycle.LastFlushedText.ShouldBe("second");
+        lifecycle.EditCount.ShouldBe(2);
+        lifecycle.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        lifecycle.NyxRelayInFlightSequence.ShouldBe(0);
+        lifecycle.NyxRelayOperationGeneration.ShouldBe(2);
+        lifecycle.PendingFinalizeText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeCommandId.ShouldBeEmpty();
+        lifecycle.PendingNyxRelayTerminalState.ShouldBe(LlmReplyTerminalState.Unspecified);
+        lifecycle.TerminalReason.ShouldBe("completed");
+        lifecycle.UpdatedAtUnixMs.ShouldBe(300);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
     {
         var runner = new RecordingTurnRunner
@@ -2420,6 +2542,106 @@ public sealed class ConversationGAgentDedupTests
         lifecycle.Sequence.ShouldBe(1);
         lifecycle.LastFlushedText.ShouldBe("hello");
         lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossLarkCardTransitions()
+    {
+        var store = new InMemoryEventStore();
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.Unspecified,
+                Phase = ConversationReplyLifecyclePhase.LarkCardCreating,
+                ChangedAtUnixMs = 100,
+                LarkCardInFlightOperation = LarkCardOperationPhase.Create,
+                LarkCardInFlightSequence = 1,
+                LarkCardOperationGeneration = 1,
+            },
+            1);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardCreating,
+                Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                ChangedAtUnixMs = 200,
+                CardId = "card_fact",
+                CardMessageId = "om_fact",
+                OriginalCardId = "card_fact",
+                LastFlushedText = "hello",
+                Sequence = 1,
+                StreamingElementId = "streaming_main",
+                LarkCardInFlightOperation = LarkCardOperationPhase.Unspecified,
+                LarkCardInFlightSequence = 0,
+            },
+            2);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                ChangedAtUnixMs = 300,
+                PendingAccumulatedText = "queued",
+                PendingFinalizeText = "final",
+                PendingFinalizeCommandId = "cmd-final",
+                LarkCardInFlightOperation = LarkCardOperationPhase.Finalize,
+                LarkCardInFlightSequence = 2,
+                LarkCardOperationGeneration = 2,
+            },
+            3);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                Phase = ConversationReplyLifecyclePhase.LarkCardCompleted,
+                ChangedAtUnixMs = 400,
+                LastFlushedText = "final",
+                Sequence = 2,
+                PendingAccumulatedText = string.Empty,
+                PendingFinalizeText = string.Empty,
+                PendingFinalizeCommandId = string.Empty,
+                LarkCardInFlightOperation = LarkCardOperationPhase.Unspecified,
+                LarkCardInFlightSequence = 0,
+                TerminalReason = "completed",
+            },
+            4);
+
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-fact-replay", store: store);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.CorrelationId.ShouldBe("corr-card-fact");
+        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.LarkCard);
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.LarkCardCompleted);
+        lifecycle.CardId.ShouldBe("card_fact");
+        lifecycle.CardMessageId.ShouldBe("om_fact");
+        lifecycle.OriginalCardId.ShouldBe("card_fact");
+        lifecycle.LastFlushedText.ShouldBe("final");
+        lifecycle.Sequence.ShouldBe(2);
+        lifecycle.StreamingElementId.ShouldBe("streaming_main");
+        lifecycle.PendingAccumulatedText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeCommandId.ShouldBeEmpty();
+        lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        lifecycle.LarkCardInFlightSequence.ShouldBe(0);
+        lifecycle.LarkCardOperationGeneration.ShouldBe(2);
+        lifecycle.TerminalReason.ShouldBe("completed");
+        lifecycle.UpdatedAtUnixMs.ShouldBe(400);
     }
 
     [Fact]
