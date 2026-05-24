@@ -268,6 +268,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
             return;
 
+        await DispatchGenerationTimeoutDropNotificationAsync(command);
+
         await PersistDomainEventAsync(new AgentRunFailedEvent
         {
             RunId = command.RunId,
@@ -685,6 +687,36 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             throw new AgentRunOutputDispatchException(
                 $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
+                ex);
+        }
+    }
+
+    private async Task DispatchGenerationTimeoutDropNotificationAsync(AgentRunReplyGenerationTimedOut command)
+    {
+        if (string.IsNullOrWhiteSpace(command.TargetActorId) ||
+            string.IsNullOrWhiteSpace(command.CorrelationId))
+        {
+            return;
+        }
+
+        var dropped = new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = command.CorrelationId,
+            Reason = "llm_reply_timeout",
+            DroppedAtUnixMs = command.TimedOutAtUnixMs > 0
+                ? command.TimedOutAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        };
+
+        try
+        {
+            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
+            await SendToAsync(command.TargetActorId, dropped, outputCts.Token);
+        }
+        catch (Exception ex)
+        {
+            throw new AgentRunOutputDispatchException(
+                $"Failed to send agent run generation timeout drop event to conversation actor '{command.TargetActorId}'.",
                 ex);
         }
     }

@@ -328,6 +328,69 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+                ResponseTimeoutSeconds = 1,
+            },
+            callbackScheduler: scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-generation-timeout-race",
+            RunId = "run-generation-timeout-race",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-generation-timeout-race",
+        });
+
+        var timeout = scheduler.Timeouts.Should().ContainSingle(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor)).Subject;
+
+        await runtime.HandleReplyGenerationTimedOutAsync(
+            timeout.TriggerEnvelope.Payload.Unpack<AgentRunReplyGenerationTimedOut>());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("llm_reply_timeout");
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        var dropped = handled.Single().Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-generation-timeout-race");
+        dropped.Reason.Should().Be("llm_reply_timeout");
+
+        await runtime.HandleReplyGenerationCompletedAsync(new AgentRunReplyGenerationCompleted
+        {
+            RunId = "run-generation-timeout-race",
+            CorrelationId = "corr-generation-timeout-race",
+            TargetActorId = "actor-1",
+            ReplyText = "late executor reply",
+            TerminalState = LlmReplyTerminalState.Completed,
+            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Attempt = generationExecutor.Starts.Single().Attempt,
+            Request = generationExecutor.Starts.Single().Request.Clone(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ProducedReplyText.Should().BeEmpty();
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        handled.Should().NotContain(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task ProduceAndDispatch_WhenPersistDispatchedFails_DoesNotDeliverDuplicateFallbackReply()
     {
         // Once DispatchReadyEventAsync delivers the reply to the conversation actor, the user
