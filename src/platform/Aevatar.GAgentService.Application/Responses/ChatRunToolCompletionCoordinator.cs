@@ -14,6 +14,13 @@ namespace Aevatar.GAgentService.Application.Responses;
 
 public sealed class ChatRunToolCompletionCoordinator
 {
+    public static IReadOnlyList<string> CompleteInvocationToolNames { get; } =
+    [
+        "aevatar_invoke_gagent",
+        "aevatar_invoke_team",
+        "aevatar_start_workflow",
+    ];
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -21,12 +28,8 @@ public sealed class ChatRunToolCompletionCoordinator
         WriteIndented = false,
     };
 
-    private static readonly HashSet<string> CompleteInvocationToolNames = new(StringComparer.Ordinal)
-    {
-        "aevatar_invoke_gagent",
-        "aevatar_invoke_team",
-        "aevatar_start_workflow",
-    };
+    private static readonly HashSet<string> CompleteInvocationToolNameSet =
+        CompleteInvocationToolNames.ToHashSet(StringComparer.Ordinal);
 
     private readonly IChatRunActorPort _chatRunActorPort;
     private readonly IActorEventSubscriptionProvider _subscriptionProvider;
@@ -51,7 +54,7 @@ public sealed class ChatRunToolCompletionCoordinator
     public static bool IsWaitCompleteInvocationTool(ToolCall toolCall)
     {
         ArgumentNullException.ThrowIfNull(toolCall);
-        if (!CompleteInvocationToolNames.Contains(toolCall.Name))
+        if (!CompleteInvocationToolNameSet.Contains(toolCall.Name))
             return false;
 
         return TryReadWait(toolCall.ArgumentsJson, out var wait) &&

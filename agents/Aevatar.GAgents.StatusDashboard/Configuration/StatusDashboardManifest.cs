@@ -9,6 +9,7 @@ public sealed class StatusDashboardManifest
 {
     private const string HttpStatusProbe = "http_status";
     private const string ReadmodelFreshnessProbe = "readmodel_freshness";
+    private const string AevatarCoreLoopProbe = "aevatar_core_loop";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
@@ -131,18 +132,19 @@ public sealed class StatusDashboardManifest
             {
                 ["Body"] = "{}",
             }),
-            HttpTarget(
-            slug: "chat-completion-api-singular-route",
-            name: "OpenAI Chat Completion singular route",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/chat/completion",
-            method: "POST",
-            expectedStatuses: "404",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            new()
             {
-                ["Body"] = "{}",
-            }),
+                Slug = "aevatar-core-loop-tools",
+                Name = "Aevatar Core Loop Tools",
+                Category = "feature",
+                Probe = AevatarCoreLoopProbe,
+                IntervalSeconds = 60,
+                Parameters =
+                {
+                    ["ToolSet"] = "workspace.default",
+                    ["RequireWorkspaceSources"] = "true",
+                },
+            },
             HttpTarget(
             slug: "models-api-auth-gate",
             name: "Models API auth gate",

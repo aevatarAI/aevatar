@@ -21,6 +21,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -82,6 +83,10 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetServices<IHealthProbeExecutor>()
+            .Select(static executor => executor.Kind)
+            .Should()
+            .Contain("aevatar_core_loop");
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -96,6 +101,7 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/v1/responses");
         routePatterns.Should().Contain("/v1/chat/completions");
+        routePatterns.Should().NotContain("/v1/chat/completion");
 
         // Both Lark and Telegram tool providers must register with IAgentToolSource so the
         // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup

@@ -4,6 +4,7 @@ internal static class RetiredStatusProbeTargets
 {
     public static readonly string[] Slugs =
     [
+        "chat-completion-api-singular-route",
         "responses-forward-team-00-nyxid-identity",
         "responses-forward-team-01-nyxid-service",
         "responses-forward-team-02-nyxid-proxy-models",

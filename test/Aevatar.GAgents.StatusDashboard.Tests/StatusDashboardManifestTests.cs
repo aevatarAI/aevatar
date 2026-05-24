@@ -26,7 +26,7 @@ public sealed class StatusDashboardManifestTests
             "responses-api-auth-gate",
             "messages-api-auth-gate",
             "chat-completions-api-auth-gate",
-            "chat-completion-api-singular-route",
+            "aevatar-core-loop-tools",
             "models-api-auth-gate",
             "voice-websocket-auth-gate",
             "channel-bot-runtime",
@@ -43,14 +43,13 @@ public sealed class StatusDashboardManifestTests
         chatCompletions.Parameters["Method"].Should().Be("POST");
         chatCompletions.Parameters["ExpectedStatuses"].Should().Be("401");
         chatCompletions.Parameters["Body"].Should().Be("{}");
-        var singularChatCompletion = manifest.Descriptors.Single(d => d.Slug == "chat-completion-api-singular-route");
-        singularChatCompletion.DisplayName.Should().Be("OpenAI Chat Completion singular route");
-        singularChatCompletion.Category.Should().Be("feature");
-        singularChatCompletion.ProbeKind.Should().Be("http_status");
-        singularChatCompletion.Parameters["Url"].Should().Be("http://127.0.0.1:9999/v1/chat/completion");
-        singularChatCompletion.Parameters["Method"].Should().Be("POST");
-        singularChatCompletion.Parameters["ExpectedStatuses"].Should().Be("404");
-        singularChatCompletion.Parameters["Body"].Should().Be("{}");
+        manifest.Descriptors.Select(d => d.Slug).Should().NotContain("chat-completion-api-singular-route");
+        var coreLoop = manifest.Descriptors.Single(d => d.Slug == "aevatar-core-loop-tools");
+        coreLoop.DisplayName.Should().Be("Aevatar Core Loop Tools");
+        coreLoop.Category.Should().Be("feature");
+        coreLoop.ProbeKind.Should().Be("aevatar_core_loop");
+        coreLoop.Parameters["ToolSet"].Should().Be("workspace.default");
+        coreLoop.Parameters["RequireWorkspaceSources"].Should().Be("true");
         manifest.Descriptors.Should().OnlyContain(d => d.IntervalSeconds == 60);
     }
 

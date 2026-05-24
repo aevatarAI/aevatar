@@ -107,6 +107,13 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 | `http_status` | `HttpStatusProbeExecutor` | 发送一次 HTTP 请求，按 status code 与 body assertion 分类结果 |
 | `readmodel_freshness` | `ReadmodelFreshnessProbeExecutor` | 读取某个注册的 `IReadmodelFreshnessSource`，检查数量与更新时间 |
 
+Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不创建 run、不调用固定 actor/team，只验证 host 组合层是否仍具备 core-loop 所需能力：
+
+1. `workspace.default` tool set 可解析。
+2. 五个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
+3. 旧的 `ForwardToGAgent` / `ForwardToTeam` / `ForwardToWorkflow` route action 可迁移成 `ForwardToModel + tool_choice_hint`。
+4. `wait=complete` 只对 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 进入 ChatRun completion 协调。
+
 `http_status` 支持的常用参数：
 
 | 参数 | 含义 |
@@ -191,13 +198,15 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 
 1. `self-liveness` / `self-readiness`。
 2. Responses、Messages、Chat Completions、Models、Voice、Channel registration 等 auth gate。
-3. `channel-bot-runtime` readmodel freshness。
-4. NyxID LLM status、LLM gateway、channel-bots、channel-relay reply 等上游探测。
-5. `/v1/chat/completion` 单数误用路径探针，预期 `404`，用于确认公开入口仍是 OpenAI 兼容的 `/v1/chat/completions`。
+3. `aevatar-core-loop-tools`，展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
+4. `channel-bot-runtime` readmodel freshness。
+5. NyxID LLM status、LLM gateway、channel-bots、channel-relay reply 等上游探测。
 
 生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
 
 ### 9.1 退役探针
+
+`chat-completion-api-singular-route` 已退役。它曾用于探测 `/v1/chat/completion` 单数误用路径是否返回 `404`，但 Mainnet Host 启用全局 auth fallback 后，未带 bearer 的未知 `/v1/*` 请求会先得到 `401`，这条探针只能反映认证中间件顺序，不能稳定证明 OpenAI 兼容入口是否正确。真实入口由 `chat-completions-api-auth-gate` 监控；单数路径不得注册由 Host route composition 测试保证。
 
 旧的 `responses-forward-team-00` 到 `responses-forward-team-08` 分阶段探针已经退役。这组探针绑定 NyxID proxy、`/v1/responses`、chat-route、Studio Team、member binding 与 direct team invoke，长期依赖预置 token 和固定 team/member 事实，和当前“通过 Aevatar 核心功能由 LLM driven 使用”的方向不一致。
 
@@ -318,12 +327,13 @@ internal sealed class MyReadmodelFreshnessSource : IReadmodelFreshnessSource
 
 | 测试 | 覆盖 |
 |---|---|
-| `test/Aevatar.GAgents.StatusDashboard.Tests/StatusDashboardManifestTests.cs` | manifest 解析、内置 target、可选 staged probe |
+| `test/Aevatar.GAgents.StatusDashboard.Tests/StatusDashboardManifestTests.cs` | manifest 解析、内置 target、退役 target 屏蔽 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HealthProbeTargetGAgentTests.cs` | actor configure、tick、异常、历史裁剪 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HttpStatusProbeExecutorTests.cs` | HTTP executor status/body/header/timeout 行为 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/ReadmodelFreshnessProbeExecutorTests.cs` | freshness executor 分类逻辑 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HealthProbeTargetProjectorTests.cs` | actor state 到 readmodel 的物化 |
 | `test/Aevatar.Hosting.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
+| `test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
 
 常用验证命令：
 

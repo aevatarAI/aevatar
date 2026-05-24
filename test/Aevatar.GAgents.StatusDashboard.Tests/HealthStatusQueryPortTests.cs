@@ -24,14 +24,22 @@ public sealed class HealthStatusQueryPortTests
             DisplayName = "Responses -> Studio Team 08 NyxID proxy e2e",
             Category = "feature",
         };
+        var retiredSingularRouteProbe = new HealthProbeTargetDocument
+        {
+            Id = "chat-completion-api-singular-route",
+            Slug = "chat-completion-api-singular-route",
+            DisplayName = "OpenAI Chat Completion singular route",
+            Category = "feature",
+        };
         var port = new HealthStatusQueryPort(
-            new StaticReader([current, retired]),
+            new StaticReader([current, retired, retiredSingularRouteProbe]),
             Options.Create(new StatusDashboardOptions()));
 
         var results = await port.ListAllAsync();
 
         results.Select(static x => x.Slug).Should().Equal("responses-api-auth-gate");
         (await port.GetBySlugAsync(retired.Slug)).Should().BeNull();
+        (await port.GetBySlugAsync(retiredSingularRouteProbe.Slug)).Should().BeNull();
         (await port.GetBySlugAsync(current.Slug)).Should().NotBeNull();
     }
 
