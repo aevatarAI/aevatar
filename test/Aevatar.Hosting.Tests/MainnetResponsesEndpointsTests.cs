@@ -1100,6 +1100,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
+        builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
@@ -1169,6 +1170,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
+        builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
@@ -1718,8 +1720,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-stream");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("alpha ", "beta");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1742,6 +1746,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"alpha beta\"");
         body.Should().Contain("event: response.completed");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("alpha beta");
         provider.LastRequest.Should().BeNull();
         staticPort.LastRequest!.Identity!.ServiceId.Should().Be("published-svc-stream");
     }
@@ -1759,8 +1765,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1782,6 +1790,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.completed");
         body.Should().NotContain("team_invocation_failed");
         body.Should().NotContain("Team invocation failed");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("gagent_invocation_failed");
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1794,8 +1804,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1814,6 +1826,8 @@ public sealed class MainnetResponsesEndpointsTests
         var err = doc.RootElement.GetProperty("error");
         err.GetProperty("code").GetString().Should().Be("gagent_invocation_failed");
         err.GetProperty("message").GetString().Should().Be("GAgent invocation failed.");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("gagent_invocation_failed");
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1825,8 +1839,10 @@ public sealed class MainnetResponsesEndpointsTests
             ForwardToGAgentAction(string.Empty),
             []));
         var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             staticGAgentStreamInvocationPort: staticPort);
 
@@ -1843,6 +1859,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("error").GetProperty("code").GetString()
             .Should().Be("chat_route_invalid");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("chat_route_invalid");
         staticPort.LastRequest.Should().BeNull();
         provider.LastRequest.Should().BeNull();
     }
@@ -1863,8 +1881,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.Identity();
         var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1883,6 +1903,8 @@ public sealed class MainnetResponsesEndpointsTests
         var err = doc.RootElement.GetProperty("error");
         err.GetProperty("code").GetString().Should().Be("gagent_target_not_found");
         err.GetProperty("message").GetString().Should().Contain("ghost-member");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("gagent_target_not_found");
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1895,8 +1917,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.Identity();
         var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1916,6 +1940,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.failed");
         body.Should().Contain("\"code\":\"gagent_target_not_found\"");
         body.Should().Contain("ghost-member");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("gagent_target_not_found");
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1932,8 +1958,10 @@ public sealed class MainnetResponsesEndpointsTests
         var memberResolver = StubMemberPublishedServiceResolver.Throwing(
             "memberId must not contain ':', '/', '\\\\', '?' or '#'.");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1951,6 +1979,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("error").GetProperty("code").GetString()
             .Should().Be("chat_route_invalid");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be("chat_route_invalid");
         staticPort.LastRequest.Should().BeNull();
         provider.LastRequest.Should().BeNull();
     }
@@ -2018,8 +2048,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var teamResolver = StubTeamEntryMemberResolver.ForResolution("published-svc-2");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("alpha ", "beta");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             teamEntryMemberResolver: teamResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -2042,6 +2074,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"alpha beta\"");
         body.Should().Contain("event: response.completed");
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("alpha beta");
         provider.LastRequest.Should().BeNull();
     }
 
@@ -2053,8 +2087,10 @@ public sealed class MainnetResponsesEndpointsTests
             ForwardToTeamAction("missing-team", "chat"),
             []));
         var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             teamEntryMemberResolver: StubTeamEntryMemberResolver.NotFound(),
             staticGAgentStreamInvocationPort: staticPort);
@@ -2072,6 +2108,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("error").GetProperty("code").GetString()
             .Should().Be(TeamEntryMemberErrorCodes.TeamNotFound);
+        responseSessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.FailureCode.Should().Be(TeamEntryMemberErrorCodes.TeamNotFound);
         staticPort.LastRequest.Should().BeNull();
     }
 
@@ -2127,6 +2165,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
+        builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));

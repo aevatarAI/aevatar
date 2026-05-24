@@ -70,6 +70,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
+        services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());

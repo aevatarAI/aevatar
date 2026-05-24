@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -214,6 +215,17 @@ public sealed record ResponsesForwardCommandResult(
     LlmSessionSnapshot? PreviousSnapshot,
     DateTimeOffset CreatedAt);
 
+public sealed record ResponsesForwardingResult(
+    ResponsesCommandError? Error,
+    LlmSessionSnapshot? Snapshot)
+{
+    public static ResponsesForwardingResult FromError(int statusCode, string code, string message) =>
+        new(new ResponsesCommandError(statusCode, code, message), null);
+
+    public static ResponsesForwardingResult FromSnapshot(LlmSessionSnapshot snapshot) =>
+        new(null, snapshot);
+}
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Completed Responses JSON shape was built from endpoint execution locals.
 //   New principle: Application exposes the completed command data; Host maps it to the external Responses protocol.
@@ -312,6 +324,15 @@ public interface IResponsesCommandFacade
     Task<ResponsesStreamCommandResult> StreamAsync(
         ResponsesCreateCommandPlan plan,
         Func<string, CancellationToken, ValueTask> onTextDelta,
+        CancellationToken ct = default);
+}
+
+public interface IResponsesForwardingApplicationService
+{
+    Task<ResponsesForwardingResult> ForwardAsync(
+        ResponsesForwardCommandResult plan,
+        string bearerToken,
+        Func<AGUIEvent, CancellationToken, ValueTask>? onEventAsync = null,
         CancellationToken ct = default);
 }
 

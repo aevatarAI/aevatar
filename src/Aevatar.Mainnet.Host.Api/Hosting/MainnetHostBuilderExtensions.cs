@@ -125,6 +125,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
+        builder.Services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
