@@ -100,6 +100,41 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WithOwnerScope_LeavesDeprecatedOwnershipFieldsEmpty()
+    {
+        var ownerScope = OwnerScope.ForNyxIdNative("user-1");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-scoped",
+                    ConversationId = "oc_chat_1",
+                    NyxProviderSlug = "api-lark-bot",
+                    AgentType = "skill_runner",
+                    OwnerScope = ownerScope,
+#pragma warning disable CS0612 // stale legacy values must not be copied when owner_scope exists
+                    Platform = "nyxid",
+                    OwnerNyxUserId = "user-1",
+#pragma warning restore CS0612
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-scoped", 4, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().ContainSingle();
+        var document = _dispatcher.Upserts[0];
+        document.OwnerScope.Should().NotBeNull();
+        document.OwnerScope!.MatchesStrictly(ownerScope).Should().BeTrue();
+#pragma warning disable CS0612
+        document.Platform.Should().BeEmpty();
+        document.OwnerNyxUserId.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
     public async Task ProjectAsync_WithSkillRunnerCommittedState_UpsertsExecutionFields()
     {
         // Refactor (iter1/cluster-001):

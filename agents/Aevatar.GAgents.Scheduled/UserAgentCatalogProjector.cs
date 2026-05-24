@@ -118,14 +118,8 @@ public sealed class UserAgentCatalogProjector
     {
         var document = existing?.Clone() ?? new UserAgentCatalogDocument();
         document.Id = entry.AgentId;
-#pragma warning disable CS0612 // legacy fields kept for backward read compat (issue #466 migration)
-        document.Platform = entry.Platform ?? string.Empty;
-#pragma warning restore CS0612
         document.ConversationId = entry.ConversationId ?? string.Empty;
         document.NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty;
-#pragma warning disable CS0612
-        document.OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty;
-#pragma warning restore CS0612
         document.AgentType = entry.AgentType ?? string.Empty;
         document.TemplateName = entry.TemplateName ?? string.Empty;
         document.ScopeId = entry.ScopeId ?? string.Empty;
@@ -145,7 +139,21 @@ public sealed class UserAgentCatalogProjector
         // is the authoritative source for ownership; the projector materializes it for
         // the caller-scoped readmodel filter rather than recomputing or inferring it.
 #pragma warning disable CS0612
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         var entryScope = entry.OwnerScope ?? OwnerScope.FromLegacyFields(entry.OwnerNyxUserId, entry.Platform);
+        if (entry.OwnerScope is null)
+        {
+            document.Platform = entry.Platform ?? string.Empty;
+            document.OwnerNyxUserId = entry.OwnerNyxUserId ?? string.Empty;
+        }
+        else
+        {
+            document.Platform = string.Empty;
+            document.OwnerNyxUserId = string.Empty;
+        }
 #pragma warning restore CS0612
         if (entryScope is not null)
             document.OwnerScope = entryScope;
