@@ -1272,18 +1272,47 @@ if [ -f "${lark_card_streaming_file}" ]; then
     awk '
       /private async Task ExecuteLarkCard(Create|Stream|Finalize)OperationAsync/ {
         in_helper = 1
+        body_started = 0
         brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
       }
       in_helper {
         line = $0
-        opens = gsub(/\{/, "{", line)
-        closes = gsub(/\}/, "}", line)
-        brace_depth += opens - closes
-        if ($0 ~ /LarkCard(Create|Stream|Finalize)ContinuationEvent|To(Create|Stream|Finalize)Continuation|CompletedAtUnixMs|DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)|ErrorCode[[:space:]]*=|\$"(create|stream|finalize)_threw|CardMessageId[[:space:]]*=|FinalTextWritten[[:space:]]*=/) {
+        hard_forbidden = "LarkCard(Create|Stream|Finalize)ContinuationEvent|To(Create|Stream|Finalize)Continuation|CompletedAtUnixMs|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|ErrorCode[[:space:]]*=|\\$\"(create|stream|finalize)_threw"
+        lifecycle_mapping = "CardMessageId[[:space:]]*=|FinalTextWritten[[:space:]]*="
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/
+
+        if (body_started && line ~ hard_forbidden) {
           print FILENAME ":" FNR ":" $0
         }
-        if (brace_depth == 0 && FNR > 1) {
+        if (body_started && !inside_completed_signal && line ~ lifecycle_mapping) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
           in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
         }
       }
     ' "${lark_card_streaming_file}"
