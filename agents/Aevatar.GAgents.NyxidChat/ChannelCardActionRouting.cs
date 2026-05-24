@@ -12,6 +12,10 @@ public static class ChannelCardActionRouting
         InboundMessage inbound,
         out WorkflowResumeCommand? command)
     {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
         command = null;
         ArgumentNullException.ThrowIfNull(inbound);
 

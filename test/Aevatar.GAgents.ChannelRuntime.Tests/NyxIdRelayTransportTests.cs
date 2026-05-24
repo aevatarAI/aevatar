@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
@@ -293,6 +294,46 @@ public sealed class NyxIdRelayTransportTests
         cardAction.Arguments.Should().NotContainKey("service_id");
         cardAction.LlmSelection.Action.Should().Be("select_service");
         cardAction.LlmSelection.ServiceId.Should().Be("chrono-llm-shared");
+    }
+
+    [Theory]
+    [InlineData("lp")]
+    [InlineData("llm_apply_preset")]
+    public void Parse_ShouldMapCompactApplyPresetActionId_ToTypedLlmSelection(string actionId)
+    {
+        var cardActionText = JsonSerializer.Serialize(new
+        {
+            a = actionId,
+            s = "work-fast",
+            v = new
+            {
+                preset_id = "work-fast",
+            },
+        });
+        var body = $$"""
+            {
+              "message_id": "msg-card-compact-preset",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": {{JsonSerializer.Serialize(cardActionText)}}
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be(actionId);
+        cardAction.SubmittedValue.Should().Be("work-fast");
+        cardAction.Arguments.Should().NotContainKey("preset_id");
+        cardAction.LlmSelection.Action.Should().Be("apply_preset");
+        cardAction.LlmSelection.PresetId.Should().Be("work-fast");
     }
 
     [Fact]

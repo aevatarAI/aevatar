@@ -773,6 +773,57 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldApplyTypedLlmPreset_WhenPayloadCarriesPresetId()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "svc-openai",
+            ServiceSlug: "openai-work",
+            DisplayName: "OpenAI Work",
+            RouteValue: "/api/v1/proxy/s/openai-work",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-preset-typed-1");
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.ApplyPresetAction,
+            PresetId = "work-fast",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.SentActivityId.Should().Be("direct-reply:evt-llm-preset-typed-1");
+        selectionService.PresetId.Should().Be("work-fast");
+        selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("work-fast");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapWorkflowResumeValidationErrors()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

@@ -356,6 +356,10 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         WorkflowResumeActionPayload? payload,
         IDictionary<string, object?> map)
     {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
         if (payload is null)
             return;
 
@@ -379,6 +383,10 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         LlmSelectionActionPayload? payload,
         IDictionary<string, object?> map)
     {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
         if (payload is null)
             return;
 

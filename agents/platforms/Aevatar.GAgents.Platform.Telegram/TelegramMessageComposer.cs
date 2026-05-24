@@ -183,14 +183,15 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
     {
         callbackData = string.Empty;
         var actionId = action.ActionId?.Trim();
-        if (string.IsNullOrWhiteSpace(actionId))
+        var hasTypedLlmAction = action.LlmSelection is { Action: { } llmAction } &&
+            !string.IsNullOrWhiteSpace(llmAction);
+        if (string.IsNullOrWhiteSpace(actionId) && !hasTypedLlmAction)
             return false;
 
         var submittedValue = action.Value?.Trim();
-        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["a"] = actionId,
-        };
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(actionId))
+            payload["a"] = actionId;
         if (!string.IsNullOrWhiteSpace(submittedValue))
             payload["s"] = submittedValue;
 
@@ -217,12 +218,19 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         if (arguments.Count > 0)
             return false;
 
+        if (string.IsNullOrWhiteSpace(actionId))
+            return false;
+
         callbackData = actionId;
         return FitsCallbackDataLimit(callbackData);
     }
 
     private static Dictionary<string, string> BuildCallbackArguments(ActionElement action)
     {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
         var arguments = action.Arguments.ToDictionary(
             pair => pair.Key,
             pair => pair.Value,

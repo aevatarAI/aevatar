@@ -178,6 +178,10 @@ message ActionOption {
   string value = 2;
 }
 
+// Refactor (iter93/cluster-093):
+// Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+// New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+// extension data plus legacy callback JSON inbound compatibility.
 // Carries repository-owned workflow resume control semantics for one card action.
 message WorkflowResumeActionPayload {
   // The workflow actor that owns the suspended run.
@@ -196,6 +200,10 @@ message WorkflowResumeActionPayload {
   string feedback = 7;
 }
 
+// Refactor (iter93/cluster-093):
+// Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+// New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+// extension data plus legacy callback JSON inbound compatibility.
 // Carries repository-owned LLM selection control semantics for one card action.
 message LlmSelectionActionPayload {
   // The LLM selection action, such as selecting a service or applying a preset.
