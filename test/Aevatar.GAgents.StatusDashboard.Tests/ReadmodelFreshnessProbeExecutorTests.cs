@@ -1,5 +1,7 @@
 using Aevatar.GAgents.StatusDashboard.Executors;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
 
@@ -8,8 +10,9 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
     [Fact]
     public async Task ReturnsOk_WhenCountMeetsMinAndFresh()
     {
-        var source = new FixedFreshnessSource("registrations", count: 5, ageSeconds: 10);
-        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source });
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        var source = new FixedFreshnessSource("registrations", count: 5, clock, ageSeconds: 10);
+        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source }, clock);
         var descriptor = NewDescriptor(new()
         {
             ["Source"] = "registrations",
@@ -25,8 +28,9 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
     [Fact]
     public async Task DegradesWhenCountBelowMin()
     {
-        var source = new FixedFreshnessSource("registrations", count: 0);
-        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source });
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        var source = new FixedFreshnessSource("registrations", count: 0, clock);
+        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source }, clock);
         var descriptor = NewDescriptor(new()
         {
             ["Source"] = "registrations",
@@ -41,8 +45,9 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
     [Fact]
     public async Task DegradesWhenStale()
     {
-        var source = new FixedFreshnessSource("registrations", count: 3, ageSeconds: 600);
-        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source });
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        var source = new FixedFreshnessSource("registrations", count: 3, clock, ageSeconds: 600);
+        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source }, clock);
         var descriptor = NewDescriptor(new()
         {
             ["Source"] = "registrations",
@@ -51,14 +56,16 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
 
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
         outcome.Status.Should().Be(HealthOutcomeStatus.Degraded);
-        outcome.Detail.Should().StartWith("stale_");
+        outcome.Detail.Should().Be("stale_600s");
+        outcome.ObservedAt.ToDateTimeOffset().Should().Be(clock.GetUtcNow());
     }
 
     [Fact]
     public async Task ReturnsDown_WhenUnknownSource()
     {
-        var source = new FixedFreshnessSource("registrations", count: 5);
-        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source });
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        var source = new FixedFreshnessSource("registrations", count: 5, clock);
+        var executor = new ReadmodelFreshnessProbeExecutor(new[] { source }, clock);
         var descriptor = NewDescriptor(new() { ["Source"] = "nothing-here" });
 
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
@@ -70,7 +77,9 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
     public async Task ReturnsDown_WhenSourceThrows()
     {
         var source = new ThrowingFreshnessSource("registrations");
-        var executor = new ReadmodelFreshnessProbeExecutor(new IReadmodelFreshnessSource[] { source });
+        var executor = new ReadmodelFreshnessProbeExecutor(
+            new IReadmodelFreshnessSource[] { source },
+            new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z")));
         var descriptor = NewDescriptor(new() { ["Source"] = "registrations" });
 
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
@@ -94,14 +103,14 @@ public sealed class ReadmodelFreshnessProbeExecutorTests
         return d;
     }
 
-    private sealed class FixedFreshnessSource(string name, int count, int? ageSeconds = null)
+    private sealed class FixedFreshnessSource(string name, int count, TimeProvider timeProvider, int? ageSeconds = null)
         : IReadmodelFreshnessSource
     {
         public string Name => name;
         public Task<ReadmodelFreshnessSnapshot> GetFreshnessAsync(CancellationToken ct) =>
             Task.FromResult(new ReadmodelFreshnessSnapshot(
                 count,
-                ageSeconds.HasValue ? DateTimeOffset.UtcNow.AddSeconds(-ageSeconds.Value) : null));
+                ageSeconds.HasValue ? timeProvider.GetUtcNow().AddSeconds(-ageSeconds.Value) : null));
     }
 
     private sealed class ThrowingFreshnessSource(string name) : IReadmodelFreshnessSource
