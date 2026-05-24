@@ -1015,6 +1015,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "provide secret",
                     ["variable"] = "api_key",
+                    ["redacted_output"] = "[api key captured]",
                     ["delivery_target_id"] = "agent-secure-1",
                 },
             }),
@@ -1023,8 +1024,13 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.SuspensionType.Should().Be("secure_input");
-        suspended.Metadata["secure"].Should().Be("true");
-        suspended.Metadata["variable"].Should().Be("api_key");
+        suspended.VariableName.Should().Be("api_key");
+        suspended.Secure.Should().BeTrue();
+        suspended.RedactedOutput.Should().Be("[api key captured]");
+        suspended.Metadata.Should().NotContainKey("secure");
+        suspended.Metadata.Should().NotContainKey("variable");
+        suspended.Metadata.Should().NotContainKey("input_mode");
+        suspended.Metadata.Should().NotContainKey("redacted_output");
         suspended.Content.Should().BeEmpty();
         suspended.DeliveryTargetId.Should().Be("agent-secure-1");
         ctx.Published.Clear();
@@ -1051,9 +1057,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var completed = resumedCtx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("[secure input captured]");
+        completed.Output.Should().Be("[api key captured]");
         completed.Annotations["secure.input"].Should().Be("true");
         completed.Annotations["secure.variable"].Should().Be("api_key");
+        completed.Annotations["secure.redacted_output"].Should().Be("[api key captured]");
 
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();

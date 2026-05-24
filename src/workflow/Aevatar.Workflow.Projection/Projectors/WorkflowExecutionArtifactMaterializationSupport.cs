@@ -278,6 +278,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
+        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
+        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        var timelineMetadata = BuildWorkflowSuspendedTimelineMetadata(evt);
         AddTimeline(
             readModel.Timeline,
             observedAt,
@@ -287,7 +291,47 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             evt.StepId,
             step.StepType,
             eventType,
-            evt.Metadata);
+            timelineMetadata);
+    }
+
+    private static Dictionary<string, string> BuildWorkflowSuspendedTimelineMetadata(WorkflowSuspendedEvent evt)
+    {
+        var metadata = FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = !string.IsNullOrWhiteSpace(evt.VariableName)
+            ? evt.VariableName
+            : evt.Metadata.TryGetValue("variable", out var legacyVariable) ? legacyVariable : string.Empty;
+        var secure = evt.Secure ||
+                     (evt.Metadata.TryGetValue("secure", out var legacySecure) &&
+                      bool.TryParse(legacySecure, out var parsedSecure) &&
+                      parsedSecure);
+        var redactedOutput = !string.IsNullOrWhiteSpace(evt.RedactedOutput)
+            ? evt.RedactedOutput
+            : evt.Metadata.TryGetValue("redacted_output", out var legacyRedactedOutput)
+                ? legacyRedactedOutput
+                : string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(variableName))
+            metadata["variable"] = variableName;
+        if (secure)
+            metadata["secure"] = "true";
+        if (!string.IsNullOrWhiteSpace(redactedOutput))
+            metadata["redacted_output"] = redactedOutput;
+
+        return metadata;
+    }
+
+    private static Dictionary<string, string> FilterOpenExtensionMetadata(IDictionary<string, string> metadata)
+    {
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            if (key is "variable" or "secure" or "input_mode" or "redacted_output")
+                continue;
+
+            filtered[key] = value;
+        }
+
+        return filtered;
     }
 
     private static void ApplyWaitingForSignal(
