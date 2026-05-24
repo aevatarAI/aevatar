@@ -158,8 +158,8 @@ Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有"
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
 - `docs/`：架构文档（`canon/` 权威参考、`adr/` ADR、`history/` 归档、`audit-scorecard/` 审计）。
-- `workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
-- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
+- `tools/ci/`：CI 门禁脚本；`tools/docs/`：文档 lint 与索引工具。
+- `apps/aevatar-console-web/`：前端控制台工作目录，必须保留。
 
 ## 构建与运行
 
@@ -167,12 +167,15 @@ Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有"
 - `dotnet restore aevatar.slnx --nologo` / `dotnet build aevatar.slnx --nologo` / `dotnet test aevatar.slnx --nologo`
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
+- `pnpm --dir apps/aevatar-console-web install --frozen-lockfile` / `pnpm --dir apps/aevatar-console-web tsc` / `pnpm --dir apps/aevatar-console-web test --runInBand` / `pnpm --dir apps/aevatar-console-web build`：前端验证链路。
 
 ### CI 门禁（全量）
 - `bash tools/ci/architecture_guards.sh`：CI 架构门禁主入口。
 - 分片构建：`bash tools/ci/solution_split_guards.sh`
 - 全量测试：`dotnet test aevatar.slnx --nologo`
 - 慢测：`bash tools/ci/slow_test_guards.sh`
+- 测试归属：`bash tools/ci/test_solution_ownership_guard.sh`
+- 文档 lint：`bash tools/docs/lint.sh`
 
 ### 专项门禁（按变更范围触发）
 
@@ -182,8 +185,7 @@ Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有"
 | query/read port / projection priming / projection lifecycle | `tools/ci/query_projection_priming_guard.sh` |
 | current-state readmodel / state version | `tools/ci/projection_state_version_guard.sh` |
 | `*CurrentState*Projector` 回读同类 readmodel | `tools/ci/projection_state_mirror_current_state_guard.sh` |
-| 事件类型 → reducer 路由映射 | `tools/ci/projection_route_mapping_guard.sh` |
-| CLI playground / Demo Web 静态资源 | `tools/ci/playground_asset_drift_guard.sh` |
+| 事件类型 -> reducer 路由映射 | `tools/ci/projection_route_mapping_guard.sh` |
 | 测试新增/修改 | `tools/ci/test_stability_guards.sh` |
 
 ## Codex CLI 调用规范（强制）
@@ -287,7 +289,7 @@ Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有"
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
 - 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。自动生成代码不纳入覆盖率考核。
-- 轮询等待门禁（`test_stability_guards.sh`）强制：禁止随意 `Task.Delay(...)`/`WaitUntilAsync(...)`。确属跨进程最终一致性探测且无法改为确定性同步时，须加入 `tools/ci/test_polling_allowlist.txt` 并说明原因。
+- 轮询等待门禁（`tools/ci/test_stability_guards.sh`）强制：禁止随意 `Task.Delay(...)`/`WaitUntilAsync(...)`。确属跨进程最终一致性探测且无法改为确定性同步时，须加入 `tools/ci/test_polling_allowlist.txt` 并说明原因。
 - CI 守卫（full-scan）：
   - 禁止 `GetAwaiter().GetResult()`
   - 禁止 `TypeUrl.Contains(...)` 字符串路由

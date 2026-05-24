@@ -40,7 +40,6 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
-            options.WorkflowDirectories.Add(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
             options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
             options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
             options.WorkflowDirectories.Add(AevatarPaths.Workflows);

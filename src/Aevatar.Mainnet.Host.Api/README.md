@@ -118,36 +118,7 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 
 ## 多机集群测试（Docker）
 
-仓库提供的集群启动脚本会拉起 3 节点 Mainnet + Kafka + Garnet + Elasticsearch + Neo4j。
-
-```bash
-export NEO4J_PASSWORD="<set-a-password>"
-bash tools/cluster/start-mainnet-cluster.sh
-```
-
-停止集群：
-
-```bash
-bash tools/cluster/stop-mainnet-cluster.sh
-```
-
-Orleans + Garnet 持久化集成测试：
-
-```bash
-bash tools/ci/orleans_garnet_persistence_smoke.sh
-```
-
-三节点集群一致化测试（包含节点健康检查 + 跨节点 `/api/workflows`、`/api/agents` 一致性断言）：
-
-```bash
-bash tools/ci/distributed_3node_smoke.sh
-```
-
-三节点 Orleans scripting 集群测试（Kafka + Garnet + Elasticsearch + Neo4j）：
-
-```bash
-bash tools/ci/orleans_3node_real_env_smoke.sh
-```
+分布式部署请直接按宿主配置拉起 Mainnet 与依赖服务（Kafka、Garnet、Elasticsearch、Neo4j）。仓库不再内置集群脚本。
 
 ## 端点
 
