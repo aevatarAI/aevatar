@@ -202,6 +202,53 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldResolveLegacyWorkflowAgentIdSourceActor()
+    {
+        const string sourceActorId = "legacy-source-actor-1";
+        const string legacyYaml =
+            """
+            name: direct
+            description: source actor definition
+            roles: []
+            steps: []
+            """;
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "definition-direct-bound",
+                "source-run-1",
+                "direct",
+                legacyYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ScopeId: "source-scope-1"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
+        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                "direct",
+                sourceActorId,
+                ScopeId: "request-scope-1",
+                Source: WorkflowChatSource.DefinitionActor(sourceActorId, "direct")),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("direct");
+        bindingReader.LastActorId.Should().Be(sourceActorId);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].DefinitionActorId.Should().Be("definition-direct-bound");
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(legacyYaml);
+        actorPort.CreateRunBindings[0].ScopeId.Should().Be("source-scope-1");
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldRejectInlineRun_WhenAgentWorkflowBindingConflicts()
     {
         const string entryWorkflowYaml =

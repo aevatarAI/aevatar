@@ -128,11 +128,13 @@ internal static class ChatRunRequestNormalizer
                 string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
                 string.IsNullOrWhiteSpace(normalizedAgentId) ? null : normalizedAgentId));
 
+        if (!string.IsNullOrWhiteSpace(normalizedAgentId))
+            return SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(
+                normalizedAgentId,
+                string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName));
+
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
             return SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(requestedWorkflowName));
-
-        if (!string.IsNullOrWhiteSpace(normalizedAgentId))
-            return SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(normalizedAgentId));
 
         return SourceNormalizationResult.Success(WorkflowChatSource.Direct());
     }

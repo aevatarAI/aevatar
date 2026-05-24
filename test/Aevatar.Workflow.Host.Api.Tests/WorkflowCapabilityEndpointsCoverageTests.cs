@@ -171,6 +171,25 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreserveLegacyWorkflowAgentIdAsSourceActorId()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Workflow = " direct ",
+            AgentId = " source-actor-1 ",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Should().BeEquivalentTo(
+            WorkflowChatSource.DefinitionActor("source-actor-1", "direct"));
+        result.Request.WorkflowName.Should().Be("direct");
+        result.Request.ActorId.Should().Be("source-actor-1");
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldDerivePromptAndInputParts_FromMultimodalInput()
     {
         var input = new ChatInput
