@@ -47,24 +47,63 @@ public sealed class HealthProbeStartupService : IHostedService
 
     public async Task StartAsync(CancellationToken ct)
     {
+        var currentSlugs = _manifest.Descriptors
+            .Select(static descriptor => descriptor.Slug)
+            .Where(static slug => !RetiredStatusProbeTargets.Contains(slug))
+            .ToHashSet(StringComparer.Ordinal);
+
         if (_manifest.Descriptors.Count == 0)
         {
             _logger.LogInformation("Status dashboard manifest is empty — no probes to schedule.");
-            return;
         }
-
-        foreach (var descriptor in _manifest.Descriptors)
+        else
         {
-            if (_executorRegistry.Resolve(descriptor.ProbeKind) == null)
+            foreach (var descriptor in _manifest.Descriptors)
             {
-                _logger.LogError(
-                    "Status probe {Slug} declares unknown probe_kind '{Kind}'. Known: [{Known}]. Skipping.",
-                    descriptor.Slug, descriptor.ProbeKind, string.Join(",", _executorRegistry.KnownKinds));
-                continue;
-            }
+                if (RetiredStatusProbeTargets.Contains(descriptor.Slug))
+                    continue;
 
-            await EnsureProbeAsync(descriptor, ct);
+                if (_executorRegistry.Resolve(descriptor.ProbeKind) == null)
+                {
+                    _logger.LogError(
+                        "Status probe {Slug} declares unknown probe_kind '{Kind}'. Known: [{Known}]. Skipping.",
+                        descriptor.Slug, descriptor.ProbeKind, string.Join(",", _executorRegistry.KnownKinds));
+                    continue;
+                }
+
+                await EnsureProbeAsync(descriptor, ct);
+            }
         }
+
+        foreach (var retiredSlug in RetiredStatusProbeTargets.Slugs)
+        {
+            if (currentSlugs.Contains(retiredSlug))
+                continue;
+
+            await RetireProbeIfExistsAsync(retiredSlug, ct);
+        }
+    }
+
+    private static HealthProbeTargetDescriptor RetiredProbeDescriptor(string slug) =>
+        new()
+        {
+            Slug = slug,
+            DisplayName = slug,
+            Category = "feature",
+            ProbeKind = "http_status",
+            IntervalSeconds = 300,
+            TimeoutMs = 5_000,
+            Enabled = false,
+        };
+
+    private async Task RetireProbeIfExistsAsync(string slug, CancellationToken ct)
+    {
+        var actorId = HealthProbeStoreCommands.BuildActorId(slug);
+        var actor = await _actorRuntime.GetAsync(actorId);
+        if (actor == null)
+            return;
+
+        await EnsureProbeAsync(RetiredProbeDescriptor(slug), ct);
     }
 
     private async Task EnsureProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)

@@ -93,18 +93,18 @@ public sealed class HttpStatusProbeExecutorTests
             HttpStatusCode.OK,
             configuration: new Dictionary<string, string?>
             {
-                ["Aevatar:Status:ResponsesForwardToTeam:BearerToken"] = "token-from-pod",
+                ["Aevatar:Status:AuthenticatedProbe:BearerToken"] = "token-from-pod",
             },
             captureRequest: req =>
             {
                 capturedAuthorization = req.Headers.Authorization?.ToString();
             });
 
-        var descriptor = NewDescriptor("responses-forward-team", new()
+        var descriptor = NewDescriptor("authenticated-probe", new()
         {
             ["Url"] = "https://example.test/v1/responses",
             ["Header.Authorization"] =
-                "Bearer ${configuration:Aevatar:Status:ResponsesForwardToTeam:BearerToken}",
+                "Bearer ${configuration:Aevatar:Status:AuthenticatedProbe:BearerToken}",
         });
 
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
@@ -135,19 +135,19 @@ public sealed class HttpStatusProbeExecutorTests
             },
             configuration: new Dictionary<string, string?>
             {
-                ["Aevatar:Status:ResponsesForwardToTeam:BearerToken"] = "expired-access",
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientId"] = "client-id",
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientSecret"] = "client-secret",
+                ["Aevatar:Status:AuthenticatedProbe:BearerToken"] = "expired-access",
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
             });
 
-        var descriptor = NewDescriptor("responses-forward-team", new()
+        var descriptor = NewDescriptor("authenticated-probe", new()
         {
             ["Url"] = "https://example.test/v1/responses",
             ["Header.Authorization"] =
-                "Bearer ${configuration:Aevatar:Status:ResponsesForwardToTeam:BearerToken}",
+                "Bearer ${configuration:Aevatar:Status:AuthenticatedProbe:BearerToken}",
             ["Auth.Mode"] = "auto",
-            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientId",
-            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientSecret",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
             ["Auth.ClientCredentialsScope"] = "proxy:* llm:proxy",
             ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
         });
@@ -187,17 +187,17 @@ public sealed class HttpStatusProbeExecutorTests
             },
             configuration: new Dictionary<string, string?>
             {
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientId"] = "client-id",
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientSecret"] = "client-secret",
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
             });
 
-        var descriptor = NewDescriptor("responses-forward-team", new()
+        var descriptor = NewDescriptor("authenticated-probe", new()
         {
             ["Url"] = "https://example.test/v1/responses",
             ["Header.Authorization"] = "Bearer stale",
             ["Auth.Mode"] = "auto",
-            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientId",
-            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientSecret",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
             ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
         });
 
@@ -216,17 +216,17 @@ public sealed class HttpStatusProbeExecutorTests
             : new HttpResponseMessage(HttpStatusCode.OK),
             configuration: new Dictionary<string, string?>
             {
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientId"] = "client-id",
-                ["Aevatar:Status:ResponsesForwardToTeam:ClientSecret"] = "client-secret",
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
             });
 
-        var descriptor = NewDescriptor("responses-forward-team", new()
+        var descriptor = NewDescriptor("authenticated-probe", new()
         {
             ["Url"] = "https://example.test/v1/responses",
             ["Header.Authorization"] = "Bearer stale",
             ["Auth.Mode"] = "auto",
-            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientId",
-            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:ResponsesForwardToTeam:ClientSecret",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
             ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
         });
 

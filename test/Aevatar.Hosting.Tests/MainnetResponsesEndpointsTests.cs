@@ -391,7 +391,8 @@ public sealed class MainnetResponsesEndpointsTests
             configureServices: services =>
             {
                 services.AddSingleton<IActorDispatchPort>(actorDispatch);
-                services.AddSingleton<IGAgentActorRegistryQueryPort>(new EmptyGAgentActorRegistryQueryPort());
+                services.AddSingleton<IGAgentActorRegistryQueryPort>(
+                    StaticGAgentActorRegistryQueryPort.ForActors("user-1", ["actor-stage1"]));
                 services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(
                     new StubWorkflowDispatchService());
                 services.AddSingleton<IServiceRunQueryPort>(new EmptyServiceRunQueryPort());
@@ -521,6 +522,8 @@ public sealed class MainnetResponsesEndpointsTests
             configureServices: services =>
             {
                 services.AddSingleton<IActorDispatchPort, ChatRunForwardingRecordingActorDispatchPort>();
+                services.AddSingleton<IGAgentActorRegistryQueryPort>(
+                    StaticGAgentActorRegistryQueryPort.ForActors("user-1", ["actor-complete"]));
                 services.AddSingleton<IResponsesToolProvider, AgentToolSourcesResponsesToolProvider>();
             });
 
@@ -2779,6 +2782,37 @@ public sealed class MainnetResponsesEndpointsTests
             string scopeId,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new GAgentActorRegistrySnapshot(scopeId, [], 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+    }
+
+    private sealed class StaticGAgentActorRegistryQueryPort(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> actorsByScope)
+        : IGAgentActorRegistryQueryPort
+    {
+        public static StaticGAgentActorRegistryQueryPort ForActors(
+            string scopeId,
+            IReadOnlyList<string> actorIds) =>
+            new(new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+            {
+                [scopeId] = actorIds,
+            });
+
+        public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<string> actorIds = actorsByScope.TryGetValue(scopeId, out var registeredActorIds)
+                ? registeredActorIds
+                : Array.Empty<string>();
+            IReadOnlyList<GAgentActorGroup> groups = actorIds.Count == 0
+                ? []
+                : [new GAgentActorGroup("TestGAgent", actorIds)];
+            return Task.FromResult(new GAgentActorRegistrySnapshot(
+                scopeId,
+                groups,
+                1,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow));
+        }
     }
 
     private sealed class StubWorkflowDispatchService

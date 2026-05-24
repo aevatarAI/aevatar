@@ -107,8 +107,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStatusDashboard(builder.Configuration);
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHealthProbeExecutor, ResponsesForwardTeamInternalProbeExecutor>());
         // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
         // document store (Elasticsearch in prod, InMemory otherwise — same
         // selection pattern as AddScheduledAgents / AddDeviceRegistration).

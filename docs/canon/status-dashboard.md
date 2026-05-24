@@ -128,7 +128,7 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 
 `static_bearer` 用于长期机器 bearer，例如 NyxID API key / Agent Key。不要把人工登录产生的短期 access token 配成这里的生产值；它会过期，过期后整组探针会一起 401。
 
-`client_credentials` 用于 NyxID service account token。注意：当前 Mainnet `/v1/responses` 会用 bearer 去 NyxID `/api/v1/users/me` 解析 caller scope，而该 NyxID 接口是 human-only surface，不适合作为 service account token 的 scope 解析路径。因此 `ResponsesForwardToTeam` 当前生产推荐使用长期 Agent Key / API key；只有在 Aevatar 明确支持 service-account caller scope 后，才把这组端到端 HTTP 探针切到 `client_credentials`。
+`client_credentials` 用于上游支持的 service account token。若某个业务入口需要用 bearer 解析真实调用者身份，探针必须先确认该入口支持 service account 语义，否则应使用通用 auth gate 或显式配置的自定义 HTTP target。
 
 `readmodel_freshness` 支持的参数：
 
@@ -150,11 +150,13 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 
 `HealthStatusQueryPort` 只读 projection document store：
 
-1. `ListAllAsync` 返回当前可见的 target documents。
-2. `GetBySlugAsync` 按 slug 读取单个 document。
+1. `ListAllAsync` 返回当前 manifest 中仍声明的 target documents。
+2. `GetBySlugAsync` 按 slug 读取单个当前 manifest document。
 3. 不激活 projection。
 4. 不读取 write-side actor state。
 5. 不执行 query-time replay 或 priming。
+
+退役 target 的历史 readmodel 可能仍在 document store 中，但查询端口不会把它们返回给 `/api/status`。启动服务也会对已知退役 target 下发 disabled descriptor，使旧 actor 停止后续 tick。
 
 ## 8. HTTP Surface
 
@@ -191,53 +193,20 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 2. Responses、Messages、Chat Completions、Models、Voice、Channel registration 等 auth gate。
 3. `channel-bot-runtime` readmodel freshness。
 4. NyxID LLM status、LLM gateway、channel-bots、channel-relay reply 等上游探测。
-5. 可选的 `ResponsesForwardToTeam` 分阶段探针，用于验证 NyxID proxy 到 `/v1/responses`、chat-route、Studio Team、member binding 与 e2e invoke 链路。
+5. `/v1/chat/completion` 单数误用路径探针，预期 `404`，用于确认公开入口仍是 OpenAI 兼容的 `/v1/chat/completions`。
 
 生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
 
-### 9.1 ResponsesForwardToTeam 分阶段探针
+### 9.1 退役探针
 
-`Aevatar:Status:ResponsesForwardToTeam:Enabled=true` 时，内置 manifest 会生成 `responses-forward-team-00` 到 `responses-forward-team-08`。每个阶段都是独立 target，方便定位是哪一段断了。
+旧的 `responses-forward-team-00` 到 `responses-forward-team-08` 分阶段探针已经退役。这组探针绑定 NyxID proxy、`/v1/responses`、chat-route、Studio Team、member binding 与 direct team invoke，长期依赖预置 token 和固定 team/member 事实，和当前“通过 Aevatar 核心功能由 LLM driven 使用”的方向不一致。
 
-| Stage | Kind | 检查内容 |
-|---|---|---|
-| `00-nyxid-identity` | `http_status` | 用配置里的生产 bearer 调 NyxID `/api/v1/users/me`，确认该 bearer 能解析出 caller id。它专门防止短期 token 过期、错误 key、service-account token 打 human-only surface 等问题混到后续阶段。 |
-| `01-nyxid-service` | `http_status` | 调 NyxID `/api/v1/proxy/services`，确认 `NyxIdServiceSlug` 对应的 service proxy 注册存在。 |
-| `02-nyxid-proxy-models` | `http_status` | 调 NyxID `/api/v1/proxy/s/{slug}/v1/models`，确认 NyxID proxy 到 Aevatar models surface 可达。 |
-| `03-direct-responses` | `http_status` | 直连 Aevatar `/v1/responses`，确认 Aevatar Responses HTTP 面、caller scope 解析、路由与完成事件能返回 `response.completed`。 |
-| `04-route-policy` | `responses_forward_team_internal` | 读取 chat route policy readmodel，并用 `ChatSourceKind.NyxResponses` 解析，确认目标是配置中的 `ForwardToModel + aevatar_invoke_team(team_id, endpoint_id)` canonical 工具形态。 |
-| `05-team-entry-member` | `responses_forward_team_internal` | 读取 Studio team readmodel，并通过 `ITeamEntryMemberResolver` 确认 entry member 和 published service。 |
-| `06-member-binding` | `responses_forward_team_internal` | 读取 Studio member readmodel，确认 member 是 `BindReady`，且最近完成 binding 的 published service 符合配置。 |
-| `07-direct-team-invoke` | `responses_forward_team_internal` | 不走 `/api/scopes/*` HTTP guard，直接用 `IStaticGAgentStreamInvocationPort<AGUIEvent>` 调 team entry member 的 endpoint；如果配置了认证，会把 bearer 注入 `nyxid.access_token` 和 `connector.http.authorization`，给下游工具/LLM/connector 调用使用。 |
-| `08-nyxid-proxy-e2e` | `http_status` | 从 NyxID proxy `/api/v1/proxy/s/{slug}/v1/responses` 进入，完整验证 NyxID -> Aevatar `/v1/responses` -> route policy -> Studio team invoke -> SSE completed。 |
+退役后：
 
-这组探针的边界选择是：两头保留真实 HTTP，证明外部可访问路径；中间业务事实走内部 readmodel/port，避免拿 NyxID bearer 去打 `/api/scopes/*` 这类 Studio 管理 API guard。旧实现里 04-07 也是 HTTP，因此一个过期 bearer 会把 8 个阶段全部打成 401；新实现把 route、team、member、invoke 拆成各自真实的业务探针。
-
-生产配置必须落到 GitOps / developer-platform 管理的声明式配置源中。手工 `kubectl patch deployment`、`kubectl set env` 或直接改运行中 pod 只会被 Argo reconciliation 还原，不能作为修复方案。推荐配置项：
-
-```json
-{
-  "Aevatar": {
-    "Status": {
-      "ResponsesForwardToTeam": {
-        "Enabled": true,
-        "DirectBaseUrl": "https://aevatar-console-backend-api.aevatar.ai",
-        "NyxIdBaseUrl": "https://nyx-api.chrono-ai.fun",
-        "NyxIdServiceSlug": "aevatar",
-        "AuthMode": "static_bearer",
-        "AccessTokenConfigurationKey": "Aevatar:Status:ResponsesForwardToTeam:BearerToken",
-        "ScopeId": "<nyxid-caller-id-resolved-by-stage-00>",
-        "TeamId": "<studio-team-id>",
-        "MemberId": "<entry-member-id>",
-        "PublishedServiceId": "<member-published-service-id>",
-        "EndpointId": "chat"
-      }
-    }
-  }
-}
-```
-
-Kubernetes 环境变量使用 .NET 配置约定，例如 `Aevatar__Status__ResponsesForwardToTeam__BearerToken`。这个值必须是长期 NyxID API key / Agent Key，并且要和 `ScopeId` 指向同一个 NyxID caller。不要把短期 access token 或 refresh token 放进这里；refresh token rotation 需要持久化新 refresh token，pod 多副本和重启场景下无法靠本服务安全维护。
+1. 内置 manifest 不再生成这些 target。
+2. `/api/status` 只返回当前 manifest 中仍声明的 target，旧 readmodel 不再展示。
+3. `HealthProbeStartupService` 会对这些旧 slug 下发 disabled descriptor，停止旧 actor 的后续 tick。
+4. 若需要临时诊断某条业务链路，应通过 `Aevatar:Status:Targets` 显式增加普通 `http_status` target，或使用业务侧 readmodel / tracing 工具定位，不把固定业务编排长期放进默认状态面板。
 
 ## 10. 扩展新探针
 
