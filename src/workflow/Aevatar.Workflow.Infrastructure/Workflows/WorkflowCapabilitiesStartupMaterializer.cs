@@ -71,6 +71,9 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
     // Refactor (iter46/issue-871-workflow-file-catalog-query-port):
     //   Old pattern: Workflow catalog/capabilities query port discovered files, parsed YAML, loaded connector config, and cached results in singleton process memory during query execution.
     //   New principle: WorkflowGAgent per-definition authority; query ports only read freshness-bearing readmodels; file discovery/parsing happens at startup/import time, not in query path.
+    // Refactor (iter94/cluster-094b):
+    //   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
+    //   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
     public async Task MaterializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

@@ -6,6 +6,9 @@ namespace Aevatar.Workflow.Projection.Workflows;
 // Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
 //   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
 //   New principle: Removed dead capability flag; output describes available primitives only
+// Refactor (iter94/cluster-094b):
+//   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
+//   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
 public sealed class WorkflowCatalogReadModelMapper
 {
     public WorkflowCatalogItem ToCatalogItem(WorkflowCatalogCurrentStateDocument document) =>

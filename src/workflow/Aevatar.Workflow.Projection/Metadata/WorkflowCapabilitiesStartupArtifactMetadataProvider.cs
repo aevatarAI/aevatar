@@ -2,6 +2,9 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Metadata;
 
+// Refactor (iter94/cluster-094b):
+//   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
+//   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
 public sealed class WorkflowCapabilitiesStartupArtifactMetadataProvider
     : IProjectionDocumentMetadataProvider<WorkflowCapabilitiesStartupArtifact>
 {
