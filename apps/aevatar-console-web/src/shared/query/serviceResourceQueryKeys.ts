@@ -13,8 +13,14 @@ const legacyDeploymentResourceKeys = new Set([
   "traffic",
 ]);
 
+// Refactor (iter90/cluster-090-console-service-cache-invalidation):
+// Old: service catalog and deployment pages owned separate query-key roots, so
+// mutation invalidation could refresh one page while leaving sibling resource
+// views stale.
+// New: shared service-resource query keys plus one alias matcher invalidate both
+// the unified keys and legacy page-scoped aliases without touching auth-session
+// cache entries.
 export const serviceResourceQueryKeys = {
-  all: [serviceResourceRoot] as const,
   deployments: (query: ServiceIdentityQuery, serviceId: string) =>
     [serviceResourceRoot, "deployments", query, serviceId] as const,
   detail: (query: ServiceIdentityQuery, serviceId: string) =>
