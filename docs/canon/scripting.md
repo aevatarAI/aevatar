@@ -131,9 +131,10 @@ flowchart LR
 这意味着：
 
 1. `CommittedStateEventPublished` 现在携带 `state_event + state_root`，作为 scripting current-state readmodel 的统一观察输入。
-2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态；每一条 committed fact 自身携带的 `read_model_payload/native_document/native_graph` 都必须对应它自己的 post-event state/version。
+2. `ScriptDomainFactCommitted` 只表达已经提交的脚本业务事实；它不再携带派生的 current-state readmodel、native document 或 native graph 结果。
 3. runtime provisioning 必须显式使用 write-side 已得出的 `ScriptDefinitionSnapshot`，而不是中间层再去读 definition readmodel。
-4. native document / graph 物化计划已经前移到 write-side；projection 只消费 `ScriptDomainFactCommitted` 内的 durable `native_document/native_graph` 子契约。
+4. current-state readmodel、native document 与 native graph 由 projection 基于 `CommittedStateEventPublished.state_root + ScriptDomainFactCommitted` 派生并物化。
+5. 旧 `ScriptDomainFactCommitted` 字段 `15/16/17` 已在 proto 中 reserved；生产链路不再 emit `read_model_payload/native_document/native_graph`，读侧仅将它们作为历史事件的 legacy fallback 解析。
 
 ### 5.3 读侧权威模型
 
