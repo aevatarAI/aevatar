@@ -289,6 +289,10 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
     private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session)
     {
+        // Refactor (iter94/cluster-809):
+        // Old:OpenAI SDK typed beta session options.
+        // New:GA shape session.update JSON envelope per OpenAI docs
+        // (audio.input/audio.output/instructions/voice/tools fields per GA contract).
         var sessionObject = new JsonObject
         {
             ["type"] = "realtime",

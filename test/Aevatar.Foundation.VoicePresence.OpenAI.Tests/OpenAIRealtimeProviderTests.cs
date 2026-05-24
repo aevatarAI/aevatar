@@ -632,8 +632,6 @@ public class OpenAIRealtimeProviderTests
 
     private sealed class ErrorSession : IOpenAIRealtimeSession
     {
-        private readonly OpenAIRealtimeSessionEvent _unreachableEvent = new OpenAIRealtimeDisconnectedEvent("unreachable");
-
         public Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct) => Task.CompletedTask;
         public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) => Task.CompletedTask;
         public Task AddItemAsync(RealtimeItem item, CancellationToken ct) => Task.CompletedTask;
@@ -641,19 +639,15 @@ public class OpenAIRealtimeProviderTests
         public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-#pragma warning disable CS1998
         public async IAsyncEnumerable<OpenAIRealtimeSessionEvent> ReceiveEventsAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
-            _ = ct;
-            await Task.Yield();
-#pragma warning disable CS0162
-            if (true)
-                throw new InvalidOperationException("simulated connection error");
+            if (ct.IsCancellationRequested)
+                yield break;
 
-            yield return _unreachableEvent;
-#pragma warning restore CS0162
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("simulated connection error");
         }
-#pragma warning restore CS1998
     }
 }

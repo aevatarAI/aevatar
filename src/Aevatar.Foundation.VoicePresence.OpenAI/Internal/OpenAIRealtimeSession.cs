@@ -72,6 +72,10 @@ internal sealed class OpenAIRealtimeSession : IOpenAIRealtimeSession
     public async Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(sessionUpdateEvent);
+        // Refactor (iter94/cluster-809):
+        // Old:OpenAI SDK typed beta session options.
+        // New:GA shape session.update JSON envelope per OpenAI docs
+        // (audio.input/audio.output/instructions/voice/tools fields per GA contract).
         await _session.WebSocket.SendAsync(
             sessionUpdateEvent.ToMemory(),
             WebSocketMessageType.Text,
