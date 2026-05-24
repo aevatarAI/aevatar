@@ -6,24 +6,38 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
 public sealed class AgentBuilderTool : IAgentTool
 {
-    private readonly IServiceProvider _serviceProvider;
+    // Refactor (iter83/cluster-083-agent-tool-source-root-provider-locator):
+    //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
+    //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
+    private readonly IUserAgentCatalogQueryPort _queryPort;
+    private readonly NyxIdApiClient _nyxClient;
+    private readonly ISkillRunnerCommandPort _skillRunnerPort;
+    private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
+    private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ILogger<AgentBuilderTool>? _logger;
 
     // Refactor (iter1/cluster-002):
     //   Old pattern: Tool construction carried readmodel polling budget for lifecycle command paths.
     //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
     public AgentBuilderTool(
-        IServiceProvider serviceProvider,
+        IUserAgentCatalogQueryPort queryPort,
+        NyxIdApiClient nyxClient,
+        ISkillRunnerCommandPort skillRunnerPort,
+        IUserAgentCatalogCommandPort catalogCommandPort,
+        ICallerScopeResolver callerScopeResolver,
         ILogger<AgentBuilderTool>? logger = null)
     {
-        _serviceProvider = serviceProvider;
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
+        _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
+        _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
+        _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _logger = logger;
     }
 
@@ -77,24 +91,12 @@ public sealed class AgentBuilderTool : IAgentTool
         if (args.HasParseError)
             return JsonSerializer.Serialize(new { error = args.ParseError });
 
-        var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
-        var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
-        var skillRunnerPort = _serviceProvider.GetService<ISkillRunnerCommandPort>();
-        var catalogCommandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
-        var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
-        if (queryPort is null || nyxClient is null ||
-            skillRunnerPort is null || catalogCommandPort is null ||
-            callerScopeResolver is null)
-        {
-            return """{"error":"Agent builder runtime not available. Required services are not registered in DI."}""";
-        }
-
         // Resolve once per request and pass to every method below. Failure to resolve
         // is fail-closed: never fall through to "all agents". (Issue #466 acceptance.)
         OwnerScope caller;
         try
         {
-            caller = await callerScopeResolver.RequireAsync(ct);
+            caller = await _callerScopeResolver.RequireAsync(ct);
         }
         catch (CallerScopeUnavailableException ex)
         {
@@ -109,12 +111,12 @@ public sealed class AgentBuilderTool : IAgentTool
         var action = args.Str("action", "list_agents");
         return action switch
         {
-            "list_agents" => await ListAgentsAsync(queryPort, caller, ct),
-            "agent_status" => await GetAgentStatusAsync(args, queryPort, caller, ct),
-            "run_agent" => await RunAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
-            "disable_agent" => await DisableAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
-            "enable_agent" => await EnableAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
-            "delete_agent" => await DeleteAgentAsync(args, queryPort, catalogCommandPort, skillRunnerPort, nyxClient, token, caller, ct),
+            "list_agents" => await ListAgentsAsync(_queryPort, caller, ct),
+            "agent_status" => await GetAgentStatusAsync(args, _queryPort, caller, ct),
+            "run_agent" => await RunAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
+            "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
+            "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _catalogCommandPort, _skillRunnerPort, _nyxClient, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
     }

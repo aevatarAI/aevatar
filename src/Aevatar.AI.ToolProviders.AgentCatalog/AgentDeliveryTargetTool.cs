@@ -1,9 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Scheduled;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
 
@@ -22,11 +20,21 @@ namespace Aevatar.AI.ToolProviders.AgentCatalog;
 /// </summary>
 public sealed class AgentDeliveryTargetTool : IAgentTool
 {
-    private readonly IServiceProvider _serviceProvider;
+    // Refactor (iter83/cluster-083-agent-tool-source-root-provider-locator):
+    //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
+    //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
+    private readonly IUserAgentCatalogQueryPort _queryPort;
+    private readonly IUserAgentCatalogCommandPort _commandPort;
+    private readonly ICallerScopeResolver _callerScopeResolver;
 
-    public AgentDeliveryTargetTool(IServiceProvider serviceProvider)
+    public AgentDeliveryTargetTool(
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort commandPort,
+        ICallerScopeResolver callerScopeResolver)
     {
-        _serviceProvider = serviceProvider;
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
     }
 
     public string Name => "agent_delivery_targets";
@@ -80,15 +88,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
-        var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
-        if (queryPort is null || callerScopeResolver is null)
-            return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogQueryPort or ICallerScopeResolver not registered in DI."}""";
-
         OwnerScope caller;
         try
         {
-            caller = await callerScopeResolver.RequireAsync(ct);
+            caller = await _callerScopeResolver.RequireAsync(ct);
         }
         catch (CallerScopeUnavailableException ex)
         {
@@ -106,19 +109,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         if (action is "upsert" or "delete")
         {
-            var commandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
-            if (commandPort is null)
-                return """{"error":"Agent delivery target runtime not available. IUserAgentCatalogCommandPort not registered in DI."}""";
-
             return action switch
             {
-                "upsert" => await UpsertAsync(queryPort, commandPort, caller, root, ct),
-                "delete" => await DeleteAsync(queryPort, commandPort, caller, root, ct),
-                _ => await ListAsync(queryPort, caller, ct),
+                "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
+                "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
+                _ => await ListAsync(_queryPort, caller, ct),
             };
         }
 
-        return await ListAsync(queryPort, caller, ct);
+        return await ListAsync(_queryPort, caller, ct);
     }
 
     private static string? GetStr(JsonElement el, params string[] properties)
