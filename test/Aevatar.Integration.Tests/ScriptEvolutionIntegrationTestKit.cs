@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -13,6 +14,7 @@ using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Projection.Orchestration;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,12 +47,12 @@ internal static class ScriptEvolutionIntegrationTestKit
         services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionApplicationService>(sp =>
             new AttachOnlyScriptEvolutionApplicationService(
                 new ScriptEvolutionApplicationService(sp.GetRequiredService<IScriptEvolutionProposalPort>()),
-                sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
+                sp.GetRequiredService<IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>>(),
                 sp.GetRequiredService<IScriptingActorAddressResolver>())));
         services.Replace(ServiceDescriptor.Singleton<IScriptEvolutionProposalPort>(sp =>
             new AttachOnlyScriptEvolutionProposalPort(
                 sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>(),
-                sp.GetRequiredService<IScriptEvolutionProjectionPort>(),
+                sp.GetRequiredService<IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>>(),
                 sp.GetRequiredService<IScriptingActorAddressResolver>())));
         return services;
     }
@@ -167,7 +169,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
         await using var sink = new EventChannel<EventEnvelope>(capacity: 64);
         var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
@@ -202,7 +204,7 @@ internal static class ScriptEvolutionIntegrationTestKit
     {
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
 
         try
@@ -436,7 +438,7 @@ internal static class ScriptEvolutionIntegrationTestKit
 
     private sealed class AttachOnlyScriptEvolutionApplicationService(
         IScriptEvolutionApplicationService inner,
-        IScriptEvolutionProjectionPort evolutionProjectionPort,
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> evolutionProjectionActivation,
         IScriptingActorAddressResolver addressResolver)
         : IScriptEvolutionApplicationService
     {
@@ -464,7 +466,8 @@ internal static class ScriptEvolutionIntegrationTestKit
             var sessionActorId = addressResolver.GetEvolutionSessionActorId(
                 normalizedProposalId,
                 normalizedScopeId);
-            var lease = await evolutionProjectionPort.EnsureActorProjectionAsync(
+            var lease = await EnsureEvolutionProjectionAsync(
+                evolutionProjectionActivation,
                 sessionActorId,
                 normalizedProposalId,
                 ct);
@@ -480,7 +483,7 @@ internal static class ScriptEvolutionIntegrationTestKit
 
     private sealed class AttachOnlyScriptEvolutionProposalPort(
         IScriptEvolutionProposalPort inner,
-        IScriptEvolutionProjectionPort evolutionProjectionPort,
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> evolutionProjectionActivation,
         IScriptingActorAddressResolver addressResolver)
         : IScriptEvolutionProposalPort
     {
@@ -502,7 +505,8 @@ internal static class ScriptEvolutionIntegrationTestKit
             var sessionActorId = addressResolver.GetEvolutionSessionActorId(
                 normalizedProposalId,
                 normalizedScopeId);
-            var lease = await evolutionProjectionPort.EnsureActorProjectionAsync(
+            var lease = await EnsureEvolutionProjectionAsync(
+                evolutionProjectionActivation,
                 sessionActorId,
                 normalizedProposalId,
                 ct);
@@ -514,5 +518,24 @@ internal static class ScriptEvolutionIntegrationTestKit
 
             return await inner.ProposeAsync(normalizedProposal, ct);
         }
+    }
+
+    private static async Task<IScriptEvolutionProjectionLease?> EnsureEvolutionProjectionAsync(
+        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> activationService,
+        string sessionActorId,
+        string proposalId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activationService);
+
+        return await activationService.EnsureAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = sessionActorId,
+                ProjectionKind = ScriptProjectionKinds.EvolutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = proposalId,
+            },
+            ct);
     }
 }

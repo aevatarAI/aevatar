@@ -1,33 +1,50 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 
 namespace Aevatar.Integration.Tests;
 
 internal static class ScriptProjectionTestActivationExtensions
 {
-    public static Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
-        this IScriptExecutionProjectionPort projectionPort,
+    public static async Task<IScriptExecutionProjectionLease?> EnsureScriptExecutionProjectionAsync(
+        this IServiceProvider services,
         string actorId,
         CancellationToken ct = default)
     {
-        var concretePort = projectionPort as ScriptExecutionProjectionPort
-            ?? throw new InvalidOperationException(
-                $"Integration tests require `{typeof(ScriptExecutionProjectionPort).FullName}` to activate execution observation scopes.");
+        ArgumentNullException.ThrowIfNull(services);
 
-        return concretePort.EnsureActorProjectionAsync(actorId, ct);
+        var activationService = services.GetRequiredService<IProjectionScopeActivationService<ScriptExecutionRuntimeLease>>();
+        return await activationService.EnsureAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.ExecutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = actorId,
+            },
+            ct);
     }
 
-    public static Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
-        this IScriptEvolutionProjectionPort projectionPort,
+    public static async Task<IScriptEvolutionProjectionLease?> EnsureScriptEvolutionProjectionAsync(
+        this IServiceProvider services,
         string sessionActorId,
         string proposalId,
         CancellationToken ct = default)
     {
-        var concretePort = projectionPort as ScriptEvolutionProjectionPort
-            ?? throw new InvalidOperationException(
-                $"Integration tests require `{typeof(ScriptEvolutionProjectionPort).FullName}` to activate evolution observation scopes.");
+        ArgumentNullException.ThrowIfNull(services);
 
-        return concretePort.EnsureActorProjectionAsync(sessionActorId, proposalId, ct);
+        var activationService = services.GetRequiredService<IProjectionScopeActivationService<ScriptEvolutionRuntimeLease>>();
+        return await activationService.EnsureAsync(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = sessionActorId,
+                ProjectionKind = ScriptProjectionKinds.EvolutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = proposalId,
+            },
+            ct);
     }
 }

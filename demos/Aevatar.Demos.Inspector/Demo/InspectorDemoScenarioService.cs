@@ -18,6 +18,9 @@ public sealed class InspectorDemoScenarioService
 
     public async Task<InspectorDemoRunResponse> RunHierarchyAsync(CancellationToken ct = default)
     {
+        await _registry.UnregisterActorAsync(nameof(InspectorTransformerAgent), "inspector-parent", ct);
+        await _registry.UnregisterActorAsync(nameof(InspectorCollectorAgent), "inspector-child", ct);
+
         var parent = await _runtime.CreateAsync<InspectorTransformerAgent>("inspector-parent", ct);
         var child = await _runtime.CreateAsync<InspectorCollectorAgent>("inspector-child", ct);
         await _registry.RegisterActorAsync(nameof(InspectorTransformerAgent), parent.Id, ct);

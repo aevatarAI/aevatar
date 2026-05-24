@@ -173,7 +173,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 orchestratorDefinition.Snapshot,
                 CancellationToken.None);
 
-            var lease = await executionProjectionNode1.EnsureActorProjectionAsync(
+            var lease = await node1.Services.EnsureScriptExecutionProjectionAsync(
                 orchestratorRuntimeActorId,
                 CancellationToken.None);
             lease.Should().NotBeNull();

@@ -24,22 +24,4 @@ public sealed class ScriptExecutionProjectionPort
     {
     }
 
-    internal Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
-        string actorId,
-        CancellationToken ct = default) =>
-        EnsureRunProjectionAsync(actorId, actorId, ct);
-
-    internal Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
-        string actorId,
-        string runId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = ScriptProjectionKinds.ExecutionSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = runId,
-            },
-            ct);
 }
