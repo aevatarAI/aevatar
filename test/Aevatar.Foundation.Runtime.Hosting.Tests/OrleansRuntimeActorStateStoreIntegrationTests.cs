@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -7,6 +5,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Tests.Shared;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -23,9 +22,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
     public async Task RuntimeActorGrain_ShouldNotRestoreTransientStateWithoutEvents_WhenReinitialized()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
-        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+        var host = await StartSiloHostAsync();
 
         try
         {
@@ -52,9 +49,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
     public async Task RuntimeActorGrain_ShouldIgnoreObserveEnvelopes_WhenHandlingRuntimeInbox()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
-        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+        var host = await StartSiloHostAsync();
 
         try
         {
@@ -90,14 +85,13 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
         }
     }
 
-    private static async Task<IHost> StartSiloHostAsync(int siloPort, int gatewayPort)
-    {
-        var host = Host.CreateDefaultBuilder()
+    private static async Task<IHost> StartSiloHostAsync() =>
+        await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
-                    siloPort: siloPort,
-                    gatewayPort: gatewayPort,
+                    siloPort: ports.SiloPort,
+                    gatewayPort: ports.GatewayPort,
                     serviceId: $"aevatar-orleans-state-store-it-service-{Guid.NewGuid():N}",
                     clusterId: $"aevatar-orleans-state-store-it-cluster-{Guid.NewGuid():N}");
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
@@ -106,18 +100,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
                 });
             })
-            .Build();
-
-        await host.StartAsync();
-        return host;
-    }
-
-    private static int ReserveTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
+            .Build());
 
     public sealed class StateStoreAwareActivationAgent : GAgentBase<Int32Value>
     {

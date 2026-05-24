@@ -1,9 +1,8 @@
-using System.Net;
-using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans;
@@ -27,14 +26,12 @@ internal sealed class RuntimeCallbackSchedulerGrainTestHarness : IAsyncDisposabl
 
     public static async Task<RuntimeCallbackSchedulerGrainTestHarness> StartAsync()
     {
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
-        var host = Host.CreateDefaultBuilder()
+        var host = await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
-                    siloPort: siloPort,
-                    gatewayPort: gatewayPort,
+                    siloPort: ports.SiloPort,
+                    gatewayPort: ports.GatewayPort,
                     serviceId: $"aevatar-channel-runtime-callback-test-service-{Guid.NewGuid():N}",
                     clusterId: $"aevatar-channel-runtime-callback-test-cluster-{Guid.NewGuid():N}");
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
@@ -43,9 +40,8 @@ internal sealed class RuntimeCallbackSchedulerGrainTestHarness : IAsyncDisposabl
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
                 });
             })
-            .Build();
+            .Build());
 
-        await host.StartAsync();
         var harness = new RuntimeCallbackSchedulerGrainTestHarness(host);
         harness.Scheduler = new GrainBackedCallbackScheduler(
             host.Services.GetRequiredService<IGrainFactory>(),
@@ -57,13 +53,6 @@ internal sealed class RuntimeCallbackSchedulerGrainTestHarness : IAsyncDisposabl
     {
         await _host.StopAsync();
         _host.Dispose();
-    }
-
-    private static int ReserveTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private sealed class GrainBackedCallbackScheduler : IActorRuntimeCallbackScheduler

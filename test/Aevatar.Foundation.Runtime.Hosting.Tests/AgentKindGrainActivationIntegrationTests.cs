@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Compatibility;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -7,6 +5,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -171,15 +170,13 @@ public sealed class AgentKindGrainActivationIntegrationTests
 
     private static async Task<IHost> StartSiloHostAsync()
     {
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
         var serviceId = $"aevatar-agent-kind-it-service-{Guid.NewGuid():N}";
         var clusterId = $"aevatar-agent-kind-it-cluster-{Guid.NewGuid():N}";
 
-        var host = Host.CreateDefaultBuilder()
+        return await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
-                siloBuilder.UseLocalhostClustering(siloPort, gatewayPort, null, serviceId, clusterId);
+                siloBuilder.UseLocalhostClustering(ports.SiloPort, ports.GatewayPort, null, serviceId, clusterId);
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
@@ -193,17 +190,7 @@ public sealed class AgentKindGrainActivationIntegrationTests
                         builder.Register<IntegrationFixtureCanonicalAgent>());
                 });
             })
-            .Build();
-
-        await host.StartAsync();
-        return host;
-    }
-
-    private static int ReserveTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+            .Build());
     }
 }
 
