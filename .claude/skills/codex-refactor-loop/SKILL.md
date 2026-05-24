@@ -2037,6 +2037,20 @@ Controller 读 marker 后路由:
 - ❌ reflector 决议 `re-design` 但 controller 继续派 fix → 框架失效
 - ❌ 临时 `max_fix_rounds = 5` 滥用 → 仅 reflector 明确 `retry-fix` 时允许,且不超过 5
 
+### CLAUDE/AGENTS rule-interpretation splits(强制,per #939 4-round + reflector consensus retro 2026-05-24)
+
+**问题**:Phase 9 / Phase 8 卡死常常**根本是 solver 对同一 CLAUDE/AGENTS 条款理解不一致**(e.g. #939 minimal 认为 `Task.Run` 信号化合规,structural 认为必须移除)。如果 reflector 不先 settle 规则解读,后续 round 只是各自重复实施偏好,永远不收敛。
+
+**铁律**:如果 Phase 9/8 stall 根因是 solvers/reviewers 对同一 CLAUDE.md / AGENTS.md 条款解读不同,**reflector 必须先 verbatim quote 该条款 + 给 narrow ruling**:
+- 争议 pattern 是 allowed / forbidden / allowed-under-listed-constraints?
+- 实际违反点是什么 behavior(不是该 pattern 本身)?
+- 从此 ruling 推出的 implementation boundary?
+- 下轮 retry-fix(narrowed)还是 escalate-human(条款本身需改)?
+
+**不允许**在规则解读未 settle 前再派一轮 solver 让 ta 们继续重申实施偏好。
+
+事故记录:#939 r1/r2/r3 三轮 minimal vs structural 分歧不动,本质是"`Task.Run` 在 actor 内是否允许"的 CLAUDE 条款解读分歧。reflector r1 终于 verbatim quote "回调只发信号" 条款 + ruling(信号化 Task.Run 允许,违反在 actor 外构造 rich continuation)→ r4 立即 3/3 consensus。
+
 ## CI 监控即时推进 — 强制(per Auric 2026-05-19 "ci 监控,应该红了就及时推进")
 
 **问题**:PR push 后 controller 把 CI watch 当 "等 Monitor 通知" 然后该睡就睡。结果 CI 红了 controller 没及时反应,PR 一红就挂半天,人类看到 🔴 而无动作。
