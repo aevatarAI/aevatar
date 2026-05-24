@@ -1,10 +1,12 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -815,6 +817,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
             return;
 
+        if (state.InFlight is not null)
+        {
+            await PersistNyxRelayTextCoalescedStateAsync(correlationId, state, evt.AccumulatedText);
+            return;
+        }
+
         var runtimeContext = BuildNyxRelayRuntimeContext(
             evt.CorrelationId,
             evt.Activity,
@@ -833,67 +841,45 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        var runner = ResolveRunner();
-        // Bound the upstream edit so a stuck relay/network can't pin the actor turn forever
-        // (PR #562 review). 10s matches the failure-path timeout below; the edit is best-effort,
-        // so timing out cleanly into the !result.Success branch preserves correctness.
-        using var streamChunkCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-        var result = await runner.RunStreamChunkAsync(
-            evt,
-            state.PlatformMessageId,
-            runtimeContext,
-            streamChunkCts.Token);
-        if (!result.Success)
-        {
-            if (state.AllowsFinalEdit)
-            {
-                // First chunk already consumed the reply token. Skip further interim edits but
-                // preserve PlatformMessageId so the final edit on LlmReplyReady can still try
-                // to reconcile the user-visible message. Falling back to /reply would reuse a
-                // dead token.
-                Logger.LogInformation(
-                    "Streaming interim edit failed after token consumed; suppressing interim edits, final edit will still be attempted. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
-                    evt.CorrelationId,
-                    result.ErrorCode,
-                    result.EditUnsupported);
-                await TransitionNyxRelayStreamingPhaseAsync(
-                    correlationId,
-                    state,
-                    NyxRelayStreamingPhase.SuppressingInterim,
-                    terminalReason: $"interim_edit_failed:{result.ErrorCode}");
-            }
-            else
-            {
-                // First send itself failed, so the reply token is still usable. Let
-                // LlmReplyReady fall back to a single-shot /reply via RunLlmReplyAsync.
-                Logger.LogInformation(
-                    "Streaming initial send failed before token consumed; disabling streaming and allowing /reply fallback. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
-                    evt.CorrelationId,
-                    result.ErrorCode,
-                    result.EditUnsupported);
-                await TransitionNyxRelayStreamingPhaseAsync(
-                    correlationId,
-                    state,
-                    NyxRelayStreamingPhase.DisabledPreSend,
-                    terminalReason: $"first_send_failed:{result.ErrorCode}");
-            }
-            return;
-        }
-
-        var isFirstChunk = state.Phase == NyxRelayStreamingPhase.Idle;
-        var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
-            ? state.PlatformMessageId
-            : result.PlatformMessageId;
+        var sequence = state.EditCount + 1L;
+        var generation = NextNyxRelayTextOperationGeneration(state);
         await TransitionNyxRelayStreamingPhaseAsync(
             correlationId,
             state,
-            isFirstChunk ? NyxRelayStreamingPhase.PlaceholderSent : NyxRelayStreamingPhase.Streaming,
+            state.Phase,
             fieldUpdate: s => s with
             {
-                PlatformMessageId = newPlatformMessageId,
-                LastFlushedText = evt.AccumulatedText,
-                EditCount = isFirstChunk ? 0 : s.EditCount + 1,
+                InFlight = new NyxRelayTextOperationInFlight(
+                    NyxRelayTextOperationKind.Interim,
+                    sequence,
+                    generation),
+                OperationGeneration = generation,
+                PendingAccumulatedText = evt.AccumulatedText,
             });
+        await ScheduleNyxRelayTextOperationTimeoutAsync(
+            correlationId,
+            NyxRelayTextOperationKind.Interim,
+            sequence,
+            generation,
+            evt,
+            state.PlatformMessageId,
+            commandId: string.Empty,
+            finalText: string.Empty,
+            lastFlushedText: state.LastFlushedText,
+            editCount: state.EditCount,
+            CancellationToken.None);
+        StartNyxRelayTextOperation(
+            NyxRelayTextOperationKind.Interim,
+            evt,
+            correlationId,
+            state.PlatformMessageId,
+            commandId: string.Empty,
+            finalText: string.Empty,
+            lastFlushedText: state.LastFlushedText,
+            editCount: state.EditCount,
+            sequence,
+            generation,
+            runtimeContext);
     }
 
     private async Task<bool> TryCompleteStreamedReplyAsync(
@@ -920,6 +906,34 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         var platformMessageId = state.PlatformMessageId!;
 
+        if (state.InFlight is not null)
+        {
+            if (evt.TerminalState == LlmReplyTerminalState.Failed)
+            {
+                var failureText = NormalizeOptional(evt.Outbound?.Text)
+                    ?? NormalizeOptional(evt.ErrorSummary)
+                    ?? "Sorry, the reply failed. Please try again.";
+                await PersistNyxRelayTextCoalescedStateAsync(
+                    correlationId,
+                    state,
+                    finalizeText: failureText,
+                    finalizeCommandId: commandId,
+                    terminalState: LlmReplyTerminalState.Failed);
+                return true;
+            }
+
+            if (evt.TerminalState == LlmReplyTerminalState.Completed)
+            {
+                await PersistNyxRelayTextCoalescedStateAsync(
+                    correlationId,
+                    state,
+                    finalizeText: evt.Outbound?.Text ?? string.Empty,
+                    finalizeCommandId: commandId,
+                    terminalState: LlmReplyTerminalState.Completed);
+                return true;
+            }
+        }
+
         // Streaming-start already consumed the reply token. On Failed, falling through to
         // RunLlmReplyAsync would issue a fresh /reply against the dead token and surface
         // as `401 Reply token already used` to NyxID — leaving the user staring at the
@@ -931,7 +945,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var failureText = NormalizeOptional(evt.Outbound?.Text)
                 ?? NormalizeOptional(evt.ErrorSummary)
                 ?? "Sorry, the reply failed. Please try again.";
-            var runner = ResolveRunner();
             var failureChunk = new LlmReplyStreamChunkEvent
             {
                 CorrelationId = evt.CorrelationId,
@@ -940,43 +953,44 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 AccumulatedText = failureText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
-            using var failureUpdateCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-            var failureResult = await runner.RunStreamChunkAsync(
-                failureChunk,
-                platformMessageId,
-                runtimeContext,
-                failureUpdateCts.Token);
-            if (failureResult.Success)
-            {
-                Logger.LogWarning(
-                    "LLM reply failed after streaming-start; updated placeholder with failure text. correlation={CorrelationId}, errorCode={ErrorCode}, platformMessageId={PlatformMessageId}",
-                    evt.CorrelationId,
-                    evt.ErrorCode,
-                    platformMessageId);
-                await TransitionNyxRelayStreamingPhaseAsync(
-                    correlationId,
-                    state,
-                    NyxRelayStreamingPhase.TerminalSucceeded,
-                    terminalReason: $"failed_self_heal:{evt.ErrorCode}");
-                await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, failureText, state.EditCount + 1);
-                return true;
-            }
-
-            // Edit failed too (rare — Lark may reject a message edit for unrelated reasons).
-            // Falling back to /reply would still hit the dead token, so persist the last
-            // flushed partial as terminal. The user sees the partial (potentially empty)
-            // but we don't spin on a guaranteed 401.
-            Logger.LogWarning(
-                "Streaming LLM failure-update could not edit placeholder; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
-                evt.CorrelationId,
-                failureResult.ErrorCode,
-                platformMessageId);
+            var sequence = state.EditCount + 1L;
+            var generation = NextNyxRelayTextOperationGeneration(state);
             await TransitionNyxRelayStreamingPhaseAsync(
                 correlationId,
                 state,
-                NyxRelayStreamingPhase.TerminalPartial,
-                terminalReason: $"failed_self_heal_edit_failed:{failureResult.ErrorCode}");
-            await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    InFlight = new NyxRelayTextOperationInFlight(
+                        NyxRelayTextOperationKind.FailureSelfHeal,
+                        sequence,
+                        generation),
+                    OperationGeneration = generation,
+                });
+            await ScheduleNyxRelayTextOperationTimeoutAsync(
+                correlationId,
+                NyxRelayTextOperationKind.FailureSelfHeal,
+                sequence,
+                generation,
+                failureChunk,
+                platformMessageId,
+                commandId,
+                finalText: failureText,
+                lastFlushedText: state.LastFlushedText,
+                editCount: state.EditCount,
+                CancellationToken.None);
+            StartNyxRelayTextOperation(
+                NyxRelayTextOperationKind.FailureSelfHeal,
+                failureChunk,
+                correlationId,
+                platformMessageId,
+                commandId,
+                finalText: failureText,
+                lastFlushedText: state.LastFlushedText,
+                editCount: state.EditCount,
+                sequence,
+                generation,
+                runtimeContext);
             return true;
         }
 
@@ -1005,7 +1019,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var edits = state.EditCount;
         if (!string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal))
         {
-            var runner = ResolveRunner();
             var finalChunk = new LlmReplyStreamChunkEvent
             {
                 CorrelationId = evt.CorrelationId,
@@ -1014,33 +1027,45 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 AccumulatedText = finalText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
-            using var finalChunkCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
-            var finalResult = await runner.RunStreamChunkAsync(
+            var sequence = state.EditCount + 1L;
+            var generation = NextNyxRelayTextOperationGeneration(state);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    InFlight = new NyxRelayTextOperationInFlight(
+                        NyxRelayTextOperationKind.Final,
+                        sequence,
+                        generation),
+                    OperationGeneration = generation,
+                });
+            await ScheduleNyxRelayTextOperationTimeoutAsync(
+                correlationId,
+                NyxRelayTextOperationKind.Final,
+                sequence,
+                generation,
                 finalChunk,
                 platformMessageId,
-                runtimeContext,
-                finalChunkCts.Token);
-            if (!finalResult.Success)
-            {
-                // The reply token was already consumed by the first chunk, so falling back to
-                // a fresh /reply via RunLlmReplyAsync would reuse a dead JTI and surface as 401
-                // to the user. Persist the last flushed partial as the terminal state instead —
-                // the user sees the stale partial, but we don't spin on a guaranteed-failing
-                // send. Retries cannot help here.
-                Logger.LogWarning(
-                    "Streaming final flush failed after token consumed; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
-                    evt.CorrelationId,
-                    finalResult.ErrorCode,
-                    platformMessageId);
-                await TransitionNyxRelayStreamingPhaseAsync(
-                    correlationId,
-                    state,
-                    NyxRelayStreamingPhase.TerminalPartial,
-                    terminalReason: $"final_edit_failed:{finalResult.ErrorCode}");
-                await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
-                return true;
-            }
-            edits += 1;
+                commandId,
+                finalText,
+                state.LastFlushedText,
+                state.EditCount,
+                CancellationToken.None);
+            StartNyxRelayTextOperation(
+                NyxRelayTextOperationKind.Final,
+                finalChunk,
+                correlationId,
+                platformMessageId,
+                commandId,
+                finalText,
+                state.LastFlushedText,
+                state.EditCount,
+                sequence,
+                generation,
+                runtimeContext);
+            return true;
         }
 
         await TransitionNyxRelayStreamingPhaseAsync(
@@ -1051,6 +1076,553 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, finalText, edits);
         return true;
     }
+
+    private Task<NyxRelayStreamingState> PersistNyxRelayTextCoalescedStateAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        string? accumulatedText = null,
+        string? finalizeText = null,
+        string? finalizeCommandId = null,
+        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified) =>
+        TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                PendingAccumulatedText = NormalizeOptional(accumulatedText) ?? s.PendingAccumulatedText,
+                PendingFinalizeText = NormalizeOptional(finalizeText) ?? s.PendingFinalizeText,
+                PendingFinalizeCommandId = NormalizeOptional(finalizeCommandId) ?? s.PendingFinalizeCommandId,
+                PendingTerminalState = terminalState == LlmReplyTerminalState.Unspecified
+                    ? s.PendingTerminalState
+                    : terminalState,
+            });
+
+    private async Task ScheduleNyxRelayTextOperationTimeoutAsync(
+        string correlationId,
+        NyxRelayTextOperationKind operation,
+        long sequence,
+        long generation,
+        LlmReplyStreamChunkEvent chunk,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        CancellationToken ct)
+    {
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildNyxRelayTextOperationTimeoutCallbackId(correlationId, operation, generation),
+            StreamingFailureUpdateTimeout,
+            new NyxRelayTextOperationTimeoutFiredEvent
+            {
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = CloneNyxRelayTextTimeoutChunkForDurableState(chunk),
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+                FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            ct: ct);
+    }
+
+    private static LlmReplyStreamChunkEvent CloneNyxRelayTextTimeoutChunkForDurableState(
+        LlmReplyStreamChunkEvent chunk) =>
+        new()
+        {
+            CorrelationId = chunk.CorrelationId ?? string.Empty,
+            RegistrationId = chunk.RegistrationId ?? string.Empty,
+            Activity = CloneForDurableState(chunk.Activity) ?? new ChatActivity(),
+            AccumulatedText = chunk.AccumulatedText ?? string.Empty,
+            ChunkAtUnixMs = chunk.ChunkAtUnixMs,
+        };
+
+    private void StartNyxRelayTextOperation(
+        NyxRelayTextOperationKind operation,
+        LlmReplyStreamChunkEvent chunk,
+        string correlationId,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var runner = ResolveRunner();
+        _ = Task.Run(() => ExecuteNyxRelayTextOperationAsync(
+            runner,
+            operation,
+            chunk.Clone(),
+            correlationId,
+            currentPlatformMessageId,
+            commandId,
+            finalText,
+            lastFlushedText,
+            editCount,
+            sequence,
+            generation,
+            runtimeContext));
+    }
+
+    private async Task ExecuteNyxRelayTextOperationAsync(
+        IConversationTurnRunner runner,
+        NyxRelayTextOperationKind operation,
+        LlmReplyStreamChunkEvent chunk,
+        string correlationId,
+        string? currentPlatformMessageId,
+        string? commandId,
+        string? finalText,
+        string? lastFlushedText,
+        int editCount,
+        long sequence,
+        long generation,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        NyxRelayTextOperationCompletedEvent signal;
+        try
+        {
+            using var cts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
+            var result = await runner.RunStreamChunkAsync(
+                    chunk,
+                    currentPlatformMessageId,
+                    runtimeContext,
+                    cts.Token)
+                .ConfigureAwait(false);
+            signal = new NyxRelayTextOperationCompletedEvent
+            {
+                OperationId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation),
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                State = result.Success
+                    ? NyxRelayTextOperationResultState.Succeeded
+                    : NyxRelayTextOperationResultState.Failed,
+                RawResult = ToRawResult(result),
+                Chunk = chunk,
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Nyx relay text operation executor threw. correlation={CorrelationId}, operation={Operation}", correlationId, operation);
+            signal = new NyxRelayTextOperationCompletedEvent
+            {
+                OperationId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation),
+                CorrelationId = correlationId,
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                State = NyxRelayTextOperationResultState.Faulted,
+                RawResult = ToNyxRelayTextRawFault(ex),
+                Chunk = chunk,
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            };
+        }
+
+        await DispatchNyxRelayTextOperationCompletedSignalAsync(signal, correlationId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task DispatchNyxRelayTextOperationCompletedSignalAsync(
+        NyxRelayTextOperationCompletedEvent evt,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (dispatchPort is null)
+        {
+            Logger.LogWarning(
+                "IActorDispatchPort unavailable; cannot dispatch Nyx relay text operation signal. correlation={CorrelationId}",
+                correlationId);
+            return;
+        }
+
+        await dispatchPort.DispatchAsync(
+                Id,
+                new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(evt),
+                    Route = EnvelopeRouteSemantics.CreateDirect(Id, Id),
+                    Propagation = new EnvelopePropagation { CorrelationId = correlationId },
+                },
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private static NyxRelayTextOperationRawResult ToRawResult(ConversationStreamChunkResult result) =>
+        new()
+        {
+            PlatformMessageId = result.PlatformMessageId ?? string.Empty,
+            EditUnsupported = result.EditUnsupported,
+            RawErrorCode = result.ErrorCode ?? string.Empty,
+            RawErrorSummary = result.ErrorSummary ?? string.Empty,
+        };
+
+    private static NyxRelayTextOperationRawResult ToNyxRelayTextRawFault(Exception ex) =>
+        new()
+        {
+            ExceptionType = ex.GetType().Name,
+            ExceptionMessage = ex.Message,
+        };
+
+    private static ConversationStreamChunkResult ToStreamChunkResult(NyxRelayTextOperationCompletedEvent evt)
+    {
+        var raw = evt.RawResult ?? new NyxRelayTextOperationRawResult();
+        if (evt.State == NyxRelayTextOperationResultState.Succeeded)
+            return ConversationStreamChunkResult.Succeeded(raw.PlatformMessageId);
+
+        return ConversationStreamChunkResult.Failed(
+            evt.State == NyxRelayTextOperationResultState.Faulted
+                ? BuildNyxRelayTextFaultErrorCode(raw)
+                : raw.RawErrorCode,
+            evt.State == NyxRelayTextOperationResultState.Faulted
+                ? raw.ExceptionMessage
+                : raw.RawErrorSummary,
+            raw.EditUnsupported);
+    }
+
+    private static string BuildNyxRelayTextFaultErrorCode(NyxRelayTextOperationRawResult raw)
+    {
+        var exceptionType = string.IsNullOrWhiteSpace(raw.ExceptionType)
+            ? "Exception"
+            : raw.ExceptionType;
+        return $"relay_text_threw:{exceptionType}";
+    }
+
+    [EventHandler]
+    public async Task HandleNyxRelayTextOperationCompletedAsync(NyxRelayTextOperationCompletedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, evt.Operation, evt.Sequence, evt.OperationGeneration))
+            return;
+
+        switch (evt.Operation)
+        {
+            case NyxRelayTextOperationKind.Interim:
+                await HandleNyxRelayTextInterimCompletionAsync(correlationId, state, evt);
+                return;
+            case NyxRelayTextOperationKind.FailureSelfHeal:
+                await HandleNyxRelayTextFailureSelfHealCompletionAsync(correlationId, state, evt);
+                return;
+            case NyxRelayTextOperationKind.Final:
+                await HandleNyxRelayTextFinalCompletionAsync(correlationId, state, evt);
+                return;
+            default:
+                return;
+        }
+    }
+
+    private async Task HandleNyxRelayTextInterimCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        if (!result.Success)
+        {
+            if (state.AllowsFinalEdit)
+            {
+                Logger.LogInformation(
+                    "Streaming interim edit failed after token consumed; suppressing interim edits, final edit will still be attempted. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.SuppressingInterim,
+                    terminalReason: $"interim_edit_failed:{result.ErrorCode}",
+                    fieldUpdate: s => s with { InFlight = null });
+            }
+            else
+            {
+                Logger.LogInformation(
+                    "Streaming initial send failed before token consumed; disabling streaming and allowing /reply fallback. correlation={CorrelationId}, code={Code}, editUnsupported={EditUnsupported}",
+                    evt.CorrelationId,
+                    result.ErrorCode,
+                    result.EditUnsupported);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.DisabledPreSend,
+                    terminalReason: $"first_send_failed:{result.ErrorCode}",
+                    fieldUpdate: s => s with { InFlight = null });
+            }
+            return;
+        }
+
+        var isFirstChunk = state.Phase == NyxRelayStreamingPhase.Idle;
+        var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
+            ? state.PlatformMessageId
+            : result.PlatformMessageId;
+        var ackedText = evt.Chunk?.AccumulatedText ?? state.PendingAccumulatedText ?? state.LastFlushedText;
+        var pendingText = string.Equals(state.PendingAccumulatedText, ackedText, StringComparison.Ordinal)
+            ? null
+            : state.PendingAccumulatedText;
+        var updated = await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            isFirstChunk ? NyxRelayStreamingPhase.PlaceholderSent : NyxRelayStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                PlatformMessageId = newPlatformMessageId,
+                LastFlushedText = ackedText,
+                EditCount = isFirstChunk ? 0 : s.EditCount + 1,
+                InFlight = null,
+                PendingAccumulatedText = pendingText,
+            });
+        await ContinueNyxRelayTextCoalescedWorkAsync(correlationId, updated, evt.Chunk);
+    }
+
+    private async Task HandleNyxRelayTextFailureSelfHealCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        var platformMessageId = NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty;
+        var commandId = NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+        var failureText = state.PendingFinalizeText ?? evt.FinalText ?? evt.Chunk?.AccumulatedText ?? string.Empty;
+        if (result.Success)
+        {
+            Logger.LogWarning(
+                "LLM reply failed after streaming-start; updated placeholder with failure text. correlation={CorrelationId}, platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                platformMessageId);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalSucceeded,
+                terminalReason: "failed_self_heal",
+                fieldUpdate: s => s with { InFlight = null });
+            await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, failureText, state.EditCount + 1);
+            return;
+        }
+
+        Logger.LogWarning(
+            "Streaming LLM failure-update could not edit placeholder; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
+            evt.CorrelationId,
+            result.ErrorCode,
+            platformMessageId);
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalPartial,
+            terminalReason: $"failed_self_heal_edit_failed:{result.ErrorCode}",
+            fieldUpdate: s => s with { InFlight = null });
+        await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
+    }
+
+    private async Task HandleNyxRelayTextFinalCompletionAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationCompletedEvent evt)
+    {
+        var result = ToStreamChunkResult(evt);
+        var platformMessageId = NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty;
+        var commandId = NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+        var finalText = state.PendingFinalizeText ?? evt.FinalText ?? evt.Chunk?.AccumulatedText ?? string.Empty;
+        if (!result.Success)
+        {
+            Logger.LogWarning(
+                "Streaming final flush failed after token consumed; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                result.ErrorCode,
+                platformMessageId);
+            await TransitionNyxRelayStreamingPhaseAsync(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalPartial,
+                terminalReason: $"final_edit_failed:{result.ErrorCode}",
+                fieldUpdate: s => s with { InFlight = null });
+            await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
+            return;
+        }
+
+        await TransitionNyxRelayStreamingPhaseAsync(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalSucceeded,
+            terminalReason: "completed",
+            fieldUpdate: s => s with
+            {
+                LastFlushedText = finalText,
+                EditCount = state.EditCount + 1,
+                InFlight = null,
+            });
+        await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, finalText, state.EditCount + 1);
+    }
+
+    [EventHandler]
+    public async Task HandleNyxRelayTextOperationTimeoutFiredAsync(NyxRelayTextOperationTimeoutFiredEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, evt.Operation, evt.Sequence, evt.OperationGeneration))
+            return;
+
+        switch (evt.Operation)
+        {
+            case NyxRelayTextOperationKind.Interim:
+                if (state.AllowsFinalEdit)
+                {
+                    await TransitionNyxRelayStreamingPhaseAsync(
+                        correlationId,
+                        state,
+                        NyxRelayStreamingPhase.SuppressingInterim,
+                        terminalReason: "interim_edit_timeout",
+                        fieldUpdate: s => s with { InFlight = null });
+                }
+                else
+                {
+                    await TransitionNyxRelayStreamingPhaseAsync(
+                        correlationId,
+                        state,
+                        NyxRelayStreamingPhase.DisabledPreSend,
+                        terminalReason: "first_send_timeout",
+                        fieldUpdate: s => s with { InFlight = null });
+                }
+                return;
+            case NyxRelayTextOperationKind.FailureSelfHeal:
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalPartial,
+                    terminalReason: "failed_self_heal_timeout",
+                    fieldUpdate: s => s with { InFlight = null });
+                await PersistStreamedCompletionAsync(
+                    evt,
+                    NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty,
+                    state.LastFlushedText,
+                    state.EditCount);
+                return;
+            case NyxRelayTextOperationKind.Final:
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalPartial,
+                    terminalReason: "final_edit_timeout",
+                    fieldUpdate: s => s with { InFlight = null });
+                await PersistStreamedCompletionAsync(
+                    evt,
+                    NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId ?? string.Empty,
+                    state.LastFlushedText,
+                    state.EditCount);
+                return;
+        }
+    }
+
+    private async Task ContinueNyxRelayTextCoalescedWorkAsync(
+        string correlationId,
+        NyxRelayStreamingState state,
+        LlmReplyStreamChunkEvent? sourceChunk)
+    {
+        if (state.InFlight is not null || IsTerminalNyxRelayStreamingPhase(state.Phase))
+            return;
+
+        if (state.PendingFinalizeText is not null)
+        {
+            var commandId = state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
+            var ready = new LlmReplyReadyEvent
+            {
+                CorrelationId = correlationId,
+                RegistrationId = sourceChunk?.RegistrationId ?? string.Empty,
+                Activity = sourceChunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = state.PendingFinalizeText },
+                TerminalState = state.PendingTerminalState == LlmReplyTerminalState.Unspecified
+                    ? LlmReplyTerminalState.Completed
+                    : state.PendingTerminalState,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            var runtimeContext = BuildNyxRelayRuntimeContext(
+                correlationId,
+                ready.Activity,
+                sourceChunk?.ReplyToken,
+                sourceChunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+            await TryCompleteStreamedReplyAsync(ready, commandId, ready.Activity, runtimeContext);
+            return;
+        }
+
+        if (state.PendingAccumulatedText is null || sourceChunk is null)
+            return;
+
+        var chunk = sourceChunk.Clone();
+        chunk.AccumulatedText = state.PendingAccumulatedText;
+        await HandleNyxRelayStreamingChunkCoreAsync(chunk);
+    }
+
+    private async Task PersistStreamedCompletionAsync(
+        NyxRelayTextOperationCompletedEvent evt,
+        string commandId,
+        string platformMessageId,
+        string outboundText,
+        int edits) =>
+        await PersistStreamedCompletionAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
+                Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = outboundText },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            commandId,
+            evt.Chunk?.Activity,
+            platformMessageId,
+            outboundText,
+            edits);
+
+    private async Task PersistStreamedCompletionAsync(
+        NyxRelayTextOperationTimeoutFiredEvent evt,
+        string commandId,
+        string platformMessageId,
+        string outboundText,
+        int edits) =>
+        await PersistStreamedCompletionAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
+                Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
+                Outbound = new MessageContent { Text = outboundText },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            commandId,
+            evt.Chunk?.Activity,
+            platformMessageId,
+            outboundText,
+            edits);
 
     private async Task PersistStreamedCompletionAsync(
         LlmReplyReadyEvent evt,

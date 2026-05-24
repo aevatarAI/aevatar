@@ -1485,10 +1485,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-first");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-first", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.StreamChunkCount.ShouldBe(1);
         runner.LastStreamChunkCurrentPlatformMessageId.ShouldBeNull();
@@ -1502,12 +1504,15 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-2");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-2", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk plus more"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.StreamChunkCount.ShouldBe(2);
         runner.LastStreamChunkCurrentPlatformMessageId.ShouldBe("om_first");
@@ -1521,10 +1526,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, _) =>
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-fail");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-fail", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fail", "relay-msg-1", "first"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second"));
         await agent.HandleLlmReplyStreamChunkAsync(
@@ -1553,10 +1560,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_stream"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-sc", "relay-msg-1", "final text"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1599,6 +1608,16 @@ public sealed class ConversationGAgentDedupTests
 
         await firstAgent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-reactivate", "relay-msg-1", "first partial"));
+        await firstAgent.HandleNyxRelayTextOperationCompletedAsync(new NyxRelayTextOperationCompletedEvent
+        {
+            CorrelationId = "act-stream-reactivate",
+            Operation = NyxRelayTextOperationKind.Interim,
+            Sequence = 1,
+            OperationGeneration = firstAgent.State.ActiveReplyLifecycles.Single().NyxRelayOperationGeneration,
+            State = NyxRelayTextOperationResultState.Succeeded,
+            RawResult = new NyxRelayTextOperationRawResult { PlatformMessageId = "om_reactivated" },
+            Chunk = CreateStreamChunk("act-stream-reactivate", "relay-msg-1", "first partial"),
+        });
 
         var lifecycle = firstAgent.State.ActiveReplyLifecycles.Single();
         lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
@@ -1611,7 +1630,8 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_reactivated"),
         };
-        var (secondAgent, _) = CreateAgent(secondRunner, "conv-stream-reactivate", store: store);
+        var secondDispatch = new RecordingActorDispatchPort();
+        var (secondAgent, _) = CreateAgent(secondRunner, "conv-stream-reactivate", store: store, dispatchPort: secondDispatch);
 
         await secondAgent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -1625,6 +1645,7 @@ public sealed class ConversationGAgentDedupTests
             ReplyToken = "runtime-ready-token",
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         });
+        await CompleteNextNyxRelayTextOperationAsync(secondAgent, secondDispatch);
 
         secondRunner.LlmReplyCount.ShouldBe(0);
         secondRunner.StreamChunkCount.ShouldBe(1);
@@ -1644,10 +1665,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, _) =>
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-fallback");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-fallback", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fb", "relay-msg-1", "partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1692,14 +1715,17 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
             },
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-suppress");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-suppress", dispatchPort: dispatch);
 
         // First chunk consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         // Interim edit fails after token consumed.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         // Later interim chunk must be dropped (not dispatched to runner).
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world again"));
@@ -1727,12 +1753,15 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Succeeded(pmid ?? "om_first_consumed");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1745,6 +1774,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         // Must not fall back to RunLlmReplyAsync — the token is already consumed.
         runner.LlmReplyCount.ShouldBe(0);
@@ -1775,12 +1805,15 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial more"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1793,6 +1826,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.LlmReplyCount.ShouldBe(0);
         var events = await store.GetEventsAsync(agent.Id);
@@ -1830,11 +1864,13 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Succeeded(pmid ?? "om_placeholder_consumed");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit", dispatchPort: dispatch);
 
         // First chunk lands the placeholder + consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-failed", "relay-msg-1", "..."));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1851,6 +1887,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         // Must NOT fall through to RunLlmReplyAsync (would 401 on the dead token).
         runner.LlmReplyCount.ShouldBe(0);
@@ -1885,10 +1922,12 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "lark refused", editUnsupported: true);
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-failed-deny", "relay-msg-1", "first partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1903,6 +1942,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.LlmReplyCount.ShouldBe(0);
         var events = await store.GetEventsAsync(agent.Id);
@@ -2014,12 +2054,13 @@ public sealed class ConversationGAgentDedupTests
         IChatRoutePolicyQueryPort? queryPort = null,
         ChatRouteResolver? chatRouteResolver = null,
         IEventStore? store = null,
-        IEventPublisher? eventPublisher = null)
+        IEventPublisher? eventPublisher = null,
+        RecordingActorDispatchPort? dispatchPort = null)
     {
         store ??= new InMemoryEventStore();
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore>(store);
-        services.AddSingleton<IActorDispatchPort>(new RecordingActorDispatchPort());
+        services.AddSingleton<IActorDispatchPort>(dispatchPort ?? new RecordingActorDispatchPort());
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
@@ -2122,6 +2163,15 @@ public sealed class ConversationGAgentDedupTests
         Payload = new MessageContent { Text = "ping" },
         DispatchedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
     };
+
+    private static async Task<NyxRelayTextOperationCompletedEvent> CompleteNextNyxRelayTextOperationAsync(
+        ConversationGAgent agent,
+        RecordingActorDispatchPort dispatchPort)
+    {
+        var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
+        await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
+        return completed;
+    }
 
     private sealed class RecordingTurnRunner : IConversationTurnRunner
     {
@@ -2275,11 +2325,42 @@ public sealed class ConversationGAgentDedupTests
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+        private readonly Queue<EventEnvelope> _pending = new();
+        private readonly SemaphoreSlim _available = new(0);
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            Dispatches.Add((actorId, envelope.Clone()));
+            var clone = envelope.Clone();
+            Dispatches.Add((actorId, clone.Clone()));
+            lock (_pending)
+            {
+                _pending.Enqueue(clone);
+            }
+            _available.Release();
             return Task.CompletedTask;
+        }
+
+        public async Task<T> WaitForPayloadAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || !await _available.WaitAsync(remaining))
+                    break;
+
+                EventEnvelope envelope;
+                lock (_pending)
+                {
+                    envelope = _pending.Dequeue();
+                }
+
+                if (envelope.Payload.Is(new T().Descriptor))
+                    return envelope.Payload.Unpack<T>();
+            }
+
+            throw new TimeoutException($"Timed out waiting for dispatched {typeof(T).Name}.");
         }
     }
 
@@ -2349,7 +2430,8 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
-        var (agent, _) = CreateAgent(text, "conv-card-timeout");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(text, "conv-card-timeout", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-timeout", "relay-msg-1", "hello"));
@@ -2365,6 +2447,7 @@ public sealed class ConversationGAgentDedupTests
             CommandId = "llm-reply:act-card-timeout",
             FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         text.StreamChunkCount.ShouldBe(1);
         agent.State.ActiveReplyLifecycles.ShouldContain(x =>
@@ -2628,7 +2711,8 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
-        var (agent, store) = CreateAgent(text, "conv-card-fb-final");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(text, "conv-card-fb-final", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"));
@@ -2642,6 +2726,7 @@ public sealed class ConversationGAgentDedupTests
             isRateLimited: true,
             errorCode: "card_create_failed",
             errorSummary: "down"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -2655,7 +2740,8 @@ public sealed class ConversationGAgentDedupTests
         };
         await agent.HandleLlmReplyReadyAsync(ready);
 
-        // Text-edit finalize lands the ConversationTurnCompletedEvent with the legacy prefix.
+        // Text-edit fallback lands the ConversationTurnCompletedEvent with the legacy prefix
+        // after the typed text operation completion reconciles inside the actor.
         var events = await store.GetEventsAsync(agent.Id);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
