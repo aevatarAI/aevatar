@@ -174,6 +174,33 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_WhenProbeExceedsTimeout_UsesInjectedClockForCancellationAndOutcome()
+    {
+        var startedAt = DateTimeOffset.Parse("2026-05-21T10:10:00Z");
+        _timeProvider.SetUtcNow(startedAt);
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth", timeoutMs: 1_000),
+        });
+
+        _executor.WaitForCancellation = true;
+        var tickTask = _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+        await _executor.ProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var timedOutAt = startedAt.AddMilliseconds(1_001);
+        _timeProvider.Advance(TimeSpan.FromMilliseconds(1_001));
+
+        await tickTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        _executor.Invocations.Should().Be(1);
+        _agent.State.LastOutcome.Should().NotBeNull();
+        _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        _agent.State.LastOutcome.Detail.Should().Be("timeout");
+        _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset().Should().Be(timedOutAt);
+        _agent.State.LastOutcome.LatencyMs.Should().Be(1_001);
+    }
+
+    [Fact]
     public async Task Tick_RetainsRecentTwoHourOutcomeWindow()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
@@ -319,20 +346,30 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         public Exception? ThrowOnNextProbe { get; set; }
         public FakeTimeProvider TimeProvider { get; set; } = null!;
         public TimeSpan Delay { get; set; }
+        public bool WaitForCancellation { get; set; }
+        public TaskCompletionSource ProbeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
+        public async Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
         {
             Invocations++;
+            ProbeStarted.TrySetResult();
             if (ThrowOnNextProbe is { } ex)
             {
                 ThrowOnNextProbe = null;
                 throw ex;
             }
+            if (WaitForCancellation)
+            {
+                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await using var registration = ct.Register(static state =>
+                    ((TaskCompletionSource)state!).TrySetCanceled(), cancelled);
+                await cancelled.Task;
+            }
             if (Delay > TimeSpan.Zero)
             {
                 TimeProvider.Advance(Delay);
             }
-            return Task.FromResult(NextOutcome);
+            return NextOutcome;
         }
     }
 
