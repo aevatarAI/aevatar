@@ -4,11 +4,8 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,7 +13,6 @@ using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
-using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -59,12 +55,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -146,12 +142,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(nyxClient);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -212,17 +208,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -272,17 +263,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -332,17 +318,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -402,17 +383,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -467,17 +443,12 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(new RoutingJsonHandler())
-            {
-                BaseAddress = new Uri("https://nyx.example.com"),
-            }));
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -516,13 +487,144 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public void Constructor_Requires_Typed_Dependencies()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+
+        var missingQuery = () => new AgentBuilderTool(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingNyxFactory = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingSourceNyxFactory.Should().Throw<ArgumentNullException>().WithParameterName("nyxClientFactory");
+        missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
+        missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
+        missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsStructuredError_WhenCallerScopeUnavailable()
+    {
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("caller_scope_unavailable");
+            doc.RootElement.GetProperty("hint").GetString().Should().Contain("Re-authenticate");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
     public async Task ToolSource_Always_ReturnsTool()
     {
-        var source = new AgentBuilderToolSource(new ServiceCollection().BuildServiceProvider());
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(new RoutingJsonHandler()) { BaseAddress = new Uri("https://nyx.example.com") });
+        var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+
+        var source = new AgentBuilderToolSource(
+            queryPort,
+            nyxClientFactory,
+            skillRunnerPort,
+            catalogCommandPort,
+            callerScopeResolver);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
         tools[0].Name.Should().Be("agent_builder");
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tools[0].ExecuteAsync("""{"action":"list_agents"}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    private static AgentBuilderTool CreateTool(IServiceCollection services)
+    {
+        var provider = services.BuildServiceProvider();
+        return new AgentBuilderTool(
+            provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
+            provider.GetRequiredService<INyxIdApiClientFactory>(),
+            provider.GetRequiredService<ISkillRunnerCommandPort>(),
+            provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
+            provider.GetRequiredService<ICallerScopeResolver>(),
+            provider.GetService<ILogger<AgentBuilderTool>>());
+    }
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient? client = null)
+        {
+            _client = client ?? new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(new RoutingJsonHandler())
+                {
+                    BaseAddress = new Uri("https://nyx.example.com"),
+                });
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
     }
 
     private sealed class RoutingJsonHandler : HttpMessageHandler
@@ -561,77 +663,4 @@ public sealed class AgentBuilderToolTests
 
     private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body);
 
-    private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
-    {
-        private readonly StudioUserConfig _config;
-
-        public StubUserConfigQueryPort(StudioUserConfig config)
-        {
-            _config = config;
-        }
-
-        public Task<StudioUserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(_config);
-
-        public Task<StudioUserConfig> GetAsync(string scopeId, CancellationToken ct = default) => Task.FromResult(_config);
-    }
-
-    private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
-    {
-        public string? SavedScopeId { get; private set; }
-        public StudioUserConfig? SavedConfig { get; private set; }
-        public string? SavedGithubUsername { get; private set; }
-
-        public Task SaveAsync(StudioUserConfig config, CancellationToken ct = default)
-        {
-            SavedConfig = config;
-            return Task.CompletedTask;
-        }
-
-        public Task SaveAsync(string scopeId, StudioUserConfig config, CancellationToken ct = default)
-        {
-            SavedScopeId = scopeId;
-            return SaveAsync(config, ct);
-        }
-
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default)
-        {
-            SavedScopeId = scopeId;
-            SavedGithubUsername = githubUsername;
-            return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>
-    /// Minimal in-memory <see cref="ILogger{T}"/> that records each log call so tests can assert
-    /// on level + formatted message. Avoids a full Microsoft.Extensions.Logging.Testing dependency
-    /// for a single observability assertion.
-    /// </summary>
-    private sealed class ListLogger<T> : ILogger<T>
-    {
-        public List<LogEntry> Entries { get; } = new();
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            ArgumentNullException.ThrowIfNull(formatter);
-            Entries.Add(new LogEntry(logLevel, formatter(state, exception)));
-        }
-
-        public sealed record LogEntry(LogLevel Level, string Message);
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-
-            public void Dispose() { }
-        }
-    }
 }
