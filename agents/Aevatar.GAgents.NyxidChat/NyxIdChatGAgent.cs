@@ -105,6 +105,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        // Refactor (iter77/cluster-077-cqrs-command-outcome-stream-rpc):
+        //   Old pattern: NyxIdChat create awaited actor outcome via stream-RPC primitive (DispatchAndAwaitOutcomeAsync)
+        //   New principle (narrow scope): NyxIdChat create returns honest accepted ACK; terminal facts via committed events
         var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
         var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
@@ -132,14 +135,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                     ActorId = Id,
                     CommandId = commandId,
                     CorrelationId = correlationId,
-                });
-                await PublishCreationOutcomeAsync(new NyxIdChatConversationCreationOutcome
-                {
-                    ScopeId = command.ScopeId,
-                    ActorId = Id,
-                    CommandId = commandId,
-                    CorrelationId = correlationId,
-                    Status = NyxIdChatConversationCreationOutcomeStatus.Accepted,
                 });
                 return;
             }
@@ -359,26 +354,5 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             DestroyActor = destroyActor,
             Reason = reason,
         });
-        await PublishCreationOutcomeAsync(new NyxIdChatConversationCreationOutcome
-        {
-            ScopeId = scopeId,
-            ActorId = actorId,
-            CommandId = commandId,
-            CorrelationId = correlationId,
-            Status = NyxIdChatConversationCreationOutcomeStatus.RegistrationUnavailable,
-            Reason = reason,
-            DestroyedActor = destroyActor,
-        });
-    }
-
-    private Task PublishCreationOutcomeAsync(NyxIdChatConversationCreationOutcome outcome)
-    {
-        if (string.IsNullOrWhiteSpace(outcome.CommandId))
-            return Task.CompletedTask;
-
-        var outcomeChannel = Services.GetService<IActorOutcomeChannel<NyxIdChatConversationCreationOutcome>>();
-        return outcomeChannel is null
-            ? Task.CompletedTask
-            : outcomeChannel.PublishAsync(outcome.CommandId, outcome, CancellationToken.None);
     }
 }
