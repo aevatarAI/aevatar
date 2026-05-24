@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.OpenAI.Internal;
 using Google.Protobuf;
@@ -110,7 +111,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         ArgumentNullException.ThrowIfNull(session);
 
         _sampleRateHz = ResolveSampleRateHz(session.SampleRateHz);
-        await EnsureSession().ConfigureConversationSessionAsync(BuildConversationSessionOptions(session), ct);
+        await EnsureSession().SendSessionUpdateAsync(BuildSessionUpdateEvent(session), ct);
     }
 
     internal async Task InjectUserTextAsync(string text, CancellationToken ct)
@@ -286,19 +287,47 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             _ => null,
         };
 
-    private RealtimeConversationSessionOptions BuildConversationSessionOptions(VoiceSessionConfig session)
+    private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session)
     {
-        var options = new RealtimeConversationSessionOptions
+        var sessionObject = new JsonObject
         {
-            Instructions = session.Instructions ?? string.Empty,
-            AudioOptions = new RealtimeConversationSessionAudioOptions
+            ["type"] = "realtime",
+            ["instructions"] = session.Instructions ?? string.Empty,
+            ["output_modalities"] = new JsonArray("audio"),
+            ["audio"] = new JsonObject
             {
-                InputAudioOptions = BuildInputAudioOptions(),
-                OutputAudioOptions = BuildOutputAudioOptions(session),
+                ["input"] = new JsonObject
+                {
+                    ["format"] = BuildPcmAudioFormat(_sampleRateHz),
+                    ["turn_detection"] = BuildTurnDetection(),
+                },
+                ["output"] = new JsonObject
+                {
+                    ["format"] = BuildPcmAudioFormat(_sampleRateHz),
+                    ["voice"] = string.IsNullOrWhiteSpace(session.Voice)
+                        ? "alloy"
+                        : session.Voice.Trim(),
+                },
             },
         };
-        options.OutputModalities.Add(RealtimeOutputModality.Audio);
 
+        var tools = BuildTools(session);
+        sessionObject["tools"] = tools;
+        if (tools.Count > 0)
+            sessionObject["tool_choice"] = "auto";
+
+        var updateEvent = new JsonObject
+        {
+            ["type"] = "session.update",
+            ["session"] = sessionObject,
+        };
+
+        return BinaryData.FromString(updateEvent.ToJsonString());
+    }
+
+    private JsonArray BuildTools(VoiceSessionConfig session)
+    {
+        var tools = new JsonArray();
         var registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var definition in session.ToolDefinitions)
@@ -307,12 +336,14 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             if (string.IsNullOrWhiteSpace(toolName) || !registeredNames.Add(toolName))
                 continue;
 
-            options.Tools.Add(new RealtimeFunctionTool(toolName)
+            tools.Add(new JsonObject
             {
-                FunctionDescription = string.IsNullOrWhiteSpace(definition.Description)
+                ["type"] = "function",
+                ["name"] = toolName,
+                ["description"] = string.IsNullOrWhiteSpace(definition.Description)
                     ? $"Aevatar tool '{toolName}'."
                     : definition.Description.Trim(),
-                FunctionParameters = BuildToolParameters(definition.ParametersSchema, toolName),
+                ["parameters"] = BuildToolParameters(definition.ParametersSchema, toolName),
             });
         }
 
@@ -322,61 +353,56 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             if (string.IsNullOrWhiteSpace(toolName) || !registeredNames.Add(toolName))
                 continue;
 
-            options.Tools.Add(new RealtimeFunctionTool(toolName)
+            tools.Add(new JsonObject
             {
-                FunctionDescription = $"Aevatar tool '{toolName}'.",
-                FunctionParameters = PermissiveToolSchema,
+                ["type"] = "function",
+                ["name"] = toolName,
+                ["description"] = $"Aevatar tool '{toolName}'.",
+                ["parameters"] = BuildToolParameters(null, toolName),
             });
         }
 
-        if (options.Tools.Count > 0)
-            options.ToolChoice = new RealtimeToolChoice(RealtimeDefaultToolChoice.Auto);
-
-        return options;
+        return tools;
     }
 
-    private BinaryData BuildToolParameters(string? parametersSchema, string toolName)
+    private JsonNode BuildToolParameters(string? parametersSchema, string toolName)
     {
         if (string.IsNullOrWhiteSpace(parametersSchema))
-            return PermissiveToolSchema;
+            return JsonNode.Parse(PermissiveToolSchema.ToString())!;
 
         try
         {
-            using var _ = JsonDocument.Parse(parametersSchema);
-            return BinaryData.FromString(parametersSchema);
+            return JsonNode.Parse(parametersSchema)!;
         }
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "Voice tool schema for {ToolName} is invalid JSON. Falling back to permissive schema.", toolName);
-            return PermissiveToolSchema;
+            return JsonNode.Parse(PermissiveToolSchema.ToString())!;
         }
     }
 
-    private RealtimeConversationSessionInputAudioOptions BuildInputAudioOptions()
-    {
-        var options = new RealtimeConversationSessionInputAudioOptions();
-        if (_options.EnableServerVad)
-        {
-            options.TurnDetection = new RealtimeServerVadTurnDetection
-            {
-                DetectionThreshold = _options.DetectionThreshold,
-                PrefixPadding = _options.PrefixPadding,
-                SilenceDuration = _options.SilenceDuration,
-                InterruptResponseEnabled = _options.InterruptResponseOnSpeech,
-                CreateResponseEnabled = _options.AutoCreateResponse,
-            };
-        }
-
-        return options;
-    }
-
-    private static RealtimeConversationSessionOutputAudioOptions BuildOutputAudioOptions(VoiceSessionConfig session) =>
+    private static JsonObject BuildPcmAudioFormat(int sampleRateHz) =>
         new()
         {
-            Voice = string.IsNullOrWhiteSpace(session.Voice)
-                ? RealtimeVoice.Alloy
-                : new RealtimeVoice(session.Voice.Trim()),
+            ["type"] = "audio/pcm",
+            ["rate"] = sampleRateHz,
         };
+
+    private JsonNode? BuildTurnDetection()
+    {
+        if (!_options.EnableServerVad)
+            return null;
+
+        return new JsonObject
+        {
+            ["type"] = "server_vad",
+            ["threshold"] = _options.DetectionThreshold,
+            ["prefix_padding_ms"] = (int)_options.PrefixPadding.TotalMilliseconds,
+            ["silence_duration_ms"] = (int)_options.SilenceDuration.TotalMilliseconds,
+            ["interrupt_response"] = _options.InterruptResponseOnSpeech,
+            ["create_response"] = _options.AutoCreateResponse,
+        };
+    }
 
     private int ResolveSampleRateHz(int requested)
     {

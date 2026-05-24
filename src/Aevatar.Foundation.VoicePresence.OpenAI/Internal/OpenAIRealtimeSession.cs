@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -68,8 +69,15 @@ internal sealed class OpenAIRealtimeSession : IOpenAIRealtimeSession
         _session = session ?? throw new ArgumentNullException(nameof(session));
     }
 
-    public Task ConfigureConversationSessionAsync(RealtimeConversationSessionOptions options, CancellationToken ct) =>
-        _session.ConfigureConversationSessionAsync(options, ct);
+    public async Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sessionUpdateEvent);
+        await _session.WebSocket.SendAsync(
+            sessionUpdateEvent.ToMemory(),
+            WebSocketMessageType.Text,
+            endOfMessage: true,
+            cancellationToken: ct);
+    }
 
     public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) =>
         _session.SendInputAudioAsync(audio, ct);

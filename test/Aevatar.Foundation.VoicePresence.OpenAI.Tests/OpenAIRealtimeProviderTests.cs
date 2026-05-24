@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.OpenAI.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,15 +25,46 @@ public class OpenAIRealtimeProviderTests
             ToolNames = { "door.open" },
         }, CancellationToken.None);
 
-        session.ConfiguredOptions.Count.ShouldBe(1);
-        var options = session.ConfiguredOptions.Single();
-        options.Instructions.ShouldBe("be concise");
-        options.OutputModalities.Select(x => x.ToString()).ShouldBe(["audio"]);
-        options.AudioOptions.OutputAudioOptions.Voice?.ToString().ShouldBe("alloy");
-        options.AudioOptions.InputAudioOptions.TurnDetection.ShouldNotBeNull();
-        options.Tools.Count.ShouldBe(1);
-        options.Tools[0].ShouldBeOfType<RealtimeFunctionTool>();
-        ((RealtimeFunctionTool)options.Tools[0]).FunctionName.ShouldBe("door.open");
+        session.SessionUpdateEvents.Count.ShouldBe(1);
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        var root = document.RootElement;
+        root.GetProperty("type").GetString().ShouldBe("session.update");
+        root.TryGetProperty("input_audio_format", out _).ShouldBeFalse();
+        root.TryGetProperty("output_audio_format", out _).ShouldBeFalse();
+        root.TryGetProperty("modalities", out _).ShouldBeFalse();
+
+        var configuredSession = root.GetProperty("session");
+        configuredSession.GetProperty("type").GetString().ShouldBe("realtime");
+        configuredSession.GetProperty("instructions").GetString().ShouldBe("be concise");
+        configuredSession.GetProperty("output_modalities").EnumerateArray()
+            .Select(static x => x.GetString()).ShouldBe(["audio"]);
+        configuredSession.TryGetProperty("input_audio_format", out _).ShouldBeFalse();
+        configuredSession.TryGetProperty("output_audio_format", out _).ShouldBeFalse();
+        configuredSession.TryGetProperty("modalities", out _).ShouldBeFalse();
+
+        var audio = configuredSession.GetProperty("audio");
+        var input = audio.GetProperty("input");
+        input.GetProperty("format").GetProperty("type").GetString().ShouldBe("audio/pcm");
+        input.GetProperty("format").GetProperty("rate").GetInt32().ShouldBe(24000);
+        var turnDetection = input.GetProperty("turn_detection");
+        turnDetection.GetProperty("type").GetString().ShouldBe("server_vad");
+        turnDetection.GetProperty("threshold").GetSingle().ShouldBe(0.7f);
+        turnDetection.GetProperty("prefix_padding_ms").GetInt32().ShouldBe(300);
+        turnDetection.GetProperty("silence_duration_ms").GetInt32().ShouldBe(600);
+        turnDetection.GetProperty("interrupt_response").GetBoolean().ShouldBeTrue();
+        turnDetection.GetProperty("create_response").GetBoolean().ShouldBeTrue();
+
+        var output = audio.GetProperty("output");
+        output.GetProperty("format").GetProperty("type").GetString().ShouldBe("audio/pcm");
+        output.GetProperty("format").GetProperty("rate").GetInt32().ShouldBe(24000);
+        output.GetProperty("voice").GetString().ShouldBe("alloy");
+
+        var tools = configuredSession.GetProperty("tools").EnumerateArray().ToArray();
+        tools.Length.ShouldBe(1);
+        tools[0].GetProperty("type").GetString().ShouldBe("function");
+        tools[0].GetProperty("name").GetString().ShouldBe("door.open");
+        tools[0].GetProperty("parameters").GetProperty("additionalProperties").GetBoolean().ShouldBeTrue();
+        configuredSession.GetProperty("tool_choice").GetString().ShouldBe("auto");
     }
 
     [Fact]
@@ -58,17 +90,19 @@ public class OpenAIRealtimeProviderTests
             ToolNames = { "door.open", "door.close" },
         }, CancellationToken.None);
 
-        var options = session.ConfiguredOptions.Single();
-        options.Tools.Count.ShouldBe(2);
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        var tools = document.RootElement.GetProperty("session").GetProperty("tools").EnumerateArray().ToArray();
+        tools.Length.ShouldBe(2);
 
-        var openTool = (RealtimeFunctionTool)options.Tools[0];
-        openTool.FunctionName.ShouldBe("door.open");
-        openTool.FunctionDescription.ShouldBe("open the front door");
-        openTool.FunctionParameters.ToString().ShouldContain("\"door\"");
+        var openTool = tools[0];
+        openTool.GetProperty("name").GetString().ShouldBe("door.open");
+        openTool.GetProperty("description").GetString().ShouldBe("open the front door");
+        openTool.GetProperty("parameters").GetProperty("properties").GetProperty("door")
+            .GetProperty("type").GetString().ShouldBe("string");
 
-        var closeTool = (RealtimeFunctionTool)options.Tools[1];
-        closeTool.FunctionName.ShouldBe("door.close");
-        closeTool.FunctionDescription.ShouldBe("Aevatar tool 'door.close'.");
+        var closeTool = tools[1];
+        closeTool.GetProperty("name").GetString().ShouldBe("door.close");
+        closeTool.GetProperty("description").GetString().ShouldBe("Aevatar tool 'door.close'.");
     }
 
     [Fact]
@@ -408,7 +442,7 @@ public class OpenAIRealtimeProviderTests
             SampleRateHz = 0,
         }, CancellationToken.None);
 
-        session.ConfiguredOptions.Count.ShouldBe(1);
+        session.SessionUpdateEvents.Count.ShouldBe(1);
     }
 
     [Fact]
@@ -424,7 +458,10 @@ public class OpenAIRealtimeProviderTests
             Instructions = "test",
         }, CancellationToken.None);
 
-        session.ConfiguredOptions.Single().Tools.Count.ShouldBe(0);
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        var configuredSession = document.RootElement.GetProperty("session");
+        configuredSession.GetProperty("tools").GetArrayLength().ShouldBe(0);
+        configuredSession.TryGetProperty("tool_choice", out _).ShouldBeFalse();
     }
 
     [Fact]
@@ -526,7 +563,7 @@ public class OpenAIRealtimeProviderTests
             _afterFirstEvent = afterFirstEvent;
         }
 
-        public List<RealtimeConversationSessionOptions> ConfiguredOptions { get; } = [];
+        public List<string> SessionUpdateEvents { get; } = [];
 
         public List<BinaryData> SentAudio { get; } = [];
 
@@ -539,10 +576,10 @@ public class OpenAIRealtimeProviderTests
         public TaskCompletionSource ReceiveCompleted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task ConfigureConversationSessionAsync(RealtimeConversationSessionOptions options, CancellationToken ct)
+        public Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct)
         {
             _ = ct;
-            ConfiguredOptions.Add(options);
+            SessionUpdateEvents.Add(sessionUpdateEvent.ToString());
             return Task.CompletedTask;
         }
 
@@ -595,7 +632,9 @@ public class OpenAIRealtimeProviderTests
 
     private sealed class ErrorSession : IOpenAIRealtimeSession
     {
-        public Task ConfigureConversationSessionAsync(RealtimeConversationSessionOptions options, CancellationToken ct) => Task.CompletedTask;
+        private readonly OpenAIRealtimeSessionEvent _unreachableEvent = new OpenAIRealtimeDisconnectedEvent("unreachable");
+
+        public Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct) => Task.CompletedTask;
         public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) => Task.CompletedTask;
         public Task AddItemAsync(RealtimeItem item, CancellationToken ct) => Task.CompletedTask;
         public Task StartResponseAsync(CancellationToken ct) => Task.CompletedTask;
@@ -606,8 +645,14 @@ public class OpenAIRealtimeProviderTests
         public async IAsyncEnumerable<OpenAIRealtimeSessionEvent> ReceiveEventsAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
-            throw new InvalidOperationException("simulated connection error");
-            yield break;
+            _ = ct;
+            await Task.Yield();
+#pragma warning disable CS0162
+            if (true)
+                throw new InvalidOperationException("simulated connection error");
+
+            yield return _unreachableEvent;
+#pragma warning restore CS0162
         }
 #pragma warning restore CS1998
     }
