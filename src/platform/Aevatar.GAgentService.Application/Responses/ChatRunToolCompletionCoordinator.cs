@@ -90,7 +90,9 @@ public sealed class ChatRunToolCompletionCoordinator
             },
             ct);
 
-        if (string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal))
+        var isGAgentInvocation = string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal);
+        var hasInlineGAgentActorId = TryReadString(argumentsJson, "actor_id", out _);
+        if (isGAgentInvocation)
         {
             await _chatRunActorPort.BeginSubRunObservationAsync(
                 actorId,
@@ -121,25 +123,21 @@ public sealed class ChatRunToolCompletionCoordinator
             return dispatchResult;
 
         parsed = NormalizeDispatchResultForObservation(toolCall, argumentsJson, parsed);
-        if (!string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal))
+        if (!isGAgentInvocation || !hasInlineGAgentActorId)
             await _chatRunActorPort.BeginSubRunObservationAsync(actorId, completionRequest, ct);
 
-        var terminal = await ResolveTerminalAsync(toolCall.Name, parsed, ct);
-        if (terminal == null && string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal))
+        var terminal = TryBuildTerminalFromDispatchResult(parsed) ??
+                       await ResolveTerminalAsync(toolCall.Name, parsed, ct);
+        if (terminal == null && isGAgentInvocation)
         {
             var observed = await readySource.Task.WaitAsync(ct);
             return observed.ResultJson;
         }
 
-        terminal ??= BuildTerminal(parsed, "completed", ToJson(new
-        {
-            run_id = parsed.RunId,
-            status = "completed",
-            actor_id = EmptyToNull(parsed.ActorId),
-            service_id = EmptyToNull(parsed.ServiceId),
-            endpoint_id = EmptyToNull(parsed.EndpointId),
-            wait = "complete",
-        }));
+        terminal ??= BuildTerminal(parsed, "completion_not_observed", BuildCompletionNotObservedResult(toolCall.Name, parsed));
+        if (string.IsNullOrWhiteSpace(terminal.RunId))
+            return terminal.ResultJson;
+
         await _chatRunActorPort.ObserveSubRunTerminalAsync(actorId, terminal, ct);
 
         return (await readySource.Task.WaitAsync(ct)).ResultJson;
@@ -187,7 +185,7 @@ public sealed class ChatRunToolCompletionCoordinator
                 dispatch.ActorId,
                 dispatch.RunId,
                 ct);
-            if (snapshot != null)
+            if (snapshot != null && snapshot.Status != GAgentRunTerminalStatus.Unknown)
                 return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot));
         }
 
@@ -205,7 +203,7 @@ public sealed class ChatRunToolCompletionCoordinator
                 dispatch.ServiceId,
                 dispatch.RunId,
                 ct);
-            if (snapshot != null)
+            if (snapshot != null && IsTerminalServiceRunStatus(snapshot.Status))
                 return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot));
         }
 
@@ -219,11 +217,28 @@ public sealed class ChatRunToolCompletionCoordinator
         if (!string.IsNullOrWhiteSpace(dispatch.ActorId))
         {
             var snapshot = await _workflowQueryService.GetActorSnapshotAsync(dispatch.ActorId, ct);
-            if (snapshot != null)
+            if (snapshot != null &&
+                string.Equals(snapshot.LastCommandId, dispatch.RunId, StringComparison.Ordinal) &&
+                IsTerminalWorkflowStatus(snapshot.CompletionStatus))
+            {
                 return BuildTerminal(dispatch, snapshot.CompletionStatus.ToString(), ProtoJson(snapshot));
+            }
         }
 
         return null;
+    }
+
+    private static ChatRunSubRunTerminalObserved? TryBuildTerminalFromDispatchResult(ParsedDispatchResult dispatch)
+    {
+        if (string.IsNullOrWhiteSpace(dispatch.RunId) ||
+            string.IsNullOrWhiteSpace(dispatch.ResultJson) ||
+            !IsTerminalDispatchStatus(dispatch.Status) ||
+            DispatchResultExplicitlyIncomplete(dispatch.ResultJson))
+        {
+            return null;
+        }
+
+        return BuildTerminal(dispatch, dispatch.Status, dispatch.ResultJson);
     }
 
     private static ChatRunSubRunTerminalObserved BuildTerminal(
@@ -258,6 +273,8 @@ public sealed class ChatRunToolCompletionCoordinator
 
         return new ParsedDispatchResult(
             RunId: ReadString(root, "run_id"),
+            Status: ReadString(root, "status"),
+            ResultJson: ReadRawJson(root, "result"),
             ActorId: ReadString(root, "actor_id"),
             ServiceId: ReadString(root, "service_id"),
             EndpointId: ReadString(root, "endpoint_id"),
@@ -310,6 +327,68 @@ public sealed class ChatRunToolCompletionCoordinator
             ? property.GetString()?.Trim() ?? string.Empty
             : string.Empty;
 
+    private static string ReadRawJson(JsonElement root, string propertyName) =>
+        root.ValueKind == JsonValueKind.Object &&
+        root.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null
+            ? property.GetRawText()
+            : string.Empty;
+
+    private static bool IsTerminalDispatchStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+            return false;
+
+        return !status.Equals("accepted", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("streaming", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("running", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("in_progress", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("unknown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool DispatchResultExplicitlyIncomplete(string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.TryGetProperty("completion_observed", out var observed) &&
+                   observed.ValueKind == JsonValueKind.False;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTerminalServiceRunStatus(ServiceRunStatus status) =>
+        status is ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped;
+
+    private static bool IsTerminalWorkflowStatus(WorkflowRunCompletionStatus status) =>
+        status is WorkflowRunCompletionStatus.Completed
+            or WorkflowRunCompletionStatus.TimedOut
+            or WorkflowRunCompletionStatus.Failed
+            or WorkflowRunCompletionStatus.Stopped
+            or WorkflowRunCompletionStatus.NotFound
+            or WorkflowRunCompletionStatus.Disabled;
+
+    private static string BuildCompletionNotObservedResult(string toolName, ParsedDispatchResult dispatch) =>
+        ToJson(new
+        {
+            run_id = EmptyToNull(dispatch.RunId),
+            status = EmptyToNull(dispatch.Status),
+            stream_topic = EmptyToNull(dispatch.StreamTopic),
+            actor_id = EmptyToNull(dispatch.ActorId),
+            service_id = EmptyToNull(dispatch.ServiceId),
+            endpoint_id = EmptyToNull(dispatch.EndpointId),
+            wait = "complete",
+            error = new
+            {
+                code = "completion_not_observed",
+                message = $"{toolName} wait=complete did not observe a terminal result for this run.",
+            },
+        });
+
     private static bool TryReadString(string json, string propertyName, out string value)
     {
         value = string.Empty;
@@ -339,6 +418,8 @@ public sealed class ChatRunToolCompletionCoordinator
 
     private sealed record ParsedDispatchResult(
         string RunId,
+        string Status,
+        string ResultJson,
         string ActorId,
         string ServiceId,
         string EndpointId,
@@ -347,6 +428,8 @@ public sealed class ChatRunToolCompletionCoordinator
         string ErrorCode)
     {
         public static ParsedDispatchResult Empty { get; } = new(
+            string.Empty,
+            string.Empty,
             string.Empty,
             string.Empty,
             string.Empty,

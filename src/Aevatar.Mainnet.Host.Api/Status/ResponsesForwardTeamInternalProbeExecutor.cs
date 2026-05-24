@@ -115,23 +115,51 @@ public sealed class ResponsesForwardTeamInternalProbeExecutor : IHealthProbeExec
             Model = model,
         });
 
-        var forwardToTeam = decision.Action.ForwardToTeam;
-        if (forwardToTeam is null)
+        if (!TryReadForwardToTeamToolHint(decision.Action, out var routeTeamId, out var routeEndpointId))
         {
             return Down(
-                "route_not_forward_to_team",
-                $"Route resolved to {decision.Action.ActionCase}, not ForwardToTeam.");
+                "route_not_forward_to_team_tool",
+                $"Route resolved to {decision.Action.ActionCase}, not ForwardToModel + aevatar_invoke_team.");
         }
 
-        if (!string.Equals(forwardToTeam.TeamId, expectedTeamId, StringComparison.Ordinal) ||
-            !string.Equals(forwardToTeam.EndpointId, expectedEndpointId, StringComparison.Ordinal))
+        if (!string.Equals(routeTeamId, expectedTeamId, StringComparison.Ordinal) ||
+            !string.Equals(routeEndpointId, expectedEndpointId, StringComparison.Ordinal))
         {
             return Down(
                 "route_target_mismatch",
-                $"Route target is team '{forwardToTeam.TeamId}' endpoint '{forwardToTeam.EndpointId}', expected team '{expectedTeamId}' endpoint '{expectedEndpointId}'.");
+                $"Route target is team '{routeTeamId}' endpoint '{routeEndpointId}', expected team '{expectedTeamId}' endpoint '{expectedEndpointId}'.");
         }
 
-        return Ok($"forward_to_team:{expectedTeamId}/{expectedEndpointId}");
+        return Ok($"aevatar_invoke_team:{expectedTeamId}/{expectedEndpointId}");
+    }
+
+    private static bool TryReadForwardToTeamToolHint(
+        ChatRouteAction action,
+        out string teamId,
+        out string endpointId)
+    {
+        teamId = string.Empty;
+        endpointId = string.Empty;
+        if (action.ForwardToModel?.ToolChoiceHint is not { } hint ||
+            !string.Equals(hint.ToolName, "aevatar_invoke_team", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        teamId = ReadString(hint.PrefilledArguments, "team_id");
+        endpointId = ReadString(hint.PrefilledArguments, "endpoint_id");
+        return !string.IsNullOrWhiteSpace(teamId) && !string.IsNullOrWhiteSpace(endpointId);
+    }
+
+    private static string ReadString(Struct? arguments, string key)
+    {
+        if (arguments?.Fields.TryGetValue(key, out var value) != true ||
+            value.KindCase != Value.KindOneofCase.StringValue)
+        {
+            return string.Empty;
+        }
+
+        return value.StringValue?.Trim() ?? string.Empty;
     }
 
     private async Task<HealthProbeOutcome> ProbeTeamEntryMemberAsync(

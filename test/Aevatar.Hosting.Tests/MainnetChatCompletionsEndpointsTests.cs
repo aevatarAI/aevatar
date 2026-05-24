@@ -238,6 +238,48 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
+    public async Task PostChatCompletions_WhenRouteRequiresToolDrivenForward_ShouldReturnNotImplementedWithoutLlmCall()
+    {
+        var provider = new ChatCompletionsRecordingLLMProvider
+        {
+            StreamChunks = [new LLMStreamChunk { DeltaContent = "should not run", IsLast = true }],
+        };
+        var queryPort = ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
+            new ChatRoutePolicySnapshot(
+                new ChatRouteAction
+                {
+                    ForwardToTeam = new ForwardToTeam
+                    {
+                        TeamId = "team-1",
+                        EndpointId = "chat",
+                    },
+                },
+                []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": "route to team"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "team-route-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
+        body.Should().Contain("chat_route_action_not_supported");
+        body.Should().Contain("Tool-set and tool-choice");
+        response.Headers.GetValues("Deprecation").Should().ContainSingle().Which.Should().Be("true");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostChatCompletions_WithoutBearer_ShouldReturnOpenAIErrorEnvelope()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();

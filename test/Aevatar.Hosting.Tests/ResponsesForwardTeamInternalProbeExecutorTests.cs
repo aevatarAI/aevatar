@@ -19,7 +19,7 @@ namespace Aevatar.Hosting.Tests;
 public sealed class ResponsesForwardTeamInternalProbeExecutorTests
 {
     [Fact]
-    public async Task RoutePolicyStage_ReturnsDown_WhenLegacyForwardToTeamIsTranslatedToToolDrivenModel()
+    public async Task RoutePolicyStage_ReturnsOk_WhenLegacyForwardToTeamIsTranslatedToToolDrivenModel()
     {
         var executor = NewExecutor(
             policy: new ChatRoutePolicySnapshot(
@@ -37,12 +37,13 @@ public sealed class ResponsesForwardTeamInternalProbeExecutorTests
             Descriptor("route-policy"),
             CancellationToken.None);
 
-        // Stage 2 unit-2 translates legacy ForwardToTeam into ADR-0026 D2
-        // ForwardToModel + tool_choice_hint via ChatRoutePolicyMigrator.
-        outcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        // ADR-0026 translates legacy ForwardToTeam into the runtime
+        // ForwardToModel + tool_choice_hint shape. The probe validates that
+        // canonical tool-driven target instead of looking for the deprecated oneof.
+        outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
         outcome.ObservedAt.Should().NotBeNull();
-        outcome.Detail.Should().Be("route_not_forward_to_team");
-        outcome.ErrorMessage.Should().Contain("ForwardToModel");
+        outcome.Detail.Should().Be("aevatar_invoke_team:team-1/chat");
+        outcome.ErrorMessage.Should().BeEmpty();
     }
 
     [Fact]

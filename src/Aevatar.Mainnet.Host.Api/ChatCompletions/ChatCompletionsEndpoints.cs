@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -106,9 +107,19 @@ internal static class ChatCompletionsApiEndpoints
                     : routeDecision.Action.Reject.Reason);
         }
 
-        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
+        var forwardToModel = routeDecision.Action.ForwardToModel;
+        if (forwardToModel is not null)
         {
-            routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
+            if (HasToolDrivenRouting(forwardToModel))
+            {
+                return ToErrorResult(
+                    StatusCodes.Status501NotImplemented,
+                    "chat_route_action_not_supported",
+                    "Tool-set and tool-choice chat route actions are not supported by /v1/chat/completions in v1.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(forwardToModel.ModelName))
+                routedModel = forwardToModel.ModelName.Trim();
         }
         else if (routeDecision.Action.ForwardToGagent is not null || routeDecision.Action.ForwardToTeam is not null)
         {
@@ -246,6 +257,12 @@ internal static class ChatCompletionsApiEndpoints
             ?.Content
         ?? normalized.ChatMessages.LastOrDefault()?.Content
         ?? string.Empty;
+
+    private static bool HasToolDrivenRouting(ForwardToModel forwardToModel) =>
+        (forwardToModel.ToolSetRef is not null &&
+         !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name)) ||
+        (forwardToModel.ToolChoiceHint is not null &&
+         !string.IsNullOrWhiteSpace(forwardToModel.ToolChoiceHint.ToolName));
 
     private static async Task WriteStreamingChatCompletionAsync(
         HttpResponse response,

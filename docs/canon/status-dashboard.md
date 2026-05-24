@@ -205,7 +205,7 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 | `01-nyxid-service` | `http_status` | 调 NyxID `/api/v1/proxy/services`，确认 `NyxIdServiceSlug` 对应的 service proxy 注册存在。 |
 | `02-nyxid-proxy-models` | `http_status` | 调 NyxID `/api/v1/proxy/s/{slug}/v1/models`，确认 NyxID proxy 到 Aevatar models surface 可达。 |
 | `03-direct-responses` | `http_status` | 直连 Aevatar `/v1/responses`，确认 Aevatar Responses HTTP 面、caller scope 解析、路由与完成事件能返回 `response.completed`。 |
-| `04-route-policy` | `responses_forward_team_internal` | 读取 chat route policy readmodel，并用 `ChatSourceKind.NyxResponses` 解析，确认目标是配置中的 `ForwardToTeam(teamId, endpointId)`。 |
+| `04-route-policy` | `responses_forward_team_internal` | 读取 chat route policy readmodel，并用 `ChatSourceKind.NyxResponses` 解析，确认目标是配置中的 `ForwardToModel + aevatar_invoke_team(team_id, endpoint_id)` canonical 工具形态。 |
 | `05-team-entry-member` | `responses_forward_team_internal` | 读取 Studio team readmodel，并通过 `ITeamEntryMemberResolver` 确认 entry member 和 published service。 |
 | `06-member-binding` | `responses_forward_team_internal` | 读取 Studio member readmodel，确认 member 是 `BindReady`，且最近完成 binding 的 published service 符合配置。 |
 | `07-direct-team-invoke` | `responses_forward_team_internal` | 不走 `/api/scopes/*` HTTP guard，直接用 `IStaticGAgentStreamInvocationPort<AGUIEvent>` 调 team entry member 的 endpoint；如果配置了认证，会把 bearer 注入 `nyxid.access_token` 和 `connector.http.authorization`，给下游工具/LLM/connector 调用使用。 |
