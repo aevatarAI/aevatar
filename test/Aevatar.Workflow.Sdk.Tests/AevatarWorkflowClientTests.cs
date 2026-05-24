@@ -189,6 +189,18 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
     }
 
     [Fact]
+    public async Task GetWorkflowCatalogAsync_WhenSendCanceled_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var client = CreateClient((_, ct) => Task.FromCanceled<HttpResponseMessage>(ct));
+
+        var act = () => client.GetWorkflowCatalogAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task GetCapabilitiesAsync_ShouldParseCapabilitiesPayload()
     {
         var client = CreateClient((request, _) =>
