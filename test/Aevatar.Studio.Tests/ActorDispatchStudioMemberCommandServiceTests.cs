@@ -299,7 +299,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "Aevatar.Studio.Hosting.Endpoints.ScriptGenerateGAgent, Aevatar.Studio.Hosting",
+                        ActorTypeName: "Example.Studio.CommandMember, Example.Studio",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "run",

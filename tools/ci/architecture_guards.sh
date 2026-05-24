@@ -180,6 +180,35 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Issue #643:
+#   Old: Foundation MultiAgent experimental actors/protos stayed visible as
+#   production GAgent surface without production callers. Studio empty-state
+#   generators previously appeared as endpoint GAgents.
+#   New: MultiAgent is retired; Studio generation remains Application-layer
+#   authoring preview helpers unless a future ADR reopens the actor model.
+if rg -n "Aevatar\.Foundation\.(Core|Abstractions)\.MultiAgent|MultiAgent/multi_agent_(state|messages)\.proto|package[[:space:]]+aevatar\.multiagent|TaskBoardGAgent|TeamManagerGAgent" \
+  src agents \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Retired Foundation MultiAgent actor/proto surface is forbidden without a new ADR reopening the model."
+  exit 1
+fi
+
+if [ -d "src/Aevatar.Studio.Hosting/Endpoints" ] && rg -n "ScriptGenerateGAgent|WorkflowGenerateGAgent|AIGAgentBase[[:space:]]*<[[:space:]]*Empty[[:space:]]*>" \
+  src/Aevatar.Studio.Hosting/Endpoints \
+  -g '*.cs' \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Studio empty-state generation must stay demoted to Application authoring preview helpers, not endpoint GAgents."
+  exit 1
+fi
+
 # Refactor (iter7/cluster-016):
 #   Old: Direct actor.HandleEventAsync calls and raw SubscribeAsync<EventEnvelope>
 #   subscriptions were guarded only by capability-local source assertions, so new
