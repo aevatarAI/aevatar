@@ -88,6 +88,7 @@ public sealed class ConnectorCallModuleCoverageTests
 
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
+        ctx.SetNextElapsedTime(TimeSpan.FromMilliseconds(1234.56));
         var request = new StepRequestEvent
         {
             StepId = "s-retry",
@@ -113,6 +114,7 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Output.Should().Be("ok");
         completed.Annotations["connector.attempts"].Should().Be("2");
         completed.Annotations["connector.name"].Should().Be("retryable");
+        completed.Annotations["connector.duration_ms"].Should().Be("1234.56");
     }
 
     [Fact]

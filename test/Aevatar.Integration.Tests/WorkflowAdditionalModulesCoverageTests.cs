@@ -473,6 +473,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new CacheModule();
         var ctx = CreateContext();
+        ctx.UtcNow = DateTimeOffset.Parse("2026-05-20T10:00:00Z");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -497,6 +498,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         childDispatch.TargetRole.Should().Be("worker");
         var childStepId = childDispatch.StepId;
         ctx.Published.Clear();
+        ctx.UtcNow = ctx.UtcNow.AddMinutes(30);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -543,6 +545,25 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-value");
         hitCompletion.Annotations["cache.hit"].Should().Be("true");
+
+        ctx.Published.Clear();
+        ctx.UtcNow = DateTimeOffset.Parse("2026-05-20T11:30:01Z");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-4",
+                StepType = "cache",
+                Input = "after-expiry",
+                Parameters =
+                {
+                    ["cache_key"] = "k1",
+                    ["child_step_type"] = "transform",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Should().ContainSingle(x => x.StepId.StartsWith("cache-4_cached_", StringComparison.Ordinal));
     }
 
     [Fact]
