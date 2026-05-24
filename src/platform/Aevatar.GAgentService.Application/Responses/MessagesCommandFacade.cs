@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -11,11 +12,15 @@ namespace Aevatar.GAgentService.Application.Responses;
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Anthropic Messages Host handler normalized, resolved chat route, registered sessions, classified tools, and built LLM requests inline.
 //   New principle: Application owns the Messages command lifecycle as a typed facade; Host only maps Anthropic HTTP/SSE/JSON frames.
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class MessagesCommandFacade(
     IResponsesCallerScopeResolver callerScopeResolver,
     IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
+    ILlmSessionQueryPort sessionQueryPort,
     IResponsesCompletionApplicationService completionService,
     ILLMProviderFactory providerFactory,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
@@ -91,11 +96,21 @@ public sealed class MessagesCommandFacade(
                 plan.ToolClassification,
                 onTextDelta,
                 ct);
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
-            return ResponsesStreamCommandResult.FromCompleted(
-                completion.Text,
-                completion.ForwardedToolCalls,
-                completion.Usage);
+            var completionResult = await RecordCompletionAndReadAsync(
+                plan.Session,
+                BuildSessionCompletion(
+                    completion.Text,
+                    completion.ForwardedToolCalls,
+                    completion.Usage,
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (completionResult.Error is not null)
+                return ResponsesStreamCommandResult.FromError(
+                    completionResult.Error.StatusCode,
+                    completionResult.Error.Code,
+                    completionResult.Error.Message);
+
+            return ResponsesStreamCommandResult.FromCompleted(completionResult.Completion!);
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -244,8 +259,23 @@ public sealed class MessagesCommandFacade(
                 plan.ToolContextMetadata,
                 plan.ToolClassification,
                 ct);
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
-            return MessagesCreateCommandResult.FromCompleted(new MessagesCreateCompletedCommandResult(plan.Normalized, completion));
+            var completionResult = await RecordCompletionAndReadAsync(
+                plan.Session,
+                BuildSessionCompletion(
+                    completion.Text,
+                    completion.ForwardedToolCalls,
+                    completion.Usage,
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (completionResult.Error is not null)
+                return MessagesCreateCommandResult.FromError(
+                    completionResult.Error.StatusCode,
+                    completionResult.Error.Code,
+                    completionResult.Error.Message);
+
+            return MessagesCreateCommandResult.FromCompleted(new MessagesCreateCompletedCommandResult(
+                plan.Normalized,
+                completionResult.Completion!));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -424,6 +454,80 @@ public sealed class MessagesCommandFacade(
         }
     }
 
+    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
+        LlmSessionRegistrationResult session,
+        LlmSessionCompletion completion,
+        CancellationToken ct)
+    {
+        try
+        {
+            await sessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                completion,
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to record llm session completion for message {MessageId}", session.ResponseId);
+            return CompletionRecordResult.FromError(new ResponsesCommandError(
+                500,
+                "response_completion_record_failed",
+                "Failed to record response completion."));
+        }
+
+        var snapshot = await sessionQueryPort.GetByResponseIdAsync(session.ResponseId, ct);
+        if (snapshot?.Completion is null)
+        {
+            return CompletionRecordResult.FromError(new ResponsesCommandError(
+                503,
+                "response_completion_not_observed",
+                "Response completion was committed but is not yet visible in the read model."));
+        }
+
+        return CompletionRecordResult.FromCompletion(snapshot.Completion);
+    }
+
+    private static LlmSessionCompletion BuildSessionCompletion(
+        string outputText,
+        IReadOnlyList<ToolCall> forwardedToolCalls,
+        TokenUsage? usage,
+        DateTimeOffset completedAt)
+    {
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = outputText,
+            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
+        };
+
+        if (usage is not null)
+        {
+            completion.Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
+        }
+
+        foreach (var toolCall in forwardedToolCalls)
+        {
+            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+            });
+        }
+
+        return completion;
+    }
+
     private sealed record CallerScopeResult(
         ResponsesCallerScope? Scope,
         ResponsesCommandError? Error);
@@ -441,4 +545,13 @@ public sealed class MessagesCommandFacade(
     private sealed record SessionRegistrationResult(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
+
+    private sealed record CompletionRecordResult(
+        ResponsesCommandError? Error,
+        LlmSessionCompletionSnapshot? Completion)
+    {
+        public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
+
+        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
+    }
 }

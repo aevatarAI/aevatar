@@ -15,6 +15,9 @@ namespace Aevatar.GAgentService.Application.Responses;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class ResponsesCommandFacade(
     ILLMProviderFactory providerFactory,
     IResponsesCallerScopeResolver callerScopeResolver,
@@ -59,22 +62,35 @@ public sealed class ResponsesCommandFacade(
                 routedModelResult.Error.StatusCode,
                 routedModelResult.Error.Code,
                 routedModelResult.Error.Message);
-        var continuation = await PrepareContinuationAsync(normalized, callerScope, ct);
+        var createdAt = DateTimeOffset.UtcNow;
+        var continuation = await PrepareContinuationAsync(normalized, callerScope, createdAt, ct);
         if (continuation.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 continuation.Error.StatusCode,
                 continuation.Error.Code,
                 continuation.Error.Message);
-        if (continuation.AlreadyResolved is not null)
-            return ResponsesCreateCommandResult.FromCompleted(continuation.AlreadyResolved);
-
-        var createdAt = DateTimeOffset.UtcNow;
         var sessionResult = await RegisterSessionAsync(normalized, callerScope, createdAt, ct);
         if (sessionResult.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 sessionResult.Error.StatusCode,
                 sessionResult.Error.Code,
                 sessionResult.Error.Message);
+        if (continuation.AlreadyResolvedCompletion is not null)
+        {
+            var completionResult = await RecordCompletionAndReadAsync(
+                sessionResult.Session!,
+                continuation.AlreadyResolvedCompletion,
+                ct);
+            return completionResult.Error is not null
+                ? ResponsesCreateCommandResult.FromError(
+                    completionResult.Error.StatusCode,
+                    completionResult.Error.Code,
+                    completionResult.Error.Message)
+                : ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
+                    normalized,
+                    createdAt.ToUnixTimeSeconds(),
+                    completionResult.Completion!));
+        }
 
         // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
         //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
@@ -186,11 +202,21 @@ public sealed class ResponsesCommandFacade(
                 DateTimeOffset.UtcNow,
                 ct);
             await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
-            return ResponsesStreamCommandResult.FromCompleted(
+            var completionResult = await RecordCompletionAndReadAsync(
+                plan.Session,
+                BuildSessionCompletion(
                 completion.Text,
                 completion.ForwardedToolCalls,
-                completion.Usage);
+                    completion.Usage,
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (completionResult.Error is not null)
+                return ResponsesStreamCommandResult.FromError(
+                    completionResult.Error.StatusCode,
+                    completionResult.Error.Code,
+                    completionResult.Error.Message);
+
+            return ResponsesStreamCommandResult.FromCompleted(completionResult.Completion!);
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -265,6 +291,7 @@ public sealed class ResponsesCommandFacade(
     private async Task<ContinuationResult> PrepareContinuationAsync(
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
+        DateTimeOffset createdAt,
         CancellationToken ct)
     {
         LlmSessionSnapshot? previousSnapshot = null;
@@ -285,11 +312,16 @@ public sealed class ResponsesCommandFacade(
         }
 
         if (previousSnapshot is not null &&
-            TryBuildAlreadyResolvedToolResultResponse(normalized, previousSnapshot, out var alreadyResolvedResult, out var alreadyResolvedError))
+            TryBuildAlreadyResolvedToolResultCompletion(
+                normalized,
+                previousSnapshot,
+                createdAt,
+                out var alreadyResolvedCompletion,
+                out var alreadyResolvedError))
         {
             return alreadyResolvedError is not null
                 ? ContinuationResult.FromError(alreadyResolvedError)
-                : ContinuationResult.FromAlreadyResolved(alreadyResolvedResult!);
+                : ContinuationResult.FromAlreadyResolved(alreadyResolvedCompletion!);
         }
 
         if (previousSnapshot is not null)
@@ -389,15 +421,24 @@ public sealed class ResponsesCommandFacade(
             var forwardedToolCalls = completion.ForwardedToolCalls;
             await PersistForwardedToolCallsAsync(plan.Session, plan.ToolClassification, forwardedToolCalls, DateTimeOffset.UtcNow, ct);
             await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            var completedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Completed, ct);
+            var completionResult = await RecordCompletionAndReadAsync(
+                plan.Session,
+                BuildSessionCompletion(
+                    completion.Text,
+                    forwardedToolCalls,
+                    completion.Usage,
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (completionResult.Error is not null)
+                return ResponsesCreateCommandResult.FromError(
+                    completionResult.Error.StatusCode,
+                    completionResult.Error.Code,
+                    completionResult.Error.Message);
+
             return ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
                 plan.Normalized,
                 plan.CreatedAt.ToUnixTimeSeconds(),
-                completedAt,
-                completion.Text,
-                forwardedToolCalls,
-                completion.Usage));
+                completionResult.Completion!));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -687,13 +728,14 @@ public sealed class ResponsesCommandFacade(
         return null;
     }
 
-    private bool TryBuildAlreadyResolvedToolResultResponse(
+    private bool TryBuildAlreadyResolvedToolResultCompletion(
         NormalizedResponsesRequest normalized,
         LlmSessionSnapshot previousSnapshot,
-        out ResponsesCreateCompletedCommandResult? result,
+        DateTimeOffset completedAt,
+        out LlmSessionCompletion? completion,
         out ResponsesCommandError? error)
     {
-        result = null;
+        completion = null;
         error = null;
         if (normalized.ToolResults.Count == 0)
             return false;
@@ -723,12 +765,85 @@ public sealed class ResponsesCommandFacade(
             resolvedOutputs.Add(string.IsNullOrWhiteSpace(call.ResultJson) ? input.Output : call.ResultJson!);
         }
 
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var outputText = resolvedOutputs.Count == 1
             ? resolvedOutputs[0]
             : System.Text.Json.JsonSerializer.Serialize(resolvedOutputs);
-        result = new ResponsesCreateCompletedCommandResult(normalized, now, now, outputText, [], null);
+        completion = BuildSessionCompletion(outputText, [], null, completedAt);
         return true;
+    }
+
+    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
+        LlmSessionRegistrationResult session,
+        LlmSessionCompletion completion,
+        CancellationToken ct)
+    {
+        try
+        {
+            await responseSessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                completion,
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var correlation = LogAndCorrelate(logger, ex, "session_completion", session.ResponseId);
+            return CompletionRecordResult.FromError(new ResponsesCommandError(
+                500,
+                "response_completion_record_failed",
+                $"Failed to record response completion. Correlation: {correlation}"));
+        }
+
+        var snapshot = await responseSessionQueryPort.GetByResponseIdAsync(session.ResponseId, ct);
+        if (snapshot?.Completion is null)
+        {
+            return CompletionRecordResult.FromError(new ResponsesCommandError(
+                503,
+                "response_completion_not_observed",
+                "Response completion was committed but is not yet visible in the read model."));
+        }
+
+        return CompletionRecordResult.FromCompletion(snapshot.Completion);
+    }
+
+    private static LlmSessionCompletion BuildSessionCompletion(
+        string outputText,
+        IReadOnlyList<ToolCall> forwardedToolCalls,
+        TokenUsage? usage,
+        DateTimeOffset completedAt)
+    {
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = outputText,
+            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
+        };
+
+        if (usage is not null)
+        {
+            completion.Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
+        }
+
+        foreach (var toolCall in forwardedToolCalls)
+        {
+            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+            });
+        }
+
+        return completion;
     }
 
     private async Task TryResolveIncomingToolResultsAsync(
@@ -929,13 +1044,13 @@ public sealed class ResponsesCommandFacade(
 
     private sealed record ContinuationResult(
         LlmSessionSnapshot? PreviousSnapshot,
-        ResponsesCreateCompletedCommandResult? AlreadyResolved,
+        LlmSessionCompletion? AlreadyResolvedCompletion,
         ResponsesCommandError? Error)
     {
         public static ContinuationResult FromPrevious(LlmSessionSnapshot? previousSnapshot) =>
             new(previousSnapshot, null, null);
 
-        public static ContinuationResult FromAlreadyResolved(ResponsesCreateCompletedCommandResult alreadyResolved) =>
+        public static ContinuationResult FromAlreadyResolved(LlmSessionCompletion alreadyResolved) =>
             new(null, alreadyResolved, null);
 
         public static ContinuationResult FromError(ResponsesCommandError error) => new(null, null, error);
@@ -944,4 +1059,13 @@ public sealed class ResponsesCommandFacade(
     private sealed record SessionRegistrationResult(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
+
+    private sealed record CompletionRecordResult(
+        ResponsesCommandError? Error,
+        LlmSessionCompletionSnapshot? Completion)
+    {
+        public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
+
+        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
+    }
 }

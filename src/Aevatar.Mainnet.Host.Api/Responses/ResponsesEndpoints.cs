@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Presentation.AGUI;
 using Microsoft.AspNetCore.Builder;
@@ -15,6 +16,9 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 internal static partial class ResponsesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -114,10 +118,10 @@ internal static partial class ResponsesApiEndpoints
                 BuildCompletedResponse(
                     result.Completed.Normalized,
                     result.Completed.CreatedAt,
-                    result.Completed.CompletedAt,
-                    result.Completed.OutputText,
-                    result.Completed.ForwardedToolCalls,
-                    result.Completed.Usage is null ? null : MapUsage(result.Completed.Usage)),
+                    result.Completed.Completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    result.Completed.Completion.OutputText,
+                    ToToolCalls(result.Completed.Completion.ToolCalls),
+                    result.Completed.Completion.Usage is null ? null : MapUsage(result.Completed.Completion.Usage)),
                 statusCode: StatusCodes.Status200OK);
         }
 
@@ -236,7 +240,8 @@ internal static partial class ResponsesApiEndpoints
             return;
         }
 
-        var completedText = completion.OutputText;
+        var sessionCompletion = completion.Completion!;
+        var completedText = sessionCompletion.OutputText;
         await WriteSseFrameAsync(
             response,
             "response.output_text.done",
@@ -264,8 +269,9 @@ internal static partial class ResponsesApiEndpoints
             },
             ct);
 
+        var toolCalls = ToToolCalls(sessionCompletion.ToolCalls);
         var nextOutputIndex = 1;
-        foreach (var toolCall in completion.ForwardedToolCalls)
+        foreach (var toolCall in toolCalls)
         {
             var functionCallItem = BuildFunctionCallOutputItem(toolCall);
             await WriteSseFrameAsync(
@@ -296,10 +302,10 @@ internal static partial class ResponsesApiEndpoints
         var completedResponse = BuildCompletedResponse(
             normalized,
             createdAt,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            sessionCompletion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             completedText,
-            completion.ForwardedToolCalls,
-            completion.Usage is null ? null : MapUsage(completion.Usage));
+            toolCalls,
+            sessionCompletion.Usage is null ? null : MapUsage(sessionCompletion.Usage));
 
         await WriteSseFrameAsync(
             response,
@@ -459,15 +465,8 @@ internal static partial class ResponsesApiEndpoints
                     createdAt,
                     snapshot.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                     snapshot.OutputText,
-                    snapshot.ToolCalls
-                        .Select(static tc => new ToolCall
-                        {
-                            Id = tc.CallId,
-                            Name = tc.ToolName,
-                            ArgumentsJson = tc.ResultJson ?? "{}",
-                        })
-                        .ToArray(),
-                    usage: null),
+                    ToToolCalls(snapshot.ToolCalls),
+                    snapshot.Usage is null ? null : MapUsage(snapshot.Usage)),
                 ct);
         }
         catch (OperationCanceledException)
@@ -530,15 +529,8 @@ internal static partial class ResponsesApiEndpoints
                 createdAt,
                 completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 completion.OutputText,
-                completion.ToolCalls
-                    .Select(static tc => new ToolCall
-                    {
-                        Id = tc.CallId,
-                        Name = tc.ToolName,
-                        ArgumentsJson = tc.ResultJson ?? "{}",
-                    })
-                    .ToArray(),
-                usage: null);
+                ToToolCalls(completion.ToolCalls),
+                completion.Usage is null ? null : MapUsage(completion.Usage));
             return Results.Json(completed, statusCode: StatusCodes.Status200OK);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -640,6 +632,18 @@ internal static partial class ResponsesApiEndpoints
             OutputTokens = usage.CompletionTokens,
             TotalTokens = usage.TotalTokens,
             OutputTokensDetails = new ResponsesOutputTokensDetails(),
+        };
+
+    private static IReadOnlyList<ToolCall> ToToolCalls(
+        IReadOnlyList<LlmSessionCompletedToolCallSnapshot> toolCalls) =>
+        toolCalls.Select(ToToolCall).ToArray();
+
+    private static ToolCall ToToolCall(LlmSessionCompletedToolCallSnapshot toolCall) =>
+        new()
+        {
+            Id = toolCall.CallId,
+            Name = toolCall.ToolName,
+            ArgumentsJson = toolCall.ResultJson ?? "{}",
         };
 
     private static ResponsesOutputMessage BuildOutputMessage(string id, string status, string? text)

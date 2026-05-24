@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -11,6 +12,9 @@ namespace Aevatar.GAgentService.Projection.Queries;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
 {
     private readonly IProjectionDocumentReader<LlmSessionCurrentStateReadModel, string> _documentStore;
@@ -82,7 +86,13 @@ public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
                 .ToArray(),
             completion.CompletedAt,
             string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
-            string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage);
+            string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+            completion.Usage is null
+                ? null
+                : new TokenUsage(
+                    completion.Usage.PromptTokens,
+                    completion.Usage.CompletionTokens,
+                    completion.Usage.TotalTokens));
     }
 
     /// <summary>
