@@ -49,8 +49,12 @@ internal static class DurableCallbackEnvelopeCredentialGuard
         {
             if (IsRuntimeCredentialField(field))
             {
-                violationPath = string.Concat(path, ".", field.Name);
-                return true;
+                var credentialValue = field.Accessor.GetValue(message);
+                if (!IsDefaultCredentialValue(credentialValue))
+                {
+                    violationPath = string.Concat(path, ".", field.Name);
+                    return true;
+                }
             }
 
             if (field.FieldType != FieldType.Message && !field.IsMap)
@@ -122,17 +126,6 @@ internal static class DurableCallbackEnvelopeCredentialGuard
     {
         var keyField = field.MessageType.FindFieldByNumber(1);
         var valueField = field.MessageType.FindFieldByNumber(2);
-        if (keyField is not null && IsRuntimeCredentialField(keyField))
-        {
-            violationPath = string.Concat(path, ".key");
-            return true;
-        }
-
-        if (valueField is not null && IsRuntimeCredentialField(valueField))
-        {
-            violationPath = string.Concat(path, ".value");
-            return true;
-        }
 
         if (valueField?.FieldType != FieldType.Message)
         {
@@ -327,5 +320,25 @@ internal static class DurableCallbackEnvelopeCredentialGuard
                string.Equals(name, "reply_token_expires_at_unix_ms", StringComparison.Ordinal) ||
                string.Equals(name, "nyx_user_access_token", StringComparison.Ordinal) ||
                name.EndsWith("_token", StringComparison.Ordinal);
+    }
+
+    private static bool IsDefaultCredentialValue(object? value)
+    {
+        return value switch
+        {
+            null => true,
+            string stringValue => string.IsNullOrEmpty(stringValue),
+            ByteString bytes => bytes.Length == 0,
+            int intValue => intValue == 0,
+            long longValue => longValue == 0,
+            uint uintValue => uintValue == 0,
+            ulong ulongValue => ulongValue == 0,
+            float floatValue => floatValue == 0,
+            double doubleValue => doubleValue == 0,
+            bool boolValue => !boolValue,
+            System.Enum enumValue => Convert.ToInt64(enumValue) == 0,
+            IEnumerable enumerable => !enumerable.Cast<object>().Any(),
+            _ => false,
+        };
     }
 }

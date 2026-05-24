@@ -18,12 +18,12 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
     [Fact]
     public async Task HandleLlmReplyStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
     {
-        var scheduler = new RecordingCallbackScheduler();
-        var agent = CreateAgent("conv-nyx-timeout-sanitize", scheduler);
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
+        var agent = CreateAgent("conv-nyx-timeout-sanitize", callbackHarness.Scheduler);
 
         await agent.HandleLlmReplyStreamChunkAsync(CreateStreamChunk());
 
-        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        var scheduled = callbackHarness.Timeouts.Should().ContainSingle().Subject;
         var timeout = scheduled.TriggerEnvelope.Payload.Unpack<NyxRelayTextOperationTimeoutFiredEvent>();
         timeout.Chunk.Should().NotBeNull();
         timeout.Chunk.ReplyToken.Should().BeEmpty();

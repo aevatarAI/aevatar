@@ -100,18 +100,18 @@ public sealed class LarkCardOperationSignalTests
     [Fact]
     public async Task HandleLlmReplyCardStreamChunkAsync_ScheduledTimeoutPayload_StripsRuntimeRelayCredentials()
     {
-        var scheduler = new RecordingCallbackScheduler();
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
         var agent = CreateAgent(
             "conv-lark-card-timeout-sanitize",
             new RecordingCardRunner(),
             new RecordingActorDispatchPort(),
             new InMemoryEventStore(),
-            scheduler);
+            callbackHarness.Scheduler);
 
         await agent.HandleEventAsync(Envelope("conv-lark-card-timeout-sanitize",
             CreateCardStreamChunk("corr-card-timeout-token", "relay-msg-1", "hello")));
 
-        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
+        var scheduled = callbackHarness.Timeouts.Should().ContainSingle().Subject;
         var timeout = scheduled.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>();
         timeout.CorrelationId.Should().Be("corr-card-timeout-token");
         timeout.Operation.Should().Be(LarkCardOperationPhase.Create);
@@ -186,6 +186,15 @@ public sealed class LarkCardOperationSignalTests
         persistedText.Should().NotContain("runtime-ready-token-corr-card-finalize-token");
         persistedText.Should().NotContain("nyx_user_access_token");
         persistedText.Should().NotContain("reply_token");
+
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
+        await callbackHarness.Scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = agent.Id,
+            CallbackId = "lark-card-finalize-timeout-sanitized",
+            TriggerEnvelope = scheduled.TriggerEnvelope.Clone(),
+            DueTime = TimeSpan.FromMinutes(1),
+        });
     }
 
     private static ConversationGAgent CreateAgent(
