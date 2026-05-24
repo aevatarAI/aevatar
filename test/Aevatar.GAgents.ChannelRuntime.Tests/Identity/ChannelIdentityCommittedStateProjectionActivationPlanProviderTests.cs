@@ -9,6 +9,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProviderTests
     : ProjectionActivationPlanProviderTestBase
 {
+    // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
+    //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
+    //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     [Fact]
     public void GetPlans_ShouldMapExternalIdentityBindingActor()
     {

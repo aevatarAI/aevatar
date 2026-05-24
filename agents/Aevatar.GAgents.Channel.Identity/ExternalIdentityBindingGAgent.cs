@@ -18,6 +18,9 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// </summary>
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
+    // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
+    //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
+    //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     /// <inheritdoc />
     /// <remarks>
     /// <see cref="StateTransitionMatcher"/> handles <c>Any</c>-wrapped payloads
@@ -33,7 +36,6 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             .Match(current, evt)
             .On<ExternalIdentityBoundEvent>(ApplyBound)
             .On<ExternalIdentityBindingRevokedEvent>(ApplyRevoked)
-            .On<ExternalIdentityBindingProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
 
     // ─── Commands ───
@@ -77,23 +79,8 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
 
         if (!string.IsNullOrEmpty(State.BindingId))
         {
-            // Steady-state branch: persist a no-op rebuild request so the
-            // projector materializes the existing binding into the readmodel.
-            // Without this, a legacy binding actor whose projection scope
-            // was never activated (issue #549 follow-up: the binding scope
-            // missed an EnsureProjectionForActorAsync wiring while every
-            // other GAgent had one) leaves the readmodel empty, the OAuth
-            // callback's readiness wait times out, and binding-required
-            // commands keep re-sending the user back to /init.
-            // Apply is identity, so the binding facts are not mutated by
-            // this event.
-            await PersistDomainEventAsync(new ExternalIdentityBindingProjectionRebuildRequestedEvent
-            {
-                Reason = "commit_already_bound",
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
             Logger.LogInformation(
-                "CommitBinding discarded: already bound for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId}); rebuild requested so the projector materializes the existing binding",
+                "CommitBinding discarded: already bound for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId}); no identity fact changed",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
@@ -121,10 +108,10 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// Revokes the active binding. When state has no active binding (for
     /// example concurrent /unbind, revoke-after-revoke from
     /// <c>invalid_grant</c>, or remote-side self-heal after projection drift),
-    /// emits a no-op rebuild event so the readmodel is overwritten from the
-    /// actor's authoritative empty state. Caller must have already invoked
-    /// the NyxID-side revoke (or observed <c>invalid_grant</c>) — this command
-    /// only transitions local state.
+    /// leaves actor facts unchanged. Stale readmodel repair belongs to the
+    /// projection lifecycle or maintenance path. Caller must have already
+    /// invoked the NyxID-side revoke (or observed <c>invalid_grant</c>) —
+    /// this command only transitions local state when an active binding exists.
     /// </summary>
     [EventHandler]
     public async Task HandleRevokeBinding(RevokeBindingCommand cmd)
@@ -150,18 +137,8 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
 
         if (string.IsNullOrEmpty(State.BindingId))
         {
-            // Remote revocation self-heal can land here when the actor state
-            // is already empty but the readmodel still contains an old active
-            // binding. Persisting an identity event republishes the committed
-            // state root, allowing the projector to overwrite that stale
-            // document without inventing query-time repair logic.
-            await PersistDomainEventAsync(new ExternalIdentityBindingProjectionRebuildRequestedEvent
-            {
-                Reason = $"revoke_without_active_binding:{reason}",
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
             Logger.LogInformation(
-                "RevokeBinding found no active binding for {Platform}:{Tenant}:{User}; rebuild requested so the projector materializes the authoritative empty state (reason={Reason})",
+                "RevokeBinding found no active binding for {Platform}:{Tenant}:{User}; no identity fact changed (reason={Reason})",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,

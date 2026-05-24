@@ -27,6 +27,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 {
+    // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
+    //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
+    //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     private AevatarOAuthClientGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
     private RecordingDcrClient _registrar = null!;
@@ -110,9 +113,9 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ClientId.Should().Be(firstClientId);
         _agent.State.HmacKey.Should().BeEquivalentTo(firstHmacKey);
         _agent.State.Should().BeEquivalentTo(beforeRefreshState,
-            "projection rebuild is a state-root refresh and must not mutate OAuth client facts");
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion + 1,
-            "already-provisioned ensure must re-emit the authoritative state root so an empty projection can materialize");
+            "already-provisioned ensure must not mutate OAuth client facts");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion,
+            "already-provisioned ensure must not append a projection-only no-op event");
     }
 
     [Fact]
@@ -685,17 +688,17 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _registrar.NextClientId = "loser-orphan-client";
         _registrar.OnRegistered = async () =>
         {
-            // Peer's commit is a rebuild request — Apply is identity, so
-            // it does NOT update RedirectUri. State stays drifted after
+            // Peer's commit observes broker capability. It is a real fact,
+            // but it does NOT update RedirectUri. State stays drifted after
             // refresh, the absorber returns false, and actor-owned retry
             // captures the failed attempt.
             var store = _serviceProvider.GetRequiredService<IEventStore>();
             var actorId = _agent.Id;
             var current = await store.GetVersionAsync(actorId);
-            var peerEvent = new AevatarOAuthClientProjectionRebuildRequestedEvent
+            var peerEvent = new AevatarOAuthClientBrokerCapabilityObservedEvent
             {
-                Reason = "peer_rebuild",
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ObservedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             };
             await store.AppendAsync(
                 actorId,
@@ -705,7 +708,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                     {
                         AgentId = actorId,
                         Version = current + 1,
-                        EventType = AevatarOAuthClientProjectionRebuildRequestedEvent.Descriptor.FullName,
+                        EventType = AevatarOAuthClientBrokerCapabilityObservedEvent.Descriptor.FullName,
                         EventData = Any.Pack(peerEvent),
                         Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     },

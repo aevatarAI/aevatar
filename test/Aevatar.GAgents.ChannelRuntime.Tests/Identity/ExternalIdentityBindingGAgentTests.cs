@@ -30,6 +30,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 {
+    // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
+    //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
+    //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     private ExternalIdentityBindingGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
@@ -101,13 +104,10 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         });
         var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
-        // Second concurrent /init wins the race after the first one already
+        // Second concurrent /init lands after the first one already
         // committed. The actor MUST keep the existing binding_id and discard
-        // the second one (ADR-0018 §Implementation Notes #2). It also emits
-        // a no-op rebuild event so the projector materializes the existing
-        // binding into the readmodel — necessary on legacy clusters whose
-        // binding projection scope was activated for the first time after
-        // the bind already happened (issue #549 follow-up 2026-05-01).
+        // the second one (ADR-0018 §Implementation Notes #2) without
+        // persisting projection-only events.
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
             ExternalSubject = subject,
@@ -116,8 +116,8 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 
         _agent.State.BindingId.Should().Be("bnd_first");
         _agent.EventSourcing!.CurrentVersion.Should().Be(
-            afterFirstVersion + 1,
-            "the discard branch must emit a rebuild event so the projector re-publishes the existing binding's state root");
+            afterFirstVersion,
+            "the discard branch must not append a projection-only no-op event");
     }
 
     [Fact]
@@ -186,8 +186,10 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRevokeBinding_RequestsProjectionRebuildWhenNoActiveBinding()
+    public async Task HandleRevokeBinding_IsNoOpWhenNoActiveBinding()
     {
+        var initialVersion = _agent.EventSourcing!.CurrentVersion;
+
         await _agent.HandleRevokeBinding(new RevokeBindingCommand
         {
             ExternalSubject = SampleSubject(),
@@ -197,8 +199,8 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         _agent.State.BindingId.Should().BeEmpty();
         _agent.State.RevokedAt.Should().BeNull();
         _agent.EventSourcing!.CurrentVersion.Should().Be(
-            1,
-            "a remote-side revoke/self-heal must overwrite any stale active binding readmodel from the actor's empty state");
+            initialVersion,
+            "empty revoke must not append a projection-only no-op event");
     }
 
     [Fact]
