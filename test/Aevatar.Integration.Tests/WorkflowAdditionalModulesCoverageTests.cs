@@ -906,6 +906,195 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowModules_ShouldRedactRawContentInInformationLogs()
+    {
+        const string sensitiveAssignValue = "customer secret assigned value";
+        const string sensitiveHumanPrompt = "customer secret human prompt";
+        const string sensitiveApprovalPrompt = "customer secret approval prompt";
+        const string sensitiveFanoutInput = "customer secret fanout input";
+        const string sensitiveLlmPrompt = "customer secret llm prompt";
+        const string sensitiveLlmOutput = "customer secret llm output";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+
+        await new AssignModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "assign-log-redaction",
+                StepType = "assign",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["target"] = "answer",
+                    ["value"] = sensitiveAssignValue,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new HumanInputModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "human-log-redaction",
+                StepType = "human_input",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["prompt"] = sensitiveHumanPrompt,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new HumanApprovalModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-log-redaction",
+                StepType = "human_approval",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["prompt"] = sensitiveApprovalPrompt,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new ParallelFanOutModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "parallel-log-redaction",
+                StepType = "parallel",
+                RunId = "run-log-redaction",
+                Input = sensitiveFanoutInput,
+                Parameters =
+                {
+                    ["workers"] = "[\"worker_a\",\"worker_b\"]",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var llmCall = new LLMCallModule();
+        await llmCall.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-log-redaction",
+                StepType = "llm_call",
+                RunId = "run-log-redaction",
+                Input = sensitiveLlmPrompt,
+                TargetRole = "worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
+        var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        await llmCall.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = llmSessionId,
+                Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("value_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"value_len={sensitiveAssignValue.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveHumanPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveApprovalPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("input_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"input_len={sensitiveFanoutInput.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveLlmPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveAssignValue, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveHumanPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveApprovalPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveFanoutInput, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmOutput, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SwitchModule_ShouldRedactSensitiveSwitchInputInInformationLogs()
+    {
+        const string sensitiveSwitchInput = "customer secret switch input route-blue";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+
+        await new SwitchModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "switch-log-redaction",
+                StepType = "switch",
+                RunId = "run-switch-log-redaction",
+                Parameters =
+                {
+                    ["on"] = sensitiveSwitchInput,
+                    ["branch.blue"] = "blue-step",
+                    ["branch._default"] = "fallback-step",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("value_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"value_len={sensitiveSwitchInput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveSwitchInput, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldRedactNonStreamingChatResponseInInformationLogs()
+    {
+        const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
+        const string sensitiveLlmOutput = "customer secret llm non streaming output";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+        var module = new LLMCallModule();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-non-stream-log-redaction",
+                StepType = "llm_call",
+                RunId = "run-llm-non-stream-log-redaction",
+                Input = sensitiveLlmPrompt,
+                TargetRole = "worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("status=completed_non_streaming", StringComparison.Ordinal) &&
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmOutput, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HumanInputModule_ShouldUseRunScopedPendingForSameStepId()
     {
         var module = new HumanInputModule();
@@ -2437,12 +2626,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         }
     }
 
-    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)
+    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null, ILogger? logger = null)
     {
         return new TestEventHandlerContext(
             services ?? new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider(),
             new TestAgent("workflow-advanced-module-test-agent"),
-            NullLogger.Instance);
+            logger ?? NullLogger.Instance);
     }
 
     private static EventEnvelope Envelope(IMessage evt, string? publisherId = null)
@@ -2454,6 +2643,28 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Information)
+                Messages.Add(formatter(state, exception));
+        }
     }
 
 }
