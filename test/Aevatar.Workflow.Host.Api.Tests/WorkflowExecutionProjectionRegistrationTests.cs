@@ -20,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class WorkflowExecutionProjectionRegistrationTests
 {
     [Fact]

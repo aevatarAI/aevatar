@@ -30,6 +30,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Bootstrap.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class AIFeatureBootstrapCoverageTests
 {
     [Fact]
