@@ -1120,7 +1120,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 Operation = operation,
                 Sequence = sequence,
                 OperationGeneration = generation,
-                Chunk = chunk.Clone(),
+                Chunk = CloneNyxRelayTextTimeoutChunkForDurableState(chunk),
                 CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
                 CommandId = commandId ?? string.Empty,
                 FinalText = finalText ?? string.Empty,
@@ -1130,6 +1130,17 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             },
             ct: ct);
     }
+
+    private static LlmReplyStreamChunkEvent CloneNyxRelayTextTimeoutChunkForDurableState(
+        LlmReplyStreamChunkEvent chunk) =>
+        new()
+        {
+            CorrelationId = chunk.CorrelationId ?? string.Empty,
+            RegistrationId = chunk.RegistrationId ?? string.Empty,
+            Activity = CloneForDurableState(chunk.Activity) ?? new ChatActivity(),
+            AccumulatedText = chunk.AccumulatedText ?? string.Empty,
+            ChunkAtUnixMs = chunk.ChunkAtUnixMs,
+        };
 
     private void StartNyxRelayTextOperation(
         NyxRelayTextOperationKind operation,
