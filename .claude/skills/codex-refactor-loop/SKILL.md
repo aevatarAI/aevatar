@@ -161,6 +161,24 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
+### Auto-merge 后必须 close 关联 issue(强制,per Auric 2026-05-25 "为什么很多 issues 没及时关闭")
+
+**问题**:`gh pr merge` 不会自动 close `closes #N` 关联的 issue,因为 PR base = `auto-refact-dev` 非 default branch(`dev`/`master`)— GitHub auto-close 只在 PR base = default branch 时触发。
+
+**铁律**:每次 `gh pr merge` 成功后,controller **必须**手动 `gh issue close <linked-issue>` + label transition `🎉 phase:merged`,不依赖 GitHub auto-close。
+
+```bash
+# 标准 merge 流程(必须 chain issue close)
+gh pr merge $PR --squash --delete-branch
+ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
+if [ -n "$ISSUE" ]; then
+  gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
+  gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --add-label "🎉 phase:merged"
+fi
+```
+
+事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。每次 wakeup sweep 见 `🚀 phase:pr-open` label 但关联 PR 已 merged → 必须立即补 close。
+
 ### Controller helper 库:`tools/refactor-loop/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
 
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
