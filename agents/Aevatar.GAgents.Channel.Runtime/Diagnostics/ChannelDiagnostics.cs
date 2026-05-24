@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using Aevatar.Foundation.Runtime.Observability;
 
 namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
 /// Shared OpenTelemetry / System.Diagnostics primitives for the channel runtime.
 /// Span names follow RFC §6.1 mandatory spans and tags follow the mandatory dimensions contract.
+/// iter85/cluster-085: channel runtime emits on the canonical Aevatar source and canonical tag family.
 /// </summary>
 public static class ChannelDiagnostics
 {
@@ -12,7 +14,7 @@ public static class ChannelDiagnostics
     /// The single <see cref="ActivitySource"/> name subscribed by OTEL pipelines for channel
     /// runtime spans.
     /// </summary>
-    public const string ActivitySourceName = "Aevatar.Channel";
+    public const string ActivitySourceName = AevatarActivitySource.ActivitySourceName;
 
     /// <summary>
     /// The semver-like version string attached to the activity source.
@@ -22,7 +24,7 @@ public static class ChannelDiagnostics
     /// <summary>
     /// Shared <see cref="ActivitySource"/> instance emitted by all channel-runtime components.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new(ActivitySourceName, ActivitySourceVersion);
+    public static readonly ActivitySource ActivitySource = AevatarActivitySource.Source;
 
     /// <summary>
     /// Mandatory span names per RFC §6.1. Callers use these so dashboards can rely on stable names.
@@ -66,30 +68,30 @@ public static class ChannelDiagnostics
     public static class Tags
     {
         /// <summary>Normalized inbound activity id.</summary>
-        public const string ActivityId = "activity_id";
+        public const string ActivityId = "aevatar.channel.activity_id";
 
         /// <summary>Adapter-provided event id (raw-payload identifier).</summary>
-        public const string ProviderEventId = "provider_event_id";
+        public const string ProviderEventId = "aevatar.channel.provider_event_id";
 
         /// <summary>ConversationReference canonical key.</summary>
-        public const string CanonicalKey = "canonical_key";
+        public const string CanonicalKey = "aevatar.channel.canonical_key";
 
         /// <summary>Bot instance id.</summary>
-        public const string BotInstanceId = "bot_instance_id";
+        public const string BotInstanceId = "aevatar.channel.bot_instance_id";
 
         /// <summary>Sent activity id (set after outbound success).</summary>
-        public const string SentActivityId = "sent_activity_id";
+        public const string SentActivityId = "aevatar.channel.sent_activity_id";
 
         /// <summary>Retry attempt count.</summary>
-        public const string RetryCount = "retry_count";
+        public const string RetryCount = "aevatar.channel.retry_count";
 
         /// <summary>Redacted raw payload blob ref.</summary>
-        public const string RawPayloadBlobRef = "raw_payload_blob_ref";
+        public const string RawPayloadBlobRef = "aevatar.channel.raw_payload_blob_ref";
 
         /// <summary>Auth principal kind + id summary (e.g. <c>bot</c> or <c>user:u1</c>).</summary>
-        public const string AuthPrincipal = "auth_principal";
+        public const string AuthPrincipal = "aevatar.channel.auth_principal";
 
         /// <summary>Channel id.</summary>
-        public const string ChannelId = "channel_id";
+        public const string ChannelId = "aevatar.channel.id";
     }
 }
