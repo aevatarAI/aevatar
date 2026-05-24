@@ -182,11 +182,11 @@ message WorkflowCapabilitiesCurrentStateDocument {
 }
 
 message WorkflowPrimitiveCapabilityReadModel {
+  reserved 5;
   string name = 1;
   repeated string alias_entries = 2;
   string category = 3;
   string description = 4;
-  bool closed_world_blocked = 5;
   string runtime_module = 6;
   repeated WorkflowPrimitiveParameterCapabilityReadModel parameter_entries = 7;
 }

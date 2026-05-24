@@ -24,6 +24,7 @@ using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Workflows;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -376,10 +377,17 @@ public sealed class WorkflowInfrastructureCoverageTests
             writer.LastWritten.Should().NotBeNull();
             var document = writer.LastWritten!;
             document.Id.Should().Be(WorkflowCapabilitiesStartupMaterializer.DocumentId);
+            var primitiveNames = document.Primitives.Select(primitive => primitive.Name).ToList();
+            primitiveNames.Should().Contain("connector_call");
+            primitiveNames.Should().Contain("llm_call");
+            primitiveNames.Should().Contain("tool_call");
             document.Primitives.Should().Contain(primitive =>
                 primitive.Name == "custom_assign" &&
                 primitive.Aliases.Contains("custom_assign") &&
                 primitive.RuntimeModule == nameof(CustomAssignModule));
+            typeof(WorkflowPrimitiveCapability)
+                .GetProperty("ClosedWorldBlocked")
+                .Should().BeNull();
             document.Connectors.Select(connector => connector.Name)
                 .Should().Equal("cli_runner", "custom_sink", "http_news", "mcp_tools");
             document.Connectors.Single(connector => connector.Name == "http_news")
@@ -398,6 +406,19 @@ public sealed class WorkflowInfrastructureCoverageTests
             Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
             TryDeleteDirectory(tempHome);
         }
+    }
+
+    [Fact]
+    public void WorkflowPrimitiveCapabilityReadModelProto_ShouldReserveRemovedClosedWorldBlockedField()
+    {
+        var descriptor = WorkflowPrimitiveCapabilityReadModel.Descriptor;
+        var proto = descriptor.ToProto();
+
+        proto.ReservedRange.Should().Contain(range => range.Start <= 5 && range.End > 5);
+        descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.FieldNumber)
+            .Should().NotContain(5);
+        descriptor.FindFieldByName("closed_world_blocked").Should().BeNull();
     }
 
     [Fact]
