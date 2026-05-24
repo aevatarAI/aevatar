@@ -52,11 +52,11 @@ public enum NyxIdChatLifecycleCommandStartError
 
 public sealed class NyxIdChatLifecycleFacade
 {
-    private readonly ICommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome> _createDispatchService;
+    private readonly ICommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> _createDispatchService;
     private readonly ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> _deleteDispatchService;
 
     public NyxIdChatLifecycleFacade(
-        ICommandOutcomeDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError, NyxIdChatConversationCreationOutcome> createDispatchService,
+        ICommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> createDispatchService,
         ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError> deleteDispatchService)
     {
         _createDispatchService = createDispatchService ?? throw new ArgumentNullException(nameof(createDispatchService));
@@ -67,17 +67,20 @@ public sealed class NyxIdChatLifecycleFacade
         string scopeId,
         CancellationToken ct = default)
     {
-        var result = await _createDispatchService.DispatchAndAwaitOutcomeAsync(
+        // Refactor (iter77/cluster-077-cqrs-command-outcome-stream-rpc):
+        //   Old pattern: NyxIdChat create awaited actor outcome via stream-RPC primitive (DispatchAndAwaitOutcomeAsync)
+        //   New principle (narrow scope): NyxIdChat create returns honest accepted ACK; terminal facts via committed events
+        var result = await _createDispatchService.DispatchAsync(
             new NyxIdChatConversationCreateCommand
             {
                 ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
             },
             ct);
 
-        if (result.Succeeded && result.Receipt is not null && result.Outcome is not null)
+        if (result.Succeeded && result.Receipt is not null)
         {
             return new NyxIdChatConversationCreateReceipt(
-                MapCreateOutcome(result.Outcome.Status),
+                NyxIdChatConversationCreateStatus.Accepted,
                 result.Receipt.ActorId,
                 result.Receipt.Reject,
                 result.Receipt.CommandId,
@@ -93,16 +96,6 @@ public sealed class NyxIdChatLifecycleFacade
             _ => new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.RegistrationUnavailable, null, null),
         };
     }
-
-    private static NyxIdChatConversationCreateStatus MapCreateOutcome(
-        NyxIdChatConversationCreationOutcomeStatus status) =>
-        status switch
-        {
-            NyxIdChatConversationCreationOutcomeStatus.Accepted => NyxIdChatConversationCreateStatus.Accepted,
-            NyxIdChatConversationCreationOutcomeStatus.RegistrationUnavailable =>
-                NyxIdChatConversationCreateStatus.RegistrationUnavailable,
-            _ => NyxIdChatConversationCreateStatus.RegistrationUnavailable,
-        };
 
     public async Task<NyxIdChatConversationDeleteReceipt> DeleteConversationAsync(
         string scopeId,
