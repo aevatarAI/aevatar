@@ -6,6 +6,9 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 internal sealed class WorkflowCapabilitiesStartupMaterializer
 {
     public const string DocumentId = "workflow-capabilities";
@@ -135,7 +138,6 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
                     Aliases = aliases,
                     Category = InferPrimitiveCategory(canonical),
                     Description = descriptor.Description,
-                    ClosedWorldBlocked = WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonical),
                     RuntimeModule = runtimeModuleByCanonical.GetValueOrDefault(canonical, string.Empty),
                     Parameters = descriptor.Parameters
                         .Select(parameter => new WorkflowPrimitiveParameterCapabilityReadModel

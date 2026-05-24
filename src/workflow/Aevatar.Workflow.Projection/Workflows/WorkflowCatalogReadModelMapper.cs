@@ -3,6 +3,9 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Workflows;
 
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 public sealed class WorkflowCatalogReadModelMapper
 {
     public WorkflowCatalogItem ToCatalogItem(WorkflowCatalogCurrentStateDocument document) =>
@@ -134,7 +137,6 @@ public sealed class WorkflowCatalogReadModelMapper
             Aliases = primitive.Aliases.ToList(),
             Category = primitive.Category,
             Description = primitive.Description,
-            ClosedWorldBlocked = primitive.ClosedWorldBlocked,
             RuntimeModule = primitive.RuntimeModule,
             Parameters = primitive.Parameters.Select(parameter => new WorkflowPrimitiveParameterCapability
             {
