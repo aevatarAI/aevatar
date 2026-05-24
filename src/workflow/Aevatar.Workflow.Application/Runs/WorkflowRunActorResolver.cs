@@ -111,7 +111,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return request.Source;
 
         if (request.WorkflowYamls is { Count: > 0 })
-            return WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls, request.WorkflowName);
+            return WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls, request.WorkflowName, request.ActorId);
 
         if (!string.IsNullOrWhiteSpace(request.ActorId))
             return WorkflowChatSource.DefinitionActor(request.ActorId, request.WorkflowName);

@@ -160,6 +160,48 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldResolveTypedInlineYamlSourceActorId()
+    {
+        const string entryWorkflowYaml =
+            """
+            name: inline_entry
+            roles: []
+            steps: []
+            """;
+        const string sourceActorId = "typed-source-actor-1";
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            sourceActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                sourceActorId,
+                "shared-definition-1",
+                "source-run-1",
+                "inline_entry",
+                "name: inline_entry\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ScopeId: "source-scope-1"));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                null,
+                null,
+                ScopeId: "request-scope-1",
+                Source: WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml], actorId: sourceActorId)),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        bindingReader.LastActorId.Should().Be(sourceActorId);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
+        actorPort.CreateRunBindings[0].ScopeId.Should().Be("source-scope-1");
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldRejectInlineRun_WhenAgentWorkflowBindingConflicts()
     {
         const string entryWorkflowYaml =

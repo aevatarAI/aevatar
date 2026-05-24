@@ -157,7 +157,10 @@ internal static class ChatRunRequestNormalizer
             WorkflowChatSourceKind.InlineYamlBundle when workflowYamls.Count == 0 || workflowYamls.Any(string.IsNullOrWhiteSpace) =>
                 SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
             WorkflowChatSourceKind.InlineYamlBundle =>
-                SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(workflowYamls, string.IsNullOrWhiteSpace(workflowName) ? null : workflowName)),
+                SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
+                    workflowYamls,
+                    string.IsNullOrWhiteSpace(workflowName) ? null : workflowName,
+                    string.IsNullOrWhiteSpace(actorId) ? null : actorId)),
             WorkflowChatSourceKind.Direct =>
                 SourceNormalizationResult.Success(WorkflowChatSource.Direct(actorId)),
             _ => SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
