@@ -194,12 +194,10 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         if (!string.IsNullOrWhiteSpace(submittedValue))
             payload["s"] = submittedValue;
 
-        if (action.Arguments.Count > 0)
+        var arguments = BuildCallbackArguments(action);
+        if (arguments.Count > 0)
         {
-            payload["v"] = action.Arguments.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value,
-                StringComparer.Ordinal);
+            payload["v"] = arguments;
         }
 
         callbackData = JsonSerializer.Serialize(payload);
@@ -216,11 +214,31 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         if (!string.IsNullOrWhiteSpace(submittedValue))
             return false;
 
-        if (action.Arguments.Count > 0)
+        if (arguments.Count > 0)
             return false;
 
         callbackData = actionId;
         return FitsCallbackDataLimit(callbackData);
+    }
+
+    private static Dictionary<string, string> BuildCallbackArguments(ActionElement action)
+    {
+        var arguments = action.Arguments.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value,
+            StringComparer.Ordinal);
+
+        if (action.LlmSelection is { } llmSelection)
+        {
+            if (!string.IsNullOrWhiteSpace(llmSelection.Action))
+                arguments["llm_action"] = llmSelection.Action;
+            if (!string.IsNullOrWhiteSpace(llmSelection.ServiceId))
+                arguments["service_id"] = llmSelection.ServiceId;
+            if (!string.IsNullOrWhiteSpace(llmSelection.PresetId))
+                arguments["preset_id"] = llmSelection.PresetId;
+        }
+
+        return arguments;
     }
 
     private static bool FitsCallbackDataLimit(string value) =>

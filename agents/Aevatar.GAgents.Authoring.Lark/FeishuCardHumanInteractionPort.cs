@@ -141,14 +141,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
     /// <see cref="MessageContent"/> intent and delegating rendering to <see cref="LarkMessageComposer"/>.
     /// </summary>
     /// <remarks>
-    /// The outbound button-value payload must stay byte-compatible with the inbound card-action
-    /// parser in <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayTransport"/>, which maps
-    /// <c>content.text.value</c> into <see cref="CardActionSubmission.Arguments"/> and
-    /// <c>content.text.form_value</c> into <see cref="CardActionSubmission.FormFields"/>. The
-    /// correlation keys (<c>actor_id</c>, <c>run_id</c>, <c>step_id</c>, <c>approved</c>) are
-    /// carried via the <c>ActionElement.Arguments</c> map and form-input names
-    /// (<c>edited_content</c>, <c>user_input</c>) are carried as action ids, so
-    /// <see cref="ChannelCardActionRouting"/> can rebuild the workflow resume command downstream.
+    /// The outbound button-value payload stays JSON-compatible with the inbound card-action parser
+    /// in <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayTransport"/> at the Lark/Nyx
+    /// boundary, while repository-owned workflow resume semantics are authored as
+    /// <see cref="WorkflowResumeActionPayload"/>.
     /// </remarks>
     internal static string BuildCardJson(HumanInteractionRequest request) =>
         BuildCardJson(request, new LarkMessageComposer());
@@ -234,14 +230,25 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             Label = label,
             IsPrimary = isPrimary,
             IsDanger = isDanger,
+            WorkflowResume = BuildWorkflowResumePayload(request, approved),
         };
         button.Arguments["action_id"] = actionId;
-        button.Arguments["actor_id"] = request.ActorId;
-        button.Arguments["run_id"] = request.RunId;
-        button.Arguments["step_id"] = request.StepId;
-        if (approved.HasValue)
-            button.Arguments["approved"] = approved.Value ? "true" : "false";
         return button;
+    }
+
+    private static WorkflowResumeActionPayload BuildWorkflowResumePayload(
+        HumanInteractionRequest request,
+        bool? approved)
+    {
+        var payload = new WorkflowResumeActionPayload
+        {
+            ActorId = request.ActorId,
+            RunId = request.RunId,
+            StepId = request.StepId,
+        };
+        if (approved.HasValue)
+            payload.Approved = approved.Value;
+        return payload;
     }
 
     private static ComposeContext BuildComposeContext() => new()

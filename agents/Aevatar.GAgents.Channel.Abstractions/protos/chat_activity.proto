@@ -178,6 +178,34 @@ message ActionOption {
   string value = 2;
 }
 
+// Carries repository-owned workflow resume control semantics for one card action.
+message WorkflowResumeActionPayload {
+  // The workflow actor that owns the suspended run.
+  string actor_id = 1;
+  // The workflow run identifier.
+  string run_id = 2;
+  // The suspended step identifier.
+  string step_id = 3;
+  // The optional approval decision when the suspension is an approval request.
+  optional bool approved = 4;
+  // The submitted user input for generic human-input suspensions.
+  string user_input = 5;
+  // The edited content submitted with an approval action.
+  string edited_content = 6;
+  // The feedback submitted with an approval or rejection action.
+  string feedback = 7;
+}
+
+// Carries repository-owned LLM selection control semantics for one card action.
+message LlmSelectionActionPayload {
+  // The LLM selection action, such as selecting a service or applying a preset.
+  string action = 1;
+  // The target LLM service identifier when selecting a service.
+  string service_id = 2;
+  // The target preset identifier when applying a preset.
+  string preset_id = 3;
+}
+
 // Declares one interactive card element.
 message ActionElement {
   // The element kind.
@@ -199,9 +227,13 @@ message ActionElement {
   // Whether the element is disabled.
   bool is_disabled = 9;
   // Additional scalar arguments forwarded verbatim to the adapter so they surface on callback.
-  // Used to carry correlation keys like workflow actor_id / run_id / step_id that the outbound
-  // side needs the inbound handler to echo back without reinterpretation.
+  // This is an open extension boundary for third-party/platform-specific scalar values. Repository-owned
+  // workflow resume and LLM selection semantics must use the typed payload fields below.
   map<string, string> arguments = 10;
+  // Repository-owned workflow resume payload for this action.
+  WorkflowResumeActionPayload workflow_resume = 11;
+  // Repository-owned LLM selection payload for this action.
+  LlmSelectionActionPayload llm_selection = 12;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -244,6 +276,10 @@ message CardActionSubmission {
   map<string, string> form_fields = 4;
   // The platform-native source message identifier for the card being acted on.
   string source_message_id = 5;
+  // Repository-owned workflow resume payload submitted by this action.
+  WorkflowResumeActionPayload workflow_resume = 6;
+  // Repository-owned LLM selection payload submitted by this action.
+  LlmSelectionActionPayload llm_selection = 7;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.

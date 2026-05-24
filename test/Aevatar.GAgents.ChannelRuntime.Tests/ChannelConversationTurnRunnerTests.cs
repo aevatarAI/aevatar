@@ -593,15 +593,17 @@ public sealed class ChannelConversationTurnRunnerTests
             .BuildServiceProvider();
         var runner = CreateRunner(registrationQueryPort, adapter, services);
 
-        var result = await runner.RunInboundAsync(
-            BuildCardActionActivity(
-                "evt-card-1",
-                ("actor_id", "actor-1"),
-                ("run_id", "run-1"),
-                ("step_id", "approval-1"),
-                ("approved", "false"),
-                ("user_input", "Need stronger hook")),
-            CancellationToken.None);
+        var activity = BuildCardActionActivity("evt-card-1");
+        activity.Content.CardAction.WorkflowResume = new WorkflowResumeActionPayload
+        {
+            ActorId = "actor-1",
+            RunId = "run-1",
+            StepId = "approval-1",
+            Approved = false,
+            UserInput = "Need stronger hook",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("workflow-resume:cmd-card-1");
@@ -707,10 +709,12 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter, services);
-        var activity = BuildCardActionActivity(
-            "evt-llm-select-1",
-            (TextUserLlmOptionsRenderer.LlmActionArgument, TextUserLlmOptionsRenderer.SelectServiceAction),
-            (TextUserLlmOptionsRenderer.ServiceIdArgument, "svc-openai"));
+        var activity = BuildCardActionActivity("evt-llm-select-1");
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.SelectServiceAction,
+            ServiceId = "svc-openai",
+        };
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
