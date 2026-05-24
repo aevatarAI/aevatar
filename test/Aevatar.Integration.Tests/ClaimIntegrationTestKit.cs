@@ -112,7 +112,7 @@ internal static class ClaimIntegrationTestKit
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
         var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, ct);

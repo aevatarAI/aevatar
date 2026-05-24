@@ -28,20 +28,6 @@ public sealed class ScriptEvolutionProjectionPort
         _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
-    internal Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
-        string sessionActorId,
-        string proposalId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = sessionActorId,
-                ProjectionKind = ScriptProjectionKinds.EvolutionSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = proposalId,
-            },
-            ct);
-
     // Refactor (iter41/cluster-041-command-observation-projection-activation):
     //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
     //   New principle: observation binders attach only to existing projection-owned sessions;

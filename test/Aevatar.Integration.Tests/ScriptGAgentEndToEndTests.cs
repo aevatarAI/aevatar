@@ -49,7 +49,7 @@ public sealed class ScriptGAgentEndToEndTests
             definition.Snapshot,
             CancellationToken.None);
 
-        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
+        var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
         var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);

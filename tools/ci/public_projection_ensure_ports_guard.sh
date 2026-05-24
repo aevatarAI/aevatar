@@ -9,6 +9,9 @@ cd "${REPO_ROOT}"
 # Refactor (iter52/issue-905-public-projection-ensure-ports):
 #   Old pattern: Public application/agent projection ports exposed actorId-based EnsureProjection/EnsureActorProjection as general callable surface.
 #   New principle: Projection activation is owned by projection bootstrap/lease/session contracts (bootstrap-internal); public application/query ports only support Attach*/Release*/Query* on existing leases.
+# Refactor (iter57/issue-943-projection-ensure-delete):
+#   Old pattern: Internal production ProjectionPort/CurrentStateProjectionPort classes kept actorId Ensure* helpers after public surfaces were removed.
+#   New principle: Production projection ports must not carry actorId ensure helpers at all; tests that need bootstrap use typed IProjectionScopeActivationService<TLease> directly.
 ensure_declaration_hits="$(
   rg -n "^[[:space:]]*(public[[:space:]]+)?(async[[:space:]]+)?Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\\(" \
     src \
@@ -39,10 +42,22 @@ public_abstraction_hits="$(
 public_projection_surface_hits="$(
   if [[ -n "${ensure_declaration_hits}" ]]; then
     printf '%s\n' "${ensure_declaration_hits}" \
-      | rg '(ProjectionContracts|ProjectionPort|CurrentStateProjectionPort|MaterializationPort)\.cs:' \
+      | rg '/[^:]*(ProjectionContracts|ProjectionPort|CurrentStateProjectionPort|MaterializationPort)\.cs:' \
       | rg -v "${allowed_projection_internal_regex}" \
       || true
   fi
+)"
+
+production_projection_actorid_ensure_hits="$(
+  rg -n "^[[:space:]]*(public|internal|private|protected)?[[:space:]]*(async[[:space:]]+)?Task(<[^;{]+>)?[[:space:]]+Ensure(Run|Actor)?Projection(ForActor)?Async[[:space:]]*\\([^)]*\\b(actorId|sessionActorId|rootActorId)\\b" \
+    src \
+    agents \
+    -g '*ProjectionPort.cs' \
+    -g '*CurrentStateProjectionPort.cs' \
+    -g '*MaterializationPort.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    || true
 )"
 
 command_path_hits="$(
@@ -76,7 +91,7 @@ command_path_hits="$(
     || true
 )"
 
-if [[ -n "${public_abstraction_hits}${public_projection_surface_hits}${command_path_hits}" ]]; then
+if [[ -n "${public_abstraction_hits}${public_projection_surface_hits}${production_projection_actorid_ensure_hits}${command_path_hits}" ]]; then
   if [[ -n "${public_abstraction_hits}" ]]; then
     echo "${public_abstraction_hits}"
     echo "Public projection abstractions must not expose actorId-based Ensure* projection activation."
@@ -84,6 +99,10 @@ if [[ -n "${public_abstraction_hits}${public_projection_surface_hits}${command_p
   if [[ -n "${public_projection_surface_hits}" ]]; then
     echo "${public_projection_surface_hits}"
     echo "Public projection ports must not expose actorId-based Ensure* activation; use attach-existing public APIs or committed-state/bootstrap-owned activation."
+  fi
+  if [[ -n "${production_projection_actorid_ensure_hits}" ]]; then
+    echo "${production_projection_actorid_ensure_hits}"
+    echo "Production projection ports must not retain actorId-based Ensure* helpers; tests must bootstrap through typed IProjectionScopeActivationService<TLease>."
   fi
   if [[ -n "${command_path_hits}" ]]; then
     echo "${command_path_hits}"

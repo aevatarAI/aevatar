@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Demos.Inspector;
+using Aevatar.Demos.Inspector.Demo;
 using Aevatar.Demos.Inspector.ReadModels;
 using Aevatar.Demos.Inspector.Telemetry;
 using Aevatar.Foundation.Runtime.Observability;
@@ -54,6 +55,24 @@ public sealed class InspectorEndpointsTests
         serialized.Should().Contain("state_root");
         serialized.Should().Contain("RoleGAgent");
         serialized.Should().Contain("actor-a");
+    }
+
+    [Fact]
+    public async Task ActorsEndpoint_ShouldReflectInspectorUnregisterCleanup()
+    {
+        await using var host = await InspectorTestHost.StartAsync();
+        var registry = host.Services.GetRequiredService<InspectorGAgentRegistryService>();
+
+        await registry.RegisterActorAsync(nameof(InspectorTransformerAgent), "inspector-parent", CancellationToken.None);
+        await registry.RegisterActorAsync(nameof(InspectorTransformerAgent), "stale-parent", CancellationToken.None);
+        await registry.UnregisterActorAsync(nameof(InspectorTransformerAgent), "stale-parent", CancellationToken.None);
+
+        var response = await host.Client.GetFromJsonAsync<InspectorActorsResponse>("/api/inspector/actors");
+
+        response.Should().NotBeNull();
+        var group = response!.Groups.Should().ContainSingle().Subject;
+        group.ActorIds.Should().Equal("inspector-parent");
+        group.ActorIds.Should().NotContain("stale-parent");
     }
 
     [Fact]
