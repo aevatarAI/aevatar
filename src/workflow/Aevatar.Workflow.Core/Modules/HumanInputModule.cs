@@ -66,9 +66,10 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             };
             await SaveStateAsync(state, ctx, ct);
 
+            // iter85/cluster-085: prompt text is user content, so Information logs keep only length/status.
             ctx.Logger.LogInformation(
-                "HumanInput: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", variable={Var}, timeout={Timeout}s",
-                runId, request.StepId, prompt, variable, timeoutSeconds);
+                "HumanInput: run={RunId} step={StepId} status=suspended prompt_len={PromptLen} prompt_redacted=true variable={Var} timeout={Timeout}s",
+                runId, request.StepId, prompt.Length, variable, timeoutSeconds);
 
             var suspended = new WorkflowSuspendedEvent
             {

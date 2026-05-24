@@ -33,7 +33,13 @@ public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
         // 如果 value 以 $ 开头，表示从 input（上一步输出）中取值
         var resolvedValue = value.StartsWith('$') ? request.Input ?? string.Empty : value;
 
-        ctx.Logger.LogInformation("Assign: {Target} = {Value}", target, resolvedValue.Length > 50 ? resolvedValue[..50] + "..." : resolvedValue);
+        // iter85/cluster-085: log only assignment identity and value length; value content remains in workflow state.
+        ctx.Logger.LogInformation(
+            "Assign: run={RunId} step={StepId} target={Target} status=assigned value_len={ValueLen} value_redacted=true",
+            request.RunId,
+            request.StepId,
+            target,
+            resolvedValue.Length);
 
         var completed = new StepCompletedEvent
         {

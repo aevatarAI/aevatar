@@ -18,6 +18,7 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+// Refactor (iter85/cluster-085): Information logs report ids, status, and lengths only; prompt/output content is redacted.
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
@@ -182,14 +183,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        var outputPreview = (evt.Content ?? string.Empty).Length > 300
-            ? evt.Content![..300] + "..."
-            : evt.Content ?? string.Empty;
         ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} completed ({Len} chars): {Preview}",
+            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
+            pending.RunId,
             pending.StepId,
-            evt.Content?.Length ?? 0,
-            outputPreview);
+            sessionId,
+            evt.Content?.Length ?? 0);
 
         await ctx.PublishAsync(
             new StepCompletedEvent
@@ -226,14 +225,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        var outputPreview = (evt.Content ?? string.Empty).Length > 300
-            ? evt.Content![..300] + "..."
-            : evt.Content ?? string.Empty;
         ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} completed non-streaming ({Len} chars): {Preview}",
+            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed_non_streaming output_len={OutputLen} output_redacted=true",
+            pending.RunId,
             pending.StepId,
-            evt.Content?.Length ?? 0,
-            outputPreview);
+            sessionId,
+            evt.Content?.Length ?? 0);
 
         await ctx.PublishAsync(
             new StepCompletedEvent
@@ -631,7 +628,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
         var chatRequest = new ChatRequestEvent
         {
             Prompt = prompt,
@@ -649,23 +645,25 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (!target.UseSelf)
         {
             ctx.Logger.LogInformation(
-                "LLMCallModule: step={StepId} → SendTo mode={Mode} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+                "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=dispatching mode={Mode} actor={ActorId} timeout={Timeout}ms prompt_len={PromptLen} prompt_redacted=true",
+                WorkflowRunIdNormalizer.Normalize(request.RunId),
                 stepId,
+                sessionId,
                 target.Mode,
                 target.ActorId,
                 timeoutMs,
-                prompt.Length,
-                promptPreview);
+                prompt.Length);
             await ctx.SendToAsync(target.ActorId, chatRequest, ct, dispatchOptions);
             return;
         }
 
         ctx.Logger.LogInformation(
-            "LLMCallModule: step={StepId} → Self timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=dispatching_self timeout={Timeout}ms prompt_len={PromptLen} prompt_redacted=true",
+            WorkflowRunIdNormalizer.Normalize(request.RunId),
             stepId,
+            sessionId,
             timeoutMs,
-            prompt.Length,
-            promptPreview);
+            prompt.Length);
         await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct, dispatchOptions);
     }
 
