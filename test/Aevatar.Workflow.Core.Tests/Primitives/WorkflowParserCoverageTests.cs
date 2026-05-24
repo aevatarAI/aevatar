@@ -131,17 +131,17 @@ public sealed class WorkflowParserCoverageTests
             """
             name: role_agent_kind
             roles:
-              - id: bridge
-                name: Bridge
-                agent_kind: " workflow.telegram-user-bridge "
+              - id: assistant
+                name: Assistant
+                agent_kind: " workflow.assistant-role "
             steps:
               - id: step_1
                 type: llm_call
-                target_role: bridge
+                target_role: assistant
             """);
 
         workflow.Roles.Should().ContainSingle();
-        workflow.Roles[0].AgentKind.Should().Be("workflow.telegram-user-bridge");
+        workflow.Roles[0].AgentKind.Should().Be("workflow.assistant-role");
     }
 
     [Fact]

@@ -221,13 +221,13 @@ public class WorkflowGAgentCoverageTests
             """
             name: wf_kind
             roles:
-              - id: telegram_user_bridge
-                name: Telegram User Bridge
-                agent_kind: " workflow.telegram-user-bridge "
+              - id: assistant
+                name: Assistant
+                agent_kind: " workflow.assistant-role "
             steps:
               - id: step_1
                 type: llm_call
-                target_role: telegram_user_bridge
+                target_role: assistant
             """,
             "wf_kind",
             runId: "run-kind");
@@ -236,15 +236,15 @@ public class WorkflowGAgentCoverageTests
 
         runtime.CreateCalls.Should().Be(0);
         runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
-            "workflow.telegram-user-bridge",
-            "workflow-run-kind:telegram_user_bridge"));
+            "workflow.assistant-role",
+            "workflow-run-kind:assistant"));
         runtime.Linked.Should().ContainSingle()
-            .Which.Should().Be(("workflow-run-kind", "workflow-run-kind:telegram_user_bridge"));
+            .Which.Should().Be(("workflow-run-kind", "workflow-run-kind:assistant"));
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
         roleAgent.LastInitializeEvent.Should().NotBeNull();
-        roleAgent.LastInitializeEvent!.RoleId.Should().Be("telegram_user_bridge");
-        roleAgent.LastInitializeEvent.RoleName.Should().Be("Telegram User Bridge");
+        roleAgent.LastInitializeEvent!.RoleId.Should().Be("assistant");
+        roleAgent.LastInitializeEvent.RoleName.Should().Be("Assistant");
 
         var persisted = await ((InMemoryEventStore)agent.Services.GetRequiredService<IEventStore>()).GetEventsAsync(agent.Id);
         persisted.Should().Contain(x => x.EventType.Contains(nameof(WorkflowRoleActorLinkedEvent), StringComparison.Ordinal));

@@ -36,27 +36,6 @@ public sealed class WorkflowRunGAgentSourceRegressionTests
         executableSource.Should().NotContain("IWorkflowAgentTypeAliasProvider");
     }
 
-    [Fact]
-    public async Task WorkflowBridgeRegistration_Source_ShouldNotContainRawLifecycleRegistration()
-    {
-        var repoRoot = FindRepositoryRoot();
-        var sourcePath = Path.Combine(
-            repoRoot,
-            "src",
-            "workflow",
-            "extensions",
-            "Aevatar.Workflow.Extensions.Bridge",
-            "ServiceCollectionExtensions.cs");
-
-        var executableSource = StripLineComments(await File.ReadAllTextAsync(sourcePath));
-
-        executableSource.Should().NotContain("agent_type");
-        executableSource.Should().NotContain("agent_id");
-        executableSource.Should().NotContain("Type.GetType");
-        executableSource.Should().NotContain("AppDomain.CurrentDomain");
-        executableSource.Should().NotContain("IWorkflowAgentTypeAliasProvider");
-    }
-
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
