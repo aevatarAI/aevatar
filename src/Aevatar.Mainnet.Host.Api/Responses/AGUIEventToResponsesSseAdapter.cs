@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Presentation.AGUI;
 using Microsoft.AspNetCore.Http;
 
@@ -19,6 +20,9 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 ///   2. Each AGUI event is forwarded via <see cref="WriteAsync"/>
 ///   3. Caller calls <see cref="WriteCompletedAsync"/> when the run finishes
 /// </summary>
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 internal sealed class AGUIEventToResponsesSseAdapter
 {
     private readonly HttpResponse _response;
@@ -27,10 +31,7 @@ internal sealed class AGUIEventToResponsesSseAdapter
     private readonly JsonSerializerOptions _jsonOptions;
     private int _sequenceNumber;
     private int _nextOutputIndex;
-    private readonly StringBuilder _aggregatedText = new();
     private readonly Dictionary<string, int> _toolCallOutputIndex = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _toolCallNames = new(StringComparer.Ordinal);
-    private readonly List<(string ToolCallId, string ToolName, string? Result)> _completedToolCalls = new();
 
     public AGUIEventToResponsesSseAdapter(
         HttpResponse response,
@@ -44,12 +45,7 @@ internal sealed class AGUIEventToResponsesSseAdapter
         _jsonOptions = jsonOptions ?? throw new ArgumentNullException(nameof(jsonOptions));
     }
 
-    public string AggregatedText => _aggregatedText.ToString();
-
     public bool HasFailed { get; private set; }
-
-    public IReadOnlyList<(string ToolCallId, string ToolName, string? Result)> CompletedToolCalls =>
-        _completedToolCalls;
 
     /// <summary>
     /// Emit the initial `response.created` + `response.output_item.added` (in-progress
@@ -102,7 +98,6 @@ internal sealed class AGUIEventToResponsesSseAdapter
                     var delta = evt.TextMessageContent?.Delta ?? string.Empty;
                     if (delta.Length == 0)
                         return;
-                    _aggregatedText.Append(delta);
                     await WriteFrameAsync(
                         "response.output_text.delta",
                         new
@@ -131,7 +126,6 @@ internal sealed class AGUIEventToResponsesSseAdapter
                         return;
                     var outputIndex = _nextOutputIndex++;
                     _toolCallOutputIndex[toolCall.ToolCallId] = outputIndex;
-                    _toolCallNames[toolCall.ToolCallId] = toolCall.ToolName ?? string.Empty;
                     break;
                 }
             case AGUIEvent.EventOneofCase.ToolCallEnd:
@@ -141,8 +135,6 @@ internal sealed class AGUIEventToResponsesSseAdapter
                         return;
                     if (!_toolCallOutputIndex.ContainsKey(toolCall.ToolCallId))
                         return;
-                    var toolName = _toolCallNames.GetValueOrDefault(toolCall.ToolCallId, string.Empty);
-                    _completedToolCalls.Add((toolCall.ToolCallId, toolName, toolCall.Result));
                     break;
                 }
             case AGUIEvent.EventOneofCase.RunError:
@@ -182,13 +174,17 @@ internal sealed class AGUIEventToResponsesSseAdapter
     /// Emit the closing frames: `response.output_text.done`, `response.output_item.done`,
     /// per-tool-call output items, then `response.completed`.
     /// </summary>
+    // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+    //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+    //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
     public async Task WriteCompletedAsync(
+        LlmSessionCompletionSnapshot completion,
         Func<string, object> buildCompletedMessageItem,
-        Func<(string ToolCallId, string ToolName, string? Result), object> buildFunctionCallItem,
-        Func<string, object> buildCompletedResponse,
+        Func<LlmSessionCompletedToolCallSnapshot, object> buildFunctionCallItem,
+        Func<LlmSessionCompletionSnapshot, object> buildCompletedResponse,
         CancellationToken ct)
     {
-        var completedText = _aggregatedText.ToString();
+        var completedText = completion.OutputText;
 
         // Always close the in-progress message item that WriteCreatedAsync opened
         // — Responses SSE requires every `output_item.added` to pair with an
@@ -217,9 +213,9 @@ internal sealed class AGUIEventToResponsesSseAdapter
             },
             ct);
 
-        foreach (var toolCall in _completedToolCalls)
+        foreach (var toolCall in completion.ToolCalls)
         {
-            var outputIndex = _toolCallOutputIndex.GetValueOrDefault(toolCall.ToolCallId, _nextOutputIndex++);
+            var outputIndex = _toolCallOutputIndex.GetValueOrDefault(toolCall.CallId, _nextOutputIndex++);
             var item = buildFunctionCallItem(toolCall);
             await WriteFrameAsync(
                 "response.output_item.added",
@@ -248,7 +244,7 @@ internal sealed class AGUIEventToResponsesSseAdapter
             new
             {
                 type = "response.completed",
-                response = buildCompletedResponse(completedText),
+                response = buildCompletedResponse(completion),
                 sequence_number = ++_sequenceNumber,
             },
             ct);

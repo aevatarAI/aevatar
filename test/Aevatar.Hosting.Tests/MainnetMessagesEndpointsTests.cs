@@ -842,6 +842,12 @@ public sealed class MainnetMessagesEndpointsTests
             LlmSessionForwardedToolCall call,
             CancellationToken ct = default) => Task.CompletedTask;
 
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,
             string responseId,

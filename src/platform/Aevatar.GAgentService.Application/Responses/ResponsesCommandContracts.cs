@@ -203,10 +203,16 @@ public sealed record ResponsesCreateCommandResult(
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Forward-to-team/GAgent decisions were endpoint locals interleaved with provider-session setup.
 //   New principle: Forwarding is a typed command result so Host can invoke boundary AGUI rendering without owning route policy.
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed record ResponsesForwardCommandResult(
     NormalizedResponsesRequest Normalized,
     ResponsesCallerScope CallerScope,
-    ChatRouteAction Action);
+    ChatRouteAction Action,
+    LlmSessionRegistrationResult Session,
+    LlmSessionSnapshot? PreviousSnapshot,
+    DateTimeOffset CreatedAt);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Completed Responses JSON shape was built from endpoint execution locals.

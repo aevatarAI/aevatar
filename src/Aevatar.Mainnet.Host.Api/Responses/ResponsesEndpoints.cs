@@ -19,6 +19,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 internal static partial class ResponsesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -45,6 +48,7 @@ internal static partial class ResponsesApiEndpoints
         HttpContext http,
         ResponsesCreateRequest request,
         [FromServices] IResponsesCommandFacade commandFacade,
+        [FromServices] ResponsesForwardedCompletionRecorder forwardedCompletionRecorder,
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
@@ -54,6 +58,7 @@ internal static partial class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(commandFacade);
+        ArgumentNullException.ThrowIfNull(forwardedCompletionRecorder);
         ArgumentNullException.ThrowIfNull(teamEntryMemberResolver);
         ArgumentNullException.ThrowIfNull(memberPublishedServiceResolver);
         ArgumentNullException.ThrowIfNull(staticGAgentStreamInvocationPort);
@@ -86,7 +91,9 @@ internal static partial class ResponsesApiEndpoints
                 http,
                 result.Forward.Normalized,
                 result.Forward.CallerScope,
+                result.Forward,
                 result.Forward.Action.ForwardToTeam,
+                forwardedCompletionRecorder,
                 teamEntryMemberResolver,
                 staticGAgentStreamInvocationPort,
                 logger,
@@ -99,7 +106,9 @@ internal static partial class ResponsesApiEndpoints
                 http,
                 result.Forward.Normalized,
                 result.Forward.CallerScope,
+                result.Forward,
                 result.Forward.Action.ForwardToGagent,
+                forwardedCompletionRecorder,
                 memberPublishedServiceResolver,
                 staticGAgentStreamInvocationPort,
                 logger,
@@ -335,7 +344,9 @@ internal static partial class ResponsesApiEndpoints
         HttpContext http,
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
+        ResponsesForwardCommandResult forwardPlan,
         ForwardToTeam forwardToTeam,
+        ResponsesForwardedCompletionRecorder forwardedCompletionRecorder,
         ITeamEntryMemberResolver teamEntryMemberResolver,
         IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         ILogger logger,
@@ -383,7 +394,7 @@ internal static partial class ResponsesApiEndpoints
             SessionId: normalized.ResponseId,
             Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
         var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, endpointId, input);
-        var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
 
         if (normalized.Stream)
         {
@@ -392,6 +403,8 @@ internal static partial class ResponsesApiEndpoints
                 normalized,
                 createdAt,
                 invocationRequest,
+                forwardedCompletionRecorder,
+                forwardPlan,
                 staticGAgentStreamInvocationPort,
                 logger,
                 ct);
@@ -402,6 +415,8 @@ internal static partial class ResponsesApiEndpoints
             normalized,
             createdAt,
             invocationRequest,
+            forwardedCompletionRecorder,
+            forwardPlan,
             staticGAgentStreamInvocationPort,
             logger,
             ct);
@@ -427,7 +442,9 @@ internal static partial class ResponsesApiEndpoints
         HttpContext http,
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
+        ResponsesForwardCommandResult forwardPlan,
         ForwardToGAgent forwardToGAgent,
+        ResponsesForwardedCompletionRecorder forwardedCompletionRecorder,
         IMemberPublishedServiceResolver memberPublishedServiceResolver,
         IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         ILogger logger,
@@ -471,7 +488,7 @@ internal static partial class ResponsesApiEndpoints
             SessionId: normalized.ResponseId,
             Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
         var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, DefaultGAgentChatEndpointId, input);
-        var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
 
         if (normalized.Stream)
         {
@@ -480,6 +497,8 @@ internal static partial class ResponsesApiEndpoints
                 normalized,
                 createdAt,
                 invocationRequest,
+                forwardedCompletionRecorder,
+                forwardPlan,
                 staticGAgentStreamInvocationPort,
                 logger,
                 ct);
@@ -490,6 +509,8 @@ internal static partial class ResponsesApiEndpoints
             normalized,
             createdAt,
             invocationRequest,
+            forwardedCompletionRecorder,
+            forwardPlan,
             staticGAgentStreamInvocationPort,
             logger,
             ct);
@@ -528,6 +549,8 @@ internal static partial class ResponsesApiEndpoints
         NormalizedResponsesRequest normalized,
         long createdAt,
         StaticGAgentStreamInvocationRequest invocationRequest,
+        ResponsesForwardedCompletionRecorder forwardedCompletionRecorder,
+        ResponsesForwardCommandResult forwardPlan,
         IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         ILogger logger,
         CancellationToken ct)
@@ -539,11 +562,15 @@ internal static partial class ResponsesApiEndpoints
         response.Headers["X-Accel-Buffering"] = "no";
         await response.StartAsync(ct);
 
+        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
         var adapter = new AGUIEventToResponsesSseAdapter(
             response,
             normalized.ResponseId,
             normalized.MessageItemId,
             JsonOptions);
+        var completionCollector = forwardedCompletionRecorder.CreateCollector(forwardPlan);
         await adapter.WriteCreatedAsync(
             BuildCreatedResponse(normalized, createdAt),
             BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
@@ -553,7 +580,11 @@ internal static partial class ResponsesApiEndpoints
         {
             var result = await staticGAgentStreamInvocationPort.InvokeAsync(
                 invocationRequest,
-                emitAsync: adapter.WriteAsync,
+                emitAsync: async (evt, token) =>
+                {
+                    await completionCollector.ObserveAsync(evt, token);
+                    await adapter.WriteAsync(evt, token);
+                },
                 onAcceptedAsync: null,
                 ct);
             if (!result.Succeeded)
@@ -569,6 +600,18 @@ internal static partial class ResponsesApiEndpoints
             {
                 if (!adapter.HasFailed)
                 {
+                    await completionCollector.CommitFailureAndReadAsync(
+                        "gagent_invocation_failed",
+                        "GAgent invocation failed.",
+                        CancellationToken.None);
+                }
+                else
+                {
+                    await completionCollector.CommitAndReadAsync(CancellationToken.None);
+                }
+
+                if (!adapter.HasFailed)
+                {
                     await adapter.WriteFailureAsync(
                         "gagent_invocation_failed",
                         "GAgent invocation failed.",
@@ -577,25 +620,37 @@ internal static partial class ResponsesApiEndpoints
                 return;
             }
 
+            var completionResult = await completionCollector.CommitAndReadAsync(ct);
+            if (completionResult.Error is not null)
+            {
+                await adapter.WriteFailureAsync(
+                    completionResult.Error.Code,
+                    completionResult.Error.Message,
+                    ct);
+                return;
+            }
+
+            var completion = completionResult.Snapshot!.Completion!;
             await adapter.WriteCompletedAsync(
+                completion,
                 buildCompletedMessageItem: text => BuildOutputMessage(normalized.MessageItemId, "completed", text),
                 buildFunctionCallItem: tool => BuildFunctionCallOutputItem(new ToolCall
                 {
-                    Id = tool.ToolCallId,
+                    Id = tool.CallId,
                     Name = tool.ToolName,
-                    ArgumentsJson = tool.Result ?? "{}",
+                    ArgumentsJson = tool.ResultJson ?? "{}",
                 }),
-                buildCompletedResponse: text => BuildCompletedResponse(
+                buildCompletedResponse: snapshot => BuildCompletedResponse(
                     normalized,
                     createdAt,
-                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    text,
-                    adapter.CompletedToolCalls
-                        .Select(tc => new ToolCall
+                    snapshot.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    snapshot.OutputText,
+                    snapshot.ToolCalls
+                        .Select(static tc => new ToolCall
                         {
-                            Id = tc.ToolCallId,
+                            Id = tc.CallId,
                             Name = tc.ToolName,
-                            ArgumentsJson = tc.Result ?? "{}",
+                            ArgumentsJson = tc.ResultJson ?? "{}",
                         })
                         .ToArray(),
                     usage: null),
@@ -640,51 +695,17 @@ internal static partial class ResponsesApiEndpoints
         NormalizedResponsesRequest normalized,
         long createdAt,
         StaticGAgentStreamInvocationRequest invocationRequest,
+        ResponsesForwardedCompletionRecorder forwardedCompletionRecorder,
+        ResponsesForwardCommandResult forwardPlan,
         IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         ILogger logger,
         CancellationToken ct)
     {
-        var aggregatedText = new StringBuilder();
-        var completedToolCalls = new List<ToolCall>();
-        var toolCallNames = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? failureCode = null;
-        string? failureMessage = null;
+        var completionCollector = forwardedCompletionRecorder.CreateCollector(forwardPlan);
 
-        async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
+        ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
         {
-            switch (evt.EventCase)
-            {
-                case AGUIEvent.EventOneofCase.TextMessageContent:
-                    var delta = evt.TextMessageContent?.Delta;
-                    if (!string.IsNullOrEmpty(delta))
-                        aggregatedText.Append(delta);
-                    break;
-                case AGUIEvent.EventOneofCase.ToolCallStart:
-                    if (!string.IsNullOrWhiteSpace(evt.ToolCallStart?.ToolCallId))
-                        toolCallNames[evt.ToolCallStart.ToolCallId] = evt.ToolCallStart.ToolName ?? string.Empty;
-                    break;
-                case AGUIEvent.EventOneofCase.ToolCallEnd:
-                    var endId = evt.ToolCallEnd?.ToolCallId;
-                    if (string.IsNullOrWhiteSpace(endId))
-                        break;
-                    var name = toolCallNames.GetValueOrDefault(endId!, string.Empty);
-                    completedToolCalls.Add(new ToolCall
-                    {
-                        Id = endId!,
-                        Name = name,
-                        ArgumentsJson = evt.ToolCallEnd?.Result ?? "{}",
-                    });
-                    break;
-                case AGUIEvent.EventOneofCase.RunError:
-                    failureCode = string.IsNullOrWhiteSpace(evt.RunError?.Code)
-                        ? "gagent_invocation_failed"
-                        : evt.RunError!.Code;
-                    failureMessage = string.IsNullOrWhiteSpace(evt.RunError?.Message)
-                        ? "GAgent invocation failed."
-                        : evt.RunError!.Message;
-                    break;
-            }
-            await ValueTask.CompletedTask;
+            return completionCollector.ObserveAsync(evt, token);
         }
 
         try
@@ -701,12 +722,20 @@ internal static partial class ResponsesApiEndpoints
                     result.StartError.ToString().ToLowerInvariant(),
                     "GAgent invocation could not be started.");
             }
-            if (failureMessage is not null || result.CompletionStatus == GAgentDraftRunCompletionStatus.Failed)
+            if (result.CompletionStatus == GAgentDraftRunCompletionStatus.Failed &&
+                !completionCollector.HasFailureEvent)
             {
+                var failure = await completionCollector.CommitFailureAndReadAsync(
+                    "gagent_invocation_failed",
+                    "GAgent invocation failed.",
+                    ct);
+                if (failure.Error is not null)
+                    return ToErrorResult(failure.Error.StatusCode, failure.Error.Code, failure.Error.Message);
+                var failedCompletion = failure.Snapshot!.Completion!;
                 return ToErrorResult(
                     StatusCodes.Status500InternalServerError,
-                    failureCode ?? "gagent_invocation_failed",
-                    failureMessage ?? "GAgent invocation failed.");
+                    failedCompletion.FailureCode ?? "gagent_invocation_failed",
+                    failedCompletion.FailureMessage ?? "GAgent invocation failed.");
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -736,12 +765,33 @@ internal static partial class ResponsesApiEndpoints
                 "GAgent invocation failed.");
         }
 
+        var completionResult = await completionCollector.CommitAndReadAsync(ct);
+        if (completionResult.Error is not null)
+            return ToErrorResult(
+                completionResult.Error.StatusCode,
+                completionResult.Error.Code,
+                completionResult.Error.Message);
+
+        var completion = completionResult.Snapshot!.Completion!;
+        if (!string.IsNullOrWhiteSpace(completion.FailureCode))
+            return ToErrorResult(
+                StatusCodes.Status500InternalServerError,
+                completion.FailureCode!,
+                completion.FailureMessage ?? "GAgent invocation failed.");
+
         var completed = BuildCompletedResponse(
             normalized,
             createdAt,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            aggregatedText.ToString(),
-            completedToolCalls,
+            completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            completion.OutputText,
+            completion.ToolCalls
+                .Select(static tc => new ToolCall
+                {
+                    Id = tc.CallId,
+                    Name = tc.ToolName,
+                    ArgumentsJson = tc.ResultJson ?? "{}",
+                })
+                .ToArray(),
             usage: null);
         return Results.Json(completed, statusCode: StatusCodes.Status200OK);
     }

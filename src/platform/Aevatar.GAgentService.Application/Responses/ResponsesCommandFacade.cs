@@ -12,6 +12,9 @@ namespace Aevatar.GAgentService.Application.Responses;
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Mainnet Host endpoints owned normalization, target resolution, session registration, tool persistence, and LLM command execution inline.
 //   New principle: Application owns the Responses command lifecycle as a typed facade; Host maps HTTP/SSE/JSON frames around these command plans and results.
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed class ResponsesCommandFacade(
     ILLMProviderFactory providerFactory,
     IResponsesCallerScopeResolver callerScopeResolver,
@@ -56,12 +59,6 @@ public sealed class ResponsesCommandFacade(
                 routedModelResult.Error.StatusCode,
                 routedModelResult.Error.Code,
                 routedModelResult.Error.Message);
-        if (routedModelResult.ForwardAction is not null)
-            return ResponsesCreateCommandResult.FromForward(new ResponsesForwardCommandResult(
-                normalized,
-                callerScope,
-                routedModelResult.ForwardAction));
-
         var continuation = await PrepareContinuationAsync(normalized, callerScope, ct);
         if (continuation.Error is not null)
             return ResponsesCreateCommandResult.FromError(
@@ -78,6 +75,18 @@ public sealed class ResponsesCommandFacade(
                 sessionResult.Error.StatusCode,
                 sessionResult.Error.Code,
                 sessionResult.Error.Message);
+
+        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+        if (routedModelResult.ForwardAction is not null)
+            return ResponsesCreateCommandResult.FromForward(new ResponsesForwardCommandResult(
+                normalized,
+                callerScope,
+                routedModelResult.ForwardAction,
+                sessionResult.Session!,
+                continuation.PreviousSnapshot,
+                createdAt));
 
         var prepared = await BuildExecutionPlanAsync(
             normalized,

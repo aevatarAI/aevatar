@@ -237,6 +237,7 @@ message LlmSessionCurrentStateReadModel {
   google.protobuf.Timestamp cancelled_at_utc_value = 13;
   int64 ttl_seconds = 14;
   repeated LlmSessionForwardedToolCallReadModel forwarded_tool_call_entries = 15;
+  LlmSessionCompletionReadModel completion = 16;
 }
 
 message LlmSessionForwardedToolCallReadModel {
@@ -250,6 +251,20 @@ message LlmSessionForwardedToolCallReadModel {
   google.protobuf.Timestamp emitted_at_utc_value = 8;
   google.protobuf.Timestamp received_at_utc_value = 9;
   google.protobuf.Timestamp resolved_at_utc_value = 10;
+}
+
+message LlmSessionCompletedToolCallReadModel {
+  string call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Value result = 3;
+}
+
+message LlmSessionCompletionReadModel {
+  string output_text = 1;
+  repeated LlmSessionCompletedToolCallReadModel tool_call_entries = 2;
+  google.protobuf.Timestamp completed_at_utc_value = 3;
+  string failure_code = 4;
+  string failure_message = 5;
 }
 
 // --- ResponsesAgentToolStateCurrentStateReadModel ---

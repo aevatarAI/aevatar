@@ -14,6 +14,9 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 /// HTTP boundary are parsed into protobuf values here so the actor state never
 /// holds JSON strings.
 /// </summary>
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
 {
     private const string PublisherId = "gagent-service.response-sessions";
@@ -119,6 +122,38 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
             {
                 ResponseId = responseId.Trim(),
                 Call = prepared,
+            }),
+            envelopeId);
+
+        await _dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
+    }
+
+    // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+    //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+    //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+    public async Task RecordCompletionAsync(
+        string sessionActorId,
+        string responseId,
+        LlmSessionCompletion completion,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionActorId))
+            throw new ArgumentException("sessionActorId is required.", nameof(sessionActorId));
+        if (string.IsNullOrWhiteSpace(responseId))
+            throw new ArgumentException("responseId is required.", nameof(responseId));
+        ArgumentNullException.ThrowIfNull(completion);
+
+        var prepared = completion.Clone();
+        if (prepared.CompletedAt == null)
+            prepared.CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+
+        var envelopeId = $"{responseId}:completion";
+        var envelope = CreateEnvelope(
+            sessionActorId,
+            Any.Pack(new RecordResponseSessionCompletionRequested
+            {
+                ResponseId = responseId.Trim(),
+                Completion = prepared,
             }),
             envelopeId);
 

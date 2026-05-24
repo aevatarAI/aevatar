@@ -1099,6 +1099,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
@@ -1167,6 +1168,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
@@ -1660,8 +1662,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-member-7");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hello", " ", "agent");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             memberPublishedServiceResolver: memberResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1676,6 +1680,8 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        responseSessions.Registered.Should().ContainSingle();
+        responseSessions.RecordedCompletions.Should().ContainSingle();
         provider.LastRequest.Should().BeNull(
             "ForwardToGAgent must bypass the LLM provider entirely");
         staticPort.LastRequest.Should().NotBeNull();
@@ -1699,6 +1705,8 @@ public sealed class MainnetResponsesEndpointsTests
         var content = message.GetProperty("content")[0];
         content.GetProperty("type").GetString().Should().Be("output_text");
         content.GetProperty("text").GetString().Should().Be("hello agent");
+        var snapshot = await responseSessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!);
+        snapshot!.Completion!.OutputText.Should().Be("hello agent");
     }
 
     [Fact]
@@ -1956,8 +1964,10 @@ public sealed class MainnetResponsesEndpointsTests
             []));
         var teamResolver = StubTeamEntryMemberResolver.ForResolution("published-svc-1");
         var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hel", "lo", " world");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
+            responseSessions,
             chatRoutePolicyQueryPort: queryPort,
             teamEntryMemberResolver: teamResolver,
             staticGAgentStreamInvocationPort: staticPort);
@@ -1972,6 +1982,8 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        responseSessions.Registered.Should().ContainSingle();
+        responseSessions.RecordedCompletions.Should().ContainSingle();
         provider.LastRequest.Should().BeNull(
             "ForwardToTeam must bypass the LLM provider entirely");
         staticPort.LastRequest.Should().NotBeNull();
@@ -1993,6 +2005,8 @@ public sealed class MainnetResponsesEndpointsTests
         var content = message.GetProperty("content")[0];
         content.GetProperty("type").GetString().Should().Be("output_text");
         content.GetProperty("text").GetString().Should().Be("hello world");
+        var snapshot = await responseSessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!);
+        snapshot!.Completion!.OutputText.Should().Be("hello world");
     }
 
     [Fact]
@@ -2112,6 +2126,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
@@ -2638,6 +2653,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
 
+        public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
+
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
@@ -2724,6 +2741,40 @@ public sealed class MainnetResponsesEndpointsTests
                     ForwardedToolCalls = calls,
                     StateVersion = current.StateVersion + 1,
                     LastEventId = $"{responseId}:tool:{clone.CallId}:emitted",
+                };
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
+            CancellationToken ct = default)
+        {
+            var clone = completion.Clone();
+            RecordedCompletions.Add((sessionActorId, responseId, clone));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = string.IsNullOrWhiteSpace(clone.FailureCode)
+                        ? LlmSessionStatus.Completed
+                        : LlmSessionStatus.Failed,
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:completion",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        clone.OutputText ?? string.Empty,
+                        clone.ToolCalls
+                            .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                                call.CallId,
+                                call.ToolName,
+                                ResponsesJsonValues.ToBoundaryJson(call.Result)))
+                            .ToArray(),
+                        clone.CompletedAt?.ToDateTimeOffset(),
+                        string.IsNullOrWhiteSpace(clone.FailureCode) ? null : clone.FailureCode,
+                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage),
                 };
             }
 

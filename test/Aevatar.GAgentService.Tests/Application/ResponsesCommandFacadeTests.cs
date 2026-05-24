@@ -50,6 +50,34 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenForwardToGAgent_ShouldRegisterSessionBeforeReturningForwardPlan()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("unused", null, []));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            completionService: completion,
+            sessionPort: sessions,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToGAgentAction("member-1")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), "token");
+
+        result.Error.Should().BeNull();
+        result.Forward.Should().NotBeNull();
+        sessions.Registered.Should().ContainSingle();
+        result.Forward!.Session.ResponseId.Should().Be(sessions.Registered[0].ResponseId);
+        result.Forward.Session.ActorId.Should().Be("actor-" + sessions.Registered[0].ResponseId);
+        completion.LastRequest.Should().BeNull("forwarded Responses bypass provider execution but must keep session lifecycle");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldReturnAuthenticationError_WhenCallerScopeCannotBeResolved()
     {
         var facade = CreateFacade(callerScopeResolver: new ThrowingCallerScopeResolver());
@@ -278,6 +306,11 @@ public sealed class ResponsesCommandFacadeTests
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
+    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    {
+        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
+    };
+
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
     {
         public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
@@ -376,6 +409,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public List<LlmSessionForwardedToolCall> RecordedToolCalls { get; } = [];
 
+        public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
+
         public Exception? UpdateStatusException { get; init; }
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
@@ -399,6 +434,16 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedToolCalls.Add(call);
+            return Task.CompletedTask;
+        }
+
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
+            CancellationToken ct = default)
+        {
+            RecordedCompletions.Add(completion.Clone());
             return Task.CompletedTask;
         }
 
