@@ -12,8 +12,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
-using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
@@ -190,7 +188,7 @@ public static class PolicyAwareVoiceEndpoints
 
     private static ChatRouteInput BuildRouteInput(
         HttpContext http,
-        RoutingOwnerScope callerScope,
+        OwnerScope callerScope,
         string channel)
     {
         var voice = new VoiceInput
@@ -207,13 +205,7 @@ public static class PolicyAwareVoiceEndpoints
         return new ChatRouteInput
         {
             SourceKind = ChatSourceKind.Voice,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = callerScope.NyxUserId,
-                Platform = callerScope.Platform,
-                RegistrationScopeId = callerScope.RegistrationScopeId,
-                SenderId = callerScope.SenderId,
-            },
+            CallerScope = callerScope.Clone(),
             Channel = channel,
             CommandName = string.Empty,
             ContentHint = string.Empty,
@@ -224,8 +216,8 @@ public static class PolicyAwareVoiceEndpoints
 
     private static bool TryBuildCallerScope(
         HttpContext http,
-        out RoutingOwnerScope routingScope,
-        out ScheduledOwnerScope scheduledScope,
+        out OwnerScope routingScope,
+        out OwnerScope scheduledScope,
         out string channel,
         out string failure)
     {
@@ -235,19 +227,19 @@ public static class PolicyAwareVoiceEndpoints
             http.User.FindFirst("sub")?.Value,
             http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value);
 
-        channel = NormalizeOptional(http.Request.Query["channel"].ToString()) ?? RoutingOwnerScope.NyxIdPlatform;
+        channel = NormalizeOptional(http.Request.Query["channel"].ToString()) ?? OwnerScope.NyxIdPlatform;
         if (string.IsNullOrWhiteSpace(nyxUserId))
         {
-            routingScope = new RoutingOwnerScope();
-            scheduledScope = new ScheduledOwnerScope();
+            routingScope = new OwnerScope();
+            scheduledScope = new OwnerScope();
             failure = "Authenticated caller scope is missing.";
             return false;
         }
 
         if (IsNativeChannel(channel))
         {
-            routingScope = RoutingOwnerScope.ForNyxIdNative(nyxUserId);
-            scheduledScope = ScheduledOwnerScope.ForNyxIdNative(nyxUserId);
+            routingScope = OwnerScope.ForNyxIdNative(nyxUserId);
+            scheduledScope = routingScope.Clone();
             channel = string.Empty;
             failure = string.Empty;
             return true;
@@ -261,8 +253,8 @@ public static class PolicyAwareVoiceEndpoints
             http.Request.Query["sender_id"].ToString(),
             http.User.FindFirst("sender_id")?.Value);
 
-        routingScope = RoutingOwnerScope.ForChannel(nyxUserId, channel, registrationScopeId ?? string.Empty, senderId ?? string.Empty);
-        scheduledScope = ScheduledOwnerScope.ForChannel(nyxUserId, channel, registrationScopeId ?? string.Empty, senderId ?? string.Empty);
+        routingScope = OwnerScope.ForChannel(nyxUserId, channel, registrationScopeId ?? string.Empty, senderId ?? string.Empty);
+        scheduledScope = routingScope.Clone();
         failure = string.Empty;
         return true;
     }
@@ -277,7 +269,7 @@ public static class PolicyAwareVoiceEndpoints
         HttpContext http,
         IUserAgentCatalogQueryPort catalog,
         string actorId,
-        ScheduledOwnerScope callerScope,
+        OwnerScope callerScope,
         CancellationToken ct)
     {
         if (IsVoiceDevBypassPrincipal(http.User))

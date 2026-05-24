@@ -17,7 +17,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Protobuf Include="chat_route_policy.proto" GrpcServices="None" />
+        <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Protobuf Include="chat_route_policy.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
     </ItemGroup>
 
 </Project>

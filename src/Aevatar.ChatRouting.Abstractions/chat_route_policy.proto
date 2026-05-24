@@ -5,21 +5,12 @@ package aevatar.chat_routing.v1;
 option csharp_namespace = "Aevatar.ChatRouting.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "agent_messages.proto";
 
-// ─── Caller identity ───
-//
-// Mirrors Aevatar.GAgents.Scheduled OwnerScope but stays local to
-// ChatRouting.Abstractions so this project doesn't depend on the Scheduled
-// agent package. Phase 2 wires a thin mapper at the resolver boundary
-// (CompositeCallerScopeResolver output → ChatRouteCallerScope). Moving
-// OwnerScope to Foundation.Abstractions (tracked as #700) lets us delete
-// this mirror; out of scope for the ingress-layer milestone.
-message ChatRouteCallerScope {
-  string nyx_user_id = 1;
-  string platform = 2;                  // "nyxid" / "lark" / "telegram"
-  string registration_scope_id = 3;
-  string sender_id = 4;
-}
+// Refactor (iter91/cluster-091-owner-scope-foundation):
+//   Old: OwnerScope mirrored Scheduled.OwnerScope to avoid a reverse dependency.
+//   New: chat routing uses canonical aevatar.OwnerScope from Foundation.Abstractions.
+//        Containing field tags stay unchanged; no Any packing of the old mirror exists.
 
 // ─── Source kind: which ingress entry produced this resolve call ───
 enum ChatSourceKind {
@@ -79,7 +70,7 @@ message VoiceInput {
 // (reply_token, WS connection id, raw audio frame, bearer token, etc.).
 message ChatRouteInput {
   ChatSourceKind source_kind = 1;
-  ChatRouteCallerScope caller_scope = 2;
+  aevatar.OwnerScope caller_scope = 2;
   // Channel hint at ingress (lark / telegram / cli / web / etc.). For
   // ChatSourceKind=NYX_RELAY this mirrors ChannelMetadataCallerScopeResolver
   // output. Empty for ChatSourceKind=DIRECT / NYX_RESPONSES when caller
@@ -206,7 +197,7 @@ message ChatRouteRule {
 // projected from ChatRoutePolicyUpdated events.
 message ChatRoutePolicyState {
   string policy_id = 1;
-  ChatRouteCallerScope owner_scope = 2;
+  aevatar.OwnerScope owner_scope = 2;
   // REQUIRED. Resolver falls back to this when no rule matches. Phase 2
   // additionally provides an env-driven hardcoded fallback for the
   // case where the policy actor itself doesn't exist yet (cold start).
@@ -219,13 +210,13 @@ message ChatRoutePolicyState {
 
 // ─── Commands (write side, dispatched to ChatRoutePolicyGAgent) ───
 message UpsertChatRoutePolicyRequested {
-  ChatRouteCallerScope owner_scope = 1;
+  aevatar.OwnerScope owner_scope = 1;
   ChatRouteAction default_target = 2;
   repeated ChatRouteRule rules = 3;
 }
 
 message UpsertChatRouteRuleRequested {
-  ChatRouteCallerScope owner_scope = 1;
+  aevatar.OwnerScope owner_scope = 1;
   ChatRouteAction default_target_if_uninitialized = 2;
   ChatRouteRule rule = 3;
 }

@@ -198,7 +198,7 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
         var decision = _routeResolver.Resolve(snapshot, new ChatRouteInput
         {
             SourceKind = ChatSourceKind.Direct,
-            CallerScope = ToChatRouteCallerScope(callerScope),
+            CallerScope = callerScope.Clone(),
             Channel = string.Empty,
             CommandName = string.Empty,
             ContentHint = string.Empty,
@@ -234,14 +234,6 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 createdLocally: true,
                 NyxIdChatConversationCreateStatus.Accepted));
     }
-
-    private static ChatRouteCallerScope ToChatRouteCallerScope(OwnerScope scope) => new()
-    {
-        NyxUserId = scope.NyxUserId,
-        Platform = scope.Platform,
-        RegistrationScopeId = scope.RegistrationScopeId,
-        SenderId = scope.SenderId,
-    };
 }
 
 internal sealed class NyxIdChatConversationDeleteCommandTargetResolver

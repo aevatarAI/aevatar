@@ -107,13 +107,7 @@ internal sealed class ResponsesChatRouteDecisionPort(
         return resolver.Resolve(snapshot, new ChatRouteInput
         {
             SourceKind = ChatSourceKind.NyxResponses,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = ownerScope.NyxUserId,
-                Platform = ownerScope.Platform,
-                RegistrationScopeId = ownerScope.RegistrationScopeId,
-                SenderId = ownerScope.SenderId,
-            },
+            CallerScope = ownerScope.Clone(),
             Channel = string.Empty,
             CommandName = string.Empty,
             ContentHint = contentHint,

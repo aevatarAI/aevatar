@@ -102,7 +102,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         // Server-stamp owner_scope from URL scope so a caller can't write a
         // policy keyed to a different caller scope. Mirrors the resolver's
         // NyxID-native caller scope shape (see OwnerScope.ForNyxIdNative).
-        command.OwnerScope = new ChatRouteCallerScope
+        command.OwnerScope = new OwnerScope
         {
             NyxUserId = scopeId,
             Platform = OwnerScope.NyxIdPlatform,
@@ -173,7 +173,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         // the readmodel envelope fields (state_version, last_event_id).
         var view = new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope
+            OwnerScope = new OwnerScope
             {
                 NyxUserId = scopeId,
                 Platform = OwnerScope.NyxIdPlatform,

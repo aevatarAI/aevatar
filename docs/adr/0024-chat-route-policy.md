@@ -164,14 +164,13 @@ holds — and only as configuration, not as event-sourced fact. Existing
 "user default agent" concepts are out of scope: the policy actor's
 `default_target` covers them.
 
-### D7 — Caller identity stays an external type
+### D7 — Caller identity uses the foundation contract
 
-`ChatRouteCallerScope` mirrors `Aevatar.GAgents.Scheduled.OwnerScope` field
-for field. We do not import the Scheduled proto here so this Abstractions
-project stays at the bottom of the dependency graph; a thin mapping happens
-at Phase 2's `CompositeCallerScopeResolver → ChatRouteCallerScope` boundary.
-Moving `OwnerScope` itself to `Aevatar.Foundation.Abstractions` is a later
-refactor outside the ingress milestone.
+// Refactor (iter91/cluster-091-owner-scope-foundation):
+//   Old: chat routing carried a `ChatRouteCallerScope` mirror of
+//        `Aevatar.GAgents.Scheduled.OwnerScope` to avoid depending on the Scheduled agent package.
+//   New: `OwnerScope` lives in `Aevatar.Foundation.Abstractions`; chat routing imports
+//        that canonical caller identity directly while preserving its containing field tags.
 
 ## Boundaries with adjacent issues
 
@@ -199,7 +198,6 @@ refactor outside the ingress milestone.
   actor — explicitly deferred per #674 review).
 - Telemetry pipeline for `matched_rule_id` (will arrive via existing run
   trace channels in a later issue).
-- Moving `OwnerScope` to `Aevatar.Foundation.Abstractions`.
 - Decommissioning `/ws/voice/{actorId}` — it stays available, gated by a
   dev/admin scope.
 

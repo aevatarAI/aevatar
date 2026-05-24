@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
