@@ -764,7 +764,7 @@ internal sealed class SubWorkflowOrchestrator
 
         foreach (var pending in state.PendingSubWorkflowInvocations.ToList())
         {
-            if (pending.HandoffPhase >= SubWorkflowInvocationHandoffPhase.StartDispatched ||
+            if (pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartDispatched ||
                 pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartFailed)
             {
                 continue;
@@ -911,6 +911,10 @@ internal sealed class SubWorkflowOrchestrator
 
         try
         {
+            await AdvancePendingSubWorkflowInvocationHandoffAsync(
+                pending,
+                SubWorkflowInvocationHandoffPhase.StartDispatchPending,
+                ct);
             await _sendToAsync(childActorId, start, ct);
             await AdvancePendingSubWorkflowInvocationHandoffAsync(
                 pending,

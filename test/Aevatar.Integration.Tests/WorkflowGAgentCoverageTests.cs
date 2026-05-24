@@ -574,6 +574,79 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_BindDefinition_ShouldCleanupPendingSubWorkflowChild()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-bind-reset");
+        var childActorId = $"{agent.Id}:workflow:sub_flow:parent-run:invoke-reset";
+        runtime.RegisterAgent(childActorId, new FakeWorkflowRunChildAgent(childActorId));
+        agent.State.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-reset",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reset",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-reset",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Bound,
+            DefinitionYaml = BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"),
+        });
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId["invoke-reset"] = 0;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-reset");
+
+        runtime.Unlinked.Should().Contain(childActorId);
+        runtime.Destroyed.Should().Contain(childActorId);
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_ReplaceDefinition_ShouldCleanupPendingSubWorkflowChild()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-replace-reset");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-reset");
+        var childActorId = $"{agent.Id}:workflow:sub_flow:parent-run:invoke-replace-reset";
+        runtime.RegisterAgent(childActorId, new FakeWorkflowRunChildAgent(childActorId));
+        agent.State.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-replace-reset",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reset",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-replace-reset",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Bound,
+            DefinitionYaml = BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"),
+        });
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId["invoke-replace-reset"] = 0;
+
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+            Input = "replace",
+        });
+
+        runtime.Unlinked.Should().Contain(childActorId);
+        runtime.Destroyed.Should().Contain(childActorId);
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_WhenSingletonSubWorkflowInvoked_ShouldPersistPendingAndReuseChildActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -639,7 +712,7 @@ public class WorkflowGAgentCoverageTests
         runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
 
         var childAgent = runtime.CreatedChildWorkflowAgents.Single();
-        childAgent.BindEvents.Should().ContainSingle();
+        childAgent.BindEvents.Select(x => x.RunId).Should().Equal("invoke-1", "invoke-2");
         childAgent.StartEvents.Should().BeEmpty();
     }
 

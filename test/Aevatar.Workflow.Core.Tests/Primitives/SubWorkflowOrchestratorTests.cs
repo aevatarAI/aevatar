@@ -535,11 +535,93 @@ public sealed class SubWorkflowOrchestratorTests
             .Should()
             .ContainInOrder(
                 (int)SubWorkflowInvocationHandoffPhase.Bound,
+                (int)SubWorkflowInvocationHandoffPhase.StartDispatchPending,
                 (int)SubWorkflowInvocationHandoffPhase.StartDispatched);
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == "child-recover");
         var start = harness.Sent.Single().Message.Should().BeOfType<StartWorkflowEvent>().Subject;
         start.RunId.Should().Be("invoke-recover");
         start.Input.Should().Be("payload-recover");
+    }
+
+    [Theory]
+    [InlineData(SubWorkflowInvocationHandoffPhase.Registered, true, true, true, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.ActorResolved, false, true, true, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.Bound, false, false, false, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.StartDispatchPending, false, false, false, true)]
+    public async Task RecoverPendingSubWorkflowInvocationsAsync_ShouldResumeFromPhaseWithoutRepeatingCompletedHandoff(
+        SubWorkflowInvocationHandoffPhase phase,
+        bool expectCreate,
+        bool expectLink,
+        bool expectBind,
+        bool expectStart)
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        var childActorId = $"child-{phase}";
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-recover-" + (int)phase,
+            ParentRunId = "parent-run",
+            ParentStepId = "step-recover",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-recover-" + (int)phase,
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = phase,
+            Input = "payload-recover",
+            DefinitionYaml = ValidSubFlowYaml,
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["invoke-recover-" + (int)phase] = 0;
+        if (!expectCreate)
+            harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
+
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Any(x => x.RequestedId == childActorId).Should().Be(expectCreate);
+        harness.Runtime.Linked.Any(x => x.ChildId == childActorId).Should().Be(expectLink);
+        harness.Operations.Any(x => x == $"dispatch:{childActorId}").Should().Be(expectBind);
+        harness.Sent.Any(x => x.TargetActorId == childActorId).Should().Be(expectStart);
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().Contain(x =>
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.StartDispatched);
+    }
+
+    [Fact]
+    public async Task RecoverPendingSubWorkflowInvocationsAsync_WhenReenteredWithSameInvocationAndChildActor_ShouldNotDuplicateActorLinkOrBind()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        const string childActorId = "child-reenter";
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-reenter",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reenter",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-reenter",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.StartDispatchPending,
+            Input = "payload-reenter",
+            DefinitionYaml = ValidSubFlowYaml,
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["invoke-reenter"] = 0;
+        harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
+
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Operations.Should().NotContain($"dispatch:{childActorId}");
+        harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
     }
 
     [Fact]

@@ -50,6 +50,34 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task DuplicateWorkflowCallStart_WithSameRunAndInvocation_ShouldNotPublishAlreadyActiveFailure()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-1",
+            Input = "hello",
+        };
+        start.Parameters["workflow_call.invocation_id"] = "invoke-1";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(Wrap(start.Clone()), ctx, CancellationToken.None);
+
+        ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
+            .Should()
+            .BeEmpty();
+        ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task StepCompleted_MatchingId_ShouldAccept()
     {
         var ctx = new RecordingEventHandlerContext();
