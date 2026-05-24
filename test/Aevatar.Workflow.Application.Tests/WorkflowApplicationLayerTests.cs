@@ -409,7 +409,7 @@ public sealed class WorkflowApplicationLayerTests
             return Task.FromResult(Result);
         }
 
-        public async Task DispatchPreparedAsync(
+        public async Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
@@ -421,7 +421,7 @@ public sealed class WorkflowApplicationLayerTests
                 if (DispatchPreparedRelease != null)
                     await DispatchPreparedRelease.Task.ConfigureAwait(false);
                 AfterDispatchPrepared?.Invoke();
-                return;
+                return DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope);
             }
 
             if (CleanupOnDispatchPreparedFailure && execution.Target is ICommandDispatchCleanupAware cleanupAware)
@@ -444,8 +444,9 @@ public sealed class WorkflowApplicationLayerTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+                prepared.Target with { Admission = admission });
         }
     }
 
@@ -465,13 +466,13 @@ public sealed class WorkflowApplicationLayerTests
             return Task.FromResult(Result);
         }
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
-            _ = execution;
+            ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(

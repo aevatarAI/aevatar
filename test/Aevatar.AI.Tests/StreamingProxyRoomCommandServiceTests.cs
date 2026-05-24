@@ -508,13 +508,14 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             operations.Add($"dispatch:{actorId}");
             Dispatches.Add((actorId, envelope));
             var actor = await runtime.GetAsync(actorId);
             if (actor is not null)
                 await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 

@@ -310,7 +310,7 @@ internal sealed class ScriptServiceRunCommandDispatcher
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
     }
 
-    public Task DispatchAsync(
+    public async Task<DispatchAdmission> DispatchAsync(
         ScriptServiceRunCommandTarget target,
         EventEnvelope envelope,
         CancellationToken ct = default)
@@ -318,7 +318,7 @@ internal sealed class ScriptServiceRunCommandDispatcher
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        return _runtimeCommandPort.RunRuntimeAsync(
+        await _runtimeCommandPort.RunRuntimeAsync(
             target.ActorId,
             target.RunId,
             target.CommandId,
@@ -329,6 +329,7 @@ internal sealed class ScriptServiceRunCommandDispatcher
             target.InputPayload?.TypeUrl ?? string.Empty,
             target.ScopeId,
             ct);
+        return DispatchAdmissionFactory.Create(target.TargetId, envelope);
     }
 }
 

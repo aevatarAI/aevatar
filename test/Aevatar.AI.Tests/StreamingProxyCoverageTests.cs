@@ -2061,23 +2061,24 @@ public class StreamingProxyCoverageTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
             var actor = await runtime.GetAsync(actorId);
             if (actor is not null)
                 await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 
     private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
     {
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             _ = envelope;
             _ = ct;
-            return Task.FromException(exception);
+            return Task.FromException<DispatchAdmission>(exception);
         }
     }
 

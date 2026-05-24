@@ -2322,17 +2322,17 @@ public class VoicePresenceModuleTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = ct;
             Dispatches.Add((actorId, envelope.Clone()));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
     private sealed class ThrowingDispatchPort : IActorDispatchPort
     {
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             _ = envelope;

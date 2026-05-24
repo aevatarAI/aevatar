@@ -1755,12 +1755,13 @@ public class WorkflowGAgentCoverageTests
                 ? throw new InvalidOperationException($"Unexpected self GetAsync for actor '{id}'.")
                 : Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actor = CreatedActors.FirstOrDefault(x => x.Id == actorId)
                         ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) =>

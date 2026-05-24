@@ -2514,7 +2514,7 @@ public sealed class ConversationGAgentDedupTests
         private readonly Queue<EventEnvelope> _pending = new();
         private readonly SemaphoreSlim _available = new(0);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             var clone = envelope.Clone();
             Dispatches.Add((actorId, clone.Clone()));
@@ -2523,7 +2523,7 @@ public sealed class ConversationGAgentDedupTests
                 _pending.Enqueue(clone);
             }
             _available.Release();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public async Task<T> WaitForPayloadAsync<T>()

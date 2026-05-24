@@ -836,10 +836,10 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     {
         public List<(string actorId, EventEnvelope envelope)> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

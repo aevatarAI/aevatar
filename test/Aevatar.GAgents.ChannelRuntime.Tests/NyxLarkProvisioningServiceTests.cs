@@ -154,7 +154,7 @@ public class NyxLarkProvisioningServiceTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>())
-            .Returns(_ => throw new InvalidOperationException("mirror failed"));
+            .Returns(_ => Task.FromException<DispatchAdmission>(new InvalidOperationException("mirror failed")));
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxLarkProvisioningService(
