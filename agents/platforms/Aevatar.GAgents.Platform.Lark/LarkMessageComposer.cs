@@ -337,6 +337,8 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             ["action_id"] = action.ActionId,
             ["value"] = action.Value,
         };
+        CopyWorkflowResumePayload(action.WorkflowResume, map);
+        CopyLlmSelectionPayload(action.LlmSelection, map);
 
         foreach (var argument in action.Arguments)
         {
@@ -348,6 +350,52 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         }
 
         return map;
+    }
+
+    private static void CopyWorkflowResumePayload(
+        WorkflowResumeActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.ActorId))
+            map["actor_id"] = payload.ActorId;
+        if (!string.IsNullOrWhiteSpace(payload.RunId))
+            map["run_id"] = payload.RunId;
+        if (!string.IsNullOrWhiteSpace(payload.StepId))
+            map["step_id"] = payload.StepId;
+        if (payload.HasApproved)
+            map["approved"] = payload.Approved;
+        if (!string.IsNullOrWhiteSpace(payload.UserInput))
+            map["user_input"] = payload.UserInput;
+        if (!string.IsNullOrWhiteSpace(payload.EditedContent))
+            map["edited_content"] = payload.EditedContent;
+        if (!string.IsNullOrWhiteSpace(payload.Feedback))
+            map["feedback"] = payload.Feedback;
+    }
+
+    private static void CopyLlmSelectionPayload(
+        LlmSelectionActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.Action))
+            map["llm_action"] = payload.Action;
+        if (!string.IsNullOrWhiteSpace(payload.ServiceId))
+            map["service_id"] = payload.ServiceId;
+        if (!string.IsNullOrWhiteSpace(payload.PresetId))
+            map["preset_id"] = payload.PresetId;
     }
 
     private static object? CoerceArgumentValue(string raw)

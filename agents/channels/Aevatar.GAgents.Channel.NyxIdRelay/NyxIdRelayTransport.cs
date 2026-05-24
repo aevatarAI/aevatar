@@ -198,6 +198,8 @@ public sealed class NyxIdRelayTransport
         if (root.TryGetProperty("form_fields", out var formFieldsElement))
             CopyScalarMap(formFieldsElement, submission.FormFields);
 
+        MapKnownPayloads(submission);
+
         if (string.IsNullOrEmpty(submission.ActionId) &&
             submission.Arguments.TryGetValue("agent_builder_action", out var builderAction) &&
             !string.IsNullOrWhiteSpace(builderAction))
@@ -206,6 +208,128 @@ public sealed class NyxIdRelayTransport
         }
 
         return submission;
+    }
+
+    private static void MapKnownPayloads(CardActionSubmission submission)
+    {
+        // Refactor (iter93/cluster-093):
+        // Old: workflow resume + LLM selection control semantics lived in the open `arguments` map.
+        // New: repository-owned semantics use typed payloads; `arguments` is only for adapter/third-party
+        // extension data plus legacy callback JSON inbound compatibility.
+        if (TryBuildWorkflowResumePayload(submission, out var workflowResume))
+        {
+            submission.WorkflowResume = workflowResume;
+            RemoveWorkflowResumeKeys(submission);
+        }
+
+        if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
+        {
+            submission.LlmSelection = llmSelection;
+            RemoveLlmSelectionKeys(submission);
+        }
+    }
+
+    private static void RemoveWorkflowResumeKeys(CardActionSubmission submission)
+    {
+        submission.Arguments.Remove("actor_id");
+        submission.Arguments.Remove("run_id");
+        submission.Arguments.Remove("step_id");
+        submission.Arguments.Remove("approved");
+    }
+
+    private static void RemoveLlmSelectionKeys(CardActionSubmission submission)
+    {
+        submission.Arguments.Remove("llm_action");
+        submission.Arguments.Remove("service_id");
+        submission.Arguments.Remove("preset_id");
+    }
+
+    private static bool TryBuildWorkflowResumePayload(
+        CardActionSubmission submission,
+        out WorkflowResumeActionPayload payload)
+    {
+        payload = new WorkflowResumeActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "actor_id", out var actorId) ||
+            !TryGetRequiredValue(submission.Arguments, "run_id", out var runId) ||
+            !TryGetRequiredValue(submission.Arguments, "step_id", out var stepId))
+        {
+            return false;
+        }
+
+        payload.ActorId = actorId;
+        payload.RunId = runId;
+        payload.StepId = stepId;
+        if (submission.Arguments.TryGetValue("approved", out var rawApproved) &&
+            bool.TryParse(rawApproved, out var approved))
+        {
+            payload.Approved = approved;
+        }
+
+        if (submission.FormFields.TryGetValue("user_input", out var userInput))
+            payload.UserInput = userInput ?? string.Empty;
+        if (submission.FormFields.TryGetValue("edited_content", out var editedContent))
+            payload.EditedContent = editedContent ?? string.Empty;
+        if (submission.FormFields.TryGetValue("feedback", out var feedback))
+            payload.Feedback = feedback ?? string.Empty;
+
+        return true;
+    }
+
+    private static bool TryBuildLlmSelectionPayload(
+        CardActionSubmission submission,
+        out LlmSelectionActionPayload payload)
+    {
+        payload = new LlmSelectionActionPayload();
+
+        if (!submission.Arguments.TryGetValue("llm_action", out var rawAction) ||
+            string.IsNullOrWhiteSpace(rawAction))
+        {
+            rawAction = submission.ActionId switch
+            {
+                "ls" or "llm_select_service" => "select_service",
+                "lp" or "llm_apply_preset" => "apply_preset",
+                _ => string.Empty,
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(rawAction))
+            return false;
+
+        payload.Action = rawAction.Trim();
+        if (submission.Arguments.TryGetValue("service_id", out var serviceId) &&
+            !string.IsNullOrWhiteSpace(serviceId))
+        {
+            payload.ServiceId = serviceId.Trim();
+        }
+        else if (payload.Action == "select_service" && !string.IsNullOrWhiteSpace(submission.SubmittedValue))
+        {
+            payload.ServiceId = submission.SubmittedValue.Trim();
+        }
+
+        if (submission.Arguments.TryGetValue("preset_id", out var presetId) &&
+            !string.IsNullOrWhiteSpace(presetId))
+        {
+            payload.PresetId = presetId.Trim();
+        }
+        else if (payload.Action == "apply_preset" && !string.IsNullOrWhiteSpace(submission.SubmittedValue))
+        {
+            payload.PresetId = submission.SubmittedValue.Trim();
+        }
+
+        return true;
+    }
+
+    private static bool TryGetRequiredValue(
+        Google.Protobuf.Collections.MapField<string, string> values,
+        string key,
+        out string value)
+    {
+        value = string.Empty;
+        if (!values.TryGetValue(key, out var raw))
+            return false;
+
+        value = (raw ?? string.Empty).Trim();
+        return !string.IsNullOrWhiteSpace(value);
     }
 
     private static void CopyScalarMap(JsonElement element, Google.Protobuf.Collections.MapField<string, string> target)
