@@ -47,7 +47,10 @@ public class ScriptArtifactCoverageTests
         var first = resolver.Resolve(request);
         var second = resolver.Resolve(request);
 
-        second.Should().BeSameAs(first);
+        second.ScriptId.Should().Be(first.ScriptId);
+        second.Revision.Should().Be(first.Revision);
+        first.CreateBehavior().Should().BeAssignableTo<IDisposable>().Subject.Dispose();
+        second.CreateBehavior().Should().BeAssignableTo<IDisposable>().Subject.Dispose();
         compiler.CallCount.Should().Be(1);
     }
 
@@ -74,7 +77,8 @@ public class ScriptArtifactCoverageTests
 
         var resolved = await Task.WhenAll(firstTask, secondTask);
 
-        resolved[0].Should().BeSameAs(resolved[1]);
+        resolved[0].ScriptId.Should().Be(resolved[1].ScriptId);
+        resolved[0].Revision.Should().Be(resolved[1].Revision);
         compiler.CallCount.Should().Be(1);
     }
 
@@ -133,7 +137,7 @@ public class ScriptArtifactCoverageTests
     }
 
     [Fact]
-    public void CachedResolver_ShouldEvictByConfiguredSizeLimit_AndDisposeEvictedArtifact()
+    public void CachedResolver_ShouldEvictByConfiguredSizeLimit_AndDisposeAfterReturnedBehaviorDisposes()
     {
         var disposed = new List<string>();
         var disposeObserved = new ManualResetEventSlim(false);
@@ -145,9 +149,13 @@ public class ScriptArtifactCoverageTests
         using var resolver = new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts: 1);
 
         var first = resolver.Resolve(CreateRequest(scriptId: "script-1"));
+        var firstBehavior = first.CreateBehavior();
+        var firstBehaviorDisposable = firstBehavior.Should().BeAssignableTo<IDisposable>().Subject;
         var second = resolver.Resolve(CreateRequest(scriptId: "script-2"));
 
         second.Should().NotBeSameAs(first);
+        disposeObserved.Wait(TimeSpan.FromMilliseconds(100)).Should().BeFalse();
+        firstBehaviorDisposable.Dispose();
         disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
         disposed.Should().Contain("script-1");
         compiler.CallCount.Should().Be(2);
@@ -168,7 +176,7 @@ public class ScriptArtifactCoverageTests
     }
 
     [Fact]
-    public async Task CachedResolver_ShouldDisposeInFlightArtifact_WhenConcurrentCapacityCompactionEvictsLazy()
+    public async Task CachedResolver_ShouldKeepReturnedArtifactUsable_WhenConcurrentCapacityCompactionEvictsInFlightLazy()
     {
         var firstCompileStarted = new ManualResetEventSlim(false);
         var secondCompileStarted = new ManualResetEventSlim(false);
@@ -213,6 +221,13 @@ public class ScriptArtifactCoverageTests
             .BeEquivalentTo(["script-1", "script-2"]);
 
         resolver.Resolve(CreateRequest(scriptId: "script-3"));
+
+        var behaviors = resolved.Select(artifact => artifact.CreateBehavior()).ToArray();
+        behaviors.Should().HaveCount(2);
+        disposeObserved.Wait(TimeSpan.FromMilliseconds(100)).Should().BeFalse();
+
+        foreach (var behavior in behaviors)
+            behavior.Should().BeAssignableTo<IDisposable>().Subject.Dispose();
 
         disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
         lock (disposeGate)

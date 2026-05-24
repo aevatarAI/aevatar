@@ -1,5 +1,7 @@
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Google.Protobuf;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace Aevatar.Scripting.Infrastructure.Compilation;
@@ -46,16 +48,23 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         ArgumentNullException.ThrowIfNull(request);
 
         var cacheKey = ScriptBehaviorArtifactCacheKey.From(request);
-        var entry = GetOrCreateEntry(cacheKey, request);
+        while (true)
+        {
+            var entry = GetOrCreateEntry(cacheKey, request);
 
-        try
-        {
-            return entry.Value;
-        }
-        catch
-        {
-            RemoveFailedLazy(cacheKey, entry);
-            throw;
+            try
+            {
+                return entry.LeaseForCaller();
+            }
+            catch (EvictedArtifactCacheEntryDisposedException)
+            {
+                RemoveFailedLazy(cacheKey, entry);
+            }
+            catch
+            {
+                RemoveFailedLazy(cacheKey, entry);
+                throw;
+            }
         }
     }
 
@@ -134,7 +143,7 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         if (value is not ArtifactCacheEntry entry)
             return;
 
-        entry.DisposeWhenCreated();
+        entry.MarkEvicted();
     }
 
     private sealed class ArtifactCacheEntry
@@ -142,8 +151,9 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         private readonly object _gate = new();
         private readonly Lazy<ScriptBehaviorArtifact> _lazy;
         private ScriptBehaviorArtifact? _artifact;
+        private int _referenceCount;
+        private bool _evicted;
         private bool _disposeStarted;
-        private bool _disposeWhenCreated;
 
         public ArtifactCacheEntry(Func<ScriptBehaviorArtifact> artifactFactory)
         {
@@ -151,13 +161,15 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
                 () =>
                 {
                     var artifact = artifactFactory();
-                    bool disposeNow;
+                    bool disposeNow = false;
                     lock (_gate)
                     {
                         _artifact = artifact;
-                        disposeNow = _disposeWhenCreated && !_disposeStarted;
-                        if (disposeNow)
+                        if (_evicted && _referenceCount == 0 && !_disposeStarted)
+                        {
                             _disposeStarted = true;
+                            disposeNow = true;
+                        }
                     }
 
                     if (disposeNow)
@@ -168,32 +180,102 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
                 LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
-        public ScriptBehaviorArtifact Value => _lazy.Value;
-
-        public void DisposeWhenCreated()
+        public ScriptBehaviorArtifact LeaseForCaller()
         {
-            ScriptBehaviorArtifact? artifact;
-            lock (_gate)
-            {
-                if (_disposeWhenCreated)
-                    return;
-
-                _disposeWhenCreated = true;
-                artifact = _artifact;
-                if (artifact == null || _disposeStarted)
-                    return;
-
-                _disposeStarted = true;
-            }
-
+            var callerLease = Retain();
             try
             {
-                DisposeArtifact(artifact);
+                var artifact = _lazy.Value;
+                return new ScriptBehaviorArtifact(
+                    artifact.ScriptId,
+                    artifact.Revision,
+                    artifact.PackageHash,
+                    artifact.Descriptor,
+                    artifact.Contract,
+                    () => CreateBehavior(artifact, callerLease),
+                    callerLease.ReleaseAsync);
             }
             catch
             {
-                // Eviction must not make cache mutation fail; callers already observe compile failures through Resolve.
+                callerLease.Release();
+                throw;
             }
+        }
+
+        public void MarkEvicted()
+        {
+            ScriptBehaviorArtifact? disposeNow = null;
+            lock (_gate)
+            {
+                if (_evicted)
+                    return;
+
+                _evicted = true;
+                if (_artifact != null && _referenceCount == 0 && !_disposeStarted)
+                {
+                    _disposeStarted = true;
+                    disposeNow = _artifact;
+                }
+            }
+
+            if (disposeNow != null)
+                DisposeArtifact(disposeNow);
+        }
+
+        private ArtifactLease Retain()
+        {
+            lock (_gate)
+            {
+                if (_disposeStarted)
+                    throw new EvictedArtifactCacheEntryDisposedException();
+
+                _referenceCount += 1;
+            }
+
+            return new ArtifactLease(this);
+        }
+
+        private IScriptBehaviorBridge CreateBehavior(ScriptBehaviorArtifact artifact, ArtifactLease callerLease)
+        {
+            var behaviorLease = Retain();
+            try
+            {
+                var behavior = artifact.CreateBehavior();
+                callerLease.Release();
+                return new LeasedScriptBehaviorBridge(behavior, behaviorLease);
+            }
+            catch
+            {
+                behaviorLease.Release();
+                callerLease.Release();
+                throw;
+            }
+        }
+
+        private ValueTask ReleaseAsync()
+        {
+            Release();
+            return ValueTask.CompletedTask;
+        }
+
+        private void Release()
+        {
+            ScriptBehaviorArtifact? disposeNow = null;
+            lock (_gate)
+            {
+                if (_referenceCount == 0)
+                    return;
+
+                _referenceCount -= 1;
+                if (_evicted && _referenceCount == 0 && _artifact != null && !_disposeStarted)
+                {
+                    _disposeStarted = true;
+                    disposeNow = _artifact;
+                }
+            }
+
+            if (disposeNow != null)
+                DisposeArtifact(disposeNow);
         }
 
         private static void DisposeArtifact(ScriptBehaviorArtifact artifact)
@@ -215,6 +297,143 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
                 // Eviction must not make cache mutation fail; callers already observe compile failures through Resolve.
             }
         }
+
+        public sealed class ArtifactLease
+        {
+            private readonly ArtifactCacheEntry _owner;
+            private int _released;
+
+            public ArtifactLease(ArtifactCacheEntry owner)
+            {
+                _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            }
+
+            public ValueTask ReleaseAsync()
+            {
+                Release();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Release()
+            {
+                if (Interlocked.CompareExchange(ref _released, 1, 0) == 0)
+                    _owner.Release();
+            }
+        }
+    }
+
+    private sealed class LeasedScriptBehaviorBridge : IScriptBehaviorBridge, IDisposable, IAsyncDisposable
+    {
+        private readonly IScriptBehaviorBridge _inner;
+        private readonly ArtifactCacheEntry.ArtifactLease _lease;
+        private int _disposed;
+
+        public LeasedScriptBehaviorBridge(IScriptBehaviorBridge inner, ArtifactCacheEntry.ArtifactLease lease)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _lease = lease ?? throw new ArgumentNullException(nameof(lease));
+        }
+
+        public ScriptBehaviorDescriptor Descriptor => _inner.Descriptor;
+
+        public Task<IReadOnlyList<IMessage>> DispatchAsync(
+            IMessage inbound,
+            ScriptDispatchContext context,
+            CancellationToken ct) =>
+            _inner.DispatchAsync(inbound, context, ct);
+
+        public IMessage? ApplyDomainEvent(
+            IMessage? currentState,
+            IMessage domainEvent,
+            ScriptFactContext context) =>
+            _inner.ApplyDomainEvent(currentState, domainEvent, context);
+
+        public IMessage? BuildReadModel(
+            IMessage? currentState,
+            ScriptFactContext context) =>
+            _inner.BuildReadModel(currentState, context);
+
+        public void Dispose()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return;
+
+            if (_inner is IDisposable disposable)
+            {
+                try
+                {
+                    disposable.Dispose();
+                }
+                finally
+                {
+                    _lease.Release();
+                }
+
+                return;
+            }
+
+            if (_inner is IAsyncDisposable asyncDisposable)
+            {
+                DisposeAsyncBehavior(asyncDisposable, _lease);
+                return;
+            }
+
+            _lease.Release();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return;
+
+            try
+            {
+                if (_inner is IAsyncDisposable asyncDisposable)
+                    await asyncDisposable.DisposeAsync();
+                else if (_inner is IDisposable disposable)
+                    disposable.Dispose();
+            }
+            finally
+            {
+                _lease.Release();
+            }
+        }
+
+        private static void DisposeAsyncBehavior(
+            IAsyncDisposable asyncDisposable,
+            ArtifactCacheEntry.ArtifactLease lease)
+        {
+            try
+            {
+                var dispose = asyncDisposable.DisposeAsync();
+                if (dispose.IsCompletedSuccessfully)
+                {
+                    lease.Release();
+                    return;
+                }
+
+                _ = dispose.AsTask().ContinueWith(
+                    static (task, state) =>
+                    {
+                        _ = task.Exception;
+                        ((ArtifactCacheEntry.ArtifactLease)state!).Release();
+                    },
+                    lease,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            catch
+            {
+                lease.Release();
+                throw;
+            }
+        }
+
+    }
+
+    private sealed class EvictedArtifactCacheEntryDisposedException : Exception
+    {
     }
 
     private readonly record struct ScriptBehaviorArtifactCacheKey(
