@@ -64,7 +64,9 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             };
             await SaveStateAsync(state, ctx, ct);
 
-            // iter85/cluster-085: approval prompt text may contain user content; log length only.
+            // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+            //   Old pattern: Information log included raw value/prompt/input preview
+            //   New principle: only stable id + length + status + redaction marker
             ctx.Logger.LogInformation(
                 "HumanApproval: run={RunId} step={StepId} status=suspended prompt_len={PromptLen} prompt_redacted=true timeout={Timeout}s",
                 runId, request.StepId, prompt.Length, timeoutSeconds);

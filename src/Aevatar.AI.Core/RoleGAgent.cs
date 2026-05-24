@@ -689,7 +689,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 request.SessionId);
         }
 
-        // iter85/cluster-085: raw prompts belong in gated sensitive traces, not production Information logs.
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
         var requestSummary = BuildRequestLogSummary(request);
         Logger.LogInformation(
             "[{Role}] LLM request: session={SessionId}, status=started, prompt_len={PromptLen}, input_parts={InputPartCount}, input_redacted=true",
@@ -884,7 +886,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         var response = fullContent.ToString();
-        // iter85/cluster-085: response/reasoning text is user-facing content; keep raw data in events/artifacts.
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
         Logger.LogInformation(
             "[{Role}] LLM response: session={SessionId}, status=completed, output_len={OutputLen}, output_redacted=true",
             RoleName,

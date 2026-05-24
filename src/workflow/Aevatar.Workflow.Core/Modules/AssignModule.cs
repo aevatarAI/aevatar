@@ -33,7 +33,9 @@ public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
         // 如果 value 以 $ 开头，表示从 input（上一步输出）中取值
         var resolvedValue = value.StartsWith('$') ? request.Input ?? string.Empty : value;
 
-        // iter85/cluster-085: log only assignment identity and value length; value content remains in workflow state.
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
         ctx.Logger.LogInformation(
             "Assign: run={RunId} step={StepId} target={Target} status=assigned value_len={ValueLen} value_redacted=true",
             request.RunId,

@@ -18,7 +18,9 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
-// Refactor (iter85/cluster-085): Information logs report ids, status, and lengths only; prompt/output content is redacted.
+// Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+//   Old pattern: Information log included raw value/prompt/input preview
+//   New principle: only stable id + length + status + redaction marker
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;

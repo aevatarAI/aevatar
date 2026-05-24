@@ -107,7 +107,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 state.Backpressure,
                 BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
-            // iter85/cluster-085: Information telemetry must not carry workflow input previews.
+            // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+            //   Old pattern: Information log included raw value/prompt/input preview
+            //   New principle: only stable id + length + status + redaction marker
             ctx.Logger.LogInformation(
                 "ParallelFanOut: run={RunId} step={StepId} status=fanout_dispatching workers={Count} vote={VoteType} input_len={InputLen} input_redacted=true",
                 runId,

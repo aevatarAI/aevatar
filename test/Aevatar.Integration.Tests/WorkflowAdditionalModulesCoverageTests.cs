@@ -1025,6 +1025,76 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task SwitchModule_ShouldRedactSensitiveSwitchInputInInformationLogs()
+    {
+        const string sensitiveSwitchInput = "customer secret switch input route-blue";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+
+        await new SwitchModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "switch-log-redaction",
+                StepType = "switch",
+                RunId = "run-switch-log-redaction",
+                Parameters =
+                {
+                    ["on"] = sensitiveSwitchInput,
+                    ["branch.blue"] = "blue-step",
+                    ["branch._default"] = "fallback-step",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("value_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"value_len={sensitiveSwitchInput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveSwitchInput, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldRedactNonStreamingChatResponseInInformationLogs()
+    {
+        const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
+        const string sensitiveLlmOutput = "customer secret llm non streaming output";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+        var module = new LLMCallModule();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-non-stream-log-redaction",
+                StepType = "llm_call",
+                RunId = "run-llm-non-stream-log-redaction",
+                Input = sensitiveLlmPrompt,
+                TargetRole = "worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("status=completed_non_streaming", StringComparison.Ordinal) &&
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmOutput, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HumanInputModule_ShouldUseRunScopedPendingForSameStepId()
     {
         var module = new HumanInputModule();

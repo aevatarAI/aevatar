@@ -33,7 +33,9 @@ public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
 
         var branchKey = ResolveMatchingBranch(value, request.Parameters);
 
-        // iter85/cluster-085: branch input can be user content; keep only length and resolved branch.
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
         ctx.Logger.LogInformation(
             "Switch: run={RunId} step={StepId} status=branch_resolved value_len={ValueLen} value_redacted=true branch={Branch}",
             request.RunId,
