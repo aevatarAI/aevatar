@@ -32,6 +32,27 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenCompletionIsCommittedButNotObserved_ShouldReturnServiceUnavailable()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
+        var sessions = new RecordingSessionPort
+        {
+            ObserveCompletionInQueryPort = false,
+        };
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
+
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.OutputText.Should().Be("hello");
+        result.Completed.Should().BeNull();
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            503,
+            "response_completion_not_observed",
+            "Response completion was committed but is not yet visible in the read model."));
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldReturnStreamPlan_WhenRequestIsStreaming()
     {
         var sessions = new RecordingSessionPort();
@@ -327,6 +348,8 @@ public sealed class MessagesCommandFacadeTests
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
+        public bool ObserveCompletionInQueryPort { get; init; } = true;
+
         public RecordingSessionQueryPort QueryPort { get; } = new();
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
@@ -370,7 +393,7 @@ public sealed class MessagesCommandFacadeTests
         {
             RecordedCompletions.Add(completion.Clone());
             var current = QueryPort.Snapshot;
-            if (current is not null)
+            if (current is not null && ObserveCompletionInQueryPort)
             {
                 QueryPort.Snapshot = current with
                 {
