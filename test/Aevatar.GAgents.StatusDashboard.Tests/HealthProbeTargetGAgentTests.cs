@@ -176,19 +176,21 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     [Fact]
     public async Task Tick_WhenProbeExceedsTimeout_UsesInjectedClockForCancellationAndOutcome()
     {
+        const int timeoutBudgetMs = 30_000;
+        const int timeoutAdvanceMs = timeoutBudgetMs + 1;
         var startedAt = DateTimeOffset.Parse("2026-05-21T10:10:00Z");
         _timeProvider.SetUtcNow(startedAt);
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
         {
-            Spec = NewDescriptor("nyxid-auth", timeoutMs: 1_000),
+            Spec = NewDescriptor("nyxid-auth", timeoutMs: timeoutBudgetMs),
         });
 
         _executor.WaitForCancellation = true;
         var tickTask = _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
         await _executor.ProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var timedOutAt = startedAt.AddMilliseconds(1_001);
-        _timeProvider.Advance(TimeSpan.FromMilliseconds(1_001));
+        var timedOutAt = startedAt.AddMilliseconds(timeoutAdvanceMs);
+        _timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutAdvanceMs));
 
         await tickTask.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -197,7 +199,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Down);
         _agent.State.LastOutcome.Detail.Should().Be("timeout");
         _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset().Should().Be(timedOutAt);
-        _agent.State.LastOutcome.LatencyMs.Should().Be(1_001);
+        _agent.State.LastOutcome.LatencyMs.Should().Be(timeoutAdvanceMs);
     }
 
     [Fact]
