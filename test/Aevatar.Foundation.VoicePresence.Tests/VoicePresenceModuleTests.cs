@@ -490,6 +490,9 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("Task? _providerToUserRelay", Case.Sensitive);
         moduleSource.ShouldNotContain("TransportAttached = _transportLease", Case.Sensitive);
         moduleSource.ShouldNotContain("TransportAttached = _userTransport", Case.Sensitive);
+        moduleSource.ShouldNotContain("IsActorAccepted", Case.Sensitive);
+        moduleSource.ShouldNotContain("DispatchFireAndForget", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease", Case.Sensitive);
     }
 
     [Fact]
@@ -994,7 +997,7 @@ public class VoicePresenceModuleTests
         var transport = new RecordingVoiceTransport();
         var dispatched = new List<IMessage>();
         var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
-        module.AttachTransport(transport, (message, _) =>
+        await module.AttachTransportAsync(transport, (message, _) =>
         {
             dispatched.Add(message);
             return Task.CompletedTask;
@@ -1054,6 +1057,30 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         transport.SentAudio.ShouldHaveSingleItem().ShouldBe([4, 5]);
+    }
+
+    [Fact]
+    public void Sync_leased_attach_should_reject_fire_and_forget_dispatch_shape()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var transport = new RecordingVoiceTransport();
+        var dispatched = new List<IMessage>();
+
+        var ex = Should.Throw<InvalidOperationException>(() =>
+            module.AttachTransport(
+                transport,
+                (message, _) =>
+                {
+                    dispatched.Add(message);
+                    return Task.CompletedTask;
+                },
+                "lease-1",
+                "host-1",
+                Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5))));
+
+        ex.Message.ShouldBe("Leased voice transport attach must observe attach signal dispatch.");
+        dispatched.ShouldBeEmpty();
+        module.HasVolatileTransportLease.ShouldBeFalse();
     }
 
     [Fact]
@@ -1489,7 +1516,7 @@ public class VoicePresenceModuleTests
 
         var sendThrowTransport = new ThrowingSendVoiceTransport();
         var dispatched = new List<IMessage>();
-        module.AttachTransport(sendThrowTransport, (message, _) =>
+        await module.AttachTransportAsync(sendThrowTransport, (message, _) =>
         {
             dispatched.Add(message);
             return Task.CompletedTask;

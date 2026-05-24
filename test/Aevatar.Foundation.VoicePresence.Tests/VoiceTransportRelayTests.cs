@@ -135,11 +135,12 @@ public class VoiceTransportRelayTests
         ]);
 
         const string transportLeaseId = "transport-1";
+        var leaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
         roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
         {
             ActiveSessionId = "lease-1",
             ActiveLeaseOwnerId = "host-1",
-            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseExpiresAt = leaseExpiresAt.Clone(),
             TransportAttached = true,
             ActiveTransportLeaseId = transportLeaseId,
             Status = VoicePresenceRuntimeStatus.AudioDraining,
@@ -148,16 +149,19 @@ public class VoiceTransportRelayTests
             LastDrainAckResponseId = -1,
             LastDrainAckPlayoutSequence = -1,
         };
-        module.AttachTransport(transport, (message, ct) =>
+        await module.AttachTransportAsync(transport, (message, ct) =>
         {
-            if (message is VoiceTransportAttachRequested)
-                return Task.CompletedTask;
+            if (message is VoiceTransportAttachRequested attach)
+                return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+                {
+                    ModuleName = "voice_presence",
+                    TransportAttachRequested = attach,
+                }), ctx, ct);
 
             if (message is VoiceTransportControlFrameReceived control)
             {
-                control.OwnerId = "host-1";
-                control.TransportLeaseId = transportLeaseId;
-                control.LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone();
+                control.TransportLeaseId.ShouldNotBe(transportLeaseId);
+                roleAgent.State.VoicePresence["voice_presence"].ActiveTransportLeaseId = control.TransportLeaseId;
                 return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
                 {
                     ModuleName = "voice_presence",
@@ -166,7 +170,7 @@ public class VoiceTransportRelayTests
             }
 
             return module.HandleAsync(CreateEnvelope(message), ctx, ct);
-        }, "lease-1", "host-1", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)));
+        }, "lease-1", "host-1", leaseExpiresAt.Clone());
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
         var persistedState = roleAgent.State.VoicePresence["voice_presence"];
