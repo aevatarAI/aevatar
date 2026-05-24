@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Foundation.Runtime.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
 namespace Aevatar.GAgents.Channel.Protocol.Tests;
 
+// iter85/cluster-085: verifies channel tracing stays on the canonical source and tag family.
 public sealed class ChannelTracingSmokeTests
 {
     [Fact]
@@ -19,6 +21,7 @@ public sealed class ChannelTracingSmokeTests
             ActivityStopped = spans.Add,
         };
         ActivitySource.AddActivityListener(listener);
+        ChannelDiagnostics.ActivitySourceName.ShouldBe(AevatarActivitySource.ActivitySourceName);
 
         var pipeline = new MiddlewarePipelineBuilder()
             .Use(new TracingMiddleware())
@@ -31,10 +34,13 @@ public sealed class ChannelTracingSmokeTests
 
         spans.ShouldHaveSingleItem();
         var span = spans[0];
+        span.Source.Name.ShouldBe(AevatarActivitySource.ActivitySourceName);
         span.OperationName.ShouldBe(ChannelDiagnostics.Spans.PipelineInvoke);
         span.Status.ShouldBe(ActivityStatusCode.Ok);
 
         var tags = span.TagObjects.ToDictionary(pair => pair.Key, pair => pair.Value);
+        tags.ShouldNotContainKey("activity_id");
+        tags.ShouldContainKey("aevatar.channel.activity_id");
         tags.ShouldContainKey(ChannelDiagnostics.Tags.ActivityId);
         tags[ChannelDiagnostics.Tags.ActivityId].ShouldBe("act-1");
         tags.ShouldContainKey(ChannelDiagnostics.Tags.CanonicalKey);
