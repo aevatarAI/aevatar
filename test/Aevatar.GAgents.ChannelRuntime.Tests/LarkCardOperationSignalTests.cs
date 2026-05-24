@@ -355,10 +355,10 @@ public sealed class LarkCardOperationSignalTests
         private readonly TaskCompletionSource<EventEnvelope> _dispatched =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _dispatched.TrySetResult(envelope.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public async Task<T> WaitForPayloadAsync<T>()

@@ -13,7 +13,7 @@ public sealed class ActorCommandTargetDispatcher<TTarget>
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public Task DispatchAsync(
+    public Task<DispatchAdmission> DispatchAsync(
         TTarget target,
         EventEnvelope envelope,
         CancellationToken ct = default)

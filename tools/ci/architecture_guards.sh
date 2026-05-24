@@ -302,7 +302,6 @@ dispatch_projection_boundary_report="$(
     -g '!*.Designer.cs' \
     | awk -F: '
 BEGIN {
-  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
@@ -337,6 +336,38 @@ fi
 if [ -n "${dispatch_projection_boundary_report}" ]; then
   echo "${dispatch_projection_boundary_report}"
   echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
+# Refactor (iter95/cluster-095-dispatch-port-runtime-ack-drift):
+#   Old: Local IActorDispatchPort awaited actor.HandleEventAsync while Orleans
+#   only awaited transport admission, so DispatchAsync ACK semantics drifted by
+#   runtime.
+#   New: DispatchAsync returns DispatchAdmission only. It may await runtime/inbox
+#   admission, but must not synchronously wait for actor handler completion.
+dispatch_admission_handler_wait_report=""
+while IFS= read -r dispatch_port_file; do
+  [ -z "${dispatch_port_file}" ] && continue
+
+  hits="$(rg -n "\.HandleEventAsync[[:space:]]*\(" "${dispatch_port_file}" || true)"
+
+  if [ -n "${hits}" ]; then
+    dispatch_admission_handler_wait_report="${dispatch_admission_handler_wait_report}${hits}"$'\n'
+  fi
+done < <(
+  find src agents \
+    -type f \
+    -name '*ActorDispatchPort.cs' \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if [ -n "${dispatch_admission_handler_wait_report}" ]; then
+  echo "${dispatch_admission_handler_wait_report}"
+  echo "Actor dispatch ports must return DispatchAdmission after runtime/inbox admission; do not call or await actor HandleEventAsync in DispatchAsync."
   exit 1
 fi
 

@@ -115,10 +115,10 @@ public sealed class ChannelIdentityOAuthCommandDispatchTests
     {
         public List<DispatchedEnvelope> Dispatched { get; } = new();
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatched.Add(new DispatchedEnvelope(actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

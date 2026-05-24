@@ -242,14 +242,14 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken ct = default) =>
             PrepareCoreAsync(command, ct);
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
             PreparedDispatches.Add(execution);
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
@@ -265,8 +265,9 @@ public sealed class WorkflowRunFallbackCoverageTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+                prepared.Target with { Admission = admission });
         }
 
         private Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareCoreAsync(

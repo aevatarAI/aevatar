@@ -194,7 +194,7 @@ public sealed class StreamActorOutcomeChannelTests
     {
         public bool SawSubscriberBeforePublish { get; private set; }
 
-        public async Task DispatchAsync(
+        public async Task<DispatchAdmission> DispatchAsync(
             FakeCommandTarget target,
             EventEnvelope envelope,
             CancellationToken ct = default)
@@ -204,6 +204,7 @@ public sealed class StreamActorOutcomeChannelTests
             var streamId = StreamId(envelope.Id);
             SawSubscriberBeforePublish = provider.ActiveSubscriberCount(streamId) == 1;
             await channel.PublishAsync(envelope.Id, new ProtobufStringValue { Value = $"outcome:{envelope.Id}" }, ct);
+            return DispatchAdmissionFactory.Create(target.TargetId, envelope);
         }
     }
 

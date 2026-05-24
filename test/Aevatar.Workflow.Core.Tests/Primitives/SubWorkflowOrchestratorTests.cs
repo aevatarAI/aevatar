@@ -1364,7 +1364,7 @@ public sealed class SubWorkflowOrchestratorTests
             return Task.FromResult<IActor?>(StoredActors.TryGetValue(id, out var actor) ? actor : null);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Operations.Add($"dispatch:{actorId}");
@@ -1373,6 +1373,7 @@ public sealed class SubWorkflowOrchestratorTests
 
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) =>

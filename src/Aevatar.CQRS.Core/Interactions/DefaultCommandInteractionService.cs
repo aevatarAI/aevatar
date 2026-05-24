@@ -62,7 +62,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         if (!observation.Succeeded)
             return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(observation.Error);
 
-        await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
+        _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
 
         var receipt = _receiptFactory == null
             ? execution.Receipt

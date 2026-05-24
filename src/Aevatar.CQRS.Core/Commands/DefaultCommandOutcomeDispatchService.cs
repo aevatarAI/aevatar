@@ -30,7 +30,7 @@ public sealed class DefaultCommandOutcomeDispatchService<TCommand, TTarget, TRec
         await using var subscription = await _outcomeChannel.SubscribeAsync(
             prepared.Target.Context.CommandId,
             ct);
-        await _pipeline.DispatchPreparedAsync(prepared.Target, ct);
+        _ = await _pipeline.DispatchPreparedAsync(prepared.Target, ct);
         var outcome = await subscription.Outcome.WaitAsync(ct);
         return CommandOutcomeDispatchResult<TReceipt, TError, TOutcome>.Success(
             prepared.Target.Receipt,

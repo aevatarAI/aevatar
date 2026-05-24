@@ -83,6 +83,9 @@ public class CommandDispatchPipelineTests
         result.Target.Context.TargetId.Should().Be("actor-1");
         result.Target.Envelope.Id.Should().Be("evt-1");
         result.Target.Receipt.Should().Be("receipt-1");
+        result.Target.Admission.Should().NotBeNull();
+        result.Target.Admission!.Accepted.Should().BeTrue();
+        result.Target.Admission.CommandId.Should().Be("evt-1");
         dispatcher.Calls.Should().ContainSingle(x => x.Target == target && x.Envelope.Id == "evt-1");
         receiptFactory.Calls.Should().ContainSingle(x => x.Target == target);
         order.Should().Equal("resolve", "envelope", "receipt", "dispatch");
@@ -369,18 +372,18 @@ internal sealed class RecordingTargetDispatcher : ICommandTargetDispatcher<FakeC
 
     public List<(FakeCommandTarget Target, EventEnvelope Envelope)> Calls { get; } = [];
 
-    public Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    public Task<DispatchAdmission> DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         _order?.Add("dispatch");
         Calls.Add((target, envelope));
-        return Task.CompletedTask;
+        return Task.FromResult(DispatchAdmissionFactory.Create(target.TargetId, envelope));
     }
 }
 
 internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCommandTarget>
 {
-    public Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    public Task<DispatchAdmission> DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
     {
         _ = target;
         _ = envelope;
@@ -394,13 +397,14 @@ internal sealed class OutcomePublishingTargetDispatcher(IActorOutcomeChannel<Pro
 {
     public List<string> DispatchedCommandIds { get; } = [];
 
-    public async Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    public async Task<DispatchAdmission> DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
     {
         _ = target;
         ct.ThrowIfCancellationRequested();
         var commandId = envelope.Id;
         DispatchedCommandIds.Add(commandId);
         await channel.PublishAsync(commandId, new ProtobufStringValue { Value = $"outcome:{commandId}" }, ct);
+        return DispatchAdmissionFactory.Create(target.TargetId, envelope);
     }
 }
 
@@ -482,11 +486,11 @@ internal sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     public Task<IActor?> GetAsync(string id) =>
         throw new NotSupportedException();
 
-    public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         DispatchCalls.Add((actorId, envelope));
-        return Task.CompletedTask;
+        return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 
     public Task<bool> ExistsAsync(string id) =>

@@ -17,7 +17,7 @@ public sealed class OrleansActorDispatchPort : IActorDispatchPort
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
     }
 
-    public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(envelope);
@@ -28,5 +28,6 @@ public sealed class OrleansActorDispatchPort : IActorDispatchPort
             throw new InvalidOperationException($"Actor {actorId} is not initialized.");
 
         await _streams.GetStream(actorId).ProduceAsync(envelope.Clone(), ct);
+        return DispatchAdmissionFactory.Create(actorId, envelope);
     }
 }

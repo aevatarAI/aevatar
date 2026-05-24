@@ -468,12 +468,12 @@ public sealed class ExternalLinkManagerTests
     {
         public List<IMessage> Payloads { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             actorId.Should().Be("actor-1");
             envelope.Payload.Should().NotBeNull();
             Payloads.Add(Unpack(envelope.Payload));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         private static IMessage Unpack(Any payload)
