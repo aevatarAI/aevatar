@@ -153,6 +153,85 @@ public class ScriptArtifactCoverageTests
         compiler.CallCount.Should().Be(2);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void CachedResolver_ShouldRejectNonPositiveMaxCachedArtifacts(long maxCachedArtifacts)
+    {
+        var compiler = new CountingCompiler(() => CreateArtifact("script-1", "rev-1"));
+
+        Action act = () => new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts);
+
+        act.Should()
+            .Throw<ArgumentOutOfRangeException>()
+            .WithParameterName("maxCachedArtifacts");
+    }
+
+    [Fact]
+    public async Task CachedResolver_ShouldDisposeInFlightArtifact_WhenConcurrentCapacityCompactionEvictsLazy()
+    {
+        var firstCompileStarted = new ManualResetEventSlim(false);
+        var secondCompileStarted = new ManualResetEventSlim(false);
+        var compileCallCount = 0;
+        var allowCompileToReturn = new ManualResetEventSlim(false);
+        var disposed = new List<string>();
+        var disposeObserved = new CountdownEvent(2);
+        var disposeGate = new object();
+        var compiler = new RequestEchoCompiler(
+            onCompile: _ =>
+            {
+                var call = Interlocked.Increment(ref compileCallCount);
+                if (call == 1)
+                    firstCompileStarted.Set();
+                else if (call == 2)
+                    secondCompileStarted.Set();
+
+                allowCompileToReturn.Wait();
+            },
+            onDispose: request =>
+            {
+                lock (disposeGate)
+                {
+                    disposed.Add(request.ScriptId);
+                }
+
+                disposeObserved.Signal();
+            });
+        using var resolver = new CachedScriptBehaviorArtifactResolver(compiler, maxCachedArtifacts: 1);
+
+        var firstTask = ResolveOnDedicatedThread(resolver, CreateRequest(scriptId: "script-1"));
+        firstCompileStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        var secondTask = ResolveOnDedicatedThread(resolver, CreateRequest(scriptId: "script-2"));
+        secondCompileStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        allowCompileToReturn.Set();
+        var resolved = await Task.WhenAll(firstTask, secondTask);
+
+        resolved.Select(artifact => artifact.ScriptId)
+            .Should()
+            .BeEquivalentTo(["script-1", "script-2"]);
+
+        resolver.Resolve(CreateRequest(scriptId: "script-3"));
+
+        disposeObserved.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        lock (disposeGate)
+        {
+            disposed.Should().BeEquivalentTo(["script-1", "script-2"]);
+        }
+
+        compiler.CallCount.Should().Be(3);
+    }
+
+    private static Task<ScriptBehaviorArtifact> ResolveOnDedicatedThread(
+        CachedScriptBehaviorArtifactResolver resolver,
+        ScriptBehaviorArtifactRequest request) =>
+        Task.Factory.StartNew(
+            () => resolver.Resolve(request),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
     private static ScriptBehaviorArtifactRequest CreateRequest() =>
         CreateRequest(
             scriptId: "script-1",
@@ -233,13 +312,18 @@ public class ScriptArtifactCoverageTests
         }
     }
 
-    private sealed class RequestEchoCompiler(Action<ScriptBehaviorCompilationRequest>? onDispose = null) : IScriptBehaviorCompiler
+    private sealed class RequestEchoCompiler(
+        Action<ScriptBehaviorCompilationRequest>? onDispose = null,
+        Action<ScriptBehaviorCompilationRequest>? onCompile = null) : IScriptBehaviorCompiler
     {
-        public int CallCount { get; private set; }
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
 
         public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
         {
-            CallCount += 1;
+            Interlocked.Increment(ref _callCount);
+            onCompile?.Invoke(request);
             return new ScriptBehaviorCompilationResult(
                 true,
                 CreateArtifact(request.ScriptId, request.Revision, () => onDispose?.Invoke(request)),

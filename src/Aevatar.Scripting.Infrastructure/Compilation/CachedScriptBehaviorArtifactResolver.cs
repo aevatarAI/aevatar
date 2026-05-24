@@ -46,15 +46,15 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         ArgumentNullException.ThrowIfNull(request);
 
         var cacheKey = ScriptBehaviorArtifactCacheKey.From(request);
-        var lazy = GetOrCreateLazy(cacheKey, request);
+        var entry = GetOrCreateEntry(cacheKey, request);
 
         try
         {
-            return lazy.Value;
+            return entry.Value;
         }
         catch
         {
-            RemoveFailedLazy(cacheKey, lazy);
+            RemoveFailedLazy(cacheKey, entry);
             throw;
         }
     }
@@ -64,11 +64,11 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         _artifacts.Dispose();
     }
 
-    private Lazy<ScriptBehaviorArtifact> GetOrCreateLazy(
+    private ArtifactCacheEntry GetOrCreateEntry(
         ScriptBehaviorArtifactCacheKey cacheKey,
         ScriptBehaviorArtifactRequest request)
     {
-        if (_artifacts.TryGetValue(cacheKey, out Lazy<ScriptBehaviorArtifact>? existing) && existing != null)
+        if (_artifacts.TryGetValue(cacheKey, out ArtifactCacheEntry? existing) && existing != null)
             return existing;
 
         lock (_cacheGate)
@@ -76,9 +76,7 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
             if (_artifacts.TryGetValue(cacheKey, out existing) && existing != null)
                 return existing;
 
-            var created = new Lazy<ScriptBehaviorArtifact>(
-                () => CompileOrThrow(request),
-                LazyThreadSafetyMode.ExecutionAndPublication);
+            var created = new ArtifactCacheEntry(() => CompileOrThrow(request));
 
             CompactWhenFull();
             _artifacts.Set(
@@ -103,11 +101,11 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
 
     private void RemoveFailedLazy(
         ScriptBehaviorArtifactCacheKey cacheKey,
-        Lazy<ScriptBehaviorArtifact> failed)
+        ArtifactCacheEntry failed)
     {
         lock (_cacheGate)
         {
-            if (_artifacts.TryGetValue(cacheKey, out Lazy<ScriptBehaviorArtifact>? current) &&
+            if (_artifacts.TryGetValue(cacheKey, out ArtifactCacheEntry? current) &&
                 ReferenceEquals(current, failed))
             {
                 _artifacts.Remove(cacheKey);
@@ -133,24 +131,89 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         _ = reason;
         _ = state;
 
-        if (value is not Lazy<ScriptBehaviorArtifact> lazy || !lazy.IsValueCreated)
+        if (value is not ArtifactCacheEntry entry)
             return;
 
-        try
+        entry.DisposeWhenCreated();
+    }
+
+    private sealed class ArtifactCacheEntry
+    {
+        private readonly object _gate = new();
+        private readonly Lazy<ScriptBehaviorArtifact> _lazy;
+        private ScriptBehaviorArtifact? _artifact;
+        private bool _disposeStarted;
+        private bool _disposeWhenCreated;
+
+        public ArtifactCacheEntry(Func<ScriptBehaviorArtifact> artifactFactory)
         {
-            var dispose = lazy.Value.DisposeAsync();
-            if (!dispose.IsCompletedSuccessfully)
+            _lazy = new Lazy<ScriptBehaviorArtifact>(
+                () =>
+                {
+                    var artifact = artifactFactory();
+                    bool disposeNow;
+                    lock (_gate)
+                    {
+                        _artifact = artifact;
+                        disposeNow = _disposeWhenCreated && !_disposeStarted;
+                        if (disposeNow)
+                            _disposeStarted = true;
+                    }
+
+                    if (disposeNow)
+                        DisposeArtifact(artifact);
+
+                    return artifact;
+                },
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
+        public ScriptBehaviorArtifact Value => _lazy.Value;
+
+        public void DisposeWhenCreated()
+        {
+            ScriptBehaviorArtifact? artifact;
+            lock (_gate)
             {
-                _ = dispose.AsTask().ContinueWith(
-                    static task => _ = task.Exception,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+                if (_disposeWhenCreated)
+                    return;
+
+                _disposeWhenCreated = true;
+                artifact = _artifact;
+                if (artifact == null || _disposeStarted)
+                    return;
+
+                _disposeStarted = true;
+            }
+
+            try
+            {
+                DisposeArtifact(artifact);
+            }
+            catch
+            {
+                // Eviction must not make cache mutation fail; callers already observe compile failures through Resolve.
             }
         }
-        catch
+
+        private static void DisposeArtifact(ScriptBehaviorArtifact artifact)
         {
-            // Eviction must not make cache mutation fail; callers already observe compile failures through Resolve.
+            try
+            {
+                var dispose = artifact.DisposeAsync();
+                if (!dispose.IsCompletedSuccessfully)
+                {
+                    _ = dispose.AsTask().ContinueWith(
+                        static task => _ = task.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
+            }
+            catch
+            {
+                // Eviction must not make cache mutation fail; callers already observe compile failures through Resolve.
+            }
         }
     }
 
