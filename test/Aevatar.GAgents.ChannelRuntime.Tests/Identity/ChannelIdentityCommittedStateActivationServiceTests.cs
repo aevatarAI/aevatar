@@ -73,6 +73,69 @@ public sealed class ChannelIdentityCommittedStateActivationServiceTests
             .BindingId.Should().Be("bnd-first");
     }
 
+    [Fact]
+    public async Task EnsureAevatarOAuthClientCommittedStateActivatedAsync_DispatchesOAuthStateRoot()
+    {
+        var bindingActivation = new RecordingActivationService<ExternalIdentityBindingMaterializationRuntimeLease>(
+            request => new ExternalIdentityBindingMaterializationRuntimeLease(new ExternalIdentityBindingMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+            }));
+        var oauthActivation = new RecordingActivationService<AevatarOAuthClientMaterializationRuntimeLease>(
+            request => new AevatarOAuthClientMaterializationRuntimeLease(new AevatarOAuthClientMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+            }));
+        var dispatch = new RecordingActorDispatchPort();
+        var eventStore = new RecordingEventStore();
+        var service = new ChannelIdentityCommittedStateActivationService(
+            bindingActivation,
+            oauthActivation,
+            dispatch,
+            eventStore);
+        const string actorId = AevatarOAuthClientGAgent.WellKnownId;
+        const string clientId = "aevatar-client-first";
+        var state = new AevatarOAuthClientState
+        {
+            ClientId = clientId,
+            ClientIdIssuedAtUnix = 1_700_000_001,
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        };
+        eventStore.Seed(actorId, new AevatarOAuthClientProvisionedEvent
+        {
+            ClientId = state.ClientId,
+            ClientIdIssuedAtUnix = state.ClientIdIssuedAtUnix,
+            NyxidAuthority = state.NyxidAuthority,
+            RedirectUri = state.RedirectUri,
+            OauthScope = state.OauthScope,
+            PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, 11);
+
+        await service.EnsureAevatarOAuthClientCommittedStateActivatedAsync(actorId, state, 11);
+
+        bindingActivation.Requests.Should().BeEmpty();
+        oauthActivation.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = "aevatar-oauth-client",
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            });
+        dispatch.Envelopes.Should().ContainSingle();
+        var (targetActorId, envelope) = dispatch.Envelopes[0];
+        targetActorId.Should().Be("projection.durable.scope:aevatar-oauth-client:aevatar-oauth-client");
+        envelope.Route.IsObserverPublication().Should().BeTrue();
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        published.StateRoot.Unpack<AevatarOAuthClientState>().ClientId.Should().Be(clientId);
+        published.StateEvent.Version.Should().Be(11);
+        published.StateEvent.EventData.Unpack<AevatarOAuthClientProvisionedEvent>()
+            .ClientId.Should().Be(clientId);
+    }
+
     private sealed class RecordingActivationService<TLease> : IProjectionScopeActivationService<TLease>
         where TLease : class, IProjectionRuntimeLease
     {
