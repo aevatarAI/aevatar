@@ -28,6 +28,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -1796,6 +1797,39 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WhenStreamingInitialSseWriteIsCancelled_ShouldRecordFailureCompletionBeforeForwarding()
+    {
+        var commandFacade = new StaticResponsesCommandFacade(
+            ResponsesCreateCommandResult.FromForward(BuildForwardPlan(ForwardToGAgentAction("member-stream-cancel"))));
+        var forwardingService = new RecordingForwardingApplicationService();
+        var context = new DefaultHttpContext
+        {
+            Response =
+            {
+                Body = new CancellingWriteStream(),
+            },
+        };
+        context.Request.Headers.Authorization = "Bearer stream-cancel-secret";
+        var request = new ResponsesCreateRequest
+        {
+            Model = "original-model",
+            Input = JsonDocument.Parse("\"stream me\"").RootElement.Clone(),
+            Stream = true,
+        };
+
+        await ResponsesApiEndpoints.HandleCreateResponseAsync(
+            context,
+            request,
+            commandFacade,
+            forwardingService,
+            LoggerFactory.Create(static _ => { }),
+            context.RequestAborted);
+
+        forwardingService.ForwardCalls.Should().Be(0);
+        forwardingService.Failures.Should().ContainSingle().Which.Code.Should().Be("request_timeout");
+    }
+
+    [Fact]
     public async Task PostResponses_WhenForwardToGAgentEmitsRunError_ReturnsFailureInsteadOfCompletedResponse()
     {
         var provider = new RecordingLLMProvider();
@@ -2313,6 +2347,25 @@ public sealed class MainnetResponsesEndpointsTests
         ForwardToTeam = new ForwardToTeam { TeamId = teamId, EndpointId = endpointId },
     };
 
+    private static ResponsesForwardCommandResult BuildForwardPlan(ChatRouteAction action) =>
+        new(
+            new NormalizedResponsesRequest(
+                "resp_forward",
+                "msg_forward",
+                "model",
+                "stream me",
+                true,
+                null,
+                null,
+                null,
+                [],
+                []),
+            new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey),
+            action,
+            new LlmSessionRegistrationResult("actor-resp_forward", "resp_forward"),
+            null,
+            DateTimeOffset.UtcNow);
+
     private sealed class StubTeamEntryMemberResolver : ITeamEntryMemberResolver
     {
         private readonly Func<string, string, TeamEntryMemberResolution> _resolve;
@@ -2452,6 +2505,94 @@ public sealed class MainnetResponsesEndpointsTests
                 CompletionStatus: GAgentDraftRunCompletionStatus.RunFinished,
                 CompletionObserved: true);
         }
+    }
+
+    private sealed class StaticResponsesCommandFacade(ResponsesCreateCommandResult createResult) : IResponsesCommandFacade
+    {
+        public Task<ResponsesCreateCommandResult> CreateAsync(
+            ResponsesCommandRequest request,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            Task.FromResult(createResult);
+
+        public Task<ResponsesCancelCommandResult> CancelAsync(
+            string responseId,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ResponsesStreamCommandResult> StreamAsync(
+            ResponsesCreateCommandPlan plan,
+            Func<string, CancellationToken, ValueTask> onTextDelta,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingForwardingApplicationService : IResponsesForwardingApplicationService
+    {
+        public int ForwardCalls { get; private set; }
+
+        public List<(ResponsesForwardCommandResult Plan, string Code, string Message)> Failures { get; } = [];
+
+        public Task<ResponsesForwardingResult> ForwardAsync(
+            ResponsesForwardCommandResult plan,
+            string bearerToken,
+            Func<AGUIEvent, CancellationToken, ValueTask>? onEventAsync = null,
+            CancellationToken ct = default)
+        {
+            ForwardCalls++;
+            return Task.FromResult(ResponsesForwardingResult.FromError(
+                500,
+                "unexpected_forward",
+                "Forward should not start after initial SSE write cancellation."));
+        }
+
+        public Task<ResponsesForwardingResult> RecordForwardedFailureAsync(
+            ResponsesForwardCommandResult plan,
+            string code,
+            string message,
+            CancellationToken ct = default)
+        {
+            Failures.Add((plan, code, message));
+            return Task.FromResult(ResponsesForwardingResult.FromError(500, code, message));
+        }
+    }
+
+    private sealed class CancellingWriteStream : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => 0;
+        public override long Position
+        {
+            get => 0;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new OperationCanceledException(new CancellationToken(canceled: true));
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new OperationCanceledException(new CancellationToken(canceled: true)));
     }
 
     private sealed class ThrowingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>

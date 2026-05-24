@@ -334,6 +334,12 @@ public interface IResponsesForwardingApplicationService
         string bearerToken,
         Func<AGUIEvent, CancellationToken, ValueTask>? onEventAsync = null,
         CancellationToken ct = default);
+
+    Task<ResponsesForwardingResult> RecordForwardedFailureAsync(
+        ResponsesForwardCommandResult plan,
+        string code,
+        string message,
+        CancellationToken ct = default);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):

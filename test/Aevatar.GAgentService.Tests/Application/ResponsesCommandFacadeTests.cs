@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -240,6 +241,37 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
 
+    [Fact]
+    public async Task ForwardAsync_WhenTargetResolutionIsCancelled_ShouldRecordFailureCompletion()
+    {
+        var sessions = new RecordingSessionPort();
+        var queryPort = new RecordingSessionQueryPort
+        {
+            Snapshot = BuildSnapshot("resp_forward", "scope-1"),
+        };
+        var forwarding = new ResponsesForwardingApplicationService(
+            teamEntryMemberResolver: new CancellingTeamEntryMemberResolver(),
+            memberPublishedServiceResolver: new StaticMemberPublishedServiceResolver("unused"),
+            staticGAgentStreamInvocationPort: new RecordingStaticGAgentStreamInvocationPort(),
+            completionRecorder: new ResponsesForwardedCompletionRecorder(sessions, queryPort),
+            logger: NullLogger<ResponsesForwardingApplicationService>.Instance);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var result = await forwarding.ForwardAsync(
+            BuildForwardPlan(ForwardToTeamAction("team-1", "chat")),
+            "token",
+            onEventAsync: null,
+            cts.Token);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            408,
+            "request_timeout",
+            "Request timed out."));
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.FailureCode.Should().Be("request_timeout");
+    }
+
     private static ResponsesCommandFacade CreateFacade(
         IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
@@ -301,6 +333,25 @@ public sealed class ResponsesCommandFacadeTests
             1,
             "event-1");
 
+    private static ResponsesForwardCommandResult BuildForwardPlan(ChatRouteAction action) =>
+        new(
+            new NormalizedResponsesRequest(
+                "resp_forward",
+                "msg_forward",
+                "model",
+                "hello",
+                true,
+                null,
+                null,
+                null,
+                [],
+                []),
+            new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+            action,
+            new LlmSessionRegistrationResult("actor-resp_forward", "resp_forward"),
+            null,
+            DateTimeOffset.UtcNow);
+
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
@@ -309,6 +360,11 @@ public sealed class ResponsesCommandFacadeTests
     private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
     {
         ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
+    };
+
+    private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()
+    {
+        ForwardToTeam = new ForwardToTeam { TeamId = teamId, EndpointId = endpointId },
     };
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
@@ -470,5 +526,39 @@ public sealed class ResponsesCommandFacadeTests
 
         public Task<LlmSessionSnapshot?> GetByResponseIdAsync(string responseId, CancellationToken ct = default) =>
             Task.FromResult(Snapshot);
+    }
+
+    private sealed class CancellingTeamEntryMemberResolver : ITeamEntryMemberResolver
+    {
+        public Task<TeamEntryMemberResolution> ResolveAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new OperationCanceledException(ct);
+        }
+    }
+
+    private sealed class StaticMemberPublishedServiceResolver(string publishedServiceId)
+        : IMemberPublishedServiceResolver
+    {
+        public Task<MemberPublishedServiceResolution> ResolveAsync(
+            MemberPublishedServiceResolveRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new MemberPublishedServiceResolution(
+                request.ScopeId,
+                request.MemberId,
+                publishedServiceId));
+    }
+
+    private sealed class RecordingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>
+    {
+        public Task<StaticGAgentStreamInvocationResult> InvokeAsync(
+            StaticGAgentStreamInvocationRequest request,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Invocation should not start when target resolution is cancelled.");
     }
 }

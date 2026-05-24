@@ -29,16 +29,16 @@ public sealed class ResponsesForwardingApplicationService(
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var target = await BuildInvocationRequestAsync(plan, bearerToken, ct);
-        if (target.Error is not null)
-        {
-            await TryCommitFailureAsync(plan, target.Error.Code, target.Error.Message, CancellationToken.None);
-            return new ResponsesForwardingResult(target.Error, null);
-        }
-
-        var collector = completionRecorder.CreateCollector(plan);
         try
         {
+            var target = await BuildInvocationRequestAsync(plan, bearerToken, ct);
+            if (target.Error is not null)
+            {
+                await TryCommitFailureAsync(plan, target.Error.Code, target.Error.Message, CancellationToken.None);
+                return new ResponsesForwardingResult(target.Error, null);
+            }
+
+            var collector = completionRecorder.CreateCollector(plan);
             var result = await staticGAgentStreamInvocationPort.InvokeAsync(
                 target.Request!,
                 async (evt, token) =>
@@ -75,7 +75,7 @@ public sealed class ResponsesForwardingApplicationService(
                 ? new ResponsesForwardingResult(completion.Error, null)
                 : ResponsesForwardingResult.FromSnapshot(completion.Snapshot!);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             await TryCommitFailureAsync(plan, "request_timeout", "Request timed out.", CancellationToken.None);
             return ResponsesForwardingResult.FromError(408, "request_timeout", "Request timed out.");
@@ -106,6 +106,18 @@ public sealed class ResponsesForwardingApplicationService(
                 "gagent_invocation_failed",
                 "GAgent invocation failed.");
         }
+    }
+
+    public async Task<ResponsesForwardingResult> RecordForwardedFailureAsync(
+        ResponsesForwardCommandResult plan,
+        string code,
+        string message,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        await TryCommitFailureAsync(plan, code, message, ct);
+        return ResponsesForwardingResult.FromError(500, code, message);
     }
 
     private async Task<InvocationRequestResult> BuildInvocationRequestAsync(

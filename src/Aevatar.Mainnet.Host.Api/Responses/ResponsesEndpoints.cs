@@ -400,7 +400,6 @@ internal static partial class ResponsesApiEndpoints
         response.Headers.CacheControl = "no-store";
         response.Headers.Pragma = "no-cache";
         response.Headers["X-Accel-Buffering"] = "no";
-        await response.StartAsync(ct);
 
         // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
         //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
@@ -410,13 +409,15 @@ internal static partial class ResponsesApiEndpoints
             normalized.ResponseId,
             normalized.MessageItemId,
             JsonOptions);
-        await adapter.WriteCreatedAsync(
-            BuildCreatedResponse(normalized, createdAt),
-            BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
-            ct);
 
         try
         {
+            await response.StartAsync(ct);
+            await adapter.WriteCreatedAsync(
+                BuildCreatedResponse(normalized, createdAt),
+                BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
+                ct);
+
             var result = await forwardingService.ForwardAsync(
                 forwardPlan,
                 bearerToken,
@@ -469,17 +470,36 @@ internal static partial class ResponsesApiEndpoints
                     usage: null),
                 ct);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            // Client aborted; nothing to forward.
+            await forwardingService.RecordForwardedFailureAsync(
+                forwardPlan,
+                "request_timeout",
+                "Request timed out.",
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "AGUI-backed stream rendering failed for response {ResponseId}", normalized.ResponseId);
-            await adapter.WriteFailureAsync(
+            await forwardingService.RecordForwardedFailureAsync(
+                forwardPlan,
                 "gagent_invocation_failed",
                 "GAgent invocation failed mid-stream.",
-                ct);
+                CancellationToken.None);
+            try
+            {
+                await adapter.WriteFailureAsync(
+                    "gagent_invocation_failed",
+                    "GAgent invocation failed mid-stream.",
+                    ct);
+            }
+            catch (Exception writeEx)
+            {
+                logger.LogWarning(
+                    writeEx,
+                    "Failed to write AGUI-backed stream failure frame for response {ResponseId}",
+                    normalized.ResponseId);
+            }
         }
     }
 
