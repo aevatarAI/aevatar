@@ -19,6 +19,11 @@ internal static class SharedOrleansPortAllocator
         TimeSpan? startupTimeout,
         CancellationToken cancellationToken)
     {
+        // Refactor (iter84/cluster-084):
+        // Old: each Orleans integration test reserved ephemeral ports, released them,
+        // then raced other tests before the silo actually bound those endpoints.
+        // New: serialize host startup, keep candidate ports reserved while building
+        // host options, release immediately before StartAsync, and retry only on bind failures.
         Exception? lastFailure = null;
 
         for (var attempt = 1; attempt <= MaxStartAttempts; attempt++)
