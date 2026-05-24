@@ -4,6 +4,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
@@ -39,15 +40,45 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         result.Completed.Should().NotBeNull();
-        result.Completed!.OutputText.Should().Be("done");
+        result.Completed!.Completion.OutputText.Should().Be("done");
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.OutputText.Should().Be("done");
         completion.LastRequest.Should().NotBeNull();
         completion.LastRequest!.Model.Should().Be("gpt-5");
         completion.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         completion.LastRequest.LlmControl.Should().NotBeNull();
         completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
         completion.LastRequest.CallerContext!.ScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCompletionIsCommittedButNotObserved_ShouldReturnServiceUnavailable()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("done", null, []));
+        var sessions = new RecordingSessionPort
+        {
+            ObserveCompletionInQueryPort = false,
+        };
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), "token");
+
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.OutputText.Should().Be("done");
+        result.Completed.Should().BeNull();
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            503,
+            "response_completion_not_observed",
+            "Response completion was committed but is not yet visible in the read model."));
     }
 
     [Fact]
@@ -181,6 +212,27 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task StreamAsync_ShouldRecordCompletionFact_AndReturnSessionCompletion()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult(
+            "stream done",
+            new TokenUsage(4, 5, 9),
+            []));
+        var sessions = new RecordingSessionPort();
+        sessions.QueryPort.Snapshot = BuildSnapshot("resp_stream", "scope-1");
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+
+        result.Error.Should().BeNull();
+        result.Completion!.OutputText.Should().Be("stream done");
+        result.Completion.Usage.Should().Be(new TokenUsage(4, 5, 9));
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.OutputText.Should().Be("stream done");
+        sessions.UpdatedStatuses.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
     {
         var completion = new RecordingCompletionService(
@@ -278,17 +330,20 @@ public sealed class ResponsesCommandFacadeTests
         ILlmSessionQueryPort? queryPort = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesRouteResolver? routeResolver = null,
-        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null) =>
-        new(
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null)
+    {
+        var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        return new ResponsesCommandFacade(
             new StaticLlmProviderFactory(),
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             routeResolver ?? new StaticResponsesRouteResolver(null),
-            sessionPort ?? new RecordingSessionPort(),
-            queryPort ?? new RecordingSessionQueryPort(),
+            effectiveSessionPort,
+            queryPort ?? (effectiveSessionPort as RecordingSessionPort)?.QueryPort ?? new RecordingSessionQueryPort(),
             completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
             [],
             NullLogger<ResponsesCommandFacade>.Instance);
+    }
 
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>
         new(
@@ -469,10 +524,28 @@ public sealed class ResponsesCommandFacadeTests
 
         public Exception? UpdateStatusException { get; init; }
 
+        public bool ObserveCompletionInQueryPort { get; init; } = true;
+
+        public RecordingSessionQueryPort QueryPort { get; } = new();
+
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
             Registered.Add(record);
-            return Task.FromResult(new LlmSessionRegistrationResult("actor-" + record.ResponseId, record.ResponseId));
+            var actorId = "actor-" + record.ResponseId;
+            QueryPort.Snapshot = new LlmSessionSnapshot(
+                record.ResponseId,
+                record.ScopeId,
+                record.OwnerSubject,
+                record.OriginKind,
+                string.IsNullOrWhiteSpace(record.PreviousResponseId) ? null : record.PreviousResponseId,
+                record.Status,
+                record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow,
+                record.Ttl?.ToTimeSpan() ?? TimeSpan.FromHours(1),
+                record.CancelledAt?.ToDateTimeOffset(),
+                actorId,
+                1,
+                $"{record.ResponseId}:registered");
+            return Task.FromResult(new LlmSessionRegistrationResult(actorId, record.ResponseId));
         }
 
         public Task UpdateStatusAsync(string sessionActorId, string responseId, LlmSessionStatus status, CancellationToken ct = default)
@@ -500,8 +573,40 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
+            var current = QueryPort.Snapshot;
+            if (current is not null && ObserveCompletionInQueryPort)
+            {
+                QueryPort.Snapshot = current with
+                {
+                    Status = string.IsNullOrWhiteSpace(completion.FailureCode)
+                        ? LlmSessionStatus.Completed
+                        : LlmSessionStatus.Failed,
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:completion",
+                    Completion = ToSnapshot(completion),
+                };
+            }
             return Task.CompletedTask;
         }
+
+        private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
+            new(
+                completion.OutputText ?? string.Empty,
+                completion.ToolCalls
+                    .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                        call.CallId,
+                        call.ToolName,
+                        ResponsesJsonValues.ToBoundaryJson(call.Result)))
+                    .ToArray(),
+                completion.CompletedAt?.ToDateTimeOffset(),
+                string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+                string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+                completion.Usage is null
+                    ? null
+                    : new TokenUsage(
+                        completion.Usage.PromptTokens,
+                        completion.Usage.CompletionTokens,
+                        completion.Usage.TotalTokens));
 
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,

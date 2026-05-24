@@ -98,6 +98,10 @@ public sealed class MainnetResponsesEndpointsTests
             .Be(0);
         root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(2);
         root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(5);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("pong");
+        (await sessions.GetByResponseIdAsync(responseId))!
+            .Completion!.Usage.Should().Be(new TokenUsage(3, 2, 5));
 
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
@@ -126,7 +130,8 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("pong");
     }
 
     [Fact]
@@ -175,7 +180,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("pong");
     }
 
     [Fact]
@@ -773,7 +779,9 @@ public sealed class MainnetResponsesEndpointsTests
             .Should()
             .Be("""{"temperature":28}""");
         provider.LastRequest.Should().BeNull();
-        sessions.Registered.Should().BeEmpty();
+        sessions.Registered.Should().ContainSingle();
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("""{"temperature":28}""");
         sessions.ToolResults.Should().BeEmpty();
         sessions.ResolvedToolResults.Should().BeEmpty();
     }
@@ -2954,7 +2962,13 @@ public sealed class MainnetResponsesEndpointsTests
                             .ToArray(),
                         clone.CompletedAt?.ToDateTimeOffset(),
                         string.IsNullOrWhiteSpace(clone.FailureCode) ? null : clone.FailureCode,
-                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage),
+                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage,
+                        clone.Usage is null
+                            ? null
+                            : new TokenUsage(
+                                clone.Usage.PromptTokens,
+                                clone.Usage.CompletionTokens,
+                                clone.Usage.TotalTokens)),
                 };
             }
 

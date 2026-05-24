@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -54,6 +55,10 @@ public sealed class LlmSessionCurrentStateProjectorTests
         doc.Completion.ToolCalls[0].CallId.Should().Be("call_done");
         ResponsesJsonValues.ToBoundaryJson(doc.Completion.ToolCalls[0].Result)
             .Should().Be("""{"result":true}""");
+        doc.Completion.Usage.Should().NotBeNull();
+        doc.Completion.Usage!.PromptTokens.Should().Be(10);
+        doc.Completion.Usage.CompletionTokens.Should().Be(11);
+        doc.Completion.Usage.TotalTokens.Should().Be(21);
         doc.Completion.FailureCode.Should().BeEmpty();
 
         var snapshot = await reader.GetByResponseIdAsync("resp_1");
@@ -64,6 +69,7 @@ public sealed class LlmSessionCurrentStateProjectorTests
         snapshot.ForwardedToolCalls![0].ResultJson.Should().Be("""{"temperature":28}""");
         snapshot.Completion.Should().NotBeNull();
         snapshot.Completion!.OutputText.Should().Be("completed text");
+        snapshot.Completion.Usage.Should().Be(new TokenUsage(10, 11, 21));
         snapshot.Completion.ToolCalls.Should().ContainSingle()
             .Which.ResultJson.Should().Be("""{"result":true}""");
     }
@@ -219,6 +225,12 @@ public sealed class LlmSessionCurrentStateProjectorTests
         {
             OutputText = "completed text",
             CompletedAt = Timestamp.FromDateTimeOffset(observedAt),
+            Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = 10,
+                CompletionTokens = 11,
+                TotalTokens = 21,
+            },
             ToolCalls =
             {
                 new LlmSessionCompletedToolCall

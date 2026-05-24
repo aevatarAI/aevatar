@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Queries;
@@ -44,7 +45,8 @@ public sealed record LlmSessionCompletionSnapshot(
     IReadOnlyList<LlmSessionCompletedToolCallSnapshot> ToolCalls,
     DateTimeOffset? CompletedAt,
     string? FailureCode,
-    string? FailureMessage);
+    string? FailureMessage,
+    TokenUsage? Usage = null);
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed

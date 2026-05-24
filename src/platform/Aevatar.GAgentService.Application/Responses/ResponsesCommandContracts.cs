@@ -232,28 +232,21 @@ public sealed record ResponsesForwardingResult(
 public sealed record ResponsesCreateCompletedCommandResult(
     NormalizedResponsesRequest Normalized,
     long CreatedAt,
-    long CompletedAt,
-    string OutputText,
-    IReadOnlyList<ToolCall> ForwardedToolCalls,
-    TokenUsage? Usage);
+    LlmSessionCompletionSnapshot Completion);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Streaming completion errors and final data were encoded directly into SSE handler branches.
 //   New principle: Application reports stream execution outcome as typed data; Host renders the appropriate SSE or error frame.
 public sealed record ResponsesStreamCommandResult(
     ResponsesCommandError? Error,
-    string OutputText,
-    IReadOnlyList<ToolCall> ForwardedToolCalls,
-    TokenUsage? Usage)
+    LlmSessionCompletionSnapshot? Completion)
 {
     public static ResponsesStreamCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), string.Empty, [], null);
+        new(new ResponsesCommandError(statusCode, code, message), null);
 
     public static ResponsesStreamCommandResult FromCompleted(
-        string outputText,
-        IReadOnlyList<ToolCall> forwardedToolCalls,
-        TokenUsage? usage) =>
-        new(null, outputText, forwardedToolCalls, usage);
+        LlmSessionCompletionSnapshot completion) =>
+        new(null, completion);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -304,7 +297,7 @@ public sealed record MessagesCreateCommandResult(
 //   New principle: Application exposes the completed Messages command outcome for the Host protocol mapper.
 public sealed record MessagesCreateCompletedCommandResult(
     NormalizedMessagesRequest Normalized,
-    ResponsesCompletionResult Completion);
+    LlmSessionCompletionSnapshot Completion);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: /v1/responses endpoints owned command orchestration and called many lower-level collaborators directly.
