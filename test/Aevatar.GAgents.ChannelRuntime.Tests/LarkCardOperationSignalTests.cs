@@ -1,0 +1,365 @@
+using System.Reflection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class LarkCardOperationSignalTests
+{
+    [Fact]
+    public async Task LarkCardCreateTaskRun_DispatchesSignalOnlyPayload()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.PostSendFailed(
+                "card_orphan",
+                "om_orphan",
+                "card_first_stream_failed",
+                "stream rejected",
+                isRateLimited: true),
+        };
+        var agent = CreateAgent("conv-lark-card-signal-only", runner, dispatch, new InMemoryEventStore());
+
+        await agent.HandleEventAsync(Envelope("conv-lark-card-signal-only",
+            CreateCardStreamChunk("corr-signal-only", "relay-msg-1", "hello")));
+
+        var signal = await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>();
+
+        signal.Operation.Should().Be(LarkCardOperationPhase.Create);
+        signal.OperationId.Should().StartWith("corr-signal-only:");
+        signal.OperationId.Should().EndWith(":1:1");
+        signal.State.Should().Be(LarkCardOperationResultState.Failed);
+        signal.RawResult.CardId.Should().Be("card_orphan");
+        signal.RawResult.CardMessageId.Should().Be("om_orphan");
+        signal.RawResult.RawErrorCode.Should().Be("card_first_stream_failed");
+        signal.RawResult.RawErrorSummary.Should().Be("stream rejected");
+        signal.RawResult.IsRateLimited.Should().BeTrue();
+        signal.RawResult.IsPostSendFailure.Should().BeTrue();
+        signal.Should().BeEquivalentTo(signal.Clone());
+    }
+
+    [Fact]
+    public async Task LarkCardOperationCompleted_ActorReconstructsRichContinuation()
+    {
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(
+            "conv-lark-card-reconstruct",
+            new RecordingCardRunner(),
+            new RecordingActorDispatchPort(),
+            store);
+
+        await agent.HandleEventAsync(Envelope("conv-lark-card-reconstruct",
+            CreateCardStreamChunk("corr-reconstruct", "relay-msg-1", "hello")));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+
+        await agent.HandleEventAsync(Envelope("conv-lark-card-reconstruct",
+            new LarkCardOperationCompletedEvent
+            {
+                OperationId = "corr-reconstruct:create:1:1",
+                CorrelationId = "corr-reconstruct",
+                Operation = LarkCardOperationPhase.Create,
+                Sequence = lifecycle.LarkCardInFlightSequence,
+                OperationGeneration = lifecycle.LarkCardOperationGeneration,
+                State = LarkCardOperationResultState.Failed,
+                Chunk = CreateCardStreamChunk("corr-reconstruct", "relay-msg-1", "hello"),
+                RawResult = new LarkCardOperationRawResult
+                {
+                    CardId = "card_orphan",
+                    CardMessageId = "om_orphan",
+                    IsPostSendFailure = true,
+                    RawErrorCode = "card_first_stream_failed",
+                    RawErrorSummary = "stream rejected",
+                },
+            }));
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var changed = events
+            .Where(e => e.EventType == ConversationReplyLifecycleChangedEvent.Descriptor.FullName)
+            .Select(e => ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(e.EventData.Value))
+            .Last();
+        changed.Lifecycle.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardTerminated);
+        changed.Lifecycle.CardId.Should().Be("card_orphan");
+        changed.Lifecycle.CardMessageId.Should().Be("om_orphan");
+        changed.Lifecycle.TerminalReason.Should().Be("create_post_send_failed:card_first_stream_failed");
+
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.SentActivityId.Should().Be("lark-card-stream:om_orphan");
+    }
+
+    private static ConversationGAgent CreateAgent(
+        string id,
+        IConversationCardTurnRunner cardRunner,
+        IActorDispatchPort dispatch,
+        IEventStore store)
+    {
+        var services = new ServiceCollection()
+            .AddSingleton(store)
+            .AddSingleton(dispatch)
+            .AddSingleton(cardRunner)
+            .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+
+        var agent = new ConversationGAgent
+        {
+            Services = services,
+            EventPublisher = new NoopEventPublisher(),
+            EventSourcingBehaviorFactory =
+                services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
+        };
+        SetId(agent, id);
+        agent.ActivateAsync().GetAwaiter().GetResult();
+        return agent;
+    }
+
+    private static EventEnvelope Envelope(string actorId, IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("test", actorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = payload switch
+                {
+                    LlmReplyCardStreamChunkEvent chunk => chunk.CorrelationId,
+                    LarkCardOperationCompletedEvent signal => signal.CorrelationId,
+                    _ => string.Empty,
+                },
+            },
+        };
+
+    private static void SetId(object agent, string id)
+    {
+        var current = agent.GetType();
+        while (current is not null)
+        {
+            var setIdMethod = current.GetMethod(
+                "SetId",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            if (setIdMethod is not null)
+            {
+                setIdMethod.Invoke(agent, [id]);
+                return;
+            }
+
+            current = current.BaseType;
+        }
+
+        throw new InvalidOperationException("Unable to set agent id via reflection.");
+    }
+
+    private static LlmReplyCardStreamChunkEvent CreateCardStreamChunk(
+        string correlationId,
+        string replyMessageId,
+        string accumulatedText) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            Activity = new ChatActivity
+            {
+                Id = correlationId,
+                Type = ActivityType.Message,
+                ChannelId = new ChannelId { Value = "lark" },
+                Bot = new BotInstanceId { Value = "lark-bot" },
+                Conversation = new ConversationReference
+                {
+                    Channel = new ChannelId { Value = "lark" },
+                    Bot = new BotInstanceId { Value = "lark-bot" },
+                    Scope = ConversationScope.Group,
+                    CanonicalKey = "conv:lark:grp",
+                },
+                Content = new MessageContent { Text = "user question" },
+                OutboundDelivery = new OutboundDeliveryContext
+                {
+                    ReplyMessageId = replyMessageId,
+                    CorrelationId = correlationId,
+                },
+            },
+            AccumulatedText = accumulatedText,
+            ChunkAtUnixMs = 42,
+            ReplyToken = "runtime-token-" + correlationId,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+    private sealed class RecordingCardRunner : IConversationCardTurnRunner
+    {
+        public ConversationCardCreateResult CreateResult { get; init; } =
+            ConversationCardCreateResult.Succeeded("card_ok", "om_card_msg");
+
+        public Task<ConversationCardCreateResult> RunCardCreateAsync(
+            LlmReplyCardStreamChunkEvent chunk,
+            string streamingElementId,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(CreateResult);
+
+        public Task<ConversationCardStreamResult> RunCardStreamAsync(
+            LlmReplyCardStreamChunkEvent chunk,
+            string cardId,
+            string elementId,
+            long sequence,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationCardStreamResult.Succeeded());
+
+        public Task<ConversationCardFinalizeResult> RunCardFinalizeAsync(
+            ChatActivity referenceActivity,
+            string cardId,
+            string elementId,
+            string finalText,
+            bool finalTextDiffersFromLastFlushed,
+            long sequence,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationCardFinalizeResult.Succeeded());
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        private readonly TaskCompletionSource<EventEnvelope> _dispatched =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _dispatched.TrySetResult(envelope.Clone());
+            return Task.CompletedTask;
+        }
+
+        public async Task<T> WaitForPayloadAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            return envelope.Payload.Unpack<T>();
+        }
+    }
+
+    private sealed class InMemoryEventStore : IEventStore
+    {
+        private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream))
+            {
+                stream = [];
+                _events[agentId] = stream;
+            }
+
+            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            if (currentVersion != expectedVersion)
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    currentVersion);
+
+            var appended = events.Select(x => x.Clone()).ToList();
+            stream.AddRange(appended);
+            var latest = stream.Count == 0 ? 0 : stream[^1].Version;
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = latest,
+                CommittedEvents = { appended.Select(x => x.Clone()) },
+            });
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream))
+                return Task.FromResult<IReadOnlyList<StateEvent>>([]);
+
+            IReadOnlyList<StateEvent> result = fromVersion.HasValue
+                ? stream.Where(x => x.Version > fromVersion.Value).Select(x => x.Clone()).ToList()
+                : stream.Select(x => x.Clone()).ToList();
+            return Task.FromResult(result);
+        }
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream) || stream.Count == 0)
+                return Task.FromResult(0L);
+            return Task.FromResult(stream[^1].Version);
+        }
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (toVersion <= 0 || !_events.TryGetValue(agentId, out var stream))
+                return Task.FromResult(0L);
+
+            var before = stream.Count;
+            stream.RemoveAll(x => x.Version <= toVersion);
+            return Task.FromResult((long)(before - stream.Count));
+        }
+    }
+
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoopEventPublisher : IEventPublisher
+    {
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+    }
+}
