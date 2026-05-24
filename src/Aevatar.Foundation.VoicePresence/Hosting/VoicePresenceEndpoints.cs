@@ -52,6 +52,9 @@ public static class VoicePresenceEndpoints
     {
         ArgumentNullException.ThrowIfNull(resolveSession);
 
+        // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+        //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+        //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
         return endpoints.Map(pattern, async (HttpContext ctx) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
@@ -82,7 +85,7 @@ public static class VoicePresenceEndpoints
             {
                 await session.AttachTransportAsync(transport, ctx.RequestAborted);
                 attached = true;
-                await WaitUntilClosedAsync(ws, ctx.RequestAborted);
+                await WaitUntilClosedAsync(transport, ctx.RequestAborted);
             }
             catch (VoiceRemoteAudioTransportUnavailableException)
             {
@@ -367,12 +370,14 @@ public static class VoicePresenceEndpoints
         }
     }
 
-    private static async Task WaitUntilClosedAsync(WebSocket ws, CancellationToken ct)
+    // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
+    //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
+    //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
+    private static async Task WaitUntilClosedAsync(WebSocketVoiceTransport transport, CancellationToken ct)
     {
         try
         {
-            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
-                await Task.Delay(500, ct);
+            await transport.Completion.WaitAsync(ct);
         }
         catch (OperationCanceledException)
         {

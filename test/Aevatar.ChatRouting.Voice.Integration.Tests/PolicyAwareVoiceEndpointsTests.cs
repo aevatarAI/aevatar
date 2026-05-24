@@ -310,7 +310,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
-    public async Task PolicyAwareVoice_WhenLeaseAcceptedPendingAttach_ShouldAttachAndTimeoutCloseWait()
+    public async Task PolicyAwareVoice_WhenLeaseAcceptedPendingAttach_ShouldAttachAndDetachWhenSocketCloses()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
@@ -319,10 +319,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var session = new VoicePresenceSession(
             isInitialized: static () => true,
             isTransportAttached: static () => false,
-            attachTransportAsync: (_, _) =>
+            attachTransportAsync: async (transport, ct) =>
             {
                 attached++;
-                return Task.CompletedTask;
+                await foreach (var _ in transport.ReceiveFramesAsync(ct))
+                {
+                }
             },
             detachTransportAsync: (_, _) =>
             {
@@ -332,11 +334,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
             pcmSampleRateHz: 24000);
         var resolver = RecordingVoiceSessionResolver.PendingAttach(session);
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(
-            policyPort,
-            catalog,
-            resolver,
-            options => options.WebSocketCloseWaitTimeout = TimeSpan.FromMilliseconds(1));
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
         var context = CreateVoiceContext(app, "/ws/voice");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -350,7 +348,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
-    public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedPendingAttach_ShouldAcceptAttachAndReleaseAfterCloseWaitTimeout()
+    public async Task PolicyAwareVoice_TypedResolutionLeaseAcceptedPendingAttach_ShouldAcceptAttachAndReleaseAfterSocketClose()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
@@ -359,10 +357,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var session = new VoicePresenceSession(
             isInitialized: static () => true,
             isTransportAttached: static () => false,
-            attachTransportAsync: (_, _) =>
+            attachTransportAsync: async (transport, ct) =>
             {
                 attached++;
-                return Task.CompletedTask;
+                await foreach (var _ in transport.ReceiveFramesAsync(ct))
+                {
+                }
             },
             detachTransportAsync: (_, _) =>
             {
@@ -372,11 +372,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
             pcmSampleRateHz: 24000);
         var resolver = RecordingVoiceSessionResolver.PendingAttach(session);
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(
-            policyPort,
-            catalog,
-            resolver,
-            options => options.WebSocketCloseWaitTimeout = TimeSpan.FromMilliseconds(1));
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
         var context = CreateVoiceContext(app, "/ws/voice");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
