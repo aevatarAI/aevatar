@@ -343,6 +343,8 @@ message ScriptNativeGraphProjection {
 }
 
 message ScriptDomainFactCommitted {
+  reserved 15, 16, 17;
+  reserved "read_model_payload", "native_document", "native_graph";
   string actor_id = 1;
   string definition_actor_id = 2;
   string script_id = 3;
@@ -357,9 +359,6 @@ message ScriptDomainFactCommitted {
   string read_model_type_url = 12;
   int64 state_version = 13;
   int64 occurred_at_unix_time_ms = 14;
-  google.protobuf.Any read_model_payload = 15;
-  ScriptNativeDocumentProjection native_document = 16;
-  ScriptNativeGraphProjection native_graph = 17;
   string scope_id = 18;
 }
 

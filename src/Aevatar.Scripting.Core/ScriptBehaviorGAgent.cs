@@ -4,7 +4,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Google.Protobuf;
@@ -14,32 +13,26 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
     //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
     //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly IScriptBehaviorDispatcher _dispatcher;
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
-    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IProtobufMessageCodec _codec;
-
-    /// <summary>
-    /// Transient actor-scoped cache of the compiled materialization plan.
-    /// Rebuilt lazily on first dispatch after activation or rebind; not persisted.
-    /// </summary>
-    private ScriptReadModelMaterializationPlan? _cachedMaterializationPlan;
 
     public ScriptBehaviorGAgent(
         IScriptBehaviorDispatcher dispatcher,
         IScriptBehaviorRuntimeCapabilityFactory capabilityFactory,
         IScriptBehaviorArtifactResolver artifactResolver,
-        IScriptReadModelMaterializationCompiler materializationCompiler,
         IProtobufMessageCodec codec)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
-        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         InitializeId();
     }
@@ -82,8 +75,6 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 
         if (IsSameBinding(evt))
             return;
-
-        _cachedMaterializationPlan = null;
 
         await PersistDomainEventAsync(new ScriptBehaviorBoundEvent
         {
@@ -153,8 +144,6 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, message, ct: token),
             cancelCallbackAsync: CancelDurableCallbackAsync);
 
-        var materializationPlan = EnsureMaterializationPlan();
-
         var facts = await _dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
                 ActorId: Id,
@@ -169,12 +158,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 CurrentStateRoot: State.StateRoot?.Clone(),
                 CurrentStateVersion: State.LastAppliedEventVersion,
                 Envelope: envelope,
-                Capabilities: capabilities)
-            {
-                ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
-                ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
-                CachedMaterializationPlan = materializationPlan,
-            },
+                Capabilities: capabilities),
             ct);
 
         if (facts.Count == 0)
@@ -300,25 +284,6 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         {
             throw new InvalidOperationException($"Script behavior actor `{Id}` is not bound.");
         }
-    }
-
-    private ScriptReadModelMaterializationPlan EnsureMaterializationPlan()
-    {
-        if (_cachedMaterializationPlan != null)
-            return _cachedMaterializationPlan;
-
-        var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
-            State.ScriptId ?? string.Empty,
-            State.Revision ?? string.Empty,
-            RequireBoundPackage(State.ScriptPackage),
-            State.SourceHash ?? string.Empty));
-
-        _cachedMaterializationPlan = _materializationCompiler.Compile(
-            artifact,
-            State.ReadModelSchemaHash ?? string.Empty,
-            State.ReadModelSchemaVersion ?? string.Empty);
-
-        return _cachedMaterializationPlan;
     }
 
     private static ScriptPackageSpec RequireBoundPackage(ScriptPackageSpec? scriptPackage)

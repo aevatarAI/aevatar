@@ -24,17 +24,16 @@ public sealed class ScriptNativeGraphProjectorTests
     {
         var graphWriter = new RecordingNativeGraphWriter();
         IProjectionGraphMaterializer<ScriptNativeGraphReadModel> graphMaterializer = new ScriptNativeGraphMaterializer();
+        var readModel = BuildClaimReadModel();
         var projector = new ScriptNativeGraphProjector(
             graphWriter,
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(BuildNativeGraphProjection(readModel)),
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
             RootActorId = "claim-runtime",
             ProjectionKind = "script-execution-read-model",
         };
-        var readModel = BuildClaimReadModel();
-        var nativeGraphProjection = BuildNativeGraphProjection(readModel);
-
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
@@ -48,10 +47,8 @@ public sealed class ScriptNativeGraphProjectorTests
                     EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = readModel.Clone() }),
                     ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-                    ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 3,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
-                    NativeGraph = nativeGraphProjection.Clone(),
                 },
                 ScriptCommittedEnvelopeFactory.CreateState(
                     "definition-1",
@@ -99,6 +96,7 @@ public sealed class ScriptNativeGraphProjectorTests
         var graphWriter = new RecordingNativeGraphWriter();
         var projector = new ScriptNativeGraphProjector(
             graphWriter,
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(null),
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
@@ -132,6 +130,7 @@ public sealed class ScriptNativeGraphProjectorTests
         var graphWriter = new RecordingNativeGraphWriter();
         var projector = new ScriptNativeGraphProjector(
             graphWriter,
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(null),
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
@@ -148,7 +147,6 @@ public sealed class ScriptNativeGraphProjectorTests
                     EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ClaimDecisionRecorded()),
                     ReadModelTypeUrl = Any.Pack(new ClaimReadModel()).TypeUrl,
-                    ReadModelPayload = Any.Pack(new ClaimReadModel()),
                     StateVersion = 4,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T01:00:00Z").ToUnixTimeMilliseconds(),
                 },
@@ -171,10 +169,21 @@ public sealed class ScriptNativeGraphProjectorTests
     [Fact]
     public void Ctor_ShouldThrow_WhenDependenciesMissing()
     {
-        Action noWriter = () => new ScriptNativeGraphProjector(null!, new ScriptNativeGraphMaterializer());
-        Action noMaterializer = () => new ScriptNativeGraphProjector(new RecordingNativeGraphWriter(), null!);
+        Action noWriter = () => new ScriptNativeGraphProjector(
+            null!,
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(null),
+            new ScriptNativeGraphMaterializer());
+        Action noPayloadMaterializer = () => new ScriptNativeGraphProjector(
+            new RecordingNativeGraphWriter(),
+            null!,
+            new ScriptNativeGraphMaterializer());
+        Action noMaterializer = () => new ScriptNativeGraphProjector(
+            new RecordingNativeGraphWriter(),
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(null),
+            null!);
 
         noWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
+        noPayloadMaterializer.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("payloadMaterializer");
         noMaterializer.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("materializer");
     }
 
@@ -182,15 +191,16 @@ public sealed class ScriptNativeGraphProjectorTests
     public async Task ProjectAsync_ShouldFallbackToFactTimestamp_WhenEnvelopeTimestampIsMissing()
     {
         var graphWriter = new RecordingNativeGraphWriter();
+        var readModel = BuildClaimReadModel();
         var projector = new ScriptNativeGraphProjector(
             graphWriter,
+            StubScriptProjectionPayloadMaterializer.WithNativeGraph(BuildNativeGraphProjection(readModel)),
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
             RootActorId = "claim-runtime",
             ProjectionKind = "script-execution-read-model",
         };
-        var readModel = BuildClaimReadModel();
         var occurredAt = DateTimeOffset.Parse("2026-03-14T02:00:00Z");
 
         var fact = new ScriptDomainFactCommitted
@@ -203,10 +213,8 @@ public sealed class ScriptNativeGraphProjectorTests
             EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
             DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = readModel.Clone() }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 5,
             OccurredAtUnixTimeMs = occurredAt.ToUnixTimeMilliseconds(),
-            NativeGraph = BuildNativeGraphProjection(readModel),
         };
 
         var envelope = ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(

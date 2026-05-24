@@ -25,6 +25,9 @@ namespace Aevatar.Scripting.Projection.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
+    //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
+    //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
     public static IServiceCollection AddScriptingProjectionComponents(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -109,6 +112,7 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             ScriptingCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddSingleton<IScriptProjectionPayloadMaterializer, ScriptProjectionPayloadMaterializer>();
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();
         services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>

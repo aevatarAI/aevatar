@@ -4,7 +4,6 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -28,11 +27,9 @@ public sealed class ScriptBehaviorDispatcherTests
     {
         Action act = parameterName switch
         {
-            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ScriptReadModelMaterializationCompiler(), new ScriptNativeProjectionBuilder(), new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ProtobufMessageCodec()),
             "codec" => () => _ = new ScriptBehaviorDispatcher(
                 new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
-                new ScriptReadModelMaterializationCompiler(),
-                new ScriptNativeProjectionBuilder(),
                 null!),
             _ => throw new InvalidOperationException("Unexpected parameter name."),
         };
@@ -101,12 +98,13 @@ public sealed class ScriptBehaviorDispatcherTests
         fact.ReadModelTypeUrl.Should().Be(SimpleTextReadModelTypeUrl);
         fact.DomainEventPayload.Should().NotBeNull();
         fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
-        fact.ReadModelPayload.Should().NotBeNull();
-        fact.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
+        fact.TryGetLegacyReadModelPayload().Should().BeNull();
+        fact.TryGetLegacyNativeDocument().Should().BeNull();
+        fact.TryGetLegacyNativeGraph().Should().BeNull();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldEmitNativeMaterializations_WhenSchemaIsDeclared()
+    public async Task DispatchAsync_ShouldNotPersistDerivedNativeMaterializations_WhenSchemaIsDeclared()
     {
         var dispatcher = CreateDispatcher(
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())));
@@ -150,24 +148,15 @@ public sealed class ScriptBehaviorDispatcherTests
                 CurrentStateRoot: null,
                 CurrentStateVersion: 4,
                 Envelope: envelope,
-                Capabilities: new NoOpCapabilities())
-            {
-                ReadModelSchemaVersion = "3",
-                ReadModelSchemaHash = "structured-schema",
-            },
+                Capabilities: new NoOpCapabilities()),
             CancellationToken.None);
 
         facts.Should().ContainSingle();
         var fact = facts[0];
-        fact.NativeDocument.Should().NotBeNull();
-        fact.NativeGraph.Should().NotBeNull();
-        fact.NativeDocument!.SchemaId.Should().Be("script_profile");
-        fact.NativeDocument.FieldsValue.Fields["actor_id"].StringValue.Should().Be("actor-1");
-        fact.NativeGraph!.GraphScope.Should().Be("script-native-script_profile");
-        fact.NativeGraph.NodeEntries.Should().Contain(x => x.NodeId == "script:script_profile:profile-runtime-1");
-        fact.NativeGraph.EdgeEntries.Should().Contain(x =>
-            x.FromNodeId == "script:script_profile:profile-runtime-1" &&
-            x.EdgeType == "rel_policy");
+        fact.DomainEventPayload.Unpack<ScriptProfileUpdated>().Current.ActorId.Should().Be("actor-1");
+        fact.TryGetLegacyReadModelPayload().Should().BeNull();
+        fact.TryGetLegacyNativeDocument().Should().BeNull();
+        fact.TryGetLegacyNativeGraph().Should().BeNull();
     }
 
     [Fact]
@@ -304,8 +293,6 @@ public sealed class ScriptBehaviorDispatcherTests
     private static ScriptBehaviorDispatcher CreateDispatcher(IScriptBehaviorArtifactResolver artifactResolver) =>
         new(
             artifactResolver,
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeProjectionBuilder(),
             new ProtobufMessageCodec());
 
     [Fact]
@@ -449,7 +436,7 @@ public sealed class ScriptBehaviorDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMaterializeEachFactFromItsOwnPostEventState()
+    public async Task DispatchAsync_ShouldProgressStateAcrossMultiEventCommandTurnWithoutPersistingDerivedPayload()
     {
         var dispatcher = CreateDispatcher(
             new StaticArtifactResolver(CreateArtifact(new SequentialProjectionBehavior())));
@@ -482,10 +469,11 @@ public sealed class ScriptBehaviorDispatcherTests
         facts.Should().HaveCount(2);
         facts[0].EventSequence.Should().Be(1);
         facts[0].StateVersion.Should().Be(11);
-        facts[0].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("FIRST");
+        facts[0].TryGetLegacyReadModelPayload().Should().BeNull();
         facts[1].EventSequence.Should().Be(2);
         facts[1].StateVersion.Should().Be(12);
-        facts[1].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("SECOND");
+        facts[1].DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("SECOND");
+        facts[1].TryGetLegacyReadModelPayload().Should().BeNull();
     }
 
     [Fact]

@@ -24,6 +24,7 @@ public sealed class ScriptNativeDocumentProjectorTests
         var dispatcher = new RecordingNativeDocumentDispatcher();
         var projector = new ScriptNativeDocumentProjector(
             dispatcher,
+            StubScriptProjectionPayloadMaterializer.WithNativeDocument(BuildNativeDocumentProjection(BuildProfileReadModel())),
             new ScriptNativeDocumentMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
@@ -31,7 +32,6 @@ public sealed class ScriptNativeDocumentProjectorTests
             ProjectionKind = "script-execution-read-model",
         };
         var readModel = BuildProfileReadModel();
-        var nativeDocumentProjection = BuildNativeDocumentProjection(readModel);
 
         await projector.ProjectAsync(
             context,
@@ -46,10 +46,8 @@ public sealed class ScriptNativeDocumentProjectorTests
                     EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = readModel.Clone() }),
                     ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-                    ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 7,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
-                    NativeDocument = nativeDocumentProjection.Clone(),
                 },
                 ScriptCommittedEnvelopeFactory.CreateState(
                     "definition-1",
