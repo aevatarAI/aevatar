@@ -219,29 +219,12 @@ public sealed class NyxIdRelayTransport
         if (TryBuildWorkflowResumePayload(submission, out var workflowResume))
         {
             submission.WorkflowResume = workflowResume;
-            RemoveWorkflowResumeKeys(submission);
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
         {
             submission.LlmSelection = llmSelection;
-            RemoveLlmSelectionKeys(submission);
         }
-    }
-
-    private static void RemoveWorkflowResumeKeys(CardActionSubmission submission)
-    {
-        submission.Arguments.Remove("actor_id");
-        submission.Arguments.Remove("run_id");
-        submission.Arguments.Remove("step_id");
-        submission.Arguments.Remove("approved");
-    }
-
-    private static void RemoveLlmSelectionKeys(CardActionSubmission submission)
-    {
-        submission.Arguments.Remove("llm_action");
-        submission.Arguments.Remove("service_id");
-        submission.Arguments.Remove("preset_id");
     }
 
     private static bool TryBuildWorkflowResumePayload(
