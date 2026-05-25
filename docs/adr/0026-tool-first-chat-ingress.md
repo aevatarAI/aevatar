@@ -8,9 +8,9 @@ owner: eanzhao
 
 ## Context
 
-ADR-0024 introduced `ChatRoutePolicy` with five `ChatRouteAction` oneof
-variants — `ForwardToModel`, `ForwardToGAgent`, `ForwardToTeam`,
-`ForwardToWorkflow`, `Reject` — and shipped `ForwardToModel`,
+ADR-0024 introduced `ChatRoutePolicy` with several `ChatRouteAction` oneof
+variants — including `ForwardToModel`, `ForwardToGAgent`, `ForwardToTeam`,
+`ForwardToWorkflow`, and `Reject` — and shipped `ForwardToModel`,
 `ForwardToGAgent`, and `ForwardToTeam` in v1. ADR-0025 extended the policy
 to voice using `ForwardToGAgent(actor_id, voice_module_name)` because voice
 v1 was framed as "pick a voice-enabled actor and attach a module".
@@ -60,7 +60,7 @@ Removed actions:
 - `ForwardToGAgent` — replaced by tool `aevatar_invoke_gagent`
 - `ForwardToTeam` — replaced by tool `aevatar_invoke_team`
 - `ForwardToWorkflow` — replaced by tool `aevatar_start_workflow`
-  (the reserved wire slot becomes deprecated rather than realized)
+  (the old wire slot is reserved and must not be reused)
 
 The "config actor + boundary resolver + readmodel" three-part form from
 ADR-0024 D1 is preserved. Only the action set narrows.
@@ -214,10 +214,10 @@ deferred:
 
 Static checks (CI guards):
 
-- `chat_route_policy.proto`: new policy snapshots MUST NOT emit
-  `ForwardToGAgent`, `ForwardToTeam`, or `ForwardToWorkflow` after Phase 4.
-  A guard script asserts emission paths only produce `ForwardToModel` or
-  `Reject`.
+- `chat_route_policy.proto`: policy snapshots MUST NOT emit
+  `ForwardToGAgent`, `ForwardToTeam`, or `ForwardToWorkflow`; those tags and
+  names are reserved. A guard script asserts emission paths only produce
+  `ForwardToModel` or `Reject`.
 - `ResponsesEndpoints.cs` lines 779-927 deleted after Phase 4. A guard
   script asserts the file does not contain `IStaticGAgentStreamInvocationPort`
   references in `/v1/responses` handler bodies.
@@ -266,9 +266,9 @@ Stage 1's tool sources are merged.
 | Stage | Scope | Breaking? |
 |---|---|---|
 | **1** | Implement `aevatar_invoke_gagent` / `_team` / `_workflow` / `_observe_run` / `_query_readmodel` as `IAgentToolSource`. Wire into existing ToolCallLoop. Verify Lark outbound user-scoped path (D7 prerequisite). | No |
-| **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. `ChatRouteResolver` translates legacy `ForwardToGAgent/Team` rules to `ForwardToModel + tool_choice_hint`. `ChatRunActor` introduced for SSE sessions. | No |
-| **3** | Deprecation: legacy `ForwardToGAgent` / `ForwardToTeam` / `ForwardToWorkflow` rules emit warning headers + structured logs. Provide policy-migration tool. Hold at least one release cycle. | No |
-| **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for the three actions. Proto enum values marked deprecated (kept on the wire to avoid tag re-use); next major proto bump removes them. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
+| **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. `ChatRunActor` introduced for SSE sessions. | No |
+| **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
+| **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
 | **5** | `VoiceSessionActor` implementation. `/ws/voice` switches to `ForwardToModel + tool_set_ref`. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
 
 ## Supersedes

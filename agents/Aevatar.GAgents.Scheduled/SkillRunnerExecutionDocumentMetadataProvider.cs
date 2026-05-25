@@ -1,12 +1,12 @@
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 
-namespace Aevatar.Workflow.Projection.Metadata;
+namespace Aevatar.GAgents.Scheduled;
 
-public sealed class WorkflowCapabilitiesCurrentStateDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<WorkflowCapabilitiesCurrentStateDocument>
+public sealed class SkillRunnerExecutionDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<SkillRunnerExecutionDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "workflow-capabilities-current-states",
+        IndexName: UserAgentCatalogStorageContracts.RunnerExecutionReadModelIndexName,
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,

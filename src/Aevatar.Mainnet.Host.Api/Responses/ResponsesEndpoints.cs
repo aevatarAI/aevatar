@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.AspNetCore.Builder;
@@ -16,6 +17,9 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 internal static partial class ResponsesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -84,10 +88,10 @@ internal static partial class ResponsesApiEndpoints
                 BuildCompletedResponse(
                     result.Completed.Normalized,
                     result.Completed.CreatedAt,
-                    result.Completed.CompletedAt,
-                    result.Completed.OutputText,
-                    result.Completed.ForwardedToolCalls,
-                    result.Completed.Usage is null ? null : MapUsage(result.Completed.Usage)),
+                    result.Completed.Completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    result.Completed.Completion.OutputText,
+                    ToToolCalls(result.Completed.Completion.ToolCalls),
+                    result.Completed.Completion.Usage is null ? null : MapUsage(result.Completed.Completion.Usage)),
                 statusCode: StatusCodes.Status200OK);
         }
 
@@ -206,7 +210,8 @@ internal static partial class ResponsesApiEndpoints
             return;
         }
 
-        var completedText = completion.OutputText;
+        var sessionCompletion = completion.Completion!;
+        var completedText = sessionCompletion.OutputText;
         await WriteSseFrameAsync(
             response,
             "response.output_text.done",
@@ -234,8 +239,9 @@ internal static partial class ResponsesApiEndpoints
             },
             ct);
 
+        var toolCalls = ToToolCalls(sessionCompletion.ToolCalls);
         var nextOutputIndex = 1;
-        foreach (var toolCall in completion.ForwardedToolCalls)
+        foreach (var toolCall in toolCalls)
         {
             var functionCallItem = BuildFunctionCallOutputItem(toolCall);
             await WriteSseFrameAsync(
@@ -266,10 +272,10 @@ internal static partial class ResponsesApiEndpoints
         var completedResponse = BuildCompletedResponse(
             normalized,
             createdAt,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            sessionCompletion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             completedText,
-            completion.ForwardedToolCalls,
-            completion.Usage is null ? null : MapUsage(completion.Usage));
+            toolCalls,
+            sessionCompletion.Usage is null ? null : MapUsage(sessionCompletion.Usage));
 
         await WriteSseFrameAsync(
             response,
@@ -368,6 +374,18 @@ internal static partial class ResponsesApiEndpoints
             OutputTokens = usage.CompletionTokens,
             TotalTokens = usage.TotalTokens,
             OutputTokensDetails = new ResponsesOutputTokensDetails(),
+        };
+
+    private static IReadOnlyList<ToolCall> ToToolCalls(
+        IReadOnlyList<LlmSessionCompletedToolCallSnapshot> toolCalls) =>
+        toolCalls.Select(ToToolCall).ToArray();
+
+    private static ToolCall ToToolCall(LlmSessionCompletedToolCallSnapshot toolCall) =>
+        new()
+        {
+            Id = toolCall.CallId,
+            Name = toolCall.ToolName,
+            ArgumentsJson = toolCall.ResultJson ?? "{}",
         };
 
     private static ResponsesOutputMessage BuildOutputMessage(string id, string status, string? text)
@@ -542,7 +560,7 @@ internal static partial class ResponsesApiEndpoints
         return resolver.Resolve(snapshot, new ChatRouteInput
         {
             SourceKind = ChatSourceKind.NyxResponses,
-            CallerScope = new ChatRouteCallerScope
+            CallerScope = new OwnerScope
             {
                 NyxUserId = ownerScope.NyxUserId,
                 Platform = ownerScope.Platform,
@@ -585,7 +603,7 @@ internal static partial class ResponsesApiEndpoints
         var matchedRuleId = string.IsNullOrWhiteSpace(deprecation.MatchedRuleId)
             ? "default_target"
             : deprecation.MatchedRuleId;
-        return $"{deprecation.Code}; matched_rule_id={matchedRuleId}; action_kind={deprecation.ActionKind}; translated_target={deprecation.TranslatedTarget}; migrate_with=ChatRoutePolicyMigrator";
+        return $"{deprecation.Code}; matched_rule_id={matchedRuleId}; action_kind={deprecation.ActionKind}; translated_target={deprecation.TranslatedTarget}; use_tool_first_route_policy=true";
     }
 
     private static string EscapeWarningText(string value) =>

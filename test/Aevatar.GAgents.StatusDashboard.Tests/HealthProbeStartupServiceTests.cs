@@ -250,10 +250,10 @@ public sealed class HealthProbeStartupServiceTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope.Clone()));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -261,7 +261,7 @@ public sealed class HealthProbeStartupServiceTests
     {
         public int Attempts { get; private set; }
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Attempts++;
             throw exception;

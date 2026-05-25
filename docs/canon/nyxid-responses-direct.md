@@ -22,6 +22,14 @@ owner: eanzhao
 | `POST /v1/messages` | Anthropic Messages facade | 已上线 | 给 Messages-only 客户端使用，共享直连工具分类 |
 | `POST /v1/chat/completions` | OpenAI Chat Completions facade | 已上线 | 给 Chat Completions-only 客户端使用，共享直连工具分类 |
 
+`/api/scopes/{scopeId}/streaming-proxy/...` 仍由 Mainnet Host 保留给既有客户端，但已软废弃。该 route 会返回：
+
+- `Deprecation: true`
+- `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`
+- `Link: </v1/responses>; rel="successor-version"; title="Migrate direct model streaming to /v1/responses; StreamingProxy room fan-out has no one-to-one replacement"`
+
+迁移口径必须诚实：直接模型对话、streaming 与工具调用迁到 `/v1/responses`；只会 Anthropic Messages 的客户端迁到 `/v1/messages`。StreamingProxy 的 room CRUD、participant join/post 与 room fan-out 是不同产品语义，`/v1/responses` 不是一对一替代。如果客户端依赖 room/fan-out，必须先明确新的 room 产品契约，不能把旧 StreamingProxy 当作新的通用 streaming 主入口继续扩展。
+
 推荐外部客户端统一走：
 
 ```text

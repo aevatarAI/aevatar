@@ -170,12 +170,10 @@ message WorkflowCatalogEdgeReadModel {
   string label = 3;
 }
 
-message WorkflowCapabilitiesCurrentStateDocument {
+message WorkflowCapabilitiesStartupArtifact {
+  reserved 2, 3, 5;
   string id = 1;
-  int64 state_version = 2;
-  string last_event_id = 3;
-  google.protobuf.Timestamp updated_at_utc_value = 4;
-  string actor_id = 5;
+  google.protobuf.Timestamp generated_at_utc_value = 4;
   string schema_version = 6;
   repeated WorkflowPrimitiveCapabilityReadModel primitive_entries = 7;
   repeated WorkflowConnectorCapabilityReadModel connector_entries = 8;

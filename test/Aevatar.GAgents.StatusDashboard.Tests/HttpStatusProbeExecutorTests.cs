@@ -1,7 +1,9 @@
 using System.Net;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
 
@@ -308,18 +310,21 @@ public sealed class HttpStatusProbeExecutorTests
     [Fact]
     public async Task ReportsMissingUrlAsDown()
     {
-        var executor = NewExecutor(HttpStatusCode.OK, configuration: new Dictionary<string, string?>());
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        var executor = NewExecutor(HttpStatusCode.OK, configuration: new Dictionary<string, string?>(), timeProvider: clock);
         var descriptor = NewDescriptor("missing-url", new() { ["ExpectedStatuses"] = "200" });
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
         outcome.Status.Should().Be(HealthOutcomeStatus.Down);
         outcome.Detail.Should().Be("missing_parameter");
+        outcome.ObservedAt.ToDateTimeOffset().Should().Be(clock.GetUtcNow());
     }
 
     private static HttpStatusProbeExecutor NewExecutor(
         HttpStatusCode status,
         Dictionary<string, string?> configuration,
         Action<HttpRequestMessage>? captureRequest = null,
-        string? responseBody = null)
+        string? responseBody = null,
+        TimeProvider? timeProvider = null)
     {
         var configRoot = new ConfigurationBuilder()
             .AddInMemoryCollection(configuration)
@@ -328,7 +333,8 @@ public sealed class HttpStatusProbeExecutorTests
         return new HttpStatusProbeExecutor(
             factory,
             configRoot,
-            new StatusProbeAuthorizationResolver(factory, configRoot));
+            new StatusProbeAuthorizationResolver(factory, configRoot),
+            timeProvider ?? TimeProvider.System);
     }
 
     private static HttpStatusProbeExecutor NewExecutor(
@@ -342,7 +348,8 @@ public sealed class HttpStatusProbeExecutorTests
         return new HttpStatusProbeExecutor(
             factory,
             configRoot,
-            new StatusProbeAuthorizationResolver(factory, configRoot));
+            new StatusProbeAuthorizationResolver(factory, configRoot),
+            TimeProvider.System);
     }
 
     private static HttpStatusProbeExecutor NewExecutor(

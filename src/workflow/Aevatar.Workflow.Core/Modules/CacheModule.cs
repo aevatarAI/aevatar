@@ -32,7 +32,10 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "cache") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-            var now = DateTimeOffset.UtcNow;
+            // Refactor (iter89/cluster-089-workflow-module-clock-state):
+            //   Old: Cache TTL checks read DateTimeOffset.UtcNow directly.
+            //   New: Cache business time comes from the workflow context clock.
+            var now = ctx.UtcNow;
             var state = WorkflowExecutionStateAccess.Load<CacheModuleState>(ctx, ModuleStateKey);
 
             var cacheKey = request.Parameters.GetValueOrDefault("cache_key", request.Input ?? "");
@@ -115,7 +118,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                 state.CacheEntries[cacheKey] = new CacheEntryState
                 {
                     Value = evt.Output ?? string.Empty,
-                    ExpiresAt = WorkflowTimestampCodec.ToTimestamp(DateTimeOffset.UtcNow.AddSeconds(pending.TtlSeconds)),
+                    ExpiresAt = WorkflowTimestampCodec.ToTimestamp(ctx.UtcNow.AddSeconds(pending.TtlSeconds)),
                 };
             }
             await SaveStateAsync(state, ctx, ct);

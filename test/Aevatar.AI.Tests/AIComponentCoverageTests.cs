@@ -738,7 +738,7 @@ public class AIComponentCoverageTests
             allowedInputKeys: ["q"]);
 
         SetPrivateField(connector, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") }));
 
         var success = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -769,7 +769,7 @@ public class AIComponentCoverageTests
             allowedTools: [],
             allowedInputKeys: []);
         SetPrivateField(discoveredMiss, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)));
 
         var notDiscovered = await discoveredMiss.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -784,7 +784,7 @@ public class AIComponentCoverageTests
             serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
             defaultTool: "tool-x");
         SetPrivateField(throwingConnector, "_tools",
-            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") }));
 
         var caught = await throwingConnector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
@@ -810,6 +810,27 @@ public class AIComponentCoverageTests
         await act.Should().ThrowAsync<Exception>();
 
         await manager.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task MCPConnector_DisposeAsync_BeforeConnect_ShouldDisposeOwnedRemoteHttpClient()
+    {
+        var handler = new RecordingDisposeHandler();
+        var client = new HttpClient(handler);
+        var connector = new MCPConnector(
+            name: "mcp-owned-http",
+            serverConfig: new MCPServerConfig
+            {
+                Name = "server-owned-http",
+                Url = "https://example.com/mcp",
+                HttpClient = client,
+                OwnsHttpClient = true,
+            });
+
+        await connector.DisposeAsync();
+        await connector.DisposeAsync();
+
+        handler.DisposeCount.Should().Be(1);
     }
 
     private static async IAsyncEnumerable<ChatResponseUpdate> Stream(IEnumerable<string> parts)
@@ -963,6 +984,9 @@ public class AIComponentCoverageTests
         field!.SetValue(target, value);
     }
 
+    private static Lazy<Task<T>> CompletedLazy<T>(T value) =>
+        new(() => Task.FromResult(value), LazyThreadSafetyMode.ExecutionAndPublication);
+
     private static T GetPrivateField<T>(object target, string fieldName)
     {
         var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
@@ -982,9 +1006,11 @@ public class AIComponentCoverageTests
         string? capturedRequestBody = null;
 
         // Create a mock HTTP transport that captures the request body
-        var handler = new CapturingHttpHandler(request =>
+        var handler = new CapturingHttpHandler(async request =>
         {
-            capturedRequestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            capturedRequestBody = request.Content == null
+                ? null
+                : await request.Content.ReadAsStringAsync();
 
             // Return a minimal valid streaming response so the SDK doesn't throw
             var responseContent = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test\"," +
@@ -993,7 +1019,7 @@ public class AIComponentCoverageTests
             {
                 Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
             };
-            return Task.FromResult(response);
+            return response;
         });
 
         // Build the same pipeline as NyxIdLLMProvider: OpenAIClient → IChatClient → MEAILLMProvider
@@ -1055,5 +1081,26 @@ public class AIComponentCoverageTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
             onSend(request);
+    }
+
+    private sealed class RecordingDisposeHandler : HttpMessageHandler
+    {
+        public int DisposeCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _ = request;
+            _ = cancellationToken;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                DisposeCount++;
+
+            base.Dispose(disposing);
+        }
     }
 }

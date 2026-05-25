@@ -1075,7 +1075,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 }
                 break;
             default:
-                // ForwardToWorkflow is v2 (no relay-side implementation);
                 // Reject was handled at the resolver before run dispatch;
                 // None means resolver returned no rule + no default.
                 break;

@@ -166,6 +166,20 @@ public sealed class ElasticsearchProjectionConfigurationTests
     }
 
     [Fact]
+    public void IsEnabled_Throws_WhenExplicitFlagIsInvalid()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "sometimes",
+        });
+
+        Action act = () => ElasticsearchProjectionConfiguration.IsEnabled(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Invalid boolean value 'sometimes'.");
+    }
+
+    [Fact]
     public void BindOptions_NullConfiguration_Throws()
     {
         Action act = () => ElasticsearchProjectionConfiguration.BindOptions(null!);
@@ -203,6 +217,126 @@ public sealed class ElasticsearchProjectionConfigurationTests
         options.Should().NotBeNull();
         options.IndexPrefix.Should().Be("aevatar");
         options.Endpoints.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Resolve_SelectsElasticsearch_WhenExplicitlyEnabledAndInMemoryDefaultIsDisabled()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://es:9200",
+        });
+
+        var selection = ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        selection.Kind.Should().Be(ProjectionDocumentProviderKind.Elasticsearch);
+        selection.ElasticsearchEnabled.Should().BeTrue();
+        selection.InMemoryEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Resolve_SelectsInMemory_WhenElasticsearchDisabledAndInMemoryDefaultIsEnabled()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+        });
+
+        var selection = ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        selection.Kind.Should().Be(ProjectionDocumentProviderKind.InMemory);
+        selection.ElasticsearchEnabled.Should().BeFalse();
+        selection.InMemoryEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Resolve_Throws_WhenBothDocumentProvidersAreEnabled()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+        });
+
+        Action act = () => ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Exactly one document projection provider must be enabled for TestCapability.*");
+    }
+
+    [Fact]
+    public void Resolve_Throws_WhenInMemoryIsSelectedAndDeniedByPolicy()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Policies:DenyInMemoryDocumentReadStore"] = "true",
+        });
+
+        Action act = () => ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("InMemory document provider is not allowed by projection policy.*");
+    }
+
+    [Fact]
+    public void Resolve_Throws_WhenInMemoryIsSelectedInProduction()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Policies:Environment"] = "Production",
+        });
+
+        Action act = () => ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("InMemory document provider is not allowed by projection policy.*");
+    }
+
+    [Fact]
+    public void Resolve_Throws_WhenInMemoryFlagIsInvalid()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "maybe",
+        });
+
+        Action act = () => ProjectionDocumentProviderConfiguration.Resolve(configuration, "TestCapability");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Invalid boolean value 'maybe'.");
+    }
+
+    [Fact]
+    public void BindRequiredElasticsearchOptions_UsesSharedBindingAndRequiresEndpoints()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://es:9200",
+            ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "iter86",
+        });
+
+        var options = ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration);
+
+        options.Endpoints.Should().BeEquivalentTo(new[] { "http://es:9200" });
+        options.IndexPrefix.Should().Be("iter86");
+    }
+
+    [Fact]
+    public void BindRequiredElasticsearchOptions_Throws_WhenEnabledButEndpointsAreEmpty()
+    {
+        var configuration = BuildConfiguration(new()
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+        });
+
+        Action act = () => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
     }
 
     private static IConfigurationRoot BuildConfiguration(Dictionary<string, string?> values) =>

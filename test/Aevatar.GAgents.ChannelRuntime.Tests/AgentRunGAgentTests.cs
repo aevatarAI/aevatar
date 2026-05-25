@@ -2286,12 +2286,13 @@ public sealed class AgentRunGAgentTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
             if (!_actors.TryGetValue(actorId, out var actor))
                 throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 
@@ -2299,10 +2300,10 @@ public sealed class AgentRunGAgentTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -2363,7 +2364,7 @@ public sealed class AgentRunGAgentTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
             throw new InvalidOperationException("simulated enqueue failure");

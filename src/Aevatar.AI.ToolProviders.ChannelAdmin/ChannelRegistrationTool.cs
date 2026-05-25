@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 
@@ -14,17 +13,27 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
+    // Refactor (iter83/cluster-083-agent-tool-source-root-provider-locator):
+    //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
+    //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual readmodel rematerialization path, new=startup-owned projection refresh
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private const string DefaultNyxProviderSlug = "api-lark-bot";
-    private readonly IServiceProvider _serviceProvider;
+    private readonly IChannelBotRegistrationQueryPort _queryPort;
+    private readonly ChannelRegistrationCommandFacade _commandFacade;
+    private readonly INyxLarkProvisioningService _provisioningService;
 
-    public ChannelRegistrationTool(IServiceProvider serviceProvider)
+    public ChannelRegistrationTool(
+        IChannelBotRegistrationQueryPort queryPort,
+        ChannelRegistrationCommandFacade commandFacade,
+        INyxLarkProvisioningService provisioningService)
     {
-        _serviceProvider = serviceProvider;
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
+        _provisioningService = provisioningService ?? throw new ArgumentNullException(nameof(provisioningService));
     }
 
     public string Name => "channel_registrations";
@@ -97,35 +106,13 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         return action switch
         {
-            "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
+            "list" => await ListAsync(_queryPort, ct),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "delete" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => DeleteAsync(queryPort, commandFacade, root, ct)),
+            "delete" => await DeleteAsync(_queryPort, _commandFacade, root, ct),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
             _ => SerializeError($"Unsupported channel registration action '{action}'."),
         };
-    }
-
-    private async Task<string> ExecuteWithQueryAsync(Func<IChannelBotRegistrationQueryPort, Task<string>> operation)
-    {
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        if (queryPort is null)
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort is not registered in DI."}""";
-
-        return await operation(queryPort);
-    }
-
-    private async Task<string> ExecuteWithCommandFacadeAsync(
-        Func<IChannelBotRegistrationQueryPort, ChannelRegistrationCommandFacade, Task<string>> operation)
-    {
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        var commandFacade = _serviceProvider.GetService<ChannelRegistrationCommandFacade>();
-        if (queryPort is null || commandFacade is null)
-        {
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort or ChannelRegistrationCommandFacade is not registered in DI."}""";
-        }
-
-        return await operation(queryPort, commandFacade);
     }
 
     private static string? GetStr(JsonElement element, string propertyName) =>
@@ -228,15 +215,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         JsonElement args,
         CancellationToken ct)
     {
-        var provisioningService = _serviceProvider.GetService<INyxLarkProvisioningService>();
-        if (provisioningService is null)
-            return """{"error":"Nyx-backed Lark provisioning service is not registered."}""";
-
         var scopeResolution = ResolveToolScopeId(args, required: true);
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
 
-        var result = await provisioningService.ProvisionAsync(
+        var result = await _provisioningService.ProvisionAsync(
             new NyxLarkProvisioningRequest(
                 AccessToken: accessToken,
                 AppId: GetStr(args, "app_id")?.Trim() ?? string.Empty,

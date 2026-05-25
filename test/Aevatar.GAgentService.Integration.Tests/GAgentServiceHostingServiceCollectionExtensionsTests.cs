@@ -49,13 +49,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
-        // Transitional platform fallback only. Studio registration replaces it
-        // with the actor-readmodel resolver; remove this assertion when Team
-        // invoke no longer needs a GAgentService compatibility resolver.
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ITeamEntryMemberResolver) &&
-            x.ImplementationType != null &&
-            x.ImplementationType.FullName == "Aevatar.GAgentService.Application.Bindings.DefaultTeamEntryMemberResolver");
+        services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IActivationCapabilityViewReader));
@@ -261,10 +255,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
             .Should()
             .NotBeNull();
-        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>>()
+        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>>()
             .Should()
             .NotBeNull();
-        var capabilitiesReader = app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>();
+        var capabilitiesReader = app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>();
         var capabilities = await capabilitiesReader.GetAsync(
             "workflow-capabilities",
             CancellationToken.None);
@@ -342,7 +336,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>().Should().NotBeNull();
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
 
@@ -394,9 +388,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>().Should().NotBeNull();
     }
 
     [Fact]

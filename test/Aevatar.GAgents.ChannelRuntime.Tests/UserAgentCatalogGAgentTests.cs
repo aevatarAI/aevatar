@@ -80,6 +80,31 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         _agent.State.Entries.Should().ContainSingle();
         _agent.State.Entries[0].OwnerScope.Should().NotBeNull();
         _agent.State.Entries[0].OwnerScope!.MatchesStrictly(scope).Should().BeTrue();
+#pragma warning disable CS0612 // deprecated ownership fields should not be re-emitted with owner_scope
+        _agent.State.Entries[0].Platform.Should().BeEmpty();
+        _agent.State.Entries[0].OwnerNyxUserId.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_WithoutOwnerScope_PersistsLegacyOwnershipFields()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "legacy-agent",
+            ConversationId = "oc_chat_legacy",
+#pragma warning disable CS0612 // legacy command shape remains readable/writable when owner_scope is absent
+            Platform = "nyxid",
+            OwnerNyxUserId = "legacy-user",
+#pragma warning restore CS0612
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OwnerScope.Should().BeNull();
+#pragma warning disable CS0612
+        _agent.State.Entries[0].Platform.Should().Be("nyxid");
+        _agent.State.Entries[0].OwnerNyxUserId.Should().Be("legacy-user");
+#pragma warning restore CS0612
     }
 
     [Fact]

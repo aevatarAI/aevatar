@@ -4,7 +4,7 @@
 // Handles ChatRequestEvent:
 // 1. Calls LLM via ChatStreamAsync (streaming)
 // 2. Publishes AG-UI events: TextMessageStart → Content* → ToolCall* → End
-// 3. Logs prompt and full LLM response for observability
+// 3. Logs stable ids, lengths, status, and redaction markers for observability
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
@@ -689,8 +689,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 request.SessionId);
         }
 
-        var promptPreview = BuildRequestPreview(request);
-        Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
+        var requestSummary = BuildRequestLogSummary(request);
+        Logger.LogInformation(
+            "[{Role}] LLM request: session={SessionId}, status=started, prompt_len={PromptLen}, input_parts={InputPartCount}, input_redacted=true",
+            RoleName,
+            request.SessionId,
+            requestSummary.PromptLength,
+            requestSummary.InputPartCount);
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
         using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
@@ -880,26 +888,22 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         var response = fullContent.ToString();
-        var responsePreview = response.Length > 300
-            ? response[..300] + "..."
-            : response;
+        // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+        //   Old pattern: Information log included raw value/prompt/input preview
+        //   New principle: only stable id + length + status + redaction marker
         Logger.LogInformation(
-            "[{Role}] LLM response ({Len} chars): {Preview}",
+            "[{Role}] LLM response: session={SessionId}, status=completed, output_len={OutputLen}, output_redacted=true",
             RoleName,
-            response.Length,
-            responsePreview);
+            request.SessionId,
+            response.Length);
 
         if (fullReasoning.Length > 0)
         {
-            var reasoning = fullReasoning.ToString();
-            var reasoningPreview = reasoning.Length > 300
-                ? reasoning[..300] + "..."
-                : reasoning;
             Logger.LogInformation(
-                "[{Role}] LLM reasoning ({Len} chars): {Preview}",
+                "[{Role}] LLM reasoning: session={SessionId}, status=completed, reasoning_len={ReasoningLen}, reasoning_redacted=true",
                 RoleName,
-                reasoning.Length,
-                reasoningPreview);
+                request.SessionId,
+                fullReasoning.Length);
         }
 
         return new SessionReplayRecord(
@@ -1336,16 +1340,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return [ContentPart.TextPart(request.Prompt ?? string.Empty)];
     }
 
-    private static string BuildRequestPreview(ChatRequestEvent request)
-    {
-        var previewSource = string.IsNullOrWhiteSpace(request.Prompt)
-            ? string.Join(", ", ResolveRequestInputParts(request).Select(part => part.Kind.ToString().ToLowerInvariant()))
-            : request.Prompt;
+    private static LLMRequestLogSummary BuildRequestLogSummary(ChatRequestEvent request) =>
+        new(request.Prompt?.Length ?? 0, ResolveRequestInputParts(request).Count);
 
-        return previewSource.Length > 200
-            ? previewSource[..200] + "..."
-            : previewSource;
-    }
+    private readonly record struct LLMRequestLogSummary(int PromptLength, int InputPartCount);
 
     private static bool HaveMatchingInputParts(
         Google.Protobuf.Collections.RepeatedField<ChatContentPart> existing,

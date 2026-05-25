@@ -185,6 +185,17 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
                 },
             },
         };
+        var workflowHint = new ChatRouteToolChoiceHint
+        {
+            ToolName = "aevatar_start_workflow",
+            PrefilledArguments = new Struct
+            {
+                Fields =
+                {
+                    ["workflow_id"] = Value.ForString("status-workflow"),
+                },
+            },
+        };
         var snapshot = new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
@@ -226,7 +237,11 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
                     Match = new ChatRouteMatch { CommandName = "/workflow" },
                     Action = new ChatRouteAction
                     {
-                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "status-workflow" },
+                        ForwardToModel = new ForwardToModel
+                        {
+                            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+                            ToolChoiceHint = workflowHint,
+                        },
                     },
                 },
             ]);
@@ -238,10 +253,9 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             new RouteToolCase("/workflow", "aevatar_start_workflow", "workflow_id", "status-workflow"),
         };
 
-        var migrated = ChatRoutePolicyMigrator.MigrateLegacyActions(snapshot);
         foreach (var routeCase in cases)
         {
-            var action = migrated.Rules
+            var action = snapshot.Rules
                 .FirstOrDefault(rule => string.Equals(
                     rule.Match?.CommandName,
                     routeCase.CommandName,

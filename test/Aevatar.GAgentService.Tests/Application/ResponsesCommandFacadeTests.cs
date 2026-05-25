@@ -42,9 +42,10 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         result.Completed.Should().NotBeNull();
-        result.Completed!.OutputText.Should().Be("done");
+        result.Completed!.Completion.OutputText.Should().Be("done");
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle().Which.OutputText.Should().Be("done");
+        sessions.UpdatedStatuses.Should().BeEmpty();
         completion.LastRequest.Should().NotBeNull();
         completion.LastRequest!.Model.Should().Be("gpt-5");
         completion.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -85,7 +86,8 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         sessions.Registered.Should().ContainSingle();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle().Which.OutputText.Should().Be("done");
+        sessions.UpdatedStatuses.Should().BeEmpty();
         completion.LastRequest.Should().NotBeNull("tool-pinned route actions still execute through the LLM tool loop");
         completion.LastRequest!.Tools.Should().ContainSingle().Which.Name.Should().Be("aevatar_invoke_gagent");
         completion.LastHintProbeResult.Should().NotBeNull();
@@ -322,18 +324,21 @@ public sealed class ResponsesCommandFacadeTests
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesRouteResolver? routeResolver = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
-        IToolSetRegistry? toolSetRegistry = null) =>
-        new(
+        IToolSetRegistry? toolSetRegistry = null)
+    {
+        var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        return new ResponsesCommandFacade(
             new StaticLlmProviderFactory(),
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             routeResolver ?? new StaticResponsesRouteResolver(null),
-            sessionPort ?? new RecordingSessionPort(),
-            queryPort ?? new RecordingSessionQueryPort(),
+            effectiveSessionPort,
+            queryPort ?? (effectiveSessionPort as RecordingSessionPort)?.QueryPort ?? new RecordingSessionQueryPort(),
             completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
             new ResponsesToolClassificationService([], NullLogger<ResponsesToolClassificationService>.Instance),
             new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             NullLogger<ResponsesCommandFacade>.Instance);
+    }
 
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>
         new(
@@ -560,6 +565,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
+        public RecordingSessionQueryPort QueryPort { get; } = new();
+
         public Exception? UpdateStatusException { get; init; }
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
@@ -593,6 +600,9 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
+            QueryPort.Snapshot = QueryPort.Snapshot is null
+                ? BuildSnapshot(responseId, "scope-1", LlmSessionStatus.Completed) with { Completion = ToSnapshot(completion) }
+                : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
             return Task.CompletedTask;
         }
 
@@ -611,6 +621,25 @@ public sealed class ResponsesCommandFacadeTests
             string callId,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+
+        private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
+            new(
+                completion.OutputText,
+                completion.ToolCalls
+                    .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
+                        tool.CallId,
+                        tool.ToolName,
+                        ResponsesJsonValues.ToBoundaryJson(tool.Result)))
+                    .ToArray(),
+                completion.CompletedAt?.ToDateTimeOffset(),
+                string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+                string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+                completion.Usage is null
+                    ? null
+                    : new TokenUsage(
+                        completion.Usage.PromptTokens,
+                        completion.Usage.CompletionTokens,
+                        completion.Usage.TotalTokens));
     }
 
     private sealed class RecordingSessionQueryPort : ILlmSessionQueryPort

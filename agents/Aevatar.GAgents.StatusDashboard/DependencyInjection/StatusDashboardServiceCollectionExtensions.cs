@@ -36,6 +36,7 @@ public static class StatusDashboardServiceCollectionExtensions
         // Default executors — additional executors / freshness sources can be
         // registered with TryAddEnumerable by other modules without touching
         // this extension.
+        services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient();
         services.TryAddSingleton<StatusProbeAuthorizationResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());

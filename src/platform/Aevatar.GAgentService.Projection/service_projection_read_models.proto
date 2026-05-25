@@ -265,6 +265,13 @@ message LlmSessionCompletionReadModel {
   google.protobuf.Timestamp completed_at_utc_value = 3;
   string failure_code = 4;
   string failure_message = 5;
+  LlmSessionTokenUsageReadModel usage = 6;
+}
+
+message LlmSessionTokenUsageReadModel {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
 }
 
 // --- ResponsesAgentToolStateCurrentStateReadModel ---

@@ -77,11 +77,9 @@ sub-message. For routing this includes:
 - `ChatRouteInput.model` + `ChatRouteMatch.model` for stable model-based rules
 - `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
 - `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
-- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
-  `ForwardToTeam` (oneof variants)
-- `ForwardToTeam.team_id` + `ForwardToTeam.endpoint_id` (typed strings) —
-  resolved at ingress to a Studio entry-member's `published_service_id` via
-  `ITeamEntryMemberResolver`, never persisted in the decision
+- `ForwardToModel` and `Reject` (current oneof variants). GAgent, team,
+  Studio member, and workflow targets are expressed as
+  `ForwardToModel.tool_set_ref + tool_choice_hint`.
 - `VoiceInput.voice_module_name` (typed string) — chooses among
   `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
   `voice_presence_minicpm_o` registered at bootstrap
@@ -102,27 +100,29 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
 
 ### D5 — v1 scope reduction
 
-`ForwardToGAgent`, `ForwardToModel`, and `ForwardToTeam` are implemented in v1.
+`ForwardToGAgent`, `ForwardToModel`, `ForwardToTeam`, and
+`ForwardToStudioMember` are implemented in v1.
 
 - `Reject` is declared on the wire but unused by v1 rule semantics — it lets
   endpoints uniformly return HTTP 403 when policy lookup fails closed.
-- `ForwardToWorkflow` is reserved on the wire only — no implementation.
-- `ForwardToTeam` and `ForwardToGAgent` are supported on both GAgent-native
-  ingress entries (NyxIdChat, Relay, Voice) and the OpenAI-shaped LLM facade
-  entry (`/v1/responses`).
-    - On GAgent-native ingress the proto field `ForwardToGAgent.actor_id`
-      means a raw Orleans grain key bound directly to the ingress (Voice
-      binds `/ws/voice/{actorId}`; NyxIdChat overrides
-      `NeedsLlmReplyEvent.TargetActorId`). `ForwardToTeam` resolves
-      `(team_id, endpoint_id)` to a Studio entry-member's
-      `published_service_id` via `ITeamEntryMemberResolver` and dispatches
-      through `IStaticGAgentStreamInvocationPort<AGUIEvent>`.
-    - On the LLM facade (`/v1/responses`) both variants flow through the
-      same AGUI → Responses SSE/JSON adapter
-      (`AGUIEventToResponsesSseAdapter`). `ForwardToTeam` uses
-      `ITeamEntryMemberResolver`; `ForwardToGAgent.actor_id` is interpreted
-      as a Studio `memberId` (per issue #588: every invoke must resolve to
-      a member identity) and goes through `IMemberPublishedServiceResolver`.
+- The old `ForwardToWorkflow` tag/name are reserved only for protobuf
+  compatibility; workflow invocation is tool-first through
+  `aevatar_start_workflow`.
+- `ForwardToGAgent` is supported only on GAgent-native ingress entries
+  (NyxIdChat, Relay, Voice). It always means a raw Orleans grain key bound
+  directly to the ingress (Voice binds `/ws/voice/{actorId}`; NyxIdChat
+  overrides `NeedsLlmReplyEvent.TargetActorId`). LLM facades must reject this
+  action instead of treating `actor_id` as a Studio member identity.
+- `ForwardToTeam` is supported on GAgent-native ingress entries and the
+  OpenAI-shaped LLM facade entry (`/v1/responses`). It resolves
+  `(team_id, endpoint_id)` to a Studio entry-member's `published_service_id`
+  via `ITeamEntryMemberResolver` and dispatches through
+  `IStaticGAgentStreamInvocationPort<AGUIEvent>`.
+- On the LLM facade (`/v1/responses`) `ForwardToTeam` and
+  `ForwardToStudioMember` flow through the same AGUI → Responses SSE/JSON
+  adapter (`AGUIEventToResponsesSseAdapter`). `ForwardToTeam` uses
+  `ITeamEntryMemberResolver`; `ForwardToStudioMember.member_id` goes through
+  `IMemberPublishedServiceResolver`.
       The wire-format assumption ("OpenAI Responses cannot carry AGUI")
       that an earlier draft of this ADR relied on did not hold up against
       the actual proto: AGUI events
@@ -131,16 +131,16 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
       SSE events (`response.created`, `response.output_text.delta/done`,
       `response.output_item.added/done`, `response.completed`), so the
       adapter is ~280 lines of typed mapping, not an independent milestone.
-    - `/v1/messages` (Anthropic Messages facade) still rejects both
-      `ForwardToTeam` and `ForwardToGAgent` at HTTP 501. Adding them is
-      symmetric to the `/v1/responses` work but is not in this milestone;
-      track separately.
-    - `ForwardToGAgent` has no `endpoint_id` field, so `/v1/responses`
-      pins the invocation to the conventional `"chat"` endpoint on the
-      resolved member's published service. Callers that need a non-default
-      endpoint should use `ForwardToTeam` (which carries `endpoint_id`)
-      or the direct Studio member invoke surface
-      (`POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}[:stream]`).
+- `/v1/messages` (Anthropic Messages facade) still rejects `ForwardToTeam`,
+  `ForwardToStudioMember`, and `ForwardToGAgent` at HTTP 501. Adding
+  AGUI-backed forwarding there is symmetric to the `/v1/responses` work but
+  is not in this milestone; track separately.
+- `ForwardToStudioMember.endpoint_id` is optional; `/v1/responses` pins empty
+  values to the conventional `"chat"` endpoint on the resolved member's
+  published service. Callers that need a team entry endpoint should use
+  `ForwardToTeam` (which carries `endpoint_id`) or the direct Studio member
+  invoke surface
+  (`POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}[:stream]`).
 - No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
   `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
   reads the `actorId` from the route directly and short-circuits the
@@ -169,14 +169,13 @@ holds — and only as configuration, not as event-sourced fact. Existing
 "user default agent" concepts are out of scope: the policy actor's
 `default_target` covers them.
 
-### D7 — Caller identity stays an external type
+### D7 — Caller identity uses the foundation contract
 
-`ChatRouteCallerScope` mirrors `Aevatar.GAgents.Scheduled.OwnerScope` field
-for field. We do not import the Scheduled proto here so this Abstractions
-project stays at the bottom of the dependency graph; a thin mapping happens
-at Phase 2's `CompositeCallerScopeResolver → ChatRouteCallerScope` boundary.
-Moving `OwnerScope` itself to `Aevatar.Foundation.Abstractions` is a later
-refactor outside the ingress milestone.
+// Refactor (iter91/cluster-091-owner-scope-foundation):
+//   Old: chat routing carried a `ChatRouteCallerScope` mirror of
+//        `Aevatar.GAgents.Scheduled.OwnerScope` to avoid depending on the Scheduled agent package.
+//   New: `OwnerScope` lives in `Aevatar.Foundation.Abstractions`; chat routing imports
+//        that canonical caller identity directly while preserving its containing field tags.
 
 ## Boundaries with adjacent issues
 
@@ -199,12 +198,12 @@ refactor outside the ingress milestone.
 ## Out of scope
 
 - Configuration UI (Studio / CLI surfaces for `Upsert*` commands).
-- `ForwardToWorkflow` implementation.
+- Workflow routing as a wire action. Workflow invocation is exposed through
+  the `aevatar_start_workflow` tool.
 - `ForwardToModel` over `/ws/voice` (would need a scratch voice-enabled
   actor — explicitly deferred per #674 review).
 - Telemetry pipeline for `matched_rule_id` (will arrive via existing run
   trace channels in a later issue).
-- Moving `OwnerScope` to `Aevatar.Foundation.Abstractions`.
 - Decommissioning `/ws/voice/{actorId}` — it stays available, gated by a
   dev/admin scope.
 

@@ -1047,18 +1047,19 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.FromResult(actor);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             DispatchRequests.Add(actorId);
             if (DispatchOverride != null)
             {
                 await DispatchOverride(actorId, envelope, ct);
-                return;
+                return DispatchAdmissionFactory.Create(actorId, envelope);
             }
 
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));

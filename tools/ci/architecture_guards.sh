@@ -39,6 +39,31 @@ if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   exit 1
 fi
 
+set +e
+# Refactor (iter92/cluster-644):
+#   Old pattern: workflow-local Telegram bridge GAgents/proto owned Telegram send/wait-reply behavior inside workflow extensions.
+#   New principle: workflow must not reintroduce those bridge actors; Telegram traffic stays on the NyxID relay path.
+workflow_telegram_bridge_report="$(
+  rg -n "workflow\.telegram-(bridge|user-bridge|wait-reply)|TelegramBridgeGAgent|TelegramUserBridgeGAgent|TelegramWaitReplyGAgent|TelegramGetUpdatesExternalLinkTransport|telegram_wait_reply|AddWorkflowBridgeExtensions|Aevatar\.Workflow\.Extensions\.Bridge" \
+    src test tools docs .cursor/skills aevatar.slnx \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!tools/ci/architecture_guards.sh'
+)"
+workflow_telegram_bridge_status=$?
+set -e
+
+if [[ ${workflow_telegram_bridge_status} -ne 0 && ${workflow_telegram_bridge_status} -ne 1 ]]; then
+  echo "Workflow Telegram bridge retired-token guard execution failed."
+  exit "${workflow_telegram_bridge_status}"
+fi
+
+if [ -n "${workflow_telegram_bridge_report}" ]; then
+  echo "${workflow_telegram_bridge_report}"
+  echo "Workflow-local Telegram bridge is retired. Keep Telegram traffic on the NyxID relay path."
+  exit 1
+fi
+
 if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
   echo "Working audit documents must not be added to solution."
   exit 1
@@ -180,6 +205,141 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Refactor (PR #1010 r3):
+#   Old pattern: /run-agent, /disable-agent, and /enable-agent used runner execution
+#   readmodel Status as a cross-authority business admission view.
+#   New principle: lifecycle command admission is catalog-only. Runner Enabled/Disabled
+#   is authoritative inside SkillRunnerGAgent's own turn and is later observed via readmodel.
+python3 - <<'PY'
+from pathlib import Path
+import sys
+
+path = Path("agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderTool.cs")
+text = path.read_text()
+methods = [
+    "RunAgentAsync",
+    "DisableAgentAsync",
+    "EnableAgentAsync",
+    "RequireManagedAgentAsync",
+]
+forbidden = [
+    "executionQueryPort",
+    "_executionQueryPort",
+    "QueryAgentForCallerAsync",
+    "MergeExecution",
+    "StatusDisabled",
+    "StatusRunning",
+]
+
+def method_body(source: str, name: str) -> str:
+    marker = name + "("
+    start = source.find(marker)
+    if start < 0:
+        raise RuntimeError(f"method not found: {name}")
+    open_brace = source.find("{", start)
+    if open_brace < 0:
+        raise RuntimeError(f"method body not found: {name}")
+    depth = 0
+    for index in range(open_brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace:index + 1]
+    raise RuntimeError(f"method body unterminated: {name}")
+
+violations = []
+for method in methods:
+    body = method_body(text, method)
+    for token in forbidden:
+        if token in body:
+            violations.append(f"{path}:{method}: forbidden lifecycle admission token `{token}`")
+
+if violations:
+    print("\n".join(violations))
+    print("Scheduled-agent lifecycle command admission must stay catalog-only; execution Status belongs to runner-owned observation.")
+    sys.exit(1)
+PY
+
+# Refactor (iter92/cluster-645):
+#   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
+#   New principle: this guard prevents new consumers, wrappers, or re-maps; direct model streaming goes through /v1/responses.
+set +e
+streaming_proxy_consumer_report="$(
+  rg -n "streaming-proxy|MapStreamingProxyEndpoints|AddStreamingProxy|Aevatar\.GAgents\.StreamingProxy" \
+    src agents apps \
+    -g '*.{cs,ts,tsx,js,jsx,md,json,yml,yaml,sh}' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["tools/ci/architecture_guards.sh"] = 1;
+  allowed["tools/ci/README.md"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\//)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\./)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  print $0;
+}'
+)"
+streaming_proxy_consumer_status=$?
+set -e
+
+if [[ ${streaming_proxy_consumer_status} -ne 0 && ${streaming_proxy_consumer_status} -ne 1 ]]; then
+  echo "StreamingProxy consumer guard execution failed."
+  exit "${streaming_proxy_consumer_status}"
+fi
+
+if [ -n "${streaming_proxy_consumer_report}" ]; then
+  echo "${streaming_proxy_consumer_report}"
+  echo "StreamingProxy is deprecated compatibility surface only. Do not add new production consumers; use /v1/responses for direct model streaming."
+  exit 1
+fi
+
+# Issue #643:
+#   Old: Foundation MultiAgent experimental actors/protos stayed visible as
+#   production GAgent surface without production callers. Studio empty-state
+#   generators previously appeared as endpoint GAgents.
+#   New: MultiAgent is retired; Studio generation remains Application-layer
+#   authoring preview helpers unless a future ADR reopens the actor model.
+if rg -n "Aevatar\.Foundation\.(Core|Abstractions)\.MultiAgent|MultiAgent/multi_agent_(state|messages)\.proto|package[[:space:]]+aevatar\.multiagent|TaskBoardGAgent|TeamManagerGAgent" \
+  src agents \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Retired Foundation MultiAgent actor/proto surface is forbidden without a new ADR reopening the model."
+  exit 1
+fi
+
+if [ -d "src/Aevatar.Studio.Hosting/Endpoints" ] && rg -n "ScriptGenerateGAgent|WorkflowGenerateGAgent|AIGAgentBase[[:space:]]*<[[:space:]]*Empty[[:space:]]*>" \
+  src/Aevatar.Studio.Hosting/Endpoints \
+  -g '*.cs' \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Studio empty-state generation must stay demoted to Application authoring preview helpers, not endpoint GAgents."
+  exit 1
+fi
+
 # Refactor (iter7/cluster-016):
 #   Old: Direct actor.HandleEventAsync calls and raw SubscribeAsync<EventEnvelope>
 #   subscriptions were guarded only by capability-local source assertions, so new
@@ -200,7 +360,6 @@ dispatch_projection_boundary_report="$(
     -g '!*.Designer.cs' \
     | awk -F: '
 BEGIN {
-  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
@@ -235,6 +394,38 @@ fi
 if [ -n "${dispatch_projection_boundary_report}" ]; then
   echo "${dispatch_projection_boundary_report}"
   echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
+# Refactor (iter95/cluster-095-dispatch-port-runtime-ack-drift):
+#   Old: Local IActorDispatchPort awaited actor.HandleEventAsync while Orleans
+#   only awaited transport admission, so DispatchAsync ACK semantics drifted by
+#   runtime.
+#   New: DispatchAsync returns DispatchAdmission only. It may await runtime/inbox
+#   admission, but must not synchronously wait for actor handler completion.
+dispatch_admission_handler_wait_report=""
+while IFS= read -r dispatch_port_file; do
+  [ -z "${dispatch_port_file}" ] && continue
+
+  hits="$(rg -n "\.HandleEventAsync[[:space:]]*\(" "${dispatch_port_file}" || true)"
+
+  if [ -n "${hits}" ]; then
+    dispatch_admission_handler_wait_report="${dispatch_admission_handler_wait_report}${hits}"$'\n'
+  fi
+done < <(
+  find src agents \
+    -type f \
+    -name '*ActorDispatchPort.cs' \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if [ -n "${dispatch_admission_handler_wait_report}" ]; then
+  echo "${dispatch_admission_handler_wait_report}"
+  echo "Actor dispatch ports must return DispatchAdmission after runtime/inbox admission; do not call or await actor HandleEventAsync in DispatchAsync."
   exit 1
 fi
 

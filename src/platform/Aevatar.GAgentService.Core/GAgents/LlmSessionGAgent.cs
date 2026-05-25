@@ -10,6 +10,9 @@ namespace Aevatar.GAgentService.Core.GAgents;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -455,6 +458,12 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         completion.FailureMessage = NormalizeOptional(completion.FailureMessage) ?? string.Empty;
         if (completion.CompletedAt == null)
             completion.CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+        if (completion.Usage is not null)
+        {
+            completion.Usage.PromptTokens = Math.Max(0, completion.Usage.PromptTokens);
+            completion.Usage.CompletionTokens = Math.Max(0, completion.Usage.CompletionTokens);
+            completion.Usage.TotalTokens = Math.Max(0, completion.Usage.TotalTokens);
+        }
 
         foreach (var toolCall in completion.ToolCalls)
         {
@@ -540,6 +549,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (!string.Equals(existing.OutputText, incoming.OutputText, StringComparison.Ordinal) ||
             !string.Equals(existing.FailureCode, incoming.FailureCode, StringComparison.Ordinal) ||
             !string.Equals(existing.FailureMessage, incoming.FailureMessage, StringComparison.Ordinal) ||
+            !UsageEquals(existing.Usage, incoming.Usage) ||
             existing.ToolCalls.Count != incoming.ToolCalls.Count)
         {
             throw new InvalidOperationException("Response session completion cannot be rebound to different facts.");
@@ -616,6 +626,16 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
     private static bool DurationEquals(Duration? left, Duration? right) =>
         left?.ToTimeSpan() == right?.ToTimeSpan();
+
+    private static bool UsageEquals(LlmSessionTokenUsage? left, LlmSessionTokenUsage? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.PromptTokens == right.PromptTokens &&
+               left.CompletionTokens == right.CompletionTokens &&
+               left.TotalTokens == right.TotalTokens;
+    }
 
     private static string NormalizeRequired(string? value) =>
         NormalizeOptional(value) ?? string.Empty;

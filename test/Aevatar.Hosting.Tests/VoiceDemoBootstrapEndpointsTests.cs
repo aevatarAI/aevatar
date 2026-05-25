@@ -16,7 +16,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
+using RoutingOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
 
 namespace Aevatar.Hosting.Tests;
 

@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Microsoft.AspNetCore.Http;
@@ -28,6 +30,9 @@ internal static partial class MessagesApiEndpoints
     // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
     //   Old pattern: Mainnet Minimal API handlers (ResponsesEndpoints / MessagesEndpoints) inject long lists of application/runtime collaborators and perform caller resolution / route / session / LLM orchestration inline.
     //   New principle: Host handlers parse/authenticate HTTP only + delegate to typed Application command/query facade that owns Normalize -> Resolve Target -> Build Context -> Dispatch/Observe lifecycle. SSE rendering stays at the boundary.
+    // Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+    //   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+    //   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
     internal static async Task<IResult> HandleCreateMessageAsync(
         HttpContext http,
         MessagesCreateRequest request,
@@ -151,8 +156,10 @@ internal static partial class MessagesApiEndpoints
             }, ct);
         }
 
+        var sessionCompletion = completion.Completion!;
+        var toolCalls = ToToolCalls(sessionCompletion.ToolCalls);
         var nextBlockIndex = textStarted ? 1 : 0;
-        foreach (var toolCall in completion.ForwardedToolCalls)
+        foreach (var toolCall in toolCalls)
         {
             await WriteSseFrameAsync(response, "content_block_start", new
             {
@@ -184,7 +191,7 @@ internal static partial class MessagesApiEndpoints
             nextBlockIndex++;
         }
 
-        var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
+        var stopReason = toolCalls.Count > 0 ? "tool_use" : "end_turn";
         await WriteSseFrameAsync(response, "message_delta", new
         {
             type = "message_delta",
@@ -195,7 +202,7 @@ internal static partial class MessagesApiEndpoints
             },
             usage = new
             {
-                output_tokens = completion.Usage?.CompletionTokens ?? 0,
+                output_tokens = sessionCompletion.Usage?.CompletionTokens ?? 0,
             },
         }, ct);
 
@@ -207,14 +214,15 @@ internal static partial class MessagesApiEndpoints
 
     private static object BuildCompletedMessage(
         NormalizedMessagesRequest normalized,
-        ResponsesCompletionResult completion)
+        LlmSessionCompletionSnapshot completion)
     {
         var contentBlocks = new List<object>();
-        if (!string.IsNullOrEmpty(completion.Text))
+        if (!string.IsNullOrEmpty(completion.OutputText))
         {
-            contentBlocks.Add(new { type = "text", text = completion.Text });
+            contentBlocks.Add(new { type = "text", text = completion.OutputText });
         }
-        foreach (var toolCall in completion.ForwardedToolCalls)
+        var toolCalls = ToToolCalls(completion.ToolCalls);
+        foreach (var toolCall in toolCalls)
         {
             using var argsDoc = SafeParseJson(toolCall.ArgumentsJson);
             contentBlocks.Add(new
@@ -226,7 +234,7 @@ internal static partial class MessagesApiEndpoints
             });
         }
 
-        var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
+        var stopReason = toolCalls.Count > 0 ? "tool_use" : "end_turn";
         return new
         {
             id = normalized.MessageId,
@@ -243,6 +251,17 @@ internal static partial class MessagesApiEndpoints
             },
         };
     }
+
+    private static IReadOnlyList<ToolCall> ToToolCalls(
+        IReadOnlyList<LlmSessionCompletedToolCallSnapshot> toolCalls) =>
+        toolCalls
+            .Select(static toolCall => new ToolCall
+            {
+                Id = toolCall.CallId,
+                Name = toolCall.ToolName,
+                ArgumentsJson = toolCall.ResultJson ?? "{}",
+            })
+            .ToArray();
 
     private static async Task WriteSseFrameAsync(
         HttpResponse response,

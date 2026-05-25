@@ -1,8 +1,5 @@
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.ChatRouting.Core;
 
@@ -12,14 +9,11 @@ namespace Aevatar.ChatRouting.Core;
 public sealed class ChatRouteResolver
 {
     private readonly IChatRouteFallbackProvider _fallbackProvider;
-    private readonly ILogger<ChatRouteResolver> _logger;
 
     public ChatRouteResolver(
-        IChatRouteFallbackProvider fallbackProvider,
-        ILogger<ChatRouteResolver>? logger = null)
+        IChatRouteFallbackProvider fallbackProvider)
     {
         _fallbackProvider = fallbackProvider ?? throw new ArgumentNullException(nameof(fallbackProvider));
-        _logger = logger ?? NullLogger<ChatRouteResolver>.Instance;
     }
 
     // Implement (issue #693):
@@ -101,63 +95,11 @@ public sealed class ChatRouteResolver
         ChatRouteAction action,
         string matchedRuleId,
         bool usedFallback)
-    {
-        var decision = NewDecision(action, matchedRuleId, usedFallback);
-        if (TryBuildLegacyDeprecation(action, matchedRuleId, out var deprecation))
-        {
-            decision.Deprecations.Add(deprecation);
-            _logger.LogWarning(
-                "chat_route_legacy_action_used matched_rule_id={MatchedRuleId} action_kind={ActionKind} translated_target={TranslatedTarget} suggestion={Suggestion}",
-                deprecation.MatchedRuleId,
-                deprecation.ActionKind,
-                deprecation.TranslatedTarget,
-                "Use ChatRoutePolicyMigrator or POST /api/scopes/{scopeId}/chat-route-policy/migrate to migrate legacy route actions.");
-        }
-
-        return decision;
-    }
-
-    private static bool TryBuildLegacyDeprecation(
-        ChatRouteAction action,
-        string matchedRuleId,
-        out ChatRouteDeprecation deprecation)
-    {
-        deprecation = new ChatRouteDeprecation();
-        var actionKind = action.ActionCase switch
-        {
-            ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "ForwardToWorkflow",
-            _ => string.Empty,
-        };
-        if (string.IsNullOrEmpty(actionKind))
-        {
-            return false;
-        }
-
-        var code = action.ActionCase switch
-        {
-            ChatRouteAction.ActionOneofCase.ForwardToWorkflow => "legacy_forward_to_workflow",
-            _ => string.Empty,
-        };
-        var translatedTarget = ChatRouteActionTranslator.DescribeRuntimeTarget(action);
-        deprecation = new ChatRouteDeprecation
-        {
-            Code = code,
-            Message =
-                $"{actionKind} route action is deprecated; migrate this policy with ChatRoutePolicyMigrator or POST /api/scopes/{{scopeId}}/chat-route-policy/migrate.",
-            ActionKind = actionKind,
-            MatchedRuleId = matchedRuleId,
-            TranslatedTarget = translatedTarget,
-        };
-        return true;
-    }
+        => NewDecision(action, matchedRuleId, usedFallback);
 }
 
 internal static class ChatRouteActionTranslator
 {
-    internal const string StartWorkflowToolName = "aevatar_start_workflow";
-
-    private const string WorkflowIdArgument = "workflow_id";
-
     public static ChatRouteAction ToRuntimeDecisionAction(ChatRouteAction action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -165,11 +107,6 @@ internal static class ChatRouteActionTranslator
         return action.ActionCase switch
         {
             ChatRouteAction.ActionOneofCase.ForwardToModel => action.Clone(),
-            ChatRouteAction.ActionOneofCase.ForwardToWorkflow => ForwardToToolModel(
-                StartWorkflowToolName,
-                [
-                    new(WorkflowIdArgument, action.ForwardToWorkflow.WorkflowId, IncludeWhenEmpty: true),
-                ]),
             ChatRouteAction.ActionOneofCase.Reject => action.Clone(),
             _ => action.Clone(),
         };
@@ -177,55 +114,6 @@ internal static class ChatRouteActionTranslator
 
     public static ChatRouteAction ToCanonicalPolicyAction(ChatRouteAction action) =>
         ToRuntimeDecisionAction(action);
-
-    internal static string DescribeRuntimeTarget(ChatRouteAction action)
-    {
-        ArgumentNullException.ThrowIfNull(action);
-
-        return action.ActionCase switch
-        {
-            ChatRouteAction.ActionOneofCase.ForwardToWorkflow =>
-                $"{StartWorkflowToolName}({WorkflowIdArgument}={action.ForwardToWorkflow.WorkflowId})",
-            ChatRouteAction.ActionOneofCase.ForwardToModel when action.ForwardToModel?.ToolChoiceHint is { } hint =>
-                string.IsNullOrWhiteSpace(hint.ToolName) ? "ForwardToModel" : hint.ToolName,
-            _ => action.ActionCase.ToString(),
-        };
-    }
-
-    private static ChatRouteAction ForwardToToolModel(
-        string toolName,
-        IReadOnlyList<PrefilledArgument> prefilledArguments) =>
-        new()
-        {
-            ForwardToModel = new ForwardToModel
-            {
-                ModelName = string.Empty,
-                ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
-                ToolChoiceHint = new ChatRouteToolChoiceHint
-                {
-                    ToolName = toolName,
-                    PrefilledArguments = BuildPrefilledArguments(prefilledArguments),
-                },
-            },
-        };
-
-    private static Struct BuildPrefilledArguments(IReadOnlyList<PrefilledArgument> arguments)
-    {
-        var result = new Struct();
-        foreach (var argument in arguments)
-        {
-            if (!argument.IncludeWhenEmpty && string.IsNullOrEmpty(argument.Value))
-            {
-                continue;
-            }
-
-            result.Fields[argument.Name] = Value.ForString(argument.Value);
-        }
-
-        return result;
-    }
-
-    private sealed record PrefilledArgument(string Name, string Value, bool IncludeWhenEmpty);
 }
 
 /// <summary>

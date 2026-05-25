@@ -11,6 +11,9 @@ namespace Aevatar.GAgentService.Projection.Projectors;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class LlmSessionCurrentStateProjector
     : ICurrentStateProjectionMaterializer<LlmSessionCurrentStateProjectionContext>
 {
@@ -96,6 +99,14 @@ public sealed class LlmSessionCurrentStateProjector
                 CompletedAt = state.Completion.CompletedAt?.ToDateTimeOffset(),
                 FailureCode = state.Completion.FailureCode ?? string.Empty,
                 FailureMessage = state.Completion.FailureMessage ?? string.Empty,
+                Usage = state.Completion.Usage is null
+                    ? null
+                    : new LlmSessionTokenUsageReadModel
+                    {
+                        PromptTokens = state.Completion.Usage.PromptTokens,
+                        CompletionTokens = state.Completion.Usage.CompletionTokens,
+                        TotalTokens = state.Completion.Usage.TotalTokens,
+                    },
             };
             foreach (var call in state.Completion.ToolCalls)
             {

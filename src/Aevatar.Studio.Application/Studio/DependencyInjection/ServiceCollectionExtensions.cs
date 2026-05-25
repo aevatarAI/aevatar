@@ -35,11 +35,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserConfigService, UserConfigService>();
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
 
-        // Override the platform's deterministic resolver so existing
-        // member-first invoke / runs / binding routes resolve to the same
+        // Override the platform resolver so existing member-first invoke /
+        // runs / binding routes resolve to the same
         // publishedServiceId Studio's bind path persisted on the member
-        // authority. Platform registers the default with TryAddSingleton, so
-        // a plain Replace here wins for IServiceProvider.GetService<T>.
+        // authority.
         services.Replace(ServiceDescriptor.Singleton<IMemberPublishedServiceResolver, StudioAwareMemberPublishedServiceResolver>());
         return services;
     }

@@ -8,6 +8,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -91,7 +92,10 @@ public sealed class MainnetMessagesEndpointsTests
         // Path B reuses the same LlmSession actor as Path A (no MessagesSessionGAgent).
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
-        sessions.StatusUpdates.Should().Contain(u => u.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("Hi there");
+        (await sessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!))!
+            .Completion!.Usage.Should().Be(new TokenUsage(5, 3, 8));
 
         // System message + user message both flow into the intermediate ChatMessage list.
         provider.LastRequest.Should().NotBeNull();
@@ -157,7 +161,8 @@ public sealed class MainnetMessagesEndpointsTests
         body.Should().Contain("event: message_stop");
         body.Should().NotContain("stream-bearer");
 
-        sessions.StatusUpdates.Should().Contain(u => u.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("Hello");
     }
 
     [Fact]
@@ -851,17 +856,33 @@ public sealed class MainnetMessagesEndpointsTests
         ILlmSessionRegistrationPort,
         ILlmSessionQueryPort
     {
+        private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+
         public List<LlmSessionRecord> Registered { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
+        public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(
             LlmSessionRecord record,
             CancellationToken ct = default)
         {
-            Registered.Add(record);
-            return Task.FromResult(new LlmSessionRegistrationResult(
-                ActorId: $"llm-session:{record.ResponseId}",
-                ResponseId: record.ResponseId));
+            var clone = record.Clone();
+            Registered.Add(clone);
+            var actorId = $"llm-session:{clone.ResponseId}";
+            _snapshots[clone.ResponseId] = new LlmSessionSnapshot(
+                clone.ResponseId,
+                clone.ScopeId,
+                clone.OwnerSubject,
+                clone.OriginKind,
+                string.IsNullOrWhiteSpace(clone.PreviousResponseId) ? null : clone.PreviousResponseId,
+                clone.Status,
+                clone.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow,
+                clone.Ttl?.ToTimeSpan() ?? TimeSpan.Zero,
+                clone.CancelledAt?.ToDateTimeOffset(),
+                actorId,
+                1,
+                $"{clone.ResponseId}:registered");
+            return Task.FromResult(new LlmSessionRegistrationResult(actorId, clone.ResponseId));
         }
 
         public Task UpdateStatusAsync(
@@ -884,7 +905,41 @@ public sealed class MainnetMessagesEndpointsTests
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            var clone = completion.Clone();
+            RecordedCompletions.Add((sessionActorId, responseId, clone));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = string.IsNullOrWhiteSpace(clone.FailureCode)
+                        ? LlmSessionStatus.Completed
+                        : LlmSessionStatus.Failed,
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:completion",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        clone.OutputText ?? string.Empty,
+                        clone.ToolCalls
+                            .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                                call.CallId,
+                                call.ToolName,
+                                ResponsesJsonValues.ToBoundaryJson(call.Result)))
+                            .ToArray(),
+                        clone.CompletedAt?.ToDateTimeOffset(),
+                        string.IsNullOrWhiteSpace(clone.FailureCode) ? null : clone.FailureCode,
+                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage,
+                        clone.Usage is null
+                            ? null
+                            : new TokenUsage(
+                                clone.Usage.PromptTokens,
+                                clone.Usage.CompletionTokens,
+                                clone.Usage.TotalTokens)),
+                };
+            }
+
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,
@@ -903,7 +958,7 @@ public sealed class MainnetMessagesEndpointsTests
         public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
             string responseId,
             CancellationToken ct = default) =>
-            Task.FromResult<LlmSessionSnapshot?>(null);
+            Task.FromResult(_snapshots.GetValueOrDefault(responseId));
     }
 
     private sealed class MessagesRecordingResponsesToolProvider : IResponsesToolProvider

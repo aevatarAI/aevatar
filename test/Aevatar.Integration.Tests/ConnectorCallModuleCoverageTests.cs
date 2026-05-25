@@ -84,10 +84,11 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new ThrowThenSuccessConnector("retryable");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
 
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
+        ctx.SetNextElapsedTime(TimeSpan.FromMilliseconds(1234.56));
         var request = new StepRequestEvent
         {
             StepId = "s-retry",
@@ -113,13 +114,14 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Output.Should().Be("ok");
         completed.Annotations["connector.attempts"].Should().Be("2");
         completed.Annotations["connector.name"].Should().Be("retryable");
+        completed.Annotations["connector.duration_ms"].Should().Be("1234.56");
     }
 
     [Fact]
     public async Task HandleAsync_WhenTimeoutAndContinue_ShouldKeepInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new DelayConnector("slow"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new DelayConnector("slow")));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -150,7 +152,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
         var services = new ServiceCollection().BuildServiceProvider();
@@ -199,7 +201,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure-json");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
         var services = new ServiceCollection().BuildServiceProvider();
@@ -240,7 +242,7 @@ public sealed class ConnectorCallModuleCoverageTests
     public async Task HandleAsync_WhenAssertResponsePathPassesAndPassThroughEnabled_ShouldKeepOriginalInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FixedResponseConnector("validator", """{"valid":true}"""));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":true}""")));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -267,7 +269,7 @@ public sealed class ConnectorCallModuleCoverageTests
     public async Task HandleAsync_WhenAssertResponsePathFails_ShouldPublishFailure()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FixedResponseConnector("validator", """{"valid":false}"""));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":false}""")));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent

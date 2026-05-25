@@ -11,7 +11,7 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 //   New principle: Removed dead capability flag; output describes available primitives only
 internal sealed class WorkflowCapabilitiesStartupMaterializer
 {
-    public const string DocumentId = "workflow-capabilities";
+    public const string ArtifactId = "workflow-capabilities";
 
     private static readonly IReadOnlyDictionary<string, PrimitiveMetadataDescriptor> PrimitiveDescriptors =
         new Dictionary<string, PrimitiveMetadataDescriptor>(StringComparer.OrdinalIgnoreCase)
@@ -57,11 +57,11 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
                 ]),
         };
 
-    private readonly IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact> _writeDispatcher;
     private readonly IEnumerable<IWorkflowModulePack> _modulePacks;
 
     public WorkflowCapabilitiesStartupMaterializer(
-        IProjectionWriteDispatcher<WorkflowCapabilitiesCurrentStateDocument> writeDispatcher,
+        IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact> writeDispatcher,
         IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -71,23 +71,23 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
     // Refactor (iter46/issue-871-workflow-file-catalog-query-port):
     //   Old pattern: Workflow catalog/capabilities query port discovered files, parsed YAML, loaded connector config, and cached results in singleton process memory during query execution.
     //   New principle: WorkflowGAgent per-definition authority; query ports only read freshness-bearing readmodels; file discovery/parsing happens at startup/import time, not in query path.
+    // Refactor (iter94/cluster-094b):
+    //   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
+    //   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
     public async Task MaterializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var now = DateTimeOffset.UtcNow;
-        var document = new WorkflowCapabilitiesCurrentStateDocument
+        var artifact = new WorkflowCapabilitiesStartupArtifact
         {
-            Id = DocumentId,
-            ActorId = DocumentId,
-            StateVersion = 1,
-            LastEventId = "startup-materialization",
-            UpdatedAt = now,
+            Id = ArtifactId,
+            GeneratedAtUtc = now,
             SchemaVersion = "capabilities.v1",
             Primitives = BuildPrimitiveCapabilities(),
             Connectors = BuildConnectorCapabilities(AevatarConnectorConfig.LoadConnectors()),
         };
 
-        await _writeDispatcher.UpsertAsync(document, ct);
+        await _writeDispatcher.UpsertAsync(artifact, ct);
     }
 
     private List<WorkflowPrimitiveCapabilityReadModel> BuildPrimitiveCapabilities()

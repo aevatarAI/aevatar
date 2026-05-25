@@ -21,30 +21,30 @@ public sealed class OrleansActorRuntimeForwardingTests
     {
         var runtime = CreateRuntime(out _, out var grains, out _);
 
-        var actor = await runtime.CreateByKindAsync("  workflow.telegram-user-bridge  ", "bridge:telegram");
+        var actor = await runtime.CreateByKindAsync("  workflow.assistant-role  ", "role:assistant");
 
         actor.Should().BeOfType<OrleansActor>();
-        actor.Id.Should().Be("bridge:telegram");
-        grains.Should().ContainKey("bridge:telegram");
-        grains["bridge:telegram"].InitializedKinds.Should()
+        actor.Id.Should().Be("role:assistant");
+        grains.Should().ContainKey("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should()
             .ContainSingle()
-            .Which.Should().Be("workflow.telegram-user-bridge");
+            .Which.Should().Be("workflow.assistant-role");
     }
 
     [Fact]
     public async Task CreateByKindAsync_WhenInitializationFails_ShouldThrow()
     {
         var runtime = CreateRuntime(out _, out var grains, out _);
-        await runtime.ExistsAsync("bridge:telegram");
-        grains["bridge:telegram"].InitializeAgentByKindResult = false;
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializeAgentByKindResult = false;
 
-        var act = () => runtime.CreateByKindAsync("workflow.telegram-user-bridge", "bridge:telegram");
+        var act = () => runtime.CreateByKindAsync("workflow.assistant-role", "role:assistant");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Failed to initialize Orleans actor bridge:telegram for kind 'workflow.telegram-user-bridge'.*");
-        grains["bridge:telegram"].InitializedKinds.Should()
+            .WithMessage("*Failed to initialize Orleans actor role:assistant for kind 'workflow.assistant-role'.*");
+        grains["role:assistant"].InitializedKinds.Should()
             .ContainSingle()
-            .Which.Should().Be("workflow.telegram-user-bridge");
+            .Which.Should().Be("workflow.assistant-role");
     }
 
     [Fact]

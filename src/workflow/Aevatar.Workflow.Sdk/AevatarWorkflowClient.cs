@@ -12,6 +12,9 @@ namespace Aevatar.Workflow.Sdk;
 
 public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
 {
+    // Refactor (iter82/cluster-082-workflow-sdk-library-await-cancellation):
+    //   Old pattern: SDK awaits without library-safe ConfigureAwait/WithCancellation; OperationCanceledException wrapped as Transport failure
+    //   New principle: library awaits ConfigureAwait(false), async-enumerable WithCancellation, preserve OperationCanceledException
     private readonly HttpClient _httpClient;
     private readonly IWorkflowChatTransport _chatTransport;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -67,7 +70,9 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         var events = new List<WorkflowEvent>();
         AevatarWorkflowException? runError = null;
 
-        await foreach (var evt in StartRunStreamAsync(request, cancellationToken))
+        await foreach (var evt in StartRunStreamAsync(request, cancellationToken)
+                           .WithCancellation(cancellationToken)
+                           .ConfigureAwait(false))
         {
             events.Add(evt);
             if (evt.IsRunError && runError == null)
@@ -103,7 +108,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 feedback = NormalizeOptional(request.Feedback),
                 metadata = request.Metadata,
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<WorkflowSignalResponse> SignalAsync(
@@ -126,15 +131,15 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
                 commandId = NormalizeOptional(request.CommandId),
                 payload = NormalizeOptional(request.Payload),
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/workflow-catalog");
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -172,11 +177,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/capabilities");
-        using var response = await SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
@@ -211,11 +216,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/workflows/{Uri.EscapeDataString(workflowName)}");
-        using var response = await SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
@@ -250,11 +255,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/actors/{Uri.EscapeDataString(actorId)}");
-        using var response = await SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
 
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw WorkflowSdkJson.BuildHttpException(
@@ -296,8 +301,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/timeline-export?take={take}");
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -340,8 +345,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         {
             Content = JsonContent.Create(requestPayload, options: _jsonOptions),
         };
-        using var response = await SendAsync(request, cancellationToken);
-        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -381,7 +386,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             return await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

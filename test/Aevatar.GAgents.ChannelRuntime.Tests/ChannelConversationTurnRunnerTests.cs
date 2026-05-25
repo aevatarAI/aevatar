@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -592,15 +593,17 @@ public sealed class ChannelConversationTurnRunnerTests
             .BuildServiceProvider();
         var runner = CreateRunner(registrationQueryPort, adapter, services);
 
-        var result = await runner.RunInboundAsync(
-            BuildCardActionActivity(
-                "evt-card-1",
-                ("actor_id", "actor-1"),
-                ("run_id", "run-1"),
-                ("step_id", "approval-1"),
-                ("approved", "false"),
-                ("user_input", "Need stronger hook")),
-            CancellationToken.None);
+        var activity = BuildCardActionActivity("evt-card-1");
+        activity.Content.CardAction.WorkflowResume = new WorkflowResumeActionPayload
+        {
+            ActorId = "actor-1",
+            RunId = "run-1",
+            StepId = "approval-1",
+            Approved = false,
+            UserInput = "Need stronger hook",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("workflow-resume:cmd-card-1");
@@ -706,10 +709,12 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter, services);
-        var activity = BuildCardActionActivity(
-            "evt-llm-select-1",
-            (TextUserLlmOptionsRenderer.LlmActionArgument, TextUserLlmOptionsRenderer.SelectServiceAction),
-            (TextUserLlmOptionsRenderer.ServiceIdArgument, "svc-openai"));
+        var activity = BuildCardActionActivity("evt-llm-select-1");
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.SelectServiceAction,
+            ServiceId = "svc-openai",
+        };
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
@@ -765,6 +770,57 @@ public sealed class ChannelConversationTurnRunnerTests
         selectionService.SelectedServiceId.Should().Be(option.ServiceId);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldApplyTypedLlmPreset_WhenPayloadCarriesPresetId()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "svc-openai",
+            ServiceSlug: "openai-work",
+            DisplayName: "OpenAI Work",
+            RouteValue: "/api/v1/proxy/s/openai-work",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-preset-typed-1");
+        activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = TextUserLlmOptionsRenderer.ApplyPresetAction,
+            PresetId = "work-fast",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.SentActivityId.Should().Be("direct-reply:evt-llm-preset-typed-1");
+        selectionService.PresetId.Should().Be("work-fast");
+        selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("work-fast");
     }
 
     [Fact]
@@ -950,15 +1006,16 @@ public sealed class ChannelConversationTurnRunnerTests
         var callerScopeResolver = new CapturingCallerScopeResolver();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
+            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
             .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
-            .AddSingleton(new NyxIdApiClient(
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://example.com" },
                 new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
                 {
                     BaseAddress = new Uri("https://example.com"),
-                }))
+                })))
             .BuildServiceProvider();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -2461,7 +2518,7 @@ public sealed class ChannelConversationTurnRunnerTests
         HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
-        services ??= new ServiceCollection().BuildServiceProvider();
+        services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
         nyxHandler ??= new RecordingJsonHandler("""{"code":0,"data":{}}""");
         var relayClient = new NyxIdApiClient(
@@ -2504,6 +2561,29 @@ public sealed class ChannelConversationTurnRunnerTests
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>());
+    }
+
+    private static IServiceProvider BuildAgentBuilderToolServices()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
+                "nyx-user-1",
+                "lark",
+                "scope-1",
+                "ou_user_1")));
+
+        return new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
+            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .BuildServiceProvider();
     }
 
     private static ConversationTurnRuntimeContext RelayRuntimeContext(
@@ -2689,6 +2769,23 @@ public sealed class ChannelConversationTurnRunnerTests
                 "scope-1",
                 "ou_user_1"));
         }
+    }
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient? client = null)
+        {
+            _client = client ?? new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://example.com" },
+                new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
+                {
+                    BaseAddress = new Uri("https://example.com"),
+                });
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
     }
 
     private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService

@@ -50,7 +50,6 @@ internal static class ChatRoutePolicyAdminEndpoints
         group.MapPut("", HandleUpsertAsync);
         group.MapDelete("/rules/{ruleId}", HandleRemoveRuleAsync);
         group.MapGet("", HandleGetAsync);
-        group.MapPost("/migrate", HandleMigrateAsync);
 
         return app;
     }
@@ -103,7 +102,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         // Server-stamp owner_scope from URL scope so a caller can't write a
         // policy keyed to a different caller scope. Mirrors the resolver's
         // NyxID-native caller scope shape (see OwnerScope.ForNyxIdNative).
-        command.OwnerScope = new ChatRouteCallerScope
+        command.OwnerScope = new OwnerScope
         {
             NyxUserId = scopeId,
             Platform = OwnerScope.NyxIdPlatform,
@@ -174,7 +173,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         // the readmodel envelope fields (state_version, last_event_id).
         var view = new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope
+            OwnerScope = new OwnerScope
             {
                 NyxUserId = scopeId,
                 Platform = OwnerScope.NyxIdPlatform,
@@ -185,72 +184,6 @@ internal static class ChatRoutePolicyAdminEndpoints
             view.Rules.Add(rule.Clone());
 
         return Results.Content(ResponseFormatter.Format(view), "application/json");
-    }
-
-    /// <summary>
-    /// POST /api/scopes/{scopeId}/chat-route-policy/migrate?apply=true
-    ///
-    /// Dry-run by default: returns protobuf-JSON of the policy after
-    /// <see cref="ChatRoutePolicyMigrator.MigrateLegacyActions"/>. With
-    /// apply=true it dispatches the migrated shape as one upsert command.
-    /// </summary>
-    private static async Task<IResult> HandleMigrateAsync(
-        HttpContext http,
-        string scopeId,
-        [FromServices] IChatRoutePolicyQueryPort queryPort,
-        [FromServices] IChatRoutePolicyCommandPort commandPort,
-        CancellationToken ct)
-    {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
-            return denied;
-
-        var snapshot = await queryPort.LookupForCallerAsync(
-            OwnerScope.ForNyxIdNative(scopeId),
-            ct);
-        if (snapshot is null)
-            return JsonError(StatusCodes.Status404NotFound, "policy_not_found",
-                $"No chat route policy materialized for scope '{scopeId}'. PUT one to create.");
-
-        var migrated = ChatRoutePolicyMigrator.MigrateLegacyActions(snapshot);
-        var command = ToUpsertView(scopeId, migrated);
-        var apply = ParseApply(http);
-        if (!apply)
-        {
-            return Results.Content(ResponseFormatter.Format(command), "application/json");
-        }
-
-        var receipt = await commandPort.UpsertAsync(scopeId, command, ct);
-        return Results.Accepted(value: new
-        {
-            actor_id = receipt.ActorId,
-            command_id = receipt.CommandId,
-            note = "Migrated policy upsert dispatched. Re-query GET to observe materialized state.",
-            migrated = ResponseFormatter.Format(command),
-        });
-    }
-
-    private static UpsertChatRoutePolicyRequested ToUpsertView(string scopeId, ChatRoutePolicySnapshot snapshot)
-    {
-        var view = new UpsertChatRoutePolicyRequested
-        {
-            OwnerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = scopeId,
-                Platform = OwnerScope.NyxIdPlatform,
-            },
-            DefaultTarget = snapshot.DefaultTarget.Clone(),
-        };
-        foreach (var rule in snapshot.Rules)
-            view.Rules.Add(rule.Clone());
-
-        return view;
-    }
-
-    private static bool ParseApply(HttpContext http)
-    {
-        var value = http.Request.Query["apply"].ToString();
-        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(value, "1", StringComparison.Ordinal);
     }
 
     private static IResult JsonError(int status, string error, string detail) =>

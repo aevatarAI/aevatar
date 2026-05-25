@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
+using Aevatar.Foundation.Abstractions;
+
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>

@@ -229,7 +229,26 @@ public class WorkflowAbstractionsProtoCoverageTests
             ChildActorId = "actor-child",
             ChildRunId = "run-child",
             Lifecycle = "singleton",
+            DefinitionActorId = "definition-child",
+            DefinitionVersion = 3,
+            Input = "payload",
+            HandoffPhase = 4,
+            DefinitionYaml = "name: sub_flow",
+            ScopeId = "scope-a",
         };
+        registered.InlineWorkflowYamls["sub_flow"] = "name: sub_flow";
+        var parsedRegistered = SubWorkflowInvocationRegisteredEvent.Parser.ParseFrom(registered.ToByteArray());
+        parsedRegistered.Should().BeEquivalentTo(registered);
+
+        var advanced = new SubWorkflowInvocationHandoffAdvancedEvent
+        {
+            InvocationId = "invoke-1",
+            ChildRunId = "run-child",
+            HandoffPhase = 4,
+        };
+        var parsedAdvanced = SubWorkflowInvocationHandoffAdvancedEvent.Parser.ParseFrom(advanced.ToByteArray());
+        parsedAdvanced.Should().BeEquivalentTo(advanced);
+
         var completed = new SubWorkflowInvocationCompletedEvent
         {
             InvocationId = "invoke-1",
@@ -246,6 +265,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
 
         ((IMessage)registered).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationRegisteredEvent));
+        ((IMessage)advanced).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationHandoffAdvancedEvent));
         ((IMessage)completed).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationCompletedEvent));
         ((IMessage)binding).Descriptor.Name.Should().Be(nameof(SubWorkflowBindingUpsertedEvent));
     }
@@ -261,6 +281,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvokeRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowBindingUpsertedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationRegisteredEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationHandoffAdvancedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }

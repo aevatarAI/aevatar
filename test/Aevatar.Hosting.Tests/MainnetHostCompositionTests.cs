@@ -36,6 +36,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Hosting.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
     [Fact]

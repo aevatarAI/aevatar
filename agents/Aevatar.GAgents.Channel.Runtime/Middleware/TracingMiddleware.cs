@@ -7,6 +7,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Opens one <see cref="Activity"/> around the pipeline invocation and tags it with the mandatory
 /// observability dimensions from RFC §6.1. Downstream middlewares and grain spans run inside this
 /// span so OTEL pipelines can aggregate on a single trace.
+/// iter85/cluster-085: tracing middleware writes canonical channel tags on the canonical source.
 /// </summary>
 public sealed class TracingMiddleware : IChannelMiddleware
 {

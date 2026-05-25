@@ -84,6 +84,35 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
     }
 
     [Fact]
+    public async Task StreamAsync_WhenResponseStreamAcquisitionCanceled_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new TestHttpMessageHandler((_, _) =>
+        {
+            cts.Cancel();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new CancelingStreamContent(),
+            });
+        });
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5100") };
+        var transport = new SseChatTransport();
+
+        var act = async () =>
+        {
+            await foreach (var _ in transport.StreamAsync(
+                               client,
+                               new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "approval" },
+                               CreateJsonOptions(),
+                               cts.Token))
+            {
+            }
+        };
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldPreserveUnknownFrameFieldsInExtensionData()
     {
         const string ssePayload = """
@@ -123,4 +152,19 @@ data: {"type":"RUN_STARTED","threadId":"actor-1","source":"playground","extra":{
         {
             PropertyNameCaseInsensitive = true,
         };
+
+    private sealed class CancelingStreamContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            Task.CompletedTask;
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromCanceled<Stream>(cancellationToken);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
 }

@@ -25,6 +25,10 @@ public sealed class ToolProviderHttpClientRegistrationTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IHttpClientFactory>().Should().NotBeNull();
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
+        provider.GetRequiredService<INyxIdApiClientFactory>()
+            .CreateClient()
+            .Should()
+            .NotBeNull();
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
         provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();

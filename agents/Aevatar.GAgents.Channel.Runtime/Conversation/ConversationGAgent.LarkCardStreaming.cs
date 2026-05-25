@@ -197,9 +197,9 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
-    // Refactor (iter20/cluster-004):
-    //   Old pattern: Card phase transitions updated only process-local state.
-    //   New principle: Persist each card lifecycle change through ConversationReplyLifecycleChangedEvent.
+    // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+    //   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+    //   New principle: event describes transition facts; reducer derives current state from event + actor state
     private async Task<LarkCardStreamingState> TransitionLarkCardStreamingPhaseAsync(
         string correlationId,
         LarkCardStreamingState current,
@@ -227,11 +227,8 @@ public sealed partial class ConversationGAgent
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
         };
-        await PersistDomainEventAsync(new ConversationReplyLifecycleChangedEvent
-        {
-            Lifecycle = ToLifecycleState(correlationId, updated),
-            ChangedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        });
+        var changedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await PersistDomainEventAsync(ToLifecycleChangedEvent(correlationId, current, updated, changedAtUnixMs));
         return updated;
     }
 
@@ -259,29 +256,59 @@ public sealed partial class ConversationGAgent
             _ => ConversationReplyLifecyclePhase.Unspecified,
         };
 
-    private static ConversationReplyLifecycleState ToLifecycleState(
+    private static ConversationReplyLifecycleChangedEvent ToLifecycleChangedEvent(
         string correlationId,
-        LarkCardStreamingState state) =>
-        new()
+        LarkCardStreamingState current,
+        LarkCardStreamingState updated,
+        long changedAtUnixMs)
+    {
+        var evt = new ConversationReplyLifecycleChangedEvent
         {
             CorrelationId = correlationId,
             Mode = ConversationReplyLifecycleMode.LarkCard,
-            Phase = ToLifecyclePhase(state.Phase),
-            CardId = state.CardId ?? string.Empty,
-            CardMessageId = state.CardMessageId ?? string.Empty,
-            OriginalCardId = state.OriginalCardId ?? string.Empty,
-            LastFlushedText = state.LastFlushedText ?? string.Empty,
-            Sequence = state.Sequence,
-            StreamingElementId = state.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId,
-            TerminalReason = state.TerminalReason ?? string.Empty,
-            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            LarkCardInFlightOperation = state.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified,
-            LarkCardInFlightSequence = state.InFlight?.Sequence ?? 0,
-            LarkCardOperationGeneration = state.OperationGeneration,
-            PendingAccumulatedText = state.PendingAccumulatedText ?? string.Empty,
-            PendingFinalizeText = state.PendingFinalizeText ?? string.Empty,
-            PendingFinalizeCommandId = state.PendingFinalizeCommandId ?? string.Empty,
+            PreviousPhase = ToLifecyclePhase(current.Phase),
+            Phase = ToLifecyclePhase(updated.Phase),
+            ChangedAtUnixMs = changedAtUnixMs,
         };
+
+        if (!string.Equals(current.CardId, updated.CardId, StringComparison.Ordinal))
+            evt.CardIdAssigned = updated.CardId ?? string.Empty;
+        if (!string.Equals(current.CardMessageId, updated.CardMessageId, StringComparison.Ordinal))
+            evt.CardMessageIdAssigned = updated.CardMessageId ?? string.Empty;
+        if (!string.Equals(current.OriginalCardId, updated.OriginalCardId, StringComparison.Ordinal))
+            evt.OriginalCardIdAssigned = updated.OriginalCardId ?? string.Empty;
+        if (!string.Equals(current.LastFlushedText, updated.LastFlushedText, StringComparison.Ordinal))
+            evt.FlushedTextDelta = updated.LastFlushedText ?? string.Empty;
+        if (current.Sequence != updated.Sequence)
+            evt.SequenceDelta = updated.Sequence - current.Sequence;
+        if (!string.Equals(current.StreamingElementId, updated.StreamingElementId, StringComparison.Ordinal))
+            evt.StreamingElementIdSelected = updated.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId;
+        if (!string.Equals(current.TerminalReason, updated.TerminalReason, StringComparison.Ordinal))
+            evt.TerminalReason = updated.TerminalReason ?? string.Empty;
+
+        var currentOperation = current.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified;
+        var updatedOperation = updated.InFlight?.Operation ?? LarkCardOperationPhase.Unspecified;
+        if (currentOperation != updatedOperation)
+            evt.LarkCardOperation = updatedOperation;
+
+        var currentSequence = current.InFlight?.Sequence ?? 0;
+        var updatedSequence = updated.InFlight?.Sequence ?? 0;
+        if (currentSequence != updatedSequence)
+            evt.OperationSequence = updatedSequence;
+
+        if (current.OperationGeneration != updated.OperationGeneration ||
+            currentOperation != updatedOperation ||
+            currentSequence != updatedSequence)
+            evt.OperationGeneration = updated.OperationGeneration;
+        if (!string.Equals(current.PendingAccumulatedText, updated.PendingAccumulatedText, StringComparison.Ordinal))
+            evt.QueuedAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
+        if (!string.Equals(current.PendingFinalizeText, updated.PendingFinalizeText, StringComparison.Ordinal))
+            evt.FinalizeText = updated.PendingFinalizeText ?? string.Empty;
+        if (!string.Equals(current.PendingFinalizeCommandId, updated.PendingFinalizeCommandId, StringComparison.Ordinal))
+            evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
+
+        return evt;
+    }
 
     private IConversationCardTurnRunner ResolveCardRunner() =>
         Services.GetService<IConversationCardTurnRunner>() ?? new NullConversationCardTurnRunner();

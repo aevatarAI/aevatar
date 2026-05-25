@@ -123,15 +123,18 @@ behaviour without redeploying.
 - New abstractions (`ChannelNativeMessage`, `IChannelMessageComposerRegistry`,
   `IInteractiveReplyCollector`, `IChannelNativeMessageProducer`,
   `IInteractiveReplyDispatcher`).
-- Proto additions: `ActionElementKind.TEXT_INPUT` and `ActionElement.arguments` map
-  (carries correlation keys forwarded verbatim to the adapter so inbound parsers still
-  see them in the expected locations).
+- Proto additions: `ActionElementKind.TEXT_INPUT`, `WorkflowResumeActionPayload`,
+  `LlmSelectionActionPayload`, and the `ActionElement.arguments` extension map.
+  Workflow resume and LLM selection fields are repository-owned control semantics and
+  therefore use typed payloads on `ActionElement` / `CardActionSubmission`; `arguments`
+  is only an open adapter-extension / deprecated inbound compatibility map.
 - `NyxIdApiClient.SendChannelRelayReplyAsync` rich overload; existing text overload
   becomes a thin wrapper.
 - `LarkMessageComposer` extended to render form-wrapped cards when `TextInput` actions
   are present (emits `body.elements[].tag=form` with mixed `tag=input` + `tag=button`
-  children, merges `ActionElement.Arguments` into the button `value` object, and picks
-  the `orange` header template whenever any action is marked `is_danger`).
+  children, projects typed action payloads plus `ActionElement.Arguments` into the
+  boundary callback `value` object, and picks the `orange` header template whenever any
+  action is marked `is_danger`).
 - `LarkChannelNativeMessageProducer` wrapping the existing `LarkMessageComposer`.
 - `NyxIdRelayInteractiveReplyDispatcher` default implementation.
 - New project `Aevatar.AI.ToolProviders.Channel` with `ReplyWithInteractionTool` and

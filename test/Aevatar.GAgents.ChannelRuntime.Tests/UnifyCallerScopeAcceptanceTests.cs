@@ -425,6 +425,30 @@ public sealed class UnifyCallerScopeAcceptanceTests
             "all owned agents are returned, not just the first 200; the port pages internally");
     }
 
+    [Fact]
+    public async Task QueryByCallerAsync_ReturnsCatalogAuthorityWithoutRunnerExecutionJoin()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-join");
+        var catalogDocument = BuildDocument("agent-join", caller);
+        catalogDocument.StateVersion = 5;
+        catalogDocument.LastEventId = "catalog-5";
+        var reader = new RecordingDocumentReader(new List<UserAgentCatalogDocument>
+        {
+            catalogDocument,
+        });
+
+        var port = new UserAgentCatalogQueryPort(reader);
+
+        var entry = (await port.QueryByCallerAsync(caller, CancellationToken.None)).Should().ContainSingle().Subject;
+        entry.Status.Should().BeEmpty();
+        entry.ErrorCount.Should().Be(0);
+        entry.LastError.Should().BeEmpty();
+        entry.CatalogAuthorityStateVersion.Should().Be(5);
+        entry.CatalogLastEventId.Should().Be("catalog-5");
+        entry.RunnerAuthorityStateVersion.Should().BeNull();
+        entry.RunnerLastEventId.Should().BeEmpty();
+    }
+
     // ─── Actor → projector → query integration (lark caller end-to-end) ───
     //
     // Issue #466 review caught a gap: the previous acceptance tests stubbed at the
@@ -441,7 +465,6 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var clock = new FixedProjectionClock(new DateTimeOffset(2026, 4, 28, 10, 0, 0, TimeSpan.Zero));
         var projector = new UserAgentCatalogProjector(
             dispatcher,
-            new RecordingDocumentReader(new List<UserAgentCatalogDocument>()),
             clock);
         var context = new UserAgentCatalogMaterializationContext
         {
@@ -508,7 +531,6 @@ public sealed class UnifyCallerScopeAcceptanceTests
             AgentType = "skill_runner",
             TemplateName = "daily",
             ScopeId = scope.RegistrationScopeId,
-            Status = "running",
             StateVersion = 1,
             Tombstoned = false,
             ActorId = "agent-registry-store",
@@ -527,7 +549,6 @@ public sealed class UnifyCallerScopeAcceptanceTests
             Platform = "nyxid",
             OwnerNyxUserId = nyxUserId,
             ScopeId = string.Empty,
-            Status = "running",
             StateVersion = 1,
             Tombstoned = false,
             ActorId = "agent-registry-store",
@@ -545,7 +566,6 @@ public sealed class UnifyCallerScopeAcceptanceTests
             Platform = "lark",
             OwnerNyxUserId = nyxUserId,
             ScopeId = "legacy-bot-scope",
-            Status = "running",
             StateVersion = 1,
             Tombstoned = false,
             ActorId = "agent-registry-store",
@@ -658,4 +678,5 @@ public sealed class UnifyCallerScopeAcceptanceTests
             return string.Equals(actual as string, filter.Value.RawValue as string, StringComparison.Ordinal);
         }
     }
+
 }

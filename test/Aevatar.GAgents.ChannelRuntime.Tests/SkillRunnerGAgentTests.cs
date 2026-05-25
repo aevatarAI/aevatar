@@ -186,10 +186,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         persisted.Should().HaveCount(2);
 
         var runnerState = agent.State.Clone();
-        var writeDispatcher = new RecordingCatalogWriteDispatcher();
-        var projector = new UserAgentCatalogProjector(
+        var writeDispatcher = new RecordingExecutionWriteDispatcher();
+        var projector = new SkillRunnerExecutionProjector(
             writeDispatcher,
-            new EmptyCatalogDocumentReader(),
             new FixedProjectionClock(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero)));
 
         await projector.ProjectAsync(
@@ -215,9 +214,33 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         writeDispatcher.Upserts.Should().ContainSingle();
         var doc = writeDispatcher.Upserts[0];
         doc.Id.Should().Be("skill-runner-projection-regression");
+        doc.ActorId.Should().Be("skill-runner-projection-regression");
         doc.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
         doc.NextRunAtUtc.Should().NotBeNull();
-        doc.RunnerSourceVersion.Should().Be(2);
+        doc.StateVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WhenDisabled_PersistsRunnerOwnedRejectedEvent()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+        await _agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "test" });
+
+        await _agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "run_agent" });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+
+        _agent.State.Enabled.Should().BeFalse();
+        _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
+        _agent.State.ErrorCount.Should().Be(1);
     }
 
     [Fact]
@@ -255,6 +278,98 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
         await catalogActor.DidNotReceive()
             .HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithOwnerScope_DispatchesOwnerScopeOnlyCatalogCommand()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-owner-scope-only", provider);
+        await agent.ActivateAsync();
+
+        var ownerScope = OwnerScope.ForNyxIdNative("user-1");
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.OwnerScope = ownerScope;
+#pragma warning disable CS0612 // stale legacy fields must not be emitted when owner_scope exists
+        initialize.OutboundConfig.Platform = "nyxid";
+        initialize.OutboundConfig.OwnerNyxUserId = "user-1";
+#pragma warning restore CS0612
+
+        await agent.HandleInitializeAsync(initialize);
+
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
+        command.OwnerScope.Should().NotBeNull();
+        command.OwnerScope!.MatchesStrictly(ownerScope).Should().BeTrue();
+#pragma warning disable CS0612
+        command.Platform.Should().BeEmpty();
+        command.OwnerNyxUserId.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithLegacyOwnershipFields_DerivesOwnerScopeAndPreservesLegacyFields()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-legacy-owner-fallback", provider);
+        await agent.ActivateAsync();
+
+        var initialize = CreateInitializeCommand();
+#pragma warning disable CS0612 // legacy fallback branch must keep backwards-compatible writes
+        initialize.OutboundConfig.OwnerNyxUserId = "legacy-user-1";
+        initialize.OutboundConfig.Platform = "nyxid";
+#pragma warning restore CS0612
+
+        await agent.HandleInitializeAsync(initialize);
+
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
+        command.OwnerScope.Should().NotBeNull();
+        command.OwnerScope!.MatchesStrictly(OwnerScope.ForNyxIdNative("legacy-user-1")).Should().BeTrue();
+#pragma warning disable CS0612
+        command.Platform.Should().Be("nyxid");
+        command.OwnerNyxUserId.Should().Be("legacy-user-1");
+#pragma warning restore CS0612
     }
 
     [Fact]
@@ -1017,12 +1132,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private sealed class RecordingCatalogWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
+    private sealed class RecordingExecutionWriteDispatcher : IProjectionWriteDispatcher<SkillRunnerExecutionDocument>
     {
-        public List<UserAgentCatalogDocument> Upserts { get; } = [];
+        public List<SkillRunnerExecutionDocument> Upserts { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            UserAgentCatalogDocument readModel,
+            SkillRunnerExecutionDocument readModel,
             CancellationToken ct = default)
         {
             Upserts.Add(readModel.Clone());
@@ -1031,17 +1146,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Applied());
-    }
-
-    private sealed class EmptyCatalogDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
-    {
-        public Task<UserAgentCatalogDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<UserAgentCatalogDocument?>(null);
-
-        public Task<ProjectionDocumentQueryResult<UserAgentCatalogDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>());
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionClock

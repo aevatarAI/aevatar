@@ -5,6 +5,8 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -23,9 +25,10 @@ public sealed class MessagesCommandFacadeTests
         var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
 
         result.Error.Should().BeNull();
-        result.Completed!.Completion.Text.Should().Be("hello");
+        result.Completed!.Completion.OutputText.Should().Be("hello");
         sessions.Registered.Should().ContainSingle().Which.PreviousResponseId.Should().BeEmpty();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle().Which.OutputText.Should().Be("hello");
+        sessions.UpdatedStatuses.Should().BeEmpty();
         completion.LastRequest!.Model.Should().Be("claude-sonnet");
         completion.LastRequest.Messages.Should().ContainSingle(message => message.Role == "user" && message.Content == "hello");
     }
@@ -163,17 +166,21 @@ public sealed class MessagesCommandFacadeTests
         IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
-        IToolSetRegistry? toolSetRegistry = null) =>
-        new(
+        IToolSetRegistry? toolSetRegistry = null)
+    {
+        var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        return new MessagesCommandFacade(
             new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
-            sessionPort ?? new RecordingSessionPort(),
+            effectiveSessionPort,
+            (effectiveSessionPort as RecordingSessionPort)?.QueryPort ?? new RecordingSessionQueryPort(),
             completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
             new ResponsesToolClassificationService([], NullLogger<ResponsesToolClassificationService>.Instance),
             new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             new StaticLlmProviderFactory(),
             NullLogger<MessagesCommandFacade>.Instance);
+    }
 
     private static MessagesCreateCommandPlan BuildStreamPlan() =>
         new(
@@ -341,6 +348,10 @@ public sealed class MessagesCommandFacadeTests
 
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> UpdatedStatuses { get; } = [];
 
+        public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
+
+        public RecordingSessionQueryPort QueryPort { get; } = new();
+
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
             Registered.Add(record);
@@ -364,8 +375,14 @@ public sealed class MessagesCommandFacadeTests
             string sessionActorId,
             string responseId,
             LlmSessionCompletion completion,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            RecordedCompletions.Add(completion.Clone());
+            QueryPort.Snapshot = QueryPort.Snapshot is null
+                ? BuildSnapshot(responseId, completion)
+                : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveForwardedToolResultAsync(
             string sessionActorId,
@@ -382,5 +399,48 @@ public sealed class MessagesCommandFacadeTests
             string callId,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+
+        private static LlmSessionSnapshot BuildSnapshot(string responseId, LlmSessionCompletion completion) =>
+            new(
+                responseId,
+                "scope-1",
+                "owner-1",
+                LlmSessionOriginKind.ApiKey,
+                null,
+                LlmSessionStatus.Completed,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromHours(1),
+                null,
+                "actor-" + responseId,
+                1,
+                "event-1",
+                Completion: ToSnapshot(completion));
+
+        private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
+            new(
+                completion.OutputText,
+                completion.ToolCalls
+                    .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
+                        tool.CallId,
+                        tool.ToolName,
+                        ResponsesJsonValues.ToBoundaryJson(tool.Result)))
+                    .ToArray(),
+                completion.CompletedAt?.ToDateTimeOffset(),
+                string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+                string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+                completion.Usage is null
+                    ? null
+                    : new TokenUsage(
+                        completion.Usage.PromptTokens,
+                        completion.Usage.CompletionTokens,
+                        completion.Usage.TotalTokens));
+    }
+
+    private sealed class RecordingSessionQueryPort : ILlmSessionQueryPort
+    {
+        public LlmSessionSnapshot? Snapshot { get; set; }
+
+        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(string responseId, CancellationToken ct = default) =>
+            Task.FromResult(Snapshot);
     }
 }

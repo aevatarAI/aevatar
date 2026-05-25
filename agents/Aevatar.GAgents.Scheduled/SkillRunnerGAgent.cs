@@ -27,6 +27,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
+    private readonly IClock _clock;
+    private readonly ITimeZoneResolver _timeZoneResolver;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
     // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
@@ -44,7 +46,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        IClock? clock = null,
+        ITimeZoneResolver? timeZoneResolver = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -54,7 +58,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             toolSources,
             nyxIdApiClient,
             ownerLlmConfigSource,
-            approvalHandler)
+            approvalHandler,
+            clock,
+            timeZoneResolver)
     {
     }
 
@@ -67,7 +73,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
         IOwnerLlmConfigSource? ownerLlmConfigSource,
-        IToolApprovalHandler? approvalHandler)
+        IToolApprovalHandler? approvalHandler,
+        IClock? clock,
+        ITimeZoneResolver? timeZoneResolver)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -79,6 +87,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         _nyxIdApiClient = nyxIdApiClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
+        _clock = clock ?? new SystemClock();
+        _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _toolFailureCounter = toolMiddlewareChain.Counter;
     }
 
@@ -108,6 +118,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }),
         scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
         cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
+        clock: _clock,
+        timeZoneResolver: _timeZoneResolver,
         logger: Logger,
         ownerDescription: $"Skill runner {Id}");
 
@@ -145,6 +157,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerNextRunScheduledEvent>(ApplyNextRunScheduled)
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
+            .On<SkillRunnerExecutionRejectedEvent>(ApplyRejected)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -185,7 +198,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         await PersistDomainEventAsync(initialized);
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
+        //   Old: SkillRunnerGAgent sampled DateTimeOffset.UtcNow and cron helper resolved timezone inline.
+        //   New: ChannelScheduleRunner owns injected clock/timezone dependencies and samples once for this turn.
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
@@ -195,10 +211,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (!State.Enabled)
         {
             Logger.LogInformation("Skill runner {ActorId} ignored trigger because it is disabled", Id);
+            await PersistDomainEventAsync(new SkillRunnerExecutionRejectedEvent
+            {
+                RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+                Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
+            });
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.UtcNow;
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
@@ -286,7 +307,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
         }
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -875,20 +896,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(CancellationToken ct)
     {
-#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
-        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
-        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
-        var ownerScope = State.OutboundConfig?.OwnerScope
-                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+        var ownerScope = State.OutboundConfig?.OwnerScope;
 
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -900,10 +915,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
-#pragma warning restore CS0612
 
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         if (ownerScope is not null)
-            command.OwnerScope = ownerScope;
+        {
+            command.OwnerScope = ownerScope.Clone();
+        }
+        else
+        {
+#pragma warning disable CS0612 // legacy field write only for pre-owner_scope state
+            var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+            var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+            command.Platform = legacyPlatform;
+            command.OwnerNyxUserId = legacyOwnerNyxUserId;
+            var legacyScope = OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+#pragma warning restore CS0612
+            if (legacyScope is not null)
+                command.OwnerScope = legacyScope;
+        }
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
     }
@@ -970,6 +1002,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var next = current.Clone();
         next.LastRunAt = evt.FailedAt;
         next.LastError = evt.Error ?? string.Empty;
+        next.ErrorCount += 1;
+        return next;
+    }
+
+    private static SkillRunnerState ApplyRejected(SkillRunnerState current, SkillRunnerExecutionRejectedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastRunAt = evt.RejectedAt;
+        next.LastError = evt.Reason ?? string.Empty;
         next.ErrorCount += 1;
         return next;
     }

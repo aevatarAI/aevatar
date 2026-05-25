@@ -24,8 +24,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
-using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
-using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
+using RoutingOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
+using ScheduledOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
 
 namespace Aevatar.ChatRouting.Voice.Integration.Tests;
 

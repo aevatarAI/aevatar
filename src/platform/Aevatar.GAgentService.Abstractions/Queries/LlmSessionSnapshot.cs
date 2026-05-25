@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Queries;
@@ -44,7 +45,8 @@ public sealed record LlmSessionCompletionSnapshot(
     IReadOnlyList<LlmSessionCompletedToolCallSnapshot> ToolCalls,
     DateTimeOffset? CompletedAt,
     string? FailureCode,
-    string? FailureMessage);
+    string? FailureMessage,
+    TokenUsage? Usage = null);
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis

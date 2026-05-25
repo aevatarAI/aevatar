@@ -9,8 +9,6 @@ using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.Scheduled;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
-using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.GAgents.NyxidChat.Voice;
 
@@ -58,7 +56,7 @@ public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     {
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = command.ScopeId.Trim();
-        var scheduledScope = ScheduledOwnerScope.ForNyxIdNative(scopeId);
+        var ownerScope = OwnerScope.ForNyxIdNative(scopeId);
         var actorId = BuildDemoActorId(scopeId);
         var routePolicyActorId = $"{ChatRoutePolicyActorIdPrefix}{scopeId}";
         var correlationId = Guid.NewGuid().ToString("N");
@@ -69,7 +67,7 @@ public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
             AgentId = actorId,
             AgentType = NyxIdChatServiceDefaults.GAgentTypeName,
             TemplateName = "voice-demo",
-            OwnerScope = scheduledScope.Clone(),
+            OwnerScope = ownerScope.Clone(),
         }, ct);
 
         var routePolicyCommandId = await EnsureVoiceRoutePolicyAsync(
@@ -117,10 +115,10 @@ public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     {
         var command = new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new ChatRouteCallerScope
+            OwnerScope = new OwnerScope
             {
                 NyxUserId = scopeId,
-                Platform = RoutingOwnerScope.NyxIdPlatform,
+                Platform = OwnerScope.NyxIdPlatform,
             },
             DefaultTargetIfUninitialized = ForwardToDemoActor(actorId),
             Rule = new ChatRouteRule

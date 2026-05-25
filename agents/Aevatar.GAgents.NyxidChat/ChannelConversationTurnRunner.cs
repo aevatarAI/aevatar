@@ -674,9 +674,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (cardAction is null)
             return false;
 
+        var payload = cardAction.LlmSelection;
+        if (payload is not null && !string.IsNullOrWhiteSpace(payload.Action))
+        {
+            action = payload.Action.Trim();
+            value = action switch
+            {
+                TextUserLlmOptionsRenderer.SelectServiceAction => payload.ServiceId?.Trim() ?? string.Empty,
+                TextUserLlmOptionsRenderer.ApplyPresetAction => payload.PresetId?.Trim() ?? string.Empty,
+                _ => string.Empty,
+            };
+            return true;
+        }
+
         if (!inbound.Extra.TryGetValue(TextUserLlmOptionsRenderer.LlmActionArgument, out var actionValue) ||
             string.IsNullOrWhiteSpace(actionValue))
         {
+            // Deprecated inbound compatibility only. New producers must use LlmSelectionActionPayload.
             action = cardAction.ActionId switch
             {
                 TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
@@ -1411,7 +1425,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ArgumentNullException.ThrowIfNull(activity);
 
         var extra = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (activity.Type == ActivityType.CardAction && activity.Content?.CardAction is { } cardAction)
+        var cardAction = activity.Type == ActivityType.CardAction
+            ? activity.Content?.CardAction
+            : null;
+        if (cardAction is not null)
         {
             if (cardAction.Arguments.TryGetValue("agent_builder_action", out var builderAction) &&
                 !string.IsNullOrWhiteSpace(builderAction))
@@ -1442,6 +1459,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = ResolveChatType(activity.Conversation, activity.Type),
             OutboundDelivery = activity.OutboundDelivery?.Clone(),
             TransportExtras = activity.TransportExtras?.Clone(),
+            CardAction = cardAction?.Clone(),
             Extra = extra,
         };
     }

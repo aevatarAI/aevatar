@@ -27,6 +27,35 @@ message ConversationGAgentState {
   repeated ConversationReplyLifecycleState active_reply_lifecycles = 11;
 }
 
+// Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+//   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+//   New principle: event describes transition facts; reducer derives current state from event + actor state
+message ConversationReplyLifecycleState {
+  string correlation_id = 1;
+  ConversationReplyLifecycleMode mode = 2;
+  ConversationReplyLifecyclePhase phase = 3;
+  string platform_message_id = 4;
+  string card_id = 5;
+  string card_message_id = 6;
+  string original_card_id = 7;
+  string last_flushed_text = 8;
+  int32 edit_count = 9;
+  int64 sequence = 10;
+  string streaming_element_id = 11;
+  string terminal_reason = 12;
+  int64 updated_at_unix_ms = 13;
+  LarkCardOperationPhase lark_card_in_flight_operation = 14;
+  int64 lark_card_in_flight_sequence = 15;
+  int64 lark_card_operation_generation = 16;
+  string pending_accumulated_text = 17;
+  string pending_finalize_text = 18;
+  string pending_finalize_command_id = 19;
+  NyxRelayTextOperationKind nyx_relay_in_flight_operation = 20;
+  int64 nyx_relay_in_flight_sequence = 21;
+  int64 nyx_relay_operation_generation = 22;
+  LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
+}
+
 // Channel-sink ack tracking for the most recent reply turn. Carries either
 // an in-flight pending marker, a successful delivery (with channel-side
 // message id) or a structured failure. Used by ConversationGAgent to make

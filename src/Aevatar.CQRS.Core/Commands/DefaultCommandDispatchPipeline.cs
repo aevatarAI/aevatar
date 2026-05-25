@@ -38,8 +38,9 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
             return prepared;
 
         var execution = prepared.Target;
-        await DispatchPreparedAsync(execution, ct);
-        return prepared;
+        var admission = await DispatchPreparedAsync(execution, ct);
+        return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
+            execution with { Admission = admission });
     }
 
     public async Task<CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>> PrepareAsync(
@@ -74,7 +75,7 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
             });
     }
 
-    public async Task DispatchPreparedAsync(
+    public async Task<DispatchAdmission> DispatchPreparedAsync(
         CommandDispatchExecution<TTarget, TReceipt> execution,
         CancellationToken ct = default)
     {
@@ -86,7 +87,7 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
 
         try
         {
-            await _targetDispatcher.DispatchAsync(target, execution.Envelope, ct);
+            return await _targetDispatcher.DispatchAsync(target, execution.Envelope, ct);
         }
         catch
         {

@@ -57,7 +57,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         await _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTarget = ForwardToModelAction("chrono-llm/gpt-5.5"),
             Rules = { Rule("daily", priority: 10) },
         });
@@ -90,7 +90,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         await _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTarget = ForwardToModelAction("existing-default"),
             Rules =
             {
@@ -101,7 +101,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
 
         await _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "ignored-new-scope" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "ignored-new-scope" },
             DefaultTargetIfUninitialized = ForwardToModelAction("ignored-default"),
             Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
         });
@@ -121,7 +121,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         await _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTargetIfUninitialized = ForwardToModelAction("initial-default"),
             Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
         });
@@ -139,7 +139,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         var act = () => _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTargetIfUninitialized = ForwardToModelAction("initial-default"),
             Rule = Rule(" ", priority: 1000, modelName: "voice-model"),
         });
@@ -154,7 +154,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         var act = () => _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
         });
 
@@ -168,7 +168,7 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     {
         var act = () => _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested
         {
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             // default_target intentionally unset.
         });
 

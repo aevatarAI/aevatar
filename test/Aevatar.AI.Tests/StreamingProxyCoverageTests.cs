@@ -122,6 +122,33 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public void StreamingProxyEndpointSource_ShouldApplyDeprecationFilter()
+    {
+        var root = GetRepositoryRoot();
+        var endpoints = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs"));
+
+        endpoints.Should().Contain(".AddEndpointFilter(AddDeprecationHeadersAsync)");
+    }
+
+    [Fact]
+    public void AddDeprecationHeaders_ShouldAdvertiseSunsetAndSuccessor()
+    {
+        var context = new DefaultHttpContext();
+
+        StreamingProxyEndpoints.AddDeprecationHeaders(context.Response);
+
+        context.Response.Headers[StreamingProxyEndpoints.DeprecationHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.DeprecationHeaderValue);
+        context.Response.Headers[StreamingProxyEndpoints.SunsetHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.SunsetHeaderValue);
+        context.Response.Headers[StreamingProxyEndpoints.LinkHeaderName].ToString()
+            .Should().Be(StreamingProxyEndpoints.SuccessorLinkHeaderValue);
+        StreamingProxyEndpoints.SuccessorRoute.Should().Be("/v1/responses");
+    }
+
+    [Fact]
     public void StreamingProxyEndpointSource_ShouldNotInlineDispatchActorEvents()
     {
         var root = GetRepositoryRoot();
@@ -2034,23 +2061,24 @@ public class StreamingProxyCoverageTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope));
             var actor = await runtime.GetAsync(actorId);
             if (actor is not null)
                 await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 
     private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
     {
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             _ = envelope;
             _ = ct;
-            return Task.FromException(exception);
+            return Task.FromException<DispatchAdmission>(exception);
         }
     }
 

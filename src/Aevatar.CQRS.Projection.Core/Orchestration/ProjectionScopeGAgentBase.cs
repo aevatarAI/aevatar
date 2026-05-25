@@ -222,18 +222,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     private StreamForwardingBinding BuildObservationRelayBinding(string rootActorId)
     {
-        var typeUrl = $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}";
-        return new StreamForwardingBinding
-        {
-            SourceStreamId = rootActorId,
-            TargetStreamId = Id,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [],
-            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal)
-            {
-                typeUrl,
-            },
-        };
+        return ProjectionScopeObservationRelayBinding.Create(rootActorId, Id);
     }
 
     protected ValueTask RecordDispatchFailureAsync(

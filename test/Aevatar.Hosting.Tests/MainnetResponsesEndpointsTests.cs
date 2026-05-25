@@ -12,6 +12,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;

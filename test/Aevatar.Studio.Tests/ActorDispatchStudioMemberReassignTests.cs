@@ -186,10 +186,10 @@ public sealed class ActorDispatchStudioMemberReassignTests
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add(new DispatchedCommand(actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);

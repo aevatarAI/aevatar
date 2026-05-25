@@ -17,7 +17,7 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public void Metadata_ReflectsRelayOnlyContract()
     {
-        var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
+        var tool = CreateTool();
 
         tool.Name.Should().Be("channel_registrations");
         tool.Description.Should().Contain("register_lark_via_nyx");
@@ -41,7 +41,7 @@ public sealed class ChannelRegistrationToolTests
         AgentToolRequestContext.CurrentMetadata = null;
         try
         {
-            var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
+            var tool = CreateTool();
 
             var result = await tool.ExecuteAsync("""{"action":"list"}""");
 
@@ -76,7 +76,7 @@ public sealed class ChannelRegistrationToolTests
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -107,7 +107,7 @@ public sealed class ChannelRegistrationToolTests
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(provisioningService)
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
@@ -134,7 +134,7 @@ public sealed class ChannelRegistrationToolTests
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(provisioningService)
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken(null);
         var json = await tool.ExecuteAsync(
@@ -151,7 +151,7 @@ public sealed class ChannelRegistrationToolTests
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var result = await tool.ExecuteAsync("""{"action":"rebuild_projection"}""");
@@ -165,7 +165,7 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_UpdateToken_ReturnsRetiredError()
     {
-        var tool = new ChannelRegistrationTool(new ServiceCollection().BuildServiceProvider());
+        var tool = CreateTool();
 
         using var scope = PushNyxToken();
         var result = await tool.ExecuteAsync("""{"action":"update_token"}""");
@@ -195,7 +195,7 @@ public sealed class ChannelRegistrationToolTests
             .AddSingleton(queryPort)
             .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1"}""");
@@ -235,7 +235,7 @@ public sealed class ChannelRegistrationToolTests
             .AddSingleton(queryPort)
             .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
+        var tool = CreateTool(serviceProvider);
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
@@ -247,6 +247,55 @@ public sealed class ChannelRegistrationToolTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
         await queryPort.Received(1).GetAsync("reg-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ToolSource_ReturnsTool_WithTypedDependencies()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(Array.Empty<ChannelBotRegistrationEntry>()));
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+
+        var source = new ChannelRegistrationToolSource(queryPort, commandFacade, provisioningService);
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        tools[0].Name.Should().Be("channel_registrations");
+
+        using var scope = PushNyxToken();
+        var result = await tools[0].ExecuteAsync("""{"action":"list"}""");
+        using var doc = JsonDocument.Parse(result);
+        doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
+
+        await queryPort.Received(1).QueryAllAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Constructor_Requires_Typed_Dependencies()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+
+        var missingQuery = () => new ChannelRegistrationTool(null!, commandFacade, provisioningService);
+        var missingCommand = () => new ChannelRegistrationTool(queryPort, null!, provisioningService);
+        var missingProvisioning = () => new ChannelRegistrationTool(queryPort, commandFacade, null!);
+        var missingSourceQuery = () => new ChannelRegistrationToolSource(null!, commandFacade, provisioningService);
+        var missingSourceCommand = () => new ChannelRegistrationToolSource(queryPort, null!, provisioningService);
+        var missingSourceProvisioning = () => new ChannelRegistrationToolSource(queryPort, commandFacade, null!);
+
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandFacade");
+        missingProvisioning.Should().Throw<ArgumentNullException>().WithParameterName("provisioningService");
+        missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingSourceCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandFacade");
+        missingSourceProvisioning.Should().Throw<ArgumentNullException>().WithParameterName("provisioningService");
     }
 
     [Fact]
@@ -276,6 +325,29 @@ public sealed class ChannelRegistrationToolTests
         AgentToolRequestContext.CurrentMetadata = next;
 
         return new ResetMetadataScope(previous);
+    }
+
+    private static ChannelRegistrationTool CreateTool(IServiceProvider? services = null)
+    {
+        var provider = services ?? CreateDefaultServices().BuildServiceProvider();
+        return new ChannelRegistrationTool(
+            provider.GetService<IChannelBotRegistrationQueryPort>() ?? Substitute.For<IChannelBotRegistrationQueryPort>(),
+            provider.GetService<ChannelRegistrationCommandFacade>() ?? CreateDefaultCommandFacade(),
+            provider.GetService<INyxLarkProvisioningService>() ?? Substitute.For<INyxLarkProvisioningService>());
+    }
+
+    private static IServiceCollection CreateDefaultServices()
+    {
+        return new ServiceCollection()
+            .AddSingleton(Substitute.For<IChannelBotRegistrationQueryPort>())
+            .AddSingleton(CreateDefaultCommandFacade())
+            .AddSingleton(Substitute.For<INyxLarkProvisioningService>());
+    }
+
+    private static ChannelRegistrationCommandFacade CreateDefaultCommandFacade()
+    {
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        return ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
     }
 
     private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable

@@ -333,9 +333,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     SuspensionType = "human_input",
                     Prompt = "Need approval",
                     VariableName = "approval",
+                    Secure = true,
+                    RedactedOutput = "[captured]",
                     Metadata =
                     {
                         ["channel"] = "ui",
+                        ["variable"] = "legacy_approval",
+                        ["secure"] = "false",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy]",
                     },
                 },
                 6,
@@ -489,7 +495,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Timeline.Should().Contain(x => x.Stage == "workflow.start" && x.Message == "command=cmd-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.request" && x.StepId == "step-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.failed" && x.StepId == "step-1");
-        report.Timeline.Should().Contain(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        var suspendedTimeline = report.Timeline.Single(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        suspendedTimeline.Data.Should().ContainKey("channel").WhoseValue.Should().Be("ui");
+        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("approval");
+        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[captured]");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
         report.Timeline.Should().Contain(x => x.Stage == "signal.waiting" && x.Data["timeout_ms"] == "900");
         report.Timeline.Should().Contain(x => x.Stage == "signal.buffered");
         report.Timeline.Count(x => x.Stage == "tool.call").Should().Be(2);
@@ -548,6 +559,48 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Success.Should().BeTrue();
         report.FinalOutput.Should().Be("workflow done");
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldFallbackLegacyOnlySecureInputMetadata()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-legacy-secure",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 5, 10, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secure-input",
+                    SuspensionType = "secure_input",
+                    Prompt = "enter secret",
+                    Metadata =
+                    {
+                        ["variable"] = "api_key",
+                        ["secure"] = "true",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy captured]",
+                        ["source"] = "legacy-test",
+                    },
+                },
+                30,
+                "evt-legacy-secure"),
+            timestamp);
+
+        var suspendedTimeline = report.Timeline.Single(x =>
+            x.Stage == "workflow.suspended" &&
+            x.StepId == "secure-input");
+        suspendedTimeline.Data.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
+        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("api_key");
+        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[legacy captured]");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
     }
 
     [Fact]

@@ -1,9 +1,9 @@
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
@@ -231,77 +231,6 @@ public sealed class ChatRouteResolverTests
                 ["team_id"] = "team-1",
                 ["endpoint_id"] = "chat",
             });
-    }
-
-    [Fact]
-    public void Resolve_ForwardToWorkflowRule_TranslatesToToolDrivenModelAction()
-    {
-        var resolver = NewResolver();
-        var snapshot = new ChatRoutePolicySnapshot(
-            ForwardToModelAction("default-model"),
-            [
-                new ChatRouteRule
-                {
-                    RuleId = "workflow-route",
-                    Priority = 10,
-                    Match = new ChatRouteMatch { CommandName = "/run" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
-                    },
-                },
-            ]);
-
-        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/run" });
-
-        decision.MatchedRuleId.Should().Be("workflow-route");
-        decision.Deprecations.Should().ContainSingle().Which.Should().BeEquivalentTo(new
-        {
-            Code = "legacy_forward_to_workflow",
-            ActionKind = "ForwardToWorkflow",
-            MatchedRuleId = "workflow-route",
-            TranslatedTarget = "aevatar_start_workflow(workflow_id=workflow-1)",
-        });
-        AssertForwardToModelTool(
-            decision.Action,
-            expectedToolName: "aevatar_start_workflow",
-            expectedArguments: new Dictionary<string, string>
-            {
-                ["workflow_id"] = "workflow-1",
-            });
-    }
-
-    [Fact]
-    public void Resolve_LegacyWorkflowRule_LogsStructuredWarning()
-    {
-        var logger = new RecordingLogger<ChatRouteResolver>();
-        var resolver = NewResolver(logger);
-        var snapshot = new ChatRoutePolicySnapshot(
-            ForwardToModelAction("default-model"),
-            [
-                new ChatRouteRule
-                {
-                    RuleId = "legacy-workflow",
-                    Priority = 10,
-                    Match = new ChatRouteMatch { CommandName = "/workflow" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
-                    },
-                },
-            ]);
-
-        _ = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/workflow" });
-
-        var entry = logger.Entries.Should().ContainSingle().Subject;
-        entry.Level.Should().Be(LogLevel.Warning);
-        entry.Message.Should().Contain("chat_route_legacy_action_used");
-        entry.State.Should().ContainKey("MatchedRuleId").WhoseValue.Should().Be("legacy-workflow");
-        entry.State.Should().ContainKey("ActionKind").WhoseValue.Should().Be("ForwardToWorkflow");
-        entry.State.Should().ContainKey("TranslatedTarget").WhoseValue.Should()
-            .Be("aevatar_start_workflow(workflow_id=workflow-1)");
-        entry.State.Should().ContainKey("Suggestion").WhoseValue.Should().BeOfType<string>()
-            .Which.Should().Contain("ChatRoutePolicyMigrator");
     }
 
     [Fact]
@@ -588,7 +517,7 @@ public sealed class ChatRouteResolverTests
             .Value.Defaults.FallbackModel.Should().Be("configured-model");
     }
 
-    private static ChatRouteResolver NewResolver(ILogger<ChatRouteResolver>? logger = null)
+    private static ChatRouteResolver NewResolver()
     {
         var fallback = Substitute.For<IChatRouteFallbackProvider>();
         fallback.GetFallbackDecision().Returns(new ChatRouteDecision
@@ -596,7 +525,7 @@ public sealed class ChatRouteResolverTests
             Action = ForwardToModelAction("fallback-model"),
             UsedFallback = true,
         });
-        return new ChatRouteResolver(fallback, logger);
+        return new ChatRouteResolver(fallback);
     }
 
     internal static ChatRouteAction ForwardToModelAction(string modelName) =>
@@ -681,37 +610,4 @@ public sealed class ChatRouteResolverTests
         "lark",
         "bot-1",
         "sender-1");
-
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        public List<LogEntry> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull =>
-            null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            var values = state as IReadOnlyList<KeyValuePair<string, object?>>;
-            Entries.Add(new LogEntry(
-                logLevel,
-                formatter(state, exception),
-                values?
-                    .Where(static item => item.Key != "{OriginalFormat}")
-                    .ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal)
-                ?? new Dictionary<string, object?>(StringComparer.Ordinal)));
-        }
-
-        public sealed record LogEntry(
-            LogLevel Level,
-            string Message,
-            IReadOnlyDictionary<string, object?> State);
-    }
 }

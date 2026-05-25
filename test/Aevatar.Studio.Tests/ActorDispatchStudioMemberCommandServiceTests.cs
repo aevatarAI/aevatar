@@ -299,7 +299,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "Aevatar.Studio.Hosting.Endpoints.ScriptGenerateGAgent, Aevatar.Studio.Hosting",
+                        ActorTypeName: "Example.Studio.CommandMember, Example.Studio",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "run",
@@ -391,10 +391,10 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add(new DispatchedCommand(actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);

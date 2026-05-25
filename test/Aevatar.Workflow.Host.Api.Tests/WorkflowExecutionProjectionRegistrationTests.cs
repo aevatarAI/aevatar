@@ -20,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class WorkflowExecutionProjectionRegistrationTests
 {
     [Fact]
@@ -182,12 +183,12 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             _ = envelope;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);

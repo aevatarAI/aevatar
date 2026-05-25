@@ -72,6 +72,13 @@ message LlmSessionCompletion {
   google.protobuf.Timestamp completed_at = 3;
   string failure_code = 4;
   string failure_message = 5;
+  LlmSessionTokenUsage usage = 6;
+}
+
+message LlmSessionTokenUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
 }
 
 message LlmSessionState {

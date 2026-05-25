@@ -45,16 +45,19 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly StatusProbeAuthorizationResolver _authorizationResolver;
+    private readonly TimeProvider _timeProvider;
 
     public HttpStatusProbeExecutor(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
-        StatusProbeAuthorizationResolver authorizationResolver)
+        StatusProbeAuthorizationResolver authorizationResolver,
+        TimeProvider timeProvider)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _authorizationResolver = authorizationResolver
             ?? throw new ArgumentNullException(nameof(authorizationResolver));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public string Kind => "http_status";
@@ -162,7 +165,7 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
         return fallback;
     }
 
-    private static async Task<HealthProbeOutcome?> ValidateBodyAssertionsAsync(
+    private async Task<HealthProbeOutcome?> ValidateBodyAssertionsAsync(
         HealthProbeTargetDescriptor descriptor,
         HttpResponseMessage response,
         CancellationToken ct)
@@ -261,12 +264,14 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
         });
     }
 
-    private static HealthProbeOutcome Failure(string detail, string error) => new()
+    private HealthProbeOutcome Failure(string detail, string error) => new()
     {
         Status = HealthOutcomeStatus.Down,
         Detail = detail,
         ErrorMessage = error,
-        ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        // Refactor (iter89/cluster-089-status-dashboard-probe-clock):
+        // Old: executor failure outcomes sampled DateTimeOffset.UtcNow directly.
+        // New: executor failure observed_at is supplied by the injected TimeProvider.
+        ObservedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
     };
-
 }

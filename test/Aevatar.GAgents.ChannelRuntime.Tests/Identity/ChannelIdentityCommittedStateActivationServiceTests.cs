@@ -159,10 +159,10 @@ public sealed class ChannelIdentityCommittedStateActivationServiceTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Envelopes.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

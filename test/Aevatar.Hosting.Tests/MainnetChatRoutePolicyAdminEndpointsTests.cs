@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Text;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
@@ -158,80 +159,6 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("\"ruleId\": \"rule-1\"");
         body.Should().Contain("aevatar_invoke_gagent");
         body.Should().Contain("agent-x");
-    }
-
-    [Fact]
-    public async Task MigratePolicy_DryRun_ReturnsMigratedSnapshotWithoutDispatching()
-    {
-        var snapshot = new ChatRoutePolicySnapshot(
-            new ChatRouteAction
-            {
-                ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "default-workflow" },
-            },
-            [
-                new ChatRouteRule
-                {
-                    RuleId = "legacy-workflow",
-                    Priority = 50,
-                    Match = new ChatRouteMatch { Channel = "lark" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
-                    },
-                },
-            ]);
-        var commandPort = new RecordingChatRoutePolicyCommandPort();
-        await using var app = await CreateAppAsync(commandPort, new StaticPolicyQueryPort(snapshot));
-        var client = app.GetTestClient();
-
-        var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate", content: null);
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        body.Should().Contain("\"forwardToModel\"");
-        body.Should().Contain("\"toolSetRef\"");
-        body.Should().Contain("aevatar_start_workflow");
-        body.Should().Contain("default-workflow");
-        body.Should().Contain("workflow-1");
-        body.Should().NotContain("\"forwardToWorkflow\"");
-        commandPort.Upserts.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task MigratePolicy_Apply_DispatchesSingleUpsertCommandWithMigratedActions()
-    {
-        var snapshot = new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToModel = new ForwardToModel { ModelName = "deepseek/deepseek-chat" } },
-            [
-                new ChatRouteRule
-                {
-                    RuleId = "legacy-workflow",
-                    Priority = 50,
-                    Match = new ChatRouteMatch { CommandName = "/run" },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToWorkflow = new ForwardToWorkflow { WorkflowId = "workflow-1" },
-                    },
-                },
-            ]);
-        var commandPort = new RecordingChatRoutePolicyCommandPort();
-        await using var app = await CreateAppAsync(commandPort, new StaticPolicyQueryPort(snapshot));
-        var client = app.GetTestClient();
-
-        var response = await client.PostAsync($"/api/scopes/{Scope}/chat-route-policy/migrate?apply=true", content: null);
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted, body);
-        commandPort.Upserts.Should().ContainSingle();
-        var (_, command) = commandPort.Upserts[0];
-        command.OwnerScope.NyxUserId.Should().Be(Scope);
-        command.Rules.Should().ContainSingle();
-        var migratedAction = command.Rules[0].Action;
-        migratedAction.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToModel);
-        migratedAction.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_start_workflow");
-        migratedAction.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["workflow_id"].StringValue
-            .Should()
-            .Be("workflow-1");
     }
 
     [Fact]
