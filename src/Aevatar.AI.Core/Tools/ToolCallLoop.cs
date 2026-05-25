@@ -347,7 +347,7 @@ public sealed class ToolCallLoop
         }
     }
 
-    internal static ChatMessage BuildToolResultMessage(string callId, string toolResult)
+    public static ChatMessage BuildToolResultMessage(string callId, string toolResult)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
             return ChatMessage.Tool(callId, toolResult);

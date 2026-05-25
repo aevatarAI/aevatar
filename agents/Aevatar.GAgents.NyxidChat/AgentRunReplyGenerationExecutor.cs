@@ -1,10 +1,14 @@
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.AI.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -64,6 +68,98 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.Request.CorrelationId,
                 ResolveFallbackTimeout(),
                 executorCt => ExecuteAndReportAsync(workItem, executorCt)),
+            ct);
+    }
+
+    public async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+        AgentRunReplyGenerationExecutionRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var replyRequest = request.Request.Clone();
+        using (var metadataCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            metadataCts.CancelAfter(AgentRunGAgent.MetadataBuildBudget);
+            ReplyGenerationContext generationContext;
+            try
+            {
+                generationContext = await BuildGenerationContextAsync(replyRequest, metadataCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (metadataCts.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            var generator = RequireStepGenerator();
+            var plan = await generator.BuildStepPlanAsync(
+                    replyRequest.Activity!,
+                    generationContext.Metadata,
+                    generationContext.LlmControl,
+                    generationContext.ToolContext,
+                    metadataCts.Token)
+                .ConfigureAwait(false);
+
+            var state = new AgentRunReplyStepState
+            {
+                RunId = request.RunId,
+                CorrelationId = replyRequest.CorrelationId,
+                TargetActorId = replyRequest.TargetActorId,
+                Attempt = request.Attempt,
+                NextStepIndex = 1,
+                Round = 0,
+                MaxToolRounds = plan.MaxToolRounds,
+                LlmControl = plan.LlmControl.ToPayload(),
+                ToolContext = plan.ToolContext.ToPayload(),
+            };
+            foreach (var pair in plan.Metadata)
+                state.ExternalMetadata[pair.Key] = pair.Value;
+            state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
+            return state;
+        }
+    }
+
+    public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ct.ThrowIfCancellationRequested();
+        var workItem = request with
+        {
+            Request = request.Request.Clone(),
+            StepState = request.StepState.Clone(),
+        };
+        // Refactor (issue1046): Old pattern: executor owned the whole multi-round LLM/tool loop.
+        // New principle: AgentRunGAgent owns per-step continuation; executor performs exactly one LLM IO step.
+        return _businessIoExecutor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:llm:{workItem.StepIndex}",
+                workItem.RunActorId,
+                "agent-run-reply-llm-step",
+                workItem.Request.CorrelationId,
+                ResolveFallbackTimeout(),
+                executorCt => ExecuteLlmStepAndReportAsync(workItem, executorCt)),
+            ct);
+    }
+
+    public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ct.ThrowIfCancellationRequested();
+        var workItem = request with
+        {
+            Request = request.Request.Clone(),
+            StepState = request.StepState.Clone(),
+        };
+        // Refactor (issue1046): Old pattern: tool execution stayed inside ChatRuntime's multi-round loop.
+        // New principle: a typed self-message asks for one tool IO step, then actor reconciles the result.
+        return _businessIoExecutor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:tool:{workItem.StepIndex}",
+                workItem.RunActorId,
+                "agent-run-reply-tool-step",
+                workItem.Request.CorrelationId,
+                ResolveFallbackTimeout(),
+                executorCt => ExecuteToolStepAndReportAsync(workItem, executorCt)),
             ct);
     }
 
@@ -252,6 +348,216 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
     }
 
+    private async Task ExecuteLlmStepAndReportAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
+    {
+        try
+        {
+            var command = await BuildLlmStepContinuationAsync(workItem, ct).ConfigureAwait(false);
+            await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await DispatchStepFailureAsync(workItem, ex).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ExecuteToolStepAndReportAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
+    {
+        try
+        {
+            var command = await BuildToolStepContinuationAsync(workItem, ct).ConfigureAwait(false);
+            await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await DispatchStepFailureAsync(workItem, ex).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct = default)
+    {
+        var request = workItem.Request.Clone();
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
+        var streamingState = TryBuildStreamingReplyState(streamingSink);
+        var generator = RequireStepGenerator();
+        var plan = await generator.BuildStepPlanAsync(
+                request.Activity!,
+                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
+                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                ct)
+            .ConfigureAwait(false);
+        var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
+        var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
+            messages,
+            request.Activity.Id,
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            workItem.StepState.Round,
+            workItem.StepState.FinalNoToolsStep);
+
+        var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
+        var llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                plan.StepExecutor.ResolveProvider(),
+                llmRequest,
+                async (chunk, token) =>
+                {
+                    if (string.IsNullOrEmpty(chunk.DeltaContent))
+                        return;
+                    output.Append(chunk.DeltaContent);
+                    if (streamingState is not null)
+                        await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                },
+                ct)
+            .ConfigureAwait(false);
+
+        var nextState = workItem.StepState.Clone();
+        nextState.NextStepIndex = workItem.StepIndex + 1;
+        nextState.AccumulatedText = output.ToString();
+        AddUsage(nextState, llmResult.Usage);
+        if (!string.IsNullOrEmpty(llmResult.FinishReason))
+            nextState.LastFinishReason = llmResult.FinishReason;
+        if (!string.IsNullOrEmpty(llmResult.Content))
+            nextState.HasStreamedTextContent = true;
+
+        var effectiveContent = llmResult.Content;
+        var effectiveToolCalls = llmResult.ToolCalls;
+        if (effectiveToolCalls is not { Count: > 0 } && !workItem.StepState.FinalNoToolsStep && effectiveContent is not null)
+        {
+            var parsed = TextToolCallParser.Parse(effectiveContent);
+            if (parsed.ToolCalls.Count > 0)
+            {
+                effectiveContent = parsed.CleanedContent;
+                effectiveToolCalls = parsed.ToolCalls;
+            }
+        }
+
+        nextState.PendingToolCalls.Clear();
+        if (effectiveToolCalls is { Count: > 0 })
+            nextState.PendingToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+
+        if (!string.IsNullOrEmpty(effectiveContent) ||
+            !string.IsNullOrEmpty(llmResult.ReasoningContent) ||
+            effectiveToolCalls is { Count: > 0 })
+        {
+            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(new ChatMessage
+            {
+                Role = "assistant",
+                Content = effectiveContent,
+                ReasoningContent = llmResult.ReasoningContent,
+                ToolCalls = effectiveToolCalls,
+            }));
+        }
+
+        return new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            StepState = nextState,
+        };
+    }
+
+    internal async Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct = default)
+    {
+        var request = workItem.Request.Clone();
+        var generator = RequireStepGenerator();
+        var plan = await generator.BuildStepPlanAsync(
+                request.Activity!,
+                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
+                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                ct)
+            .ConfigureAwait(false);
+        var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
+            .ConfigureAwait(false);
+
+        var nextState = workItem.StepState.Clone();
+        nextState.NextStepIndex = workItem.StepIndex + 1;
+        nextState.PendingToolCalls.Clear();
+        foreach (var result in results)
+        {
+            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(
+                ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result)));
+        }
+
+        nextState.Round++;
+
+        return new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            StepState = nextState,
+        };
+    }
+
+    private IAgentRunStepConversationReplyGenerator RequireStepGenerator() =>
+        _replyGenerator as IAgentRunStepConversationReplyGenerator
+        ?? throw new InvalidOperationException("Per-step agent run execution requires a step-capable reply generator.");
+
+    private async Task DispatchStepFailureAsync(AgentRunReplyStepExecutionRequest workItem, Exception ex)
+    {
+        _logger.LogWarning(
+            ex,
+            "Agent run reply step executor failed: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+            workItem.RunId,
+            workItem.Request.CorrelationId,
+            workItem.StepIndex);
+        var failed = new AgentRunReplyGenerationFailed
+        {
+            RunId = workItem.RunId,
+            CorrelationId = workItem.Request.CorrelationId,
+            TargetActorId = workItem.Request.TargetActorId,
+            ErrorCode = "agent_run_generation_step_failed",
+            ErrorSummary = ex.Message,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Attempt = workItem.Attempt,
+            Request = workItem.Request.Clone(),
+        };
+        try
+        {
+            await DispatchToRunActorAsync(workItem.RunActorId, failed, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception dispatchEx)
+        {
+            _logger.LogError(
+                dispatchEx,
+                "Failed to dispatch agent run step failure command: runId={RunId} actorId={ActorId}",
+                workItem.RunId,
+                workItem.RunActorId);
+        }
+    }
+
+    private static void AddUsage(AgentRunReplyStepState state, TokenUsage? usage)
+    {
+        if (usage is null)
+            return;
+        state.AggregatedUsage ??= new AgentRunReplyTokenUsage();
+        state.AggregatedUsage.PromptTokens += usage.PromptTokens;
+        state.AggregatedUsage.CompletionTokens += usage.CompletionTokens;
+        state.AggregatedUsage.TotalTokens += usage.TotalTokens;
+    }
+
     private static string BuildWorkItemId(AgentRunReplyGenerationExecutionRequest workItem) =>
         $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}";
 
@@ -293,7 +599,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
+            Route = command is AgentRunNextLlmStepRequestedEvent or AgentRunNextToolStepRequestedEvent
+                ? EnvelopeRouteSemantics.CreateTopologyPublication(runActorId, TopologyAudience.Self)
+                : EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
         };
         await _actorDispatchPort.DispatchAsync(runActorId, envelope, ct).ConfigureAwait(false);
     }

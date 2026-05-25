@@ -354,6 +354,141 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_ShouldAdvanceLlmToolLlmSteps_AndAppendToolResult()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new ScriptedStepGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        generationExecutor.Bind(runtime);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-per-step",
+            RunId = "run-per-step",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-per-step",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-per-step",
+            CorrelationId = "corr-per-step",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 1,
+            Request = request.Clone(),
+            StepState = NewStepState(request, nextStepIndex: 1),
+        });
+
+        generationExecutor.LlmSteps.Should().HaveCount(2);
+        generationExecutor.ToolSteps.Should().ContainSingle();
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.GenerationStep.Should().NotBeNull();
+        runtime.State.GenerationStep!.Messages.Should().Contain(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "tool-call-1" &&
+            message.Content == """{"result":"tool-ok"}""");
+        var ready = handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor)).Subject
+            .Payload.Unpack<LlmReplyReadyEvent>();
+        ready.Outbound.Text.Should().Be("final answer after tool");
+        ready.ReplyToken.Should().Be("relay-token-per-step");
+    }
+
+    [Fact]
+    public async Task HandleNextLlmStepAsync_ShouldRejectMismatchedAttemptAndOutOfWindowStep()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new RecordingStepGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-step-reconcile",
+            RunId = "run-step-reconcile",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-step-reconcile",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-step-reconcile",
+            CorrelationId = "corr-step-reconcile",
+            TargetActorId = "actor-1",
+            Attempt = 2,
+            StepIndex = 1,
+            Request = request.Clone(),
+            StepState = NewStepState(request, nextStepIndex: 1, attempt: 2),
+        });
+
+        generationExecutor.LlmSteps.Should().BeEmpty();
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-step-reconcile",
+            CorrelationId = "corr-step-reconcile",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 1,
+            Request = request.Clone(),
+            StepState = NewStepState(request, nextStepIndex: 1),
+        });
+
+        generationExecutor.LlmSteps.Should().ContainSingle();
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-step-reconcile",
+            CorrelationId = "corr-step-reconcile",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 3,
+            Request = request.Clone(),
+            StepState = NewStepState(request, nextStepIndex: 3),
+        });
+
+        generationExecutor.LlmSteps.Should().ContainSingle(
+            "a self-message may only reconcile the current or immediately completed next step");
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-step-reconcile",
+            CorrelationId = "corr-step-reconcile",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = request.Clone(),
+            StepState = NewStepState(request, nextStepIndex: 2, pendingTool: true),
+        });
+
+        generationExecutor.ToolSteps.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
     {
         var actor = Substitute.For<IActor>();
@@ -2326,6 +2461,39 @@ public sealed class AgentRunGAgentTests
             },
         };
 
+    private static AgentRunReplyStepState NewStepState(
+        NeedsLlmReplyEvent request,
+        int nextStepIndex,
+        int attempt = 1,
+        bool pendingTool = false)
+    {
+        var state = new AgentRunReplyStepState
+        {
+            RunId = request.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = attempt,
+            NextStepIndex = nextStepIndex,
+            MaxToolRounds = 40,
+            Messages =
+            {
+                new AgentRunChatMessage { Role = "system", Content = "system" },
+                new AgentRunChatMessage { Role = "user", Content = "hello" },
+            },
+        };
+        if (pendingTool)
+        {
+            state.PendingToolCalls.Add(new AgentRunToolCall
+            {
+                Id = "tool-call-1",
+                Name = "lookup",
+                ArgumentsJson = "{}",
+            });
+        }
+
+        return state;
+    }
+
     private sealed class DispatchingActorRuntime(params (string Id, IActor Actor)[] actors) :
         IActorRuntime,
         IActorDispatchPort
@@ -2403,6 +2571,145 @@ public sealed class AgentRunGAgentTests
             Starts.Add(request with { Request = request.Request.Clone() });
             return Task.CompletedTask;
         }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentRunReplyStepState
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                NextStepIndex = 1,
+                MaxToolRounds = 40,
+            });
+
+        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
+            Task.CompletedTask;
+    }
+
+    private class RecordingStepGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public List<AgentRunReplyGenerationExecutionRequest> Starts { get; } = [];
+
+        public List<AgentRunReplyStepExecutionRequest> LlmSteps { get; } = [];
+
+        public List<AgentRunReplyStepExecutionRequest> ToolSteps { get; } = [];
+
+        public Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+        {
+            Starts.Add(request with { Request = request.Request.Clone() });
+            return Task.CompletedTask;
+        }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) =>
+            Task.FromResult(NewStepState(request.Request, nextStepIndex: 1, attempt: request.Attempt));
+
+        public virtual Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            LlmSteps.Add(Clone(request));
+            return Task.CompletedTask;
+        }
+
+        public virtual Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            ToolSteps.Add(Clone(request));
+            return Task.CompletedTask;
+        }
+
+        protected static AgentRunReplyStepExecutionRequest Clone(AgentRunReplyStepExecutionRequest request) =>
+            request with
+            {
+                Request = request.Request.Clone(),
+                StepState = request.StepState.Clone(),
+            };
+    }
+
+    private sealed class ScriptedStepGenerationExecutor : RecordingStepGenerationExecutor
+    {
+        private AgentRunGAgent? _agent;
+
+        public void Bind(AgentRunGAgent agent) => _agent = agent;
+
+        public override async Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            await base.ExecuteLlmStepAsync(request, ct);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            var nextState = request.StepState.Clone();
+            nextState.NextStepIndex = request.StepIndex + 1;
+            nextState.PendingToolCalls.Clear();
+
+            if (LlmSteps.Count == 1)
+            {
+                nextState.Messages.Add(new AgentRunChatMessage
+                {
+                    Role = "assistant",
+                    ToolCalls =
+                    {
+                        new AgentRunToolCall { Id = "tool-call-1", Name = "lookup", ArgumentsJson = "{}" },
+                    },
+                });
+                nextState.PendingToolCalls.Add(new AgentRunToolCall
+                {
+                    Id = "tool-call-1",
+                    Name = "lookup",
+                    ArgumentsJson = "{}",
+                });
+            }
+            else
+            {
+                nextState.AccumulatedText = "final answer after tool";
+                nextState.Messages.Add(new AgentRunChatMessage
+                {
+                    Role = "assistant",
+                    Content = "final answer after tool",
+                });
+            }
+
+            await agent.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                StepState = nextState,
+            });
+        }
+
+        public override async Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            await base.ExecuteToolStepAsync(request, ct);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            var nextState = request.StepState.Clone();
+            nextState.NextStepIndex = request.StepIndex + 1;
+            nextState.Round++;
+            nextState.PendingToolCalls.Clear();
+            nextState.Messages.Add(new AgentRunChatMessage
+            {
+                Role = "tool",
+                ToolCallId = "tool-call-1",
+                Content = """{"result":"tool-ok"}""",
+            });
+
+            await agent.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                StepState = nextState,
+            });
+        }
     }
 
     private sealed class RecordingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
@@ -2445,6 +2752,25 @@ public sealed class AgentRunGAgentTests
             var completed = await _inner.ExecuteAsync(request);
             var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
             await agent.HandleReplyGenerationCompletedAsync(completed);
+        }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) =>
+            _inner.BuildInitialStepStateAsync(request, ct);
+
+        public async Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            var next = await _inner.BuildLlmStepContinuationAsync(request, ct);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            await agent.HandleNextLlmStepAsync(next);
+        }
+
+        public async Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            var next = await _inner.BuildToolStepContinuationAsync(request, ct);
+            var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
+            await agent.HandleNextToolStepAsync(next);
         }
     }
 
