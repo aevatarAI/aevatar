@@ -76,7 +76,7 @@ describe('StudioMemberInvokePanel', () => {
       method: 'POST',
       publishedServiceId: 'default',
       requestContentType: 'application/json',
-      requestTypeUrl: 'type.googleapis.com/example.ContractSubmit',
+      requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
       responseContentType: 'application/json',
       responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
       revisionId: 'contract-rev',
@@ -154,7 +154,7 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     const targetSummary = screen.getByTestId('studio-invoke-target-summary');
     expect(targetSummary).toHaveTextContent('workspace-demo');
-    expect(targetSummary).toHaveTextContent('Endpoint: chat');
+    expect(targetSummary).toHaveTextContent('Endpoint: Submit (submit)');
     expect(targetSummary).toHaveTextContent('Lifecycle: Active');
     expect(targetSummary).toHaveTextContent('Ready');
     expect(targetSummary).not.toHaveTextContent('Command ID');
@@ -167,7 +167,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Timeline')).toBeTruthy();
     expect(screen.getByText('Events')).toBeTruthy();
     expect(screen.getByText('Metadata')).toBeTruthy();
-    expect(screen.queryByText('Advanced typed payload')).toBeNull();
+    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
     const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
@@ -781,6 +781,106 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByLabelText('调用请求输入')).toHaveValue(
       'Overwrite prompt',
     );
+  });
+
+  it('requires base64 for non text typed payloads and sends it for structured invoke endpoints', async () => {
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValueOnce({
+      defaultSmokeInputMode: 'typed-payload',
+      defaultSmokePrompt: null,
+      deploymentStatus: 'Active',
+      endpointId: 'submit',
+      fetchExample: null,
+      curlExample: null,
+      invokePath: '/api/scopes/scope-1/members/default/invoke/submit',
+      method: 'POST',
+      publishedServiceId: 'default',
+      requestContentType: 'application/json',
+      requestTypeUrl: 'type.googleapis.com/example.ContractSubmit',
+      responseContentType: 'application/json',
+      responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
+      revisionId: 'contract-rev',
+      sampleRequestJson: '{"message":"hello"}',
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      smokeTestSupported: true,
+      streamFrameFormat: null,
+      supportsAguiFrames: false,
+      supportsSse: false,
+      supportsWebSocket: false,
+    });
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Send a structured request into the member.',
+                displayName: 'Submit',
+                endpointId: 'submit',
+                kind: 'invoke',
+                requestTypeUrl: 'type.googleapis.com/example.Submit',
+                responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-default',
+            serviceId: 'default',
+          },
+        ],
+      }),
+    );
+
+    expect(
+      await screen.findByText('Advanced typed payload'),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Payload type URL')).toHaveValue(
+        'type.googleapis.com/example.ContractSubmit',
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('调用请求输入'), {
+      target: {
+        value: 'Route this escalation to billing review.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    expect(
+      await screen.findByText(
+        "payloadBase64 is required for payloadTypeUrl 'type.googleapis.com/example.ContractSubmit'.",
+      ),
+    ).toBeTruthy();
+    expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
+    expect(screen.getByText('Run history (0)')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Payload base64'), {
+      target: {
+        value: 'CgVIZWxsbw==',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          endpointId: 'submit',
+          payloadBase64: 'CgVIZWxsbw==',
+          payloadTypeUrl: 'type.googleapis.com/example.ContractSubmit',
+          prompt: 'Route this escalation to billing review.',
+        }),
+        {
+          serviceId: 'default',
+        },
+      );
+    });
   });
 
   it('wraps long run error text inside the failure card', async () => {

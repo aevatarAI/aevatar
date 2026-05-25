@@ -15,6 +15,7 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
+import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
 import {
   createNyxIdChatBindingInput,
   extractRuntimeInvokeReceipt,
@@ -509,6 +510,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const endpointLabel =
     selectedEndpoint?.displayName || selectedEndpointId || '—';
+  const endpointSummaryLabel =
+    endpointLabel === selectedEndpointId
+      ? endpointLabel
+      : `${endpointLabel} (${selectedEndpointId || '—'})`;
   const currentPublishedContext =
     describeStudioMemberBindingRevisionContext(memberRevision) || '';
   const currentImplementationKind =
@@ -886,6 +891,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPayloadBase64
     ) {
       setFormError('请输入 Prompt 后再发起 Invoke。');
+      return;
+    }
+
+    if (
+      !isChatServiceEndpoint(selectedEndpoint) &&
+      trimmedPayloadTypeUrl &&
+      !trimmedPayloadBase64 &&
+      !isAutoEncodableTextPayloadTypeUrl(trimmedPayloadTypeUrl)
+    ) {
+      setFormError(
+        `payloadBase64 is required for payloadTypeUrl '${trimmedPayloadTypeUrl}'.`,
+      );
       return;
     }
 
@@ -1344,7 +1361,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 {currentMemberLabel}
               </div>
               <div style={targetMetaStyle}>
-                <span>Endpoint: chat</span>
+                <span>Endpoint: {endpointSummaryLabel}</span>
                 <span>·</span>
                 <span>{currentImplementationKind}</span>
                 <span>·</span>
@@ -1375,10 +1392,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               isHistoricalRunSelected={runViewMode === 'historical'}
               isChatEndpoint={isChatEndpoint}
               layout="dock"
+              payloadBase64={payloadBase64}
+              payloadTypeUrl={payloadTypeUrl}
               prompt={prompt}
               onAbort={handleAbort}
               onClear={handleClear}
               onInvoke={() => void handleInvoke()}
+              onPayloadBase64Change={setPayloadBase64}
+              onPayloadTypeUrlChange={setPayloadTypeUrl}
               onPromptChange={setPrompt}
             />
           </div>

@@ -3,7 +3,7 @@ import {
   PlayCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Typography } from 'antd';
+import { Button, Collapse, Input, Typography } from 'antd';
 import React from 'react';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
@@ -20,10 +20,14 @@ type StudioMemberInvokeComposerPanelProps = {
   readonly isHistoricalRunSelected?: boolean;
   readonly isChatEndpoint: boolean;
   readonly layout?: 'panel' | 'dock';
+  readonly payloadBase64: string;
+  readonly payloadTypeUrl: string;
   readonly prompt: string;
   readonly onAbort: () => void;
   readonly onClear: () => void;
   readonly onInvoke: () => void;
+  readonly onPayloadBase64Change: (value: string) => void;
+  readonly onPayloadTypeUrlChange: (value: string) => void;
   readonly onPromptChange: (value: string) => void;
 };
 
@@ -85,6 +89,12 @@ const promptDockHintStyle: React.CSSProperties = {
   lineHeight: '16px',
 };
 
+const typedPayloadGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  minWidth: 0,
+};
+
 export const StudioMemberInvokeComposerPanel: React.FC<
   StudioMemberInvokeComposerPanelProps
 > = ({
@@ -98,7 +108,11 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   onAbort,
   onClear,
   onInvoke,
+  onPayloadBase64Change,
+  onPayloadTypeUrlChange,
   onPromptChange,
+  payloadBase64,
+  payloadTypeUrl,
   prompt,
 }) => {
   const isRunning = invokeStatus === 'running';
@@ -204,6 +218,51 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           </Typography.Text>
         )}
       </div>
+
+      {!isChatEndpoint ? (
+        <Collapse
+          bordered={false}
+          defaultActiveKey={['typed-payload']}
+          items={[
+            {
+              key: 'typed-payload',
+              label: 'Advanced typed payload',
+              children: (
+                <div style={typedPayloadGridStyle}>
+                  <div style={typedPayloadGridStyle}>
+                    <Typography.Text style={helperTextStyle} type="secondary">
+                      Payload type URL
+                    </Typography.Text>
+                    <Input
+                      aria-label="Payload type URL"
+                      placeholder="type.googleapis.com/google.protobuf.StringValue"
+                      value={payloadTypeUrl}
+                      onChange={(event) =>
+                        onPayloadTypeUrlChange(event.target.value)
+                      }
+                    />
+                  </div>
+                  <div style={typedPayloadGridStyle}>
+                    <Typography.Text style={helperTextStyle} type="secondary">
+                      Payload base64
+                    </Typography.Text>
+                    <Input.TextArea
+                      aria-label="Payload base64"
+                      autoSize={{ minRows: 2, maxRows: 5 }}
+                      placeholder="Paste encoded protobuf payload when this type cannot be built from text."
+                      value={payloadBase64}
+                      onChange={(event) =>
+                        onPayloadBase64Change(event.target.value)
+                      }
+                    />
+                  </div>
+                </div>
+              ),
+            },
+          ]}
+          size="small"
+        />
+      ) : null}
 
       {layout === 'dock' ? null : (
         <div
