@@ -16,6 +16,7 @@ using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
@@ -90,6 +91,12 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
 
         // ─── Cluster-singleton OAuth client projection ───
+        // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
+        // carries state-token HMAC bytes but ES startup did not require an
+        // explicit ACL assertion. New principle: when ChannelIdentity uses ES,
+        // AevatarOAuthClientEsAclStartupGuard fails closed unless the host
+        // declares the aevatar-oauth-clients index grant matches grain/event-store
+        // internal read access.
         services.AddProjectionMaterializationRuntimeCore<
             AevatarOAuthClientMaterializationContext,
             AevatarOAuthClientMaterializationRuntimeLease,
@@ -107,6 +114,10 @@ public static class IdentityServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>,
             AevatarOAuthClientDocumentMetadataProvider>();
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
+        var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
+        if (configuration is not null)
+            aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.

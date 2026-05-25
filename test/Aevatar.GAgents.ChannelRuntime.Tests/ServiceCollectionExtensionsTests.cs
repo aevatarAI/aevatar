@@ -135,6 +135,9 @@ public sealed class ServiceCollectionExtensionsTests
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
     }
 
     [Fact]
