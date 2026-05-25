@@ -24,13 +24,13 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
 
     private readonly ChannelBotRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly IActorHandledDispatchPort _dispatchPort;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
         ChannelBotRegistrationProjectionBootstrapActivator projectionActivator,
         IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        IActorHandledDispatchPort dispatchPort,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
         _projectionActivator = projectionActivator;

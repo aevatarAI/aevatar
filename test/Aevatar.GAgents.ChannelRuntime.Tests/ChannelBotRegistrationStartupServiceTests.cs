@@ -24,20 +24,21 @@ public sealed class ChannelBotRegistrationStartupServiceTests
                 })));
 
         EventEnvelope? capturedEnvelope = null;
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var dispatchPort = Substitute.For<IActorHandledDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+        dispatchPort.DispatchAndWaitHandledAsync(
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
         var projectionActivator = new ChannelBotRegistrationProjectionBootstrapActivator(activationService);
         var startupService = new ChannelBotRegistrationStartupService(
             projectionActivator,
             actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            dispatchPort,
             NullLogger<ChannelBotRegistrationStartupService>.Instance);
 
         await startupService.StartAsync(CancellationToken.None);

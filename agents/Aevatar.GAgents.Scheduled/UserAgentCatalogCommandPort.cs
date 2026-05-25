@@ -7,8 +7,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Production implementation of <see cref="IUserAgentCatalogCommandPort"/>.
-/// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>
-/// (no direct <c>HandleEventAsync</c> on the actor instance).
+/// Routes catalog upsert / tombstone through <see cref="IActorHandledDispatchPort"/>.
 ///
 /// Issue #466: this is an internal infrastructure port (not user-facing). It
 /// dispatches by id; ownership semantics live on the public
@@ -32,11 +31,11 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     private const string PublisherActorId = "scheduled.user-agent-catalog";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly IActorHandledDispatchPort _actorDispatchPort;
 
     public UserAgentCatalogCommandPort(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort)
+        IActorHandledDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -62,7 +61,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Payload = Any.Pack(command),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
-        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+        await _actorDispatchPort.DispatchAndWaitHandledAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
     // Refactor (iter23/cluster-002):
@@ -84,7 +83,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Payload = Any.Pack(new UserAgentCatalogTombstoneCommand { AgentId = agentId }),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
-        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+        await _actorDispatchPort.DispatchAndWaitHandledAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
     private async Task EnsureCatalogActorAsync(CancellationToken ct)
