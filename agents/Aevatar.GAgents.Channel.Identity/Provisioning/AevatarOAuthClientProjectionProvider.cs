@@ -4,11 +4,13 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
+/// Refactor (iter97/cluster-526): Old pattern: the OAuth client HMAC-key
+/// readmodel had no explicit ES ACL assertion at startup. New principle: this
+/// is the only provider allowed to read the HMAC-bearing document, and ES
+/// deployments must pass <see cref="AevatarOAuthClientEsAclStartupGuard"/>.
+///
 /// Reads the cluster-singleton OAuth client state from the projection
-/// document. Backs the read seam exposed by
-/// <see cref="IAevatarOAuthClientProvider"/> for callers that need
-/// <c>client_id</c> + HMAC keys (state-token codec, broker, OAuth callback,
-/// status endpoint).
+/// document. Backs the read seam exposed by <see cref="IAevatarOAuthClientProvider"/>.
 /// </summary>
 public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientProvider
 {
