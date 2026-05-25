@@ -42,7 +42,7 @@ public sealed class UserAgentCatalogCommandPortTests
         env.Payload.Unpack<UserAgentCatalogUpsertCommand>().AgentId.Should().Be(agentId);
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
-        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+        await fixture.Dispatch.Received(1).DispatchAndWaitHandledAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
         await fixture.Runtime.Received().GetAsync(CatalogActorId);
         await fixture.Activation.DidNotReceiveWithAnyArgs().EnsureAsync(default!, default);
     }
@@ -87,7 +87,7 @@ public sealed class UserAgentCatalogCommandPortTests
         env.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId.Should().Be(agentId);
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
-        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+        await fixture.Dispatch.Received(1).DispatchAndWaitHandledAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
         await fixture.Activation.DidNotReceiveWithAnyArgs().EnsureAsync(default!, default);
     }
 
@@ -186,14 +186,14 @@ public sealed class UserAgentCatalogCommandPortTests
         public UserAgentCatalogProjectionBootstrapActivator ProjectionPort { get; }
         public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public IActorRuntime Runtime { get; }
-        public IActorDispatchPort Dispatch { get; }
+        public IActorHandledDispatchPort Dispatch { get; }
         public List<EventEnvelope> Captured { get; } = new();
         public UserAgentCatalogCommandPort Port { get; }
 
         public Fixture()
         {
             Runtime = Substitute.For<IActorRuntime>();
-            Dispatch = Substitute.For<IActorDispatchPort>();
+            Dispatch = Substitute.For<IActorHandledDispatchPort>();
 
             var activation = Substitute.For<IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease>>();
             activation.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
@@ -206,8 +206,8 @@ public sealed class UserAgentCatalogCommandPortTests
             ProjectionPort = new UserAgentCatalogProjectionBootstrapActivator(activation);
             Activation = activation;
 
-            Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(Task.CompletedTask);
+            Dispatch.DispatchAndWaitHandledAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
+                .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
             Port = new UserAgentCatalogCommandPort(
                 Runtime,

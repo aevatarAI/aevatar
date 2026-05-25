@@ -162,7 +162,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 UserAgentCatalogGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(captured.Add),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
         using var provider = BuildServiceProvider(
             new InMemoryEventStore(),
@@ -257,7 +257,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 UserAgentCatalogGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(captured.Add),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
         using var provider = BuildServiceProvider(
             new InMemoryEventStore(),
@@ -294,7 +294,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 UserAgentCatalogGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(captured.Add),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
         using var provider = BuildServiceProvider(
             new InMemoryEventStore(),
@@ -341,7 +341,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 UserAgentCatalogGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(captured.Add),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
         using var provider = BuildServiceProvider(
             new InMemoryEventStore(),

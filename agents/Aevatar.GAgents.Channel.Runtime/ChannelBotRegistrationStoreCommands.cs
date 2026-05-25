@@ -13,7 +13,7 @@ internal static class ChannelBotRegistrationStoreCommands
 
     public static Task DispatchRebuildProjectionAsync(
         IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        IActorHandledDispatchPort dispatchPort,
         string reason,
         CancellationToken ct = default) =>
         DispatchAsync(
@@ -27,7 +27,7 @@ internal static class ChannelBotRegistrationStoreCommands
 
     private static async Task DispatchAsync<TCommand>(
         IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        IActorHandledDispatchPort dispatchPort,
         TCommand command,
         CancellationToken ct)
         where TCommand : class, IMessage
@@ -45,7 +45,7 @@ internal static class ChannelBotRegistrationStoreCommands
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, ChannelBotRegistrationGAgent.WellKnownId),
         };
 
-        await dispatchPort.DispatchAsync(ChannelBotRegistrationGAgent.WellKnownId, envelope, ct);
+        await dispatchPort.DispatchAndWaitHandledAsync(ChannelBotRegistrationGAgent.WellKnownId, envelope, ct);
     }
 
     private static async Task EnsureStoreActorAsync(IActorRuntime actorRuntime, CancellationToken ct)

@@ -73,3 +73,15 @@ public interface IActorDispatchPort
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Optional runtime contract for callers that explicitly require one actor turn to finish.
+/// This is separate from <see cref="IActorDispatchPort"/> so accepted-only ACK semantics stay honest.
+/// </summary>
+public interface IActorHandledDispatchPort
+{
+    Task<DispatchAdmission> DispatchAndWaitHandledAsync(
+        string actorId,
+        EventEnvelope envelope,
+        CancellationToken ct = default);
+}

@@ -361,6 +361,7 @@ dispatch_projection_boundary_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorHandledDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
 

@@ -82,8 +82,8 @@ public static class DeviceServiceCollectionExtensions
         services.TryAddSingleton<DeviceRegistrationCommandReceiptFactory>();
         services.TryAddSingleton<DeviceCallbackCommandEnvelopeFactory>();
         services.TryAddSingleton<DeviceCallbackCommandReceiptFactory>();
-        services.TryAddSingleton<ICommandTargetDispatcher<DeviceRegistrationCommandTarget>, ActorCommandTargetDispatcher<DeviceRegistrationCommandTarget>>();
-        services.TryAddSingleton<ICommandTargetDispatcher<DeviceCallbackCommandTarget>, ActorCommandTargetDispatcher<DeviceCallbackCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<DeviceRegistrationCommandTarget>, HandledActorCommandTargetDispatcher<DeviceRegistrationCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<DeviceCallbackCommandTarget>, HandledActorCommandTargetDispatcher<DeviceCallbackCommandTarget>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceRegisterCommand, DeviceRegistrationCommandTarget, DeviceRegistrationCommandStartError>, DeviceRegistrationCommandTargetResolver<DeviceRegisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceUnregisterCommand, DeviceRegistrationCommandTarget, DeviceRegistrationCommandStartError>, DeviceRegistrationCommandTargetResolver<DeviceUnregisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceCallbackDispatchCommand, DeviceCallbackCommandTarget, DeviceCallbackCommandStartError>, DeviceCallbackCommandTargetResolver>();
