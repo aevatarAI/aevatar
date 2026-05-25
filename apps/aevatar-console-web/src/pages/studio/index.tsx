@@ -9612,7 +9612,7 @@ const StudioPage: React.FC = () => {
         ) : (
           <>
             <StudioShell
-              contentOverflow="auto"
+              contentScrollMode={isInvokeSurface ? 'page' : 'contained'}
               contextBar={studioContextBar}
               currentLifecycleStep={currentLifecycleStep}
               inventoryActions={inventoryActions}

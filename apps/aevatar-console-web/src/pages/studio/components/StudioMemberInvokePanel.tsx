@@ -1,5 +1,11 @@
-import { Alert, Grid } from 'antd';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, message } from 'antd';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
@@ -9,9 +15,6 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
-import { history } from '@/shared/navigation/history';
-import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
-import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
 import {
   createNyxIdChatBindingInput,
   extractRuntimeInvokeReceipt,
@@ -26,7 +29,6 @@ import {
   type StudioMemberBindingRevision,
 } from '@/shared/studio/models';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
-import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import {
   buildStudioInvokeCurrentRunViewModel,
   cloneInvokeResult,
@@ -38,13 +40,8 @@ import {
 } from './StudioMemberInvokePanel.currentRun';
 import StudioMemberCurrentRunPanel from './StudioMemberCurrentRunPanel';
 import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
+import { StudioMemberInvokeComposerPanel } from './StudioMemberInvokeSetupPanels';
 import {
-  StudioMemberInvokeComposerPanel,
-  StudioMemberInvokeContractPanel,
-  type StudioMemberInvokeContractStatus,
-} from './StudioMemberInvokeSetupPanels';
-import {
-  getInvokeRunStatusLabel,
   getInvokeStatusTone,
   studioInvokeColors,
   trimOptional,
@@ -90,44 +87,19 @@ function cloneChatMessages(
   return messages.map((message) => ({ ...message }));
 }
 
-function getContractStatusLabel(options: {
-  hasEndpoint: boolean;
-  hasMember: boolean;
-}): string {
-  if (!options.hasMember) {
-    return '未选中成员';
-  }
-
-  if (!options.hasEndpoint) {
-    return '缺少端点';
-  }
-
-  return '已就绪';
-}
-
-function getContractStatus(options: {
-  hasEndpoint: boolean;
-  hasMember: boolean;
-}): StudioMemberInvokeContractStatus {
-  if (!options.hasMember) {
-    return 'missing-member';
-  }
-
-  if (!options.hasEndpoint) {
-    return 'missing-endpoint';
-  }
-
-  return 'ready';
-}
-
 function getPreferredRunOutput(options: {
   assistantText: string;
   finalOutput: string;
 }): string {
-  return trimOptional(options.finalOutput) || trimOptional(options.assistantText);
+  return (
+    trimOptional(options.finalOutput) || trimOptional(options.assistantText)
+  );
 }
 
-function formatElapsedTime(startedAt: number | null, completedAt: number | null): string {
+function formatElapsedTime(
+  startedAt: number | null,
+  completedAt: number | null,
+): string {
   if (!startedAt) {
     return '00:00';
   }
@@ -141,94 +113,258 @@ function formatElapsedTime(startedAt: number | null, completedAt: number | null)
   return `${minutes}:${seconds}`;
 }
 
-function getRunStatusDotStyle(status: InvokeResultState['status']): React.CSSProperties {
-  return { background: getInvokeStatusTone(status).dot };
+function getRunStatusLabel(status: InvokeResultState['status']): string {
+  switch (status) {
+    case 'running':
+      return 'Running';
+    case 'success':
+      return 'Succeeded';
+    case 'error':
+      return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
+    default:
+      return 'Ready';
+  }
+}
+
+function getLifecycleLabel(
+  revision: StudioMemberBindingRevision | null | undefined,
+): string {
+  return (
+    trimOptional(revision?.servingState) ||
+    trimOptional(revision?.status) ||
+    'Unknown'
+  );
+}
+
+function getHistoryOutputText(entry: InvokeHistoryEntry): string {
+  const assistantMessage = [...entry.snapshot.chatMessages]
+    .reverse()
+    .find((message) => message.role === 'assistant');
+
+  return (
+    trimOptional(entry.snapshot.result.finalOutput) ||
+    trimOptional(assistantMessage?.content) ||
+    trimOptional(entry.snapshot.result.assistantText) ||
+    trimOptional(entry.errorDetail) ||
+    trimOptional(entry.snapshot.result.error)
+  );
+}
+
+function createPendingRunResult(input: {
+  readonly endpointId: string;
+  readonly mode: InvokeResultState['mode'];
+  readonly serviceId: string;
+}): InvokeResultState {
+  return {
+    ...createIdleResult(),
+    endpointId: input.endpointId,
+    mode: input.mode,
+    serviceId: input.serviceId,
+    status: 'running',
+  };
+}
+
+function createPendingHistoryEntry(input: {
+  readonly chatMessages: readonly StudioInvokeChatMessage[];
+  readonly endpointId: string;
+  readonly endpointLabel: string;
+  readonly id: string;
+  readonly mode: InvokeHistoryEntry['mode'];
+  readonly payloadBase64: string;
+  readonly payloadTypeUrl: string;
+  readonly prompt: string;
+  readonly result: InvokeResultState;
+  readonly serviceId: string;
+  readonly startedAt: number;
+}): InvokeHistoryEntry {
+  return {
+    completedAt: input.startedAt,
+    createdAt: input.startedAt,
+    endpointId: input.endpointId,
+    endpointLabel: input.endpointLabel,
+    errorDetail: '',
+    eventCount: input.result.eventCount || input.result.events.length,
+    id: input.id,
+    mode: input.mode,
+    payloadBase64: input.payloadBase64,
+    payloadTypeUrl: input.payloadTypeUrl,
+    prompt: input.prompt,
+    runId: input.result.runId,
+    serviceId: input.serviceId,
+    startedAt: input.startedAt,
+    status: 'running',
+    summary: trimPreview(input.prompt, 72) || 'Running run',
+    snapshot: {
+      chatMessages: cloneChatMessages(input.chatMessages),
+      result: cloneInvokeResult(input.result),
+    },
+  };
+}
+
+function writeClipboardText(value: string, label: string): boolean {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    void message.warning(`No ${label} available to copy.`);
+    return false;
+  }
+
+  void globalThis.navigator?.clipboard?.writeText(normalized);
+  void message.success(`${label} copied.`);
+  return true;
 }
 
 const surfaceStyle: React.CSSProperties = {
   display: 'flex',
-  flex: 1,
+  flex: '0 0 auto',
   flexDirection: 'column',
   gap: 12,
   minHeight: 0,
   minWidth: 0,
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  paddingBottom: 12,
-};
-
-const consoleFrameStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  minHeight: 0,
-  minWidth: 0,
+  overflow: 'visible',
 };
 
 const runConsolePanelStyle: React.CSSProperties = {
-  display: 'grid',
+  display: 'flex',
+  flex: '0 0 auto',
+  flexDirection: 'column',
   gap: 0,
   minHeight: 0,
-};
-
-const runSummaryGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))',
-  marginBottom: 4,
   minWidth: 0,
+  overflow: 'visible',
 };
 
-const runSummaryCardStyle: React.CSSProperties = {
-  background: studioInvokeColors.surface,
-  border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 8,
-  display: 'grid',
-  gap: 2,
-  minWidth: 0,
-  padding: '7px 10px',
-};
-
-const runSummaryLabelStyle: React.CSSProperties = {
-  color: studioInvokeColors.muted,
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: 0.4,
-  lineHeight: '14px',
-  textTransform: 'uppercase',
-};
-
-const contractDetailsStyle: React.CSSProperties = {
+const targetSummaryStyle: React.CSSProperties = {
+  alignItems: 'center',
   background: studioInvokeColors.panel,
   border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 8,
+  borderRadius: 10,
+  display: 'flex',
+  flex: '0 0 auto',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'space-between',
+  marginBottom: 10,
   minWidth: 0,
   padding: '10px 12px',
 };
 
-const contractDetailsSummaryStyle: React.CSSProperties = {
-  color: studioInvokeColors.textSoft,
-  cursor: 'pointer',
-  fontSize: 13,
-  fontWeight: 700,
-  lineHeight: '20px',
-};
-
-const contractDetailsBodyStyle: React.CSSProperties = {
-  marginTop: 10,
-};
-
-const runSummaryValueStyle: React.CSSProperties = {
-  alignItems: 'center',
+const targetTitleStyle: React.CSSProperties = {
   color: studioInvokeColors.text,
+  fontSize: 15,
+  fontWeight: 800,
+  lineHeight: '22px',
+  minWidth: 0,
+};
+
+const targetMetaStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: studioInvokeColors.meta,
   display: 'flex',
-  fontSize: 13,
-  fontWeight: 700,
+  flexWrap: 'wrap',
+  fontSize: 12,
   gap: 6,
   lineHeight: '18px',
   minWidth: 0,
+};
+
+const targetPillStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: studioInvokeColors.surface,
+  border: `1px solid ${studioInvokeColors.border}`,
+  borderRadius: 999,
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 700,
+  gap: 6,
+  lineHeight: '18px',
+  padding: '3px 9px',
+};
+
+const invokeSectionPanelBaseStyle: React.CSSProperties = {
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
+  borderRadius: 10,
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06)',
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'visible',
+};
+
+const invokeSectionTitleStyle: React.CSSProperties = {
+  color: studioInvokeColors.text,
+  fontSize: 15,
+  fontWeight: 800,
+  lineHeight: '20px',
+};
+
+const invokeSectionBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '0 0 auto',
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'visible',
+  padding: '0 14px 14px',
+};
+
+const invokeWorkspaceStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '0 0 auto',
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'visible',
+};
+
+const mainDebugAreaStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '0 0 auto',
+  flexDirection: 'column',
+  gap: 10,
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'visible',
+};
+
+const invokeRunOutputSectionStyle: React.CSSProperties = {
+  ...invokeSectionPanelBaseStyle,
+  flex: '0 0 auto',
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const invokeRunOutputBodyStyle: React.CSSProperties = {
+  ...invokeSectionBodyStyle,
+  gap: 10,
+};
+
+const currentRunViewportStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  flex: '0 0 auto',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'visible',
+};
+
+const invokeHistoryPanelStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  minHeight: 0,
+};
+
+const invokeComposerDockStyle: React.CSSProperties = {
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
+  borderRadius: 10,
+  flex: '0 0 auto',
+  marginBottom: 10,
+  minWidth: 0,
   overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
+  padding: '8px 10px',
 };
 
 const runStatusDotBaseStyle: React.CSSProperties = {
@@ -247,18 +383,17 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   services,
   selectedMemberLabel,
   emptyState,
-  returnTo,
   initialServiceId,
   initialEndpointId,
   onSelectionChange,
   onObserveSessionChange,
 }) => {
-  const screens = Grid.useBreakpoint();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeHistoryEntryIdRef = useRef('');
   const nyxIdChatBoundRef = useRef(false);
-  const payloadTypeUrlEditedRef = useRef(false);
   const previousBindingKeyRef = useRef('');
-  const transcriptAnchorRef = useRef<HTMLDivElement | null>(null);
+  const composerDockRef = useRef<HTMLDivElement | null>(null);
+  const transcriptViewportRef = useRef<HTMLDivElement | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState(() =>
     trimOptional(initialServiceId),
   );
@@ -269,25 +404,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [formError, setFormError] = useState('');
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
-  const [payloadJsonPreview, setPayloadJsonPreview] = useState('');
   const [endpointContract, setEndpointContract] =
     useState<ScopeServiceEndpointContract | null>(null);
-  const [endpointContractError, setEndpointContractError] = useState('');
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
-  const [currentRunRequest, setCurrentRunRequest] = useState<CurrentRunRequest | null>(
-    null,
+  const [currentRunRequest, setCurrentRunRequest] =
+    useState<CurrentRunRequest | null>(null);
+  const [chatMessages, setChatMessages] = useState<StudioInvokeChatMessage[]>(
+    [],
   );
-  const [chatMessages, setChatMessages] = useState<StudioInvokeChatMessage[]>([]);
-  const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>([]);
-  const [expandedHistoryId, setExpandedHistoryId] = useState('');
+  const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>(
+    [],
+  );
+  const [selectedHistoryId, setSelectedHistoryId] = useState('');
   const [consoleTab, setConsoleTab] = useState<
-    'conversation' | 'timeline' | 'events'
-  >('conversation');
-  const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<number | null>(
-    null,
-  );
+    'output' | 'timeline' | 'events' | 'metadata'
+  >('output');
+  const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<
+    number | null
+  >(null);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -298,11 +434,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const effectiveRequestTypeUrl =
     trimOptional(endpointContract?.requestTypeUrl) ||
     trimOptional(selectedEndpoint?.requestTypeUrl);
-  const effectiveResponseTypeUrl =
-    trimOptional(endpointContract?.responseTypeUrl) ||
-    trimOptional(selectedEndpoint?.responseTypeUrl);
-  const effectiveDefaultPrompt = trimOptional(endpointContract?.defaultSmokePrompt);
-  const effectiveSampleRequestJson = trimOptional(endpointContract?.sampleRequestJson);
+  const effectiveDefaultPrompt = trimOptional(
+    endpointContract?.defaultSmokePrompt,
+  );
   const isChatEndpoint = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
@@ -310,19 +444,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     () => getPreferredScopeConsoleServiceId(services),
     [services],
   );
-  const currentMemberRevision = memberRevision ?? null;
-  const currentPublishedContext = describeStudioMemberBindingRevisionContext(
-    currentMemberRevision,
-  );
-  const currentImplementationKind = normalizeStudioMemberBindingImplementationKind(
-    currentMemberRevision?.implementationKind,
-  );
-  const currentRevisionId =
-    trimOptional(endpointContract?.revisionId) ||
-    trimOptional(currentMemberRevision?.revisionId);
   const normalizedMemberId = trimOptional(memberId);
   const normalizedTeamId = trimOptional(teamId);
-  const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
@@ -340,12 +463,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
-      trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
+      trimOptional(selectedService?.serviceId) ||
+      trimOptional(initialServiceId);
     if (!currentServiceId) {
       return [];
     }
 
-    return requestHistory.filter((entry) => entry.serviceId === currentServiceId);
+    return requestHistory.filter(
+      (entry) => entry.serviceId === currentServiceId,
+    );
   }, [initialServiceId, requestHistory, selectedService?.serviceId]);
   const currentRunViewModel = useMemo(() => {
     return buildStudioInvokeCurrentRunViewModel({
@@ -377,25 +503,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentRunHasData = currentRunViewModel.hasData;
   const currentObserveSessionSeed = currentRunViewModel.observeSessionSeed;
   const currentRawOutput = currentRunViewModel.rawOutput;
-  const currentContractStatusLabel = getContractStatusLabel({
-    hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(normalizedMemberId),
-  });
-  const currentContractStatus = getContractStatus({
-    hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(normalizedMemberId),
-  });
-  const consoleMinHeight = screens.xl || screens.lg ? 280 : 220;
   const runElapsedLabel = formatElapsedTime(
     currentRunRequest?.startedAt ?? null,
     activeRunCompletedAt,
   );
-  const runIdLabel = trimOptional(invokeResult.runId) || '尚未开始';
-  const commandIdLabel = trimOptional(invokeResult.commandId) || '尚未发出';
-  const actorIdLabel =
-    trimOptional(invokeResult.actorId) || currentMemberActorId || '尚未分配';
-  const memberIdLabel = normalizedMemberId || '未选中成员';
-  const endpointLabel = selectedEndpoint?.displayName || selectedEndpointId || '—';
+  const endpointLabel =
+    selectedEndpoint?.displayName || selectedEndpointId || '—';
+  const currentPublishedContext =
+    describeStudioMemberBindingRevisionContext(memberRevision) || '';
+  const currentImplementationKind =
+    normalizeStudioMemberBindingImplementationKind(
+      memberRevision?.implementationKind,
+    );
+  const currentRevisionId =
+    trimOptional(endpointContract?.revisionId) ||
+    trimOptional(memberRevision?.revisionId);
+  const lifecycleLabel = getLifecycleLabel(memberRevision);
+  const runViewMode = selectedHistoryId ? 'historical' : 'latest';
 
   useEffect(() => {
     if (!services.length) {
@@ -413,7 +537,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const normalizedInitialServiceId = trimOptional(initialServiceId);
     if (
       normalizedInitialServiceId &&
-      services.some((service) => service.serviceId === normalizedInitialServiceId)
+      services.some(
+        (service) => service.serviceId === normalizedInitialServiceId,
+      )
     ) {
       setSelectedServiceId(normalizedInitialServiceId);
       return;
@@ -490,13 +616,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       selectedService?.kind === 'nyxid-chat'
     ) {
       setEndpointContract(null);
-      setEndpointContractError('');
       return;
     }
 
     let cancelled = false;
     setEndpointContract(null);
-    setEndpointContractError('');
 
     const request = scopeRuntimeApi.getMemberEndpointContract(
       scopeId,
@@ -512,15 +636,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
         setEndpointContract(contract);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) {
           return;
         }
 
         setEndpointContract(null);
-        setEndpointContractError(
-          error instanceof Error ? error.message : String(error),
-        );
       });
 
     return () => {
@@ -539,26 +660,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [scopeId]);
 
   useEffect(() => {
-    payloadTypeUrlEditedRef.current = false;
-  }, [scopeId, selectedEndpointId, selectedServiceId]);
-
-  useEffect(() => {
     if (!selectedEndpoint || isChatServiceEndpoint(selectedEndpoint)) {
       setPayloadTypeUrl('');
       setPayloadBase64('');
-      setPayloadJsonPreview('');
       return;
     }
 
-    setPayloadTypeUrl((current) => {
-      if (payloadTypeUrlEditedRef.current) {
-        return current;
-      }
-
-      return effectiveRequestTypeUrl;
-    });
-    setPayloadJsonPreview((current) => current || effectiveSampleRequestJson);
-  }, [effectiveRequestTypeUrl, effectiveSampleRequestJson, selectedEndpoint]);
+    setPayloadTypeUrl(effectiveRequestTypeUrl);
+  }, [effectiveRequestTypeUrl, selectedEndpoint]);
 
   useEffect(() => {
     const nextBindingKey = `${scopeId}::${selectedServiceId}::${selectedEndpointId}`;
@@ -572,14 +681,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     }
 
     previousBindingKeyRef.current = nextBindingKey;
+    activeHistoryEntryIdRef.current = '';
     setChatMessages([]);
     setCurrentRunRequest(null);
-    setExpandedHistoryId('');
+    setSelectedHistoryId('');
     setFormError('');
     setInvokeResult(createIdleResult());
-    setPayloadJsonPreview('');
     setActiveRunCompletedAt(null);
-    setConsoleTab('conversation');
+    setConsoleTab('output');
   }, [scopeId, selectedEndpointId, selectedServiceId]);
 
   useEffect(
@@ -590,23 +699,28 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
 
   useEffect(() => {
-    transcriptAnchorRef.current?.scrollIntoView?.({
+    const transcriptViewport = transcriptViewportRef.current;
+    if (!transcriptViewport) {
+      return;
+    }
+
+    transcriptViewport.scrollTo({
       behavior: chatMessages.length > 1 ? 'smooth' : 'auto',
-      block: 'end',
+      top: transcriptViewport.scrollHeight,
     });
   }, [chatMessages]);
 
   useEffect(() => {
-    if (!expandedHistoryId) {
+    if (!selectedHistoryId) {
       return;
     }
 
-    if (visibleRequestHistory.some((entry) => entry.id === expandedHistoryId)) {
+    if (visibleRequestHistory.some((entry) => entry.id === selectedHistoryId)) {
       return;
     }
 
-    setExpandedHistoryId('');
-  }, [expandedHistoryId, visibleRequestHistory]);
+    setSelectedHistoryId('');
+  }, [selectedHistoryId, visibleRequestHistory]);
 
   useEffect(() => {
     if (!formError) {
@@ -614,7 +728,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     }
 
     setFormError('');
-  }, [payloadBase64, payloadTypeUrl, prompt, selectedEndpointId, selectedServiceId]);
+  }, [
+    payloadBase64,
+    payloadTypeUrl,
+    prompt,
+    selectedEndpointId,
+    selectedServiceId,
+  ]);
 
   const ensureNyxIdChatBound = useCallback(async () => {
     if (!scopeId || nyxIdChatBoundRef.current) {
@@ -625,36 +745,123 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     nyxIdChatBoundRef.current = true;
   }, [scopeId]);
 
-  const appendRequestHistory = useCallback(
-    (entry: Omit<InvokeHistoryEntry, 'id'>) => {
-      const nextEntry: InvokeHistoryEntry = {
-        ...entry,
-        id: createClientId('request'),
-      };
-      setExpandedHistoryId(nextEntry.id);
-      setRequestHistory((current) => [nextEntry, ...current].slice(0, 8));
+  const upsertRequestHistory = useCallback((entry: InvokeHistoryEntry) => {
+    setRequestHistory((current) => [
+      entry,
+      ...current.filter((item) => item.id !== entry.id),
+    ].slice(0, 8));
+  }, []);
+
+  const updateRequestHistoryEntry = useCallback(
+    (
+      entryId: string,
+      updater: (entry: InvokeHistoryEntry) => InvokeHistoryEntry,
+    ) => {
+      if (!entryId) {
+        return;
+      }
+
+      setRequestHistory((current) =>
+        current.map((entry) => (entry.id === entryId ? updater(entry) : entry)),
+      );
     },
     [],
   );
 
-  const handleSelectHistoryEntry = useCallback((entryId: string) => {
-    setExpandedHistoryId((current) => (current === entryId ? '' : entryId));
+  const handleSelectHistoryEntry = useCallback(
+    (entryId: string) => {
+      const selectedEntry = requestHistory.find(
+        (entry) => entry.id === entryId,
+      );
+
+      if (!selectedEntry) {
+        return;
+      }
+
+      if (selectedEntry.status === 'running') {
+        setSelectedHistoryId('');
+        setConsoleTab('output');
+        return;
+      }
+
+      setSelectedHistoryId(entryId);
+      setChatMessages(cloneChatMessages(selectedEntry.snapshot.chatMessages));
+      setCurrentRunRequest({
+        mode: selectedEntry.mode,
+        payloadBase64: selectedEntry.payloadBase64,
+        payloadTypeUrl: selectedEntry.payloadTypeUrl,
+        prompt: selectedEntry.prompt,
+        startedAt: selectedEntry.startedAt,
+      });
+      setInvokeResult(cloneInvokeResult(selectedEntry.snapshot.result));
+      setActiveRunCompletedAt(selectedEntry.completedAt);
+      setConsoleTab('output');
+    },
+    [requestHistory],
+  );
+
+  const restorePromptForNewRun = useCallback((nextPrompt: string) => {
+    const normalizedPrompt = trimOptional(nextPrompt);
+    if (!normalizedPrompt) {
+      void message.warning('No input available to retry.');
+      return;
+    }
+
+    setPrompt(normalizedPrompt);
+    composerDockRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+    window.setTimeout(() => {
+      composerDockRef.current
+        ?.querySelector<HTMLTextAreaElement>('textarea')
+        ?.focus();
+    }, 0);
+    void message.info('Prompt restored. Click Invoke to create a new Run.');
   }, []);
 
   const handleAbort = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    setConsoleTab('conversation');
+    const completedAt = Date.now();
+    setConsoleTab('output');
     setInvokeResult((current) => ({
       ...current,
       error: '调用已中止。',
-      status: 'error',
+      status: 'cancelled',
     }));
-    setActiveRunCompletedAt(Date.now());
-  }, []);
+    setActiveRunCompletedAt(completedAt);
+    updateRequestHistoryEntry(activeHistoryEntryIdRef.current, (entry) => {
+      const cancelledResult: InvokeResultState = {
+        ...entry.snapshot.result,
+        error: entry.snapshot.result.error || '调用已中止。',
+        status: 'cancelled',
+      };
+
+      return {
+        ...entry,
+        completedAt,
+        errorDetail: cancelledResult.error,
+        eventCount:
+          cancelledResult.eventCount || cancelledResult.events.length,
+        status: 'cancelled',
+        summary: '该 Run 已停止，当前可能只显示部分输出。',
+        snapshot: {
+          chatMessages: cloneChatMessages(entry.snapshot.chatMessages),
+          result: cloneInvokeResult(cancelledResult),
+        },
+      };
+    });
+    activeHistoryEntryIdRef.current = '';
+  }, [updateRequestHistoryEntry]);
 
   const handleInvoke = useCallback(async () => {
-    if (!scopeId || !normalizedMemberId || !selectedService || !selectedEndpoint) {
+    if (
+      !scopeId ||
+      !normalizedMemberId ||
+      !selectedService ||
+      !selectedEndpoint
+    ) {
       return;
     }
 
@@ -662,9 +869,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const trimmedPayloadTypeUrl = payloadTypeUrl.trim();
     const trimmedPayloadBase64 = payloadBase64.trim();
     const startedAt = Date.now();
+    const currentEndpointLabel =
+      selectedEndpoint.displayName || selectedEndpoint.endpointId;
+    const currentRunMode = isChatServiceEndpoint(selectedEndpoint)
+      ? 'stream'
+      : 'invoke';
 
     if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
-      setFormError('请输入提示词后再开始对话。');
+      setFormError('请输入 Prompt 后再发起 Invoke。');
       return;
     }
 
@@ -673,16 +885,19 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       !trimmedPayloadBase64
     ) {
-      setFormError('请输入提示词或载荷后再执行调用。');
+      setFormError('请输入 Prompt 后再发起 Invoke。');
       return;
     }
 
     setFormError('');
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    setConsoleTab('conversation');
+    const historyEntryId = createClientId('run');
+    activeHistoryEntryIdRef.current = historyEntryId;
+    setSelectedHistoryId('');
+    setConsoleTab('output');
     setCurrentRunRequest({
-      mode: isChatServiceEndpoint(selectedEndpoint) ? 'stream' : 'invoke',
+      mode: currentRunMode,
       payloadBase64: trimmedPayloadBase64,
       payloadTypeUrl: trimmedPayloadTypeUrl,
       prompt: trimmedPrompt,
@@ -723,15 +938,30 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ];
 
       abortControllerRef.current = controller;
-      setChatMessages(buildChatRunMessages('streaming'));
-      setPrompt('');
-      setInvokeResult({
-        ...createIdleResult(),
+      const pendingMessages = buildChatRunMessages('streaming');
+      const pendingResult = createPendingRunResult({
         endpointId: selectedEndpoint.endpointId,
         mode: 'stream',
         serviceId: selectedService.serviceId,
-        status: 'running',
       });
+      setChatMessages(pendingMessages);
+      setPrompt('');
+      setInvokeResult(pendingResult);
+      upsertRequestHistory(
+        createPendingHistoryEntry({
+          chatMessages: pendingMessages,
+          endpointId: selectedEndpoint.endpointId,
+          endpointLabel: currentEndpointLabel,
+          id: historyEntryId,
+          mode: 'stream',
+          payloadBase64: '',
+          payloadTypeUrl: '',
+          prompt: trimmedPrompt,
+          result: pendingResult,
+          serviceId: selectedService.serviceId,
+          startedAt,
+        }),
+      );
 
       try {
         if (selectedService.kind === 'nyxid-chat') {
@@ -751,13 +981,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           signal: controller.signal,
         })) {
           applyRuntimeEvent(accumulator, event);
-          setChatMessages(
-            buildChatRunMessages(
-              accumulator.errorText ? 'error' : 'streaming',
-              accumulator.errorText || undefined,
-            ),
+          const nextChatMessages = buildChatRunMessages(
+            accumulator.errorText ? 'error' : 'streaming',
+            accumulator.errorText || undefined,
           );
-          setInvokeResult({
+          const nextResult: InvokeResultState = {
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
             commandId: accumulator.commandId,
@@ -776,7 +1004,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
-          });
+          };
+          setChatMessages(nextChatMessages);
+          setInvokeResult(nextResult);
+          updateRequestHistoryEntry(historyEntryId, (entry) => ({
+            ...entry,
+            eventCount: nextResult.eventCount || nextResult.events.length,
+            runId: nextResult.runId,
+            snapshot: {
+              chatMessages: cloneChatMessages(nextChatMessages),
+              result: cloneInvokeResult(nextResult),
+            },
+            summary:
+              accumulator.errorText ||
+              trimOptional(accumulator.finalOutput) ||
+              accumulator.assistantText ||
+              entry.summary,
+          }));
         }
 
         if (!controller.signal.aborted) {
@@ -808,14 +1052,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           setChatMessages(finalChatMessages);
           setInvokeResult(finalResult);
           setActiveRunCompletedAt(completedAt);
-          appendRequestHistory({
+          upsertRequestHistory({
             completedAt,
             createdAt: completedAt,
             endpointId: selectedEndpoint.endpointId,
-            endpointLabel:
-              selectedEndpoint.displayName || selectedEndpoint.endpointId,
+            endpointLabel: currentEndpointLabel,
             errorDetail: accumulator.errorText,
             eventCount: accumulator.events.length,
+            id: historyEntryId,
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
@@ -828,16 +1072,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               accumulator.errorText ||
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
-              '这轮对话没有返回额外文本。',
+              '该 Run 没有返回额外文本。',
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
             },
           });
+          activeHistoryEntryIdRef.current = '';
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           const completedAt = Date.now();
           const finalChatMessages = buildChatRunMessages('error', message);
           const finalResult: InvokeResultState = {
@@ -863,14 +1109,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           setChatMessages(finalChatMessages);
           setInvokeResult(finalResult);
           setActiveRunCompletedAt(completedAt);
-          appendRequestHistory({
+          upsertRequestHistory({
             completedAt,
             createdAt: completedAt,
             endpointId: selectedEndpoint.endpointId,
-            endpointLabel:
-              selectedEndpoint.displayName || selectedEndpoint.endpointId,
+            endpointLabel: currentEndpointLabel,
             errorDetail: message,
             eventCount: accumulator.events.length,
+            id: historyEntryId,
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
@@ -888,6 +1134,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               result: cloneInvokeResult(finalResult),
             },
           });
+          activeHistoryEntryIdRef.current = '';
         }
       } finally {
         if (abortControllerRef.current === controller) {
@@ -898,14 +1145,28 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return;
     }
 
-    setChatMessages([]);
-    setInvokeResult({
-      ...createIdleResult(),
+    const pendingResult = createPendingRunResult({
       endpointId: selectedEndpoint.endpointId,
       mode: 'invoke',
       serviceId: selectedService.serviceId,
-      status: 'running',
     });
+    setChatMessages([]);
+    setInvokeResult(pendingResult);
+    upsertRequestHistory(
+      createPendingHistoryEntry({
+        chatMessages: [],
+        endpointId: selectedEndpoint.endpointId,
+        endpointLabel: currentEndpointLabel,
+        id: historyEntryId,
+        mode: 'invoke',
+        payloadBase64: trimmedPayloadBase64,
+        payloadTypeUrl: trimmedPayloadTypeUrl,
+        prompt: trimmedPrompt,
+        result: pendingResult,
+        serviceId: selectedService.serviceId,
+        startedAt,
+      }),
+    );
 
     try {
       const response = await runtimeRunsApi.invokeEndpoint(
@@ -919,12 +1180,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         invokeRouteTarget,
       );
       const completedAt = Date.now();
-      const {
-        actorId,
-        commandId,
-        correlationId,
-        runId,
-      } = extractRuntimeInvokeReceipt(response);
+      const { actorId, commandId, correlationId, runId } =
+        extractRuntimeInvokeReceipt(response);
       const events: RuntimeEvent[] = [
         {
           commandId: commandId || undefined,
@@ -966,13 +1223,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       };
       setInvokeResult(finalResult);
       setActiveRunCompletedAt(completedAt);
-      appendRequestHistory({
+      upsertRequestHistory({
         completedAt,
         createdAt: completedAt,
         endpointId: selectedEndpoint.endpointId,
-        endpointLabel: selectedEndpoint.displayName || selectedEndpoint.endpointId,
+        endpointLabel: currentEndpointLabel,
         errorDetail: '',
         eventCount: events.length,
+        id: historyEntryId,
         mode: 'invoke',
         payloadBase64: trimmedPayloadBase64,
         payloadTypeUrl: trimmedPayloadTypeUrl,
@@ -990,6 +1248,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           result: cloneInvokeResult(finalResult),
         },
       });
+      activeHistoryEntryIdRef.current = '';
     } catch (error) {
       const completedAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
@@ -1004,13 +1263,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       };
       setInvokeResult(finalResult);
       setActiveRunCompletedAt(completedAt);
-      appendRequestHistory({
+      upsertRequestHistory({
         completedAt,
         createdAt: completedAt,
         endpointId: selectedEndpoint.endpointId,
-        endpointLabel: selectedEndpoint.displayName || selectedEndpoint.endpointId,
+        endpointLabel: currentEndpointLabel,
         errorDetail: message,
         eventCount: 0,
+        id: historyEntryId,
         mode: 'invoke',
         payloadBase64: trimmedPayloadBase64,
         payloadTypeUrl: trimmedPayloadTypeUrl,
@@ -1025,9 +1285,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           result: cloneInvokeResult(finalResult),
         },
       });
+      activeHistoryEntryIdRef.current = '';
     }
   }, [
-    appendRequestHistory,
     ensureNyxIdChatBound,
     normalizedMemberId,
     payloadBase64,
@@ -1037,79 +1297,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     scopeId,
     selectedEndpoint,
     selectedService,
-  ]);
-
-  const handleOpenRuns = useCallback(() => {
-    const currentRunId = trimOptional(invokeResult.runId);
-    if (!scopeId || !normalizedMemberId || !selectedEndpoint || !currentRunId) {
-      return;
-    }
-
-    const currentPrompt = currentRunRequest?.prompt || prompt.trim() || '';
-    const currentPayloadTypeUrl =
-      currentRunRequest?.payloadTypeUrl ||
-      (!isChatServiceEndpoint(selectedEndpoint) && payloadTypeUrl.trim()) ||
-      '';
-    const currentPayloadBase64 =
-      currentRunRequest?.payloadBase64 ||
-      (!isChatServiceEndpoint(selectedEndpoint) && payloadBase64.trim()) ||
-      '';
-    const observedDraftKey =
-      invokeResult.events.length > 0
-        ? saveObservedRunSessionPayload({
-            actorId: invokeResult.actorId || undefined,
-            commandId: invokeResult.commandId || undefined,
-            correlationId: invokeResult.correlationId || undefined,
-            endpointId: invokeResult.endpointId || selectedEndpoint.endpointId,
-            events: invokeResult.events,
-            payloadBase64: currentPayloadBase64 || undefined,
-            payloadTypeUrl: currentPayloadTypeUrl || undefined,
-            prompt: currentPrompt,
-            runId: invokeResult.runId || undefined,
-            scopeId,
-            serviceOverrideId: selectedService?.serviceId,
-          })
-        : '';
-
-    history.push(
-      buildRuntimeRunsHref({
-        actorId: invokeResult.actorId || undefined,
-        draftKey: observedDraftKey || undefined,
-        endpointId: selectedEndpoint.endpointId,
-        payloadTypeUrl: currentPayloadTypeUrl || undefined,
-        prompt: currentPrompt || undefined,
-        returnTo: returnTo || undefined,
-        runId: currentRunId,
-        scopeId,
-        serviceId: selectedService?.serviceId,
-      }),
-    );
-  }, [
-    currentRunRequest?.payloadBase64,
-    currentRunRequest?.payloadTypeUrl,
-    currentRunRequest?.prompt,
-    invokeResult.actorId,
-    invokeResult.commandId,
-    invokeResult.endpointId,
-    invokeResult.events,
-    invokeResult.runId,
-    normalizedMemberId,
-    payloadBase64,
-    payloadTypeUrl,
-    prompt,
-    returnTo,
-    scopeId,
-    selectedEndpoint,
-    selectedService?.serviceId,
+    updateRequestHistoryEntry,
+    upsertRequestHistory,
   ]);
 
   const handleClear = useCallback(() => {
     setChatMessages([]);
-    setConsoleTab('conversation');
+    setConsoleTab('output');
     setCurrentRunRequest(null);
     setFormError('');
     setInvokeResult(createIdleResult());
     setActiveRunCompletedAt(null);
+    setSelectedHistoryId('');
   }, []);
 
   return (
@@ -1135,129 +1334,137 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           type="warning"
         />
       ) : (
-        <>
-          <AevatarPanel
-            layoutMode="document"
-            padding={14}
-            style={runConsolePanelStyle}
-            title="Conversation"
-            titleHelp="Invoke 现在按 runs 页的交互组织：先看当前 run，再从底部输入 prompt 发起调用。"
+        <div data-testid="studio-invoke-workspace" style={invokeWorkspaceStyle}>
+          <div
+            data-testid="studio-invoke-target-summary"
+            style={targetSummaryStyle}
           >
-            <div style={consoleFrameStyle}>
-              <div style={runSummaryGridStyle}>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Status</div>
-                  <div style={runSummaryValueStyle}>
-                    <span
-                      style={{
-                        ...runStatusDotBaseStyle,
-                        ...getRunStatusDotStyle(invokeResult.status),
+            <div style={{ minWidth: 0 }}>
+              <div title={currentMemberLabel} style={targetTitleStyle}>
+                {currentMemberLabel}
+              </div>
+              <div style={targetMetaStyle}>
+                <span>Endpoint: chat</span>
+                <span>·</span>
+                <span>{currentImplementationKind}</span>
+                <span>·</span>
+                <span>Lifecycle: {lifecycleLabel}</span>
+              </div>
+            </div>
+            <div style={targetPillStyle}>
+              <span
+                style={{
+                  ...runStatusDotBaseStyle,
+                  background: getInvokeStatusTone(invokeResult.status).dot,
+                }}
+              />
+              {getRunStatusLabel(invokeResult.status)}
+            </div>
+          </div>
+
+          <div
+            data-testid="studio-invoke-composer-dock"
+            ref={composerDockRef}
+            style={invokeComposerDockStyle}
+          >
+            <StudioMemberInvokeComposerPanel
+              canInvoke={canInvoke}
+              defaultPrompt={effectiveDefaultPrompt}
+              formError={formError}
+              invokeStatus={invokeResult.status}
+              isHistoricalRunSelected={runViewMode === 'historical'}
+              isChatEndpoint={isChatEndpoint}
+              layout="dock"
+              prompt={prompt}
+              onAbort={handleAbort}
+              onClear={handleClear}
+              onInvoke={() => void handleInvoke()}
+              onPromptChange={setPrompt}
+            />
+          </div>
+
+          <div
+            data-testid="studio-invoke-main-debug-area"
+            style={mainDebugAreaStyle}
+          >
+            <div
+              data-testid="studio-invoke-run-output-section"
+              style={invokeRunOutputSectionStyle}
+            >
+              <div style={{ flex: '0 0 auto', padding: '12px 14px 0' }}>
+                <span style={invokeSectionTitleStyle}>Run output</span>
+              </div>
+              <div
+                data-testid="studio-invoke-run-output-body"
+                style={invokeRunOutputBodyStyle}
+              >
+                <div style={runConsolePanelStyle}>
+                  <div
+                    data-testid="studio-invoke-current-run-viewport"
+                    style={currentRunViewportStyle}
+                  >
+                    <StudioMemberCurrentRunPanel
+                      activeRunCompletedAt={activeRunCompletedAt}
+                      activeTab={consoleTab}
+                      chatMessages={chatMessages}
+                      currentRawOutput={currentRawOutput}
+                      currentRunHasData={currentRunHasData}
+                      currentRunRequest={currentRunRequest}
+                      endpointLabel={endpointLabel}
+                      invokeResult={invokeResult}
+                      memberId={normalizedMemberId}
+                      publishedContext={currentPublishedContext}
+                      revisionId={currentRevisionId}
+                      runElapsedLabel={runElapsedLabel}
+                      runViewMode={runViewMode}
+                      transcriptViewportRef={transcriptViewportRef}
+                      onCopyError={() =>
+                        writeClipboardText(invokeResult.error, 'Error')
+                      }
+                      onRetryAsNewRun={() => {
+                        restorePromptForNewRun(currentRunRequest?.prompt || '');
                       }}
+                      onTabChange={setConsoleTab}
                     />
-                    {getInvokeRunStatusLabel(invokeResult.status)}
-                  </div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Run ID</div>
-                  <div title={runIdLabel} style={runSummaryValueStyle}>
-                    {runIdLabel}
-                  </div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Command ID</div>
-                  <div title={commandIdLabel} style={runSummaryValueStyle}>
-                    {commandIdLabel}
-                  </div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Actor ID</div>
-                  <div title={actorIdLabel} style={runSummaryValueStyle}>
-                    {actorIdLabel}
-                  </div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Member ID</div>
-                  <div title={memberIdLabel} style={runSummaryValueStyle}>
-                    {memberIdLabel}
-                  </div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Elapsed</div>
-                  <div style={runSummaryValueStyle}>{runElapsedLabel}</div>
-                </div>
-                <div style={runSummaryCardStyle}>
-                  <div style={runSummaryLabelStyle}>Endpoint</div>
-                  <div title={endpointLabel} style={runSummaryValueStyle}>
-                    {endpointLabel}
                   </div>
                 </div>
               </div>
-              <StudioMemberCurrentRunPanel
-                activeTab={consoleTab}
-                chatMessages={chatMessages}
-                consoleMinHeight={consoleMinHeight}
-                currentRawOutput={currentRawOutput}
-                currentRunHasData={currentRunHasData}
-                currentRunRequest={currentRunRequest}
-                invokeResult={invokeResult}
-                isChatEndpoint={isChatEndpoint}
-                transcriptAnchorRef={transcriptAnchorRef}
-                onTabChange={setConsoleTab}
-              />
-              <StudioMemberInvokeComposerPanel
-                canInvoke={canInvoke}
-                defaultPrompt={effectiveDefaultPrompt}
-                effectiveRequestTypeUrl={effectiveRequestTypeUrl}
-                effectiveResponseTypeUrl={effectiveResponseTypeUrl}
-                endpointKind={selectedEndpoint?.kind || 'command'}
-                formError={formError}
-                hasOpenRunsTarget={Boolean(trimOptional(invokeResult.runId))}
-                invokeStatus={invokeResult.status}
-                isChatEndpoint={isChatEndpoint}
-                layout="dock"
-                payloadBase64={payloadBase64}
-                payloadJsonPreview={payloadJsonPreview}
-                payloadTypeUrl={payloadTypeUrl}
-                prompt={prompt}
-                onAbort={handleAbort}
-                onClear={handleClear}
-                onInvoke={() => void handleInvoke()}
-                onOpenRuns={handleOpenRuns}
-                onPayloadBase64Change={setPayloadBase64}
-                onPayloadJsonPreviewChange={setPayloadJsonPreview}
-                onPayloadTypeUrlChange={(value) => {
-                  payloadTypeUrlEditedRef.current = true;
-                  setPayloadTypeUrl(value);
-                }}
-                onPromptChange={setPrompt}
-              />
             </div>
-          </AevatarPanel>
 
-          <StudioMemberInvokeHistoryPanel
-            entries={visibleRequestHistory}
-            expandedHistoryId={expandedHistoryId}
-            onSelectEntry={handleSelectHistoryEntry}
-          />
-
-          <details style={contractDetailsStyle}>
-            <summary style={contractDetailsSummaryStyle}>
-              Advanced contract details
-            </summary>
-            <div style={contractDetailsBodyStyle}>
-              <StudioMemberInvokeContractPanel
-                actorId={currentMemberActorId}
-                contractError={endpointContractError}
-                endpointLabel={selectedEndpoint?.displayName || selectedEndpointId}
-                memberLabel={currentMemberLabel}
-                publishedContext={currentPublishedContext}
-                revisionId={currentRevisionId}
-                status={currentContractStatus}
-                statusLabel={currentContractStatusLabel}
-              />
-            </div>
-          </details>
-        </>
+            <StudioMemberInvokeHistoryPanel
+              entries={visibleRequestHistory}
+              getEntryOutputText={(entryId) => {
+                const entry = requestHistory.find((item) => item.id === entryId);
+                return entry ? getHistoryOutputText(entry) : '';
+              }}
+              selectedHistoryId={selectedHistoryId}
+              style={invokeHistoryPanelStyle}
+              onCopyInput={(entryId) => {
+                const entry = requestHistory.find((item) => item.id === entryId);
+                writeClipboardText(entry?.prompt || '', 'Input');
+              }}
+              onCopyOutput={(entryId) => {
+                const entry = requestHistory.find((item) => item.id === entryId);
+                writeClipboardText(
+                  entry ? getHistoryOutputText(entry) : '',
+                  'Output',
+                );
+              }}
+              onCopyRunId={(entryId) => {
+                const entry = requestHistory.find((item) => item.id === entryId);
+                writeClipboardText(
+                  entry?.runId || entry?.snapshot.result.runId || '',
+                  'Run id',
+                );
+              }}
+              onRetryAsNewRun={(entryId) => {
+                const entry = requestHistory.find((item) => item.id === entryId);
+                restorePromptForNewRun(entry?.prompt || '');
+              }}
+              onSelectEntry={handleSelectHistoryEntry}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
