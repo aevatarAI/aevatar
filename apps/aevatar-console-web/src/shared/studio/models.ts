@@ -546,6 +546,7 @@ export interface StudioTeamSummary {
   readonly scopeId: string;
   readonly displayName: string;
   readonly description: string;
+  readonly entryMemberId?: string | null;
   readonly lifecycleStage: StudioTeamLifecycleStage;
   readonly memberCount: number;
   readonly createdAt: string;

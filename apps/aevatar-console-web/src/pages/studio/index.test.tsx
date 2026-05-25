@@ -642,6 +642,7 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
 
 jest.mock("@/shared/api/runtimeRunsApi", () => ({
   runtimeRunsApi: {
+    streamTeamChat: jest.fn(async () => ({ ok: true })),
     stop: jest.fn(async (_scopeId: string, request: { runId: string }) => ({
       accepted: true,
       runId: request.runId,
@@ -677,6 +678,7 @@ const mockScopeRuntimeApi = scopeRuntimeApi as unknown as {
   getServiceRunAudit: jest.Mock;
 };
 const mockRuntimeRunsApi = runtimeRunsApi as unknown as {
+  streamTeamChat: jest.Mock;
   stop: jest.Mock;
   resume: jest.Mock;
   signal: jest.Mock;
@@ -728,6 +730,39 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: "scope-1",
       members: mockStudioMembers.filter((member) => member.teamId === teamId),
       nextPageToken: null,
+    })),
+    getTeam: jest.fn(async (_scopeId: string, teamId: string) => ({
+      teamId,
+      scopeId: _scopeId,
+      displayName: "Alpha Team",
+      description: "",
+      entryMemberId: "workspace-demo",
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-05-01T08:00:00Z",
+      updatedAt: "2026-05-01T08:05:00Z",
+    })),
+    setTeamEntryMember: jest.fn(async (_scopeId: string, _teamId: string, memberId: string) => ({
+      teamId: _teamId,
+      scopeId: _scopeId,
+      displayName: "Alpha Team",
+      description: "",
+      entryMemberId: memberId,
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-05-01T08:00:00Z",
+      updatedAt: "2026-05-01T08:05:00Z",
+    })),
+    clearTeamEntryMember: jest.fn(async (_scopeId: string, _teamId: string) => ({
+      teamId: _teamId,
+      scopeId: _scopeId,
+      displayName: "Alpha Team",
+      description: "",
+      entryMemberId: null,
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-05-01T08:00:00Z",
+      updatedAt: "2026-05-01T08:05:00Z",
     })),
     getMember: jest.fn(async (_scopeId: string, memberId: string) => {
       const matchedMember =
@@ -2200,6 +2235,28 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         { key: "workflow-yamls" },
         `workflow-yamls:${props.buildWorkflowYamls ? "present" : "none"}`
       ),
+      props.postBindEntryActions
+        ? React.createElement(
+            "button",
+            {
+              key: "set-entry",
+              type: "button",
+              onClick: () => props.postBindEntryActions?.onSetEntry(),
+            },
+            "Set as Team entry"
+          )
+        : null,
+      props.postBindEntryActions
+        ? React.createElement(
+            "button",
+            {
+              key: "set-entry-test",
+              type: "button",
+              onClick: () => props.postBindEntryActions?.onSetEntryAndTest(),
+            },
+            "Set as Team entry and Test Team"
+          )
+        : null,
       React.createElement(
         "div",
         { key: "member" },
@@ -3044,6 +3101,8 @@ describe("StudioPage", () => {
       accepted: true,
       runId: "execution-1",
     });
+    mockRuntimeRunsApi.streamTeamChat.mockReset();
+    mockRuntimeRunsApi.streamTeamChat.mockResolvedValue({ ok: true });
     mockRuntimeRunsApi.resume.mockReset();
     mockRuntimeRunsApi.resume.mockResolvedValue({
       accepted: true,
@@ -3076,6 +3135,35 @@ describe("StudioPage", () => {
         nextPageToken: null,
       })
     );
+    (studioApi.getTeam as jest.Mock).mockReset();
+    (studioApi.getTeam as jest.Mock).mockImplementation(
+      async (_scopeId: string, teamId: string) => ({
+        teamId,
+        scopeId: _scopeId,
+        displayName: "Alpha Team",
+        description: "",
+        entryMemberId: "workspace-demo",
+        lifecycleStage: "active",
+        memberCount: 1,
+        createdAt: "2026-05-01T08:00:00Z",
+        updatedAt: "2026-05-01T08:05:00Z",
+      })
+    );
+    (studioApi.setTeamEntryMember as jest.Mock).mockReset();
+    (studioApi.setTeamEntryMember as jest.Mock).mockImplementation(
+      async (_scopeId: string, _teamId: string, memberId: string) => ({
+        teamId: _teamId,
+        scopeId: _scopeId,
+        displayName: "Alpha Team",
+        description: "",
+        entryMemberId: memberId,
+        lifecycleStage: "active",
+        memberCount: 1,
+        createdAt: "2026-05-01T08:00:00Z",
+        updatedAt: "2026-05-01T08:05:00Z",
+      })
+    );
+    (studioApi.clearTeamEntryMember as jest.Mock).mockReset();
     (studioApi.getMember as jest.Mock).mockReset();
     (studioApi.getMember as jest.Mock).mockImplementation(
       async (_scopeId: string, memberId: string) => {
@@ -4892,6 +4980,118 @@ describe("StudioPage", () => {
         within(rail).getAllByRole("button", { name: "workspace-demo" })
       ).toHaveLength(1);
     });
+  });
+
+  it("sets the bound Team member as entry from Studio", async () => {
+    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Set as Team entry" }));
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "workspace-demo",
+      );
+    });
+    expect(message.success).toHaveBeenCalledWith(
+      "Team entry member update accepted.",
+    );
+  });
+
+  it("sets the bound Team member as entry and returns to Team Detail for testing", async () => {
+    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
+    (studioApi.getTeam as jest.Mock)
+      .mockResolvedValueOnce({
+        teamId: "t-alpha",
+        scopeId: "scope-1",
+        displayName: "Alpha Team",
+        description: "",
+        entryMemberId: null,
+        lifecycleStage: "active",
+        memberCount: 1,
+        createdAt: "2026-05-01T08:00:00Z",
+        updatedAt: "2026-05-01T08:05:00Z",
+      })
+      .mockResolvedValueOnce({
+        teamId: "t-alpha",
+        scopeId: "scope-1",
+        displayName: "Alpha Team",
+        description: "",
+        entryMemberId: "workspace-demo",
+        lifecycleStage: "active",
+        memberCount: 1,
+        createdAt: "2026-05-01T08:00:00Z",
+        updatedAt: "2026-05-01T08:05:00Z",
+      });
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Set as Team entry and Test Team",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "workspace-demo",
+      );
+      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    });
+    expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+    expect(new URLSearchParams(window.location.search).get("memberId")).toBe(
+      "workspace-demo",
+    );
+    expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
+    expect(message.success).toHaveBeenCalledWith(
+      "Team entry member update accepted.",
+    );
+    expect(message.warning).not.toHaveBeenCalled();
+  });
+
+  it("returns to Team Detail without auto-opening Test Team while entry visibility is pending", async () => {
+    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
+    (studioApi.getTeam as jest.Mock).mockResolvedValue({
+      teamId: "t-alpha",
+      scopeId: "scope-1",
+      displayName: "Alpha Team",
+      description: "",
+      entryMemberId: null,
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-05-01T08:00:00Z",
+      updatedAt: "2026-05-01T08:05:00Z",
+    });
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Set as Team entry and Test Team",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(5);
+      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("memberId")).toBe("workspace-demo");
+    expect(params.get("testTeam")).toBeNull();
+    expect(message.warning).toHaveBeenCalledWith(
+      "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。",
+    );
   });
 
   it("keeps pending member binding from promoting the bind selection", async () => {

@@ -1119,6 +1119,7 @@ describe('studioApi host-session requests', () => {
             scopeId: 'scope-1',
             displayName: 'Alpha Team',
             description: 'Owns support workflows',
+            entryMemberId: 'joker',
             lifecycleStage: 'active',
             memberCount: 2,
             createdAt: '2026-05-01T08:00:00Z',
@@ -1138,6 +1139,7 @@ describe('studioApi host-session requests', () => {
           scopeId: 'scope-1',
           displayName: 'Alpha Team',
           description: 'Owns support workflows',
+          entryMemberId: 'joker',
           lifecycleStage: 'active',
           memberCount: 2,
           createdAt: '2026-05-01T08:00:00Z',
@@ -1176,6 +1178,7 @@ describe('studioApi host-session requests', () => {
         scopeId: 'scope-1',
         displayName: 'Alpha Team',
         description: 'Owns support workflows',
+        entryMemberId: null,
         lifecycleStage: 'active',
         memberCount: 2,
         createdAt: '2026-05-01T08:00:00Z',
@@ -1189,6 +1192,7 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-1',
       displayName: 'Alpha Team',
       description: 'Owns support workflows',
+      entryMemberId: null,
       lifecycleStage: 'active',
       memberCount: 2,
       createdAt: '2026-05-01T08:00:00Z',
@@ -1221,6 +1225,7 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-1',
       displayName: 'Alpha Team',
       description: 'Owns support workflows',
+      entryMemberId: null,
       lifecycleStage: 'active',
       memberCount: 1,
       createdAt: '2026-05-01T08:00:00Z',
@@ -1357,6 +1362,111 @@ describe('studioApi host-session requests', () => {
         credentials: 'same-origin',
       }),
     );
+  });
+
+  it('sets and clears a studio team entry member', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const teamResponse = {
+      teamId: 't-alpha',
+      scopeId: 'scope-1',
+      displayName: 'Alpha Team',
+      description: 'Owns support workflows',
+      entryMemberId: 'joker',
+      lifecycleStage: 'active',
+      memberCount: 1,
+      createdAt: '2026-05-01T08:00:00Z',
+      updatedAt: '2026-05-01T08:05:00Z',
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => teamResponse,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...teamResponse,
+          entryMemberId: null,
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.setTeamEntryMember('scope-1', 't-alpha', 'joker'),
+    ).resolves.toEqual(teamResponse);
+    await expect(
+      studioApi.clearTeamEntryMember('scope-1', 't-alpha'),
+    ).resolves.toEqual({
+      ...teamResponse,
+      entryMemberId: null,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        body: JSON.stringify({
+          memberId: 'joker',
+        }),
+        credentials: 'same-origin',
+        method: 'PUT',
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
+      }),
+    );
+  });
+
+  it('accepts asynchronous studio team entry member updates', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.setTeamEntryMember('scope-1', 't-alpha', 'joker'),
+    ).resolves.toBeUndefined();
+    await expect(
+      studioApi.clearTeamEntryMember('scope-1', 't-alpha'),
+    ).resolves.toBeUndefined();
   });
 
   it('gets a studio member detail from the member authority endpoint', async () => {

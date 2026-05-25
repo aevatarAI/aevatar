@@ -1,6 +1,12 @@
 import { Input, Modal, Space, Typography, message, theme } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React from "react";
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+} from "@/shared/agui/runtimeEventSemantics";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import {
   getLocationSnapshot,
@@ -28,7 +34,16 @@ import {
   TeamDetailShell,
   type TeamTabOption,
 } from "./components/TeamDetailChrome";
+import TeamTestPanel, {
+  type TeamTestLastResult,
+  type TeamTestStatus,
+} from "./components/TeamTestPanel";
 import { DetailPill } from "./components/TeamDetailPrimitives";
+import {
+  describeTeamTestError,
+  isAbortLikeError,
+  type TeamTestErrorDescription,
+} from "./components/teamTestErrors";
 import TeamMembersTab from "./tabs/TeamMembersTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
@@ -37,6 +52,8 @@ import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 const teamProjectionRetryLimit = 5;
 const teamProjectionRetryBaseMs = 500;
 const teamProjectionRetryMaxMs = 3_000;
+const teamEntryVisibilityAttempts = 5;
+const teamEntryVisibilityRetryDelayMs = 100;
 
 function isProjectionSyncing404(error: unknown): boolean {
   return isStudioApiStatus(error, 404);
@@ -300,6 +317,27 @@ function formatCompactTimestamp(value: string | null | undefined): string {
   return formatCompactDateTime(value, "暂无");
 }
 
+function formatLocalTimeLabel(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function hasTeamEntryMember(
+  summary: StudioTeamSummary | null | undefined,
+  memberId: string,
+): boolean {
+  return trimText(summary?.entryMemberId) === trimText(memberId);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
 const TeamDetailPage: React.FC = () => {
   const queryClient = useQueryClient();
   const locationSnapshot = React.useSyncExternalStore(
@@ -347,6 +385,16 @@ const TeamDetailPage: React.FC = () => {
   const [teamEditorDescription, setTeamEditorDescription] = React.useState("");
   const [teamEditorSaving, setTeamEditorSaving] = React.useState(false);
   const [teamArchiving, setTeamArchiving] = React.useState(false);
+  const [teamTestPrompt, setTeamTestPrompt] = React.useState("");
+  const [teamTestResultText, setTeamTestResultText] = React.useState("");
+  const [teamTestStatus, setTeamTestStatus] = React.useState<TeamTestStatus>("idle");
+  const [teamTestError, setTeamTestError] =
+    React.useState<TeamTestErrorDescription | null>(null);
+  const [teamTestLastResult, setTeamTestLastResult] =
+    React.useState<TeamTestLastResult | null>(null);
+  const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
+  const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
+  const teamTestAbortRef = React.useRef<AbortController | null>(null);
   const { token } = theme.useToken();
 
   React.useEffect(() => {
@@ -366,7 +414,34 @@ const TeamDetailPage: React.FC = () => {
     setActiveTab((currentTab) =>
       currentTab === routeState.tab ? currentTab : routeState.tab,
     );
-  }, [routeState.memberId, routeState.runId, routeState.serviceId, routeState.tab]);
+    if (routeState.testTeam) {
+      setTeamTestModalOpen(true);
+    }
+  }, [
+    routeState.memberId,
+    routeState.runId,
+    routeState.serviceId,
+    routeState.tab,
+    routeState.testTeam,
+  ]);
+
+  React.useEffect(() => {
+    teamTestAbortRef.current?.abort();
+    teamTestAbortRef.current = null;
+    setTeamTestError(null);
+    setTeamTestLastResult(null);
+    setTeamTestResultText("");
+    setTeamTestStatus("idle");
+    setTeamTestModalOpen(routeState.testTeam);
+    setEntryActionBusyMemberId("");
+  }, [routeState.testTeam, scopeId, selectedTeamId]);
+
+  React.useEffect(
+    () => () => {
+      teamTestAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const teamMembersQuery = useQuery({
     enabled: hasTeamIdentity,
@@ -433,9 +508,12 @@ const TeamDetailPage: React.FC = () => {
       queryClient.invalidateQueries({
         queryKey: teamSummaryQueryKey,
       }),
+      queryClient.invalidateQueries({
+        queryKey: teamMembersQueryKey,
+      }),
       queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
     ]);
-  }, [queryClient, scopeId, teamSummaryQueryKey]);
+  }, [queryClient, scopeId, teamMembersQueryKey, teamSummaryQueryKey]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -634,6 +712,9 @@ const TeamDetailPage: React.FC = () => {
           teamId: selectedTeamId,
         }),
         description: trimText(member.description),
+        canInvokeAsEntry:
+          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+          trimText(member.publishedServiceId).length > 0,
         editStudioHref: buildTeamStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
@@ -642,6 +723,8 @@ const TeamDetailPage: React.FC = () => {
           teamId: selectedTeamId,
         }),
         implementationKind: formatCompositionKind(member.implementationKind),
+        isEntryMember:
+          trimText(member.memberId) === trimText(teamSummaryQuery.data?.entryMemberId),
         key: member.memberId,
         lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
@@ -649,7 +732,14 @@ const TeamDetailPage: React.FC = () => {
         name: trimText(member.displayName) || member.memberId,
         serviceId: trimText(member.publishedServiceId) || "--",
       })),
-    [buildTeamReturnHref, scopeId, selectedTeamId, teamMembersQuery.data?.members, token],
+    [
+      buildTeamReturnHref,
+      scopeId,
+      selectedTeamId,
+      teamMembersQuery.data?.members,
+      teamSummaryQuery.data?.entryMemberId,
+      token,
+    ],
   );
   const createMemberHref = React.useMemo(
     () =>
@@ -976,6 +1066,273 @@ const TeamDetailPage: React.FC = () => {
   const handleOpenTeamsList = React.useCallback(() => {
     history.push(teamsListHref);
   }, [teamsListHref]);
+  const openTeamTestModal = React.useCallback(() => {
+    setTeamTestModalOpen(true);
+  }, []);
+  const closeTeamTestModal = React.useCallback(() => {
+    setTeamTestModalOpen(false);
+  }, []);
+  const streamTeamTest = React.useCallback(async (promptOverride?: string) => {
+    const prompt = trimText(promptOverride) || teamTestPrompt.trim();
+    if (!prompt || !scopeId || !selectedTeamId || isTeamArchived) {
+      return;
+    }
+
+    teamTestAbortRef.current?.abort();
+    const controller = new AbortController();
+    teamTestAbortRef.current = controller;
+    const accumulator = createRuntimeEventAccumulator();
+    setTeamTestStatus("running");
+    setTeamTestError(null);
+    setTeamTestResultText("");
+
+    try {
+      const response = await runtimeRunsApi.streamTeamChat(
+        scopeId,
+        selectedTeamId,
+        {
+          prompt,
+          metadata: {
+            source: "team-detail",
+            teamId: selectedTeamId,
+          },
+        },
+        controller.signal,
+      );
+
+      for await (const event of parseBackendSSEStream(response, {
+        signal: controller.signal,
+      })) {
+        applyRuntimeEvent(accumulator, event);
+        setTeamTestResultText(
+          accumulator.errorText ||
+            accumulator.finalOutput ||
+            accumulator.assistantText ||
+            accumulator.thinking,
+        );
+      }
+
+      if (controller.signal.aborted) {
+        const stoppedSummary =
+          accumulator.assistantText ||
+          accumulator.finalOutput ||
+          accumulator.errorText ||
+          "Team Test stopped.";
+        setTeamTestStatus("stopped");
+        setTeamTestLastResult({
+          finishedAtLabel: formatLocalTimeLabel(new Date()),
+          runId: accumulator.runId || undefined,
+          status: "stopped",
+          summary: stoppedSummary,
+        });
+        return;
+      }
+
+      const summary =
+        accumulator.errorText ||
+        accumulator.finalOutput ||
+        accumulator.assistantText ||
+        "Team returned an empty response.";
+      const nextStatus = accumulator.errorText ? "error" : "success";
+      setTeamTestResultText(summary);
+      setTeamTestStatus(nextStatus);
+      if (accumulator.errorText) {
+        setTeamTestError(describeTeamTestError(accumulator.errorText));
+      }
+      setTeamTestLastResult({
+        finishedAtLabel: formatLocalTimeLabel(new Date()),
+        runId: accumulator.runId || undefined,
+        status: nextStatus,
+        summary,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || isAbortLikeError(error)) {
+        setTeamTestStatus("stopped");
+        setTeamTestError(describeTeamTestError(error));
+        setTeamTestLastResult({
+          finishedAtLabel: formatLocalTimeLabel(new Date()),
+          status: "stopped",
+          summary: "Team Test stopped.",
+        });
+        return;
+      }
+
+      const errorDescription = describeTeamTestError(error);
+      setTeamTestStatus("error");
+      setTeamTestError(errorDescription);
+      setTeamTestResultText(errorDescription.description);
+      setTeamTestLastResult({
+        finishedAtLabel: formatLocalTimeLabel(new Date()),
+        status: "error",
+        summary: errorDescription.description,
+      });
+    } finally {
+      if (teamTestAbortRef.current === controller) {
+        teamTestAbortRef.current = null;
+      }
+    }
+  }, [isTeamArchived, scopeId, selectedTeamId, teamTestPrompt]);
+  const handleStopTeamTest = React.useCallback(() => {
+    teamTestAbortRef.current?.abort();
+  }, []);
+  const waitForTeamEntryVisibility = React.useCallback(
+    async (memberId: string) => {
+      const normalizedMemberId = trimText(memberId);
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return false;
+      }
+
+      for (let attempt = 0; attempt < teamEntryVisibilityAttempts; attempt += 1) {
+        const summary = await queryClient.fetchQuery({
+          queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
+          queryKey: teamSummaryQueryKey,
+          staleTime: 0,
+        });
+        if (hasTeamEntryMember(summary, normalizedMemberId)) {
+          return true;
+        }
+        if (attempt < teamEntryVisibilityAttempts - 1) {
+          await delay(teamEntryVisibilityRetryDelayMs);
+        }
+      }
+
+      return false;
+    },
+    [queryClient, scopeId, selectedTeamId, teamSummaryQueryKey],
+  );
+  const handleSetEntry = React.useCallback(
+    async (memberId: string, options?: { test?: boolean }) => {
+      const normalizedMemberId = trimText(memberId);
+      const promptSnapshot = teamTestPrompt.trim();
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return;
+      }
+
+      setEntryActionBusyMemberId(normalizedMemberId);
+      setTeamTestStatus("setting-entry");
+      setTeamTestError(null);
+      try {
+        const updatedTeam = await studioApi.setTeamEntryMember(
+          scopeId,
+          selectedTeamId,
+          normalizedMemberId,
+        );
+        if (updatedTeam) {
+          queryClient.setQueryData<StudioTeamSummary | undefined>(
+            teamSummaryQueryKey,
+            updatedTeam,
+          );
+        }
+        void message.success("Team entry member update accepted.");
+        await refreshTeamAuthority();
+        if (options?.test) {
+          const entryVisible = await waitForTeamEntryVisibility(normalizedMemberId);
+          if (!entryVisible) {
+            const errorDescription: TeamTestErrorDescription = {
+              actionLabel: "Retry",
+              description:
+                "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后重试 Test Team。",
+              kind: "entry_syncing",
+              title: "Team entry 正在同步",
+            };
+            setTeamTestStatus("error");
+            setTeamTestError(errorDescription);
+            setTeamTestResultText(errorDescription.description);
+            setTeamTestLastResult({
+              finishedAtLabel: formatLocalTimeLabel(new Date()),
+              status: "error",
+              summary: errorDescription.description,
+            });
+            return;
+          }
+          await streamTeamTest(promptSnapshot);
+        } else {
+          setTeamTestStatus("idle");
+        }
+      } catch (error) {
+        const errorDescription = describeTeamTestError(
+          error,
+          "Team entry update failed.",
+        );
+        setTeamTestStatus("error");
+        setTeamTestError(errorDescription);
+        void message.error(errorDescription.title);
+      } finally {
+        setEntryActionBusyMemberId("");
+      }
+    },
+    [
+      queryClient,
+      refreshTeamAuthority,
+      scopeId,
+      selectedTeamId,
+      streamTeamTest,
+      teamTestPrompt,
+      teamSummaryQueryKey,
+      waitForTeamEntryVisibility,
+    ],
+  );
+  const handleClearEntry = React.useCallback(async () => {
+    if (!scopeId || !selectedTeamId) {
+      return;
+    }
+
+    setEntryActionBusyMemberId(trimText(teamSummaryQuery.data?.entryMemberId));
+    setTeamTestError(null);
+    try {
+      const updatedTeam = await studioApi.clearTeamEntryMember(scopeId, selectedTeamId);
+      if (updatedTeam) {
+        queryClient.setQueryData<StudioTeamSummary | undefined>(
+          teamSummaryQueryKey,
+          updatedTeam,
+        );
+      }
+      void message.success("Team entry member clear accepted.");
+      await refreshTeamAuthority();
+      setTeamTestStatus("idle");
+    } catch (error) {
+      const errorDescription = describeTeamTestError(
+        error,
+        "Team entry update failed.",
+      );
+      setTeamTestStatus("error");
+      setTeamTestError(errorDescription);
+      void message.error(errorDescription.title);
+    } finally {
+      setEntryActionBusyMemberId("");
+    }
+  }, [
+    queryClient,
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamSummaryQuery.data?.entryMemberId,
+    teamSummaryQueryKey,
+  ]);
+  const teamTestPanel = (
+    <TeamTestPanel
+      createMemberHref={createMemberHref}
+      disabled={isTeamArchived}
+      entryActionBusyMemberId={entryActionBusyMemberId}
+      entryMemberId={teamSummaryQuery.data?.entryMemberId}
+      error={teamTestError}
+      lastResult={teamTestLastResult}
+      onClearEntry={handleClearEntry}
+      onNavigate={(href) => history.push(href)}
+      onPromptChange={setTeamTestPrompt}
+      onSetEntryAndTest={(memberId) => void handleSetEntry(memberId, { test: true })}
+      onStop={handleStopTeamTest}
+      onTest={() => void streamTeamTest()}
+      prompt={teamTestPrompt}
+      resultText={teamTestResultText}
+      rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
+      rosterLoading={teamMembersQuery.isLoading}
+      rosterRows={teamRosterRows}
+      rosterSyncing={isTeamMembersProjectionSyncing}
+      status={teamTestStatus}
+      teamId={selectedTeamId}
+    />
+  );
 
   const renderOverviewTab = () => {
     return (
@@ -1010,7 +1367,10 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        entryActionBusyMemberId={entryActionBusyMemberId}
+        onClearEntry={() => void handleClearEntry()}
         onNavigate={(href) => history.push(href)}
+        onSetEntry={(memberId) => void handleSetEntry(memberId)}
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
         rosterSyncing={isTeamMembersProjectionSyncing}
@@ -1046,6 +1406,9 @@ const TeamDetailPage: React.FC = () => {
           editTeamLabel={editTeamActionLabel}
           onArchiveTeam={openTeamArchive}
           onOpenTeamEditor={openTeamEditor}
+          onOpenTeamTest={openTeamTestModal}
+          testTeamDisabled={isTeamArchived}
+          testTeamHint="归档后的 Team 不能继续发起测试。"
         />
       }
       activeTab={activeTab}
@@ -1072,6 +1435,22 @@ const TeamDetailPage: React.FC = () => {
       teamsListHref={teamsListHref}
     >
       {tabContent}
+      <Modal
+        footer={null}
+        onCancel={closeTeamTestModal}
+        open={teamTestModalOpen}
+        title="Test Team"
+        width={960}
+        styles={{
+          body: {
+            maxHeight: "calc(100vh - 180px)",
+            overflowY: "auto",
+            padding: 0,
+          },
+        }}
+      >
+        <div data-testid="team-test-modal-body">{teamTestPanel}</div>
+      </Modal>
       <Modal
         confirmLoading={teamEditorSaving}
         okButtonProps={{ disabled: !teamEditorName.trim() }}
