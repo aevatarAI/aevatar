@@ -42,6 +42,8 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.CorrelationId.Should().Be("msg-1");
+        result.LlmReplyRequest.RunId.Should().StartWith("agent-run-");
+        result.LlmReplyRequest.RunId.Should().NotBe(result.LlmReplyRequest.CorrelationId);
         result.LlmReplyRequest.TargetActorId.Should().Be("channel-conversation:lark:group:oc_group_chat_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.ChatType].Should().Be("group");
         adapter.Replies.Should().BeEmpty();

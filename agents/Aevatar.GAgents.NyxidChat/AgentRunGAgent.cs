@@ -24,8 +24,6 @@ namespace Aevatar.GAgents.NyxidChat;
 //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
-    public const string ActorIdPrefix = "channel-agent-run:";
-
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
@@ -70,12 +68,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public static string BuildActorId(string correlationId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
-        return ActorIdPrefix + correlationId.Trim();
-    }
-
     protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -113,6 +105,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         var request = command.Request.Clone();
         ApplyTargetRefOverrides(request);
+        if (!AgentRunId.TryParse(request.RunId, out _))
+        {
+            // Refactor (iter98/cluster-002): Old=missing run_id fell back to correlation/actor id; New=start commands without explicit run_id are malformed.
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                request.CorrelationId);
+            return;
+        }
+
         var runId = ResolveRunId(request);
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
@@ -1205,10 +1207,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
-    private string ResolveRunId(NeedsLlmReplyEvent request) =>
-        NormalizeOptional(request.RunId) ??
-        NormalizeOptional(request.CorrelationId) ??
-        Id;
+    private static string ResolveRunId(NeedsLlmReplyEvent request) =>
+        AgentRunId.Parse(request.RunId).Value;
 
     private sealed class AgentRunOutputDispatchException(string message, Exception innerException)
         : Exception(message, innerException);

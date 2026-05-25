@@ -47,7 +47,7 @@ public sealed class AgentRunGAgentTests
 
         dispatchPort.Dispatches.Should().ContainSingle();
         var (actorId, envelope) = dispatchPort.Dispatches.Single();
-        actorId.Should().Be(AgentRunGAgent.BuildActorId("run-dispatch"));
+        actorId.Should().Be(AgentRunActorIds.ForRun(AgentRunId.Parse("run-dispatch")));
         envelope.Id.Should().Be("agent-run-start:run-dispatch");
         envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
@@ -56,6 +56,30 @@ public sealed class AgentRunGAgentTests
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
         command.Request.ReplyToken.Should().Be("relay-token-dispatch");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenRunIdMissing_ShouldRejectEvenWithCorrelationId()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatcher = new AgentRunDispatcher(
+            actorRuntime,
+            dispatchPort,
+            NullLogger<AgentRunDispatcher>.Instance);
+
+        var act = () => dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-trace-only",
+            TargetActorId = "conversation-actor",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        }, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*run_id*");
+        dispatchPort.Dispatches.Should().BeEmpty();
+        actorRuntime.Dispatches.Should().BeEmpty();
     }
 
     [Fact]
@@ -86,7 +110,7 @@ public sealed class AgentRunGAgentTests
 
         dispatchPort.Dispatches.Should().HaveCount(2);
         dispatchPort.Dispatches.Select(x => x.ActorId)
-            .Should().OnlyContain(id => id == AgentRunGAgent.BuildActorId("run-duplicate-dispatch"));
+            .Should().OnlyContain(id => id == AgentRunActorIds.ForRun(AgentRunId.Parse("run-duplicate-dispatch")));
         dispatchPort.Dispatches.Select(x => x.Envelope.Id)
             .Should().OnlyContain(id => id == "agent-run-start:run-duplicate-dispatch");
         actorRuntime.DestroyedIds.Should().BeEmpty();
@@ -148,8 +172,8 @@ public sealed class AgentRunGAgentTests
         }, CancellationToken.None);
 
         dispatchPort.Dispatches.Should().ContainSingle();
-        dispatchPort.Dispatches.Single().ActorId.Should().Be(AgentRunGAgent.BuildActorId("run-stale-dispatch"));
-        (await actorRuntime.ExistsAsync(AgentRunGAgent.BuildActorId("run-stale-dispatch"))).Should().BeTrue();
+        dispatchPort.Dispatches.Single().ActorId.Should().Be(AgentRunActorIds.ForRun(AgentRunId.Parse("run-stale-dispatch")));
+        (await actorRuntime.ExistsAsync(AgentRunActorIds.ForRun(AgentRunId.Parse("run-stale-dispatch")))).Should().BeTrue();
     }
 
     [Fact]
@@ -704,7 +728,7 @@ public sealed class AgentRunGAgentTests
         cleanup.ActorId.Should().Be(runtime.Id);
         cleanup.DueTime.Should().Be(AgentRunGAgent.TerminalCleanupDelay);
         var cleanupCommand = cleanup.TriggerEnvelope.Payload.Unpack<AgentRunCleanupRequested>();
-        cleanupCommand.RunId.Should().Be("corr-cleanup-schedule");
+        cleanupCommand.RunId.Should().Be(runtime.State.RunId);
     }
 
     [Fact]
@@ -771,7 +795,7 @@ public sealed class AgentRunGAgentTests
         });
         await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
         {
-            RunId = "corr-cleanup",
+            RunId = runtime.State.RunId,
         });
 
         actorRuntime.DestroyedIds.Should().Contain(runtime.Id);
@@ -808,7 +832,7 @@ public sealed class AgentRunGAgentTests
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-cleanup-dup",
         });
-        var cleanup = new AgentRunCleanupRequested { RunId = "corr-cleanup-dup" };
+        var cleanup = new AgentRunCleanupRequested { RunId = runtime.State.RunId };
         await runtime.HandleCleanupAsync(cleanup);
         await runtime.HandleCleanupAsync(cleanup);
 
@@ -917,7 +941,7 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request);
         await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
         {
-            RunId = "corr-no-resched",
+            RunId = runtime.State.RunId,
         });
         var cleanupCountAfterFirst = scheduler.Timeouts
             .Count(t => t.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor));
@@ -1155,7 +1179,7 @@ public sealed class AgentRunGAgentTests
         retry.ActorId.Should().Be(runtime.Id);
         retry.DueTime.Should().Be(AgentRunGAgent.OutputDispatchRetryDelay);
         var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
-        retryCommand.RunId.Should().Be("corr-retry-ready");
+        retryCommand.RunId.Should().Be(runtime.State.RunId);
         retryCommand.CorrelationId.Should().Be("corr-retry-ready");
         retryCommand.TargetActorId.Should().Be("actor-1");
         Encoding.UTF8.GetString(retry.TriggerEnvelope.ToByteArray()).Should().NotContain("relay-token-retry-ready");
@@ -2129,7 +2153,7 @@ public sealed class AgentRunGAgentTests
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
-        SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        SetId(agent, AgentRunActorIds.ForRun(AgentRunId.New()));
         generationExecutor.Bind(agent);
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));
@@ -2150,7 +2174,7 @@ public sealed class AgentRunGAgentTests
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
-        SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        SetId(agent, AgentRunActorIds.ForRun(AgentRunId.New()));
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));
         agent.EventPublisher = eventPublisher ?? new DispatchingEventPublisher(actorRuntime);
@@ -2663,6 +2687,21 @@ internal static class AgentRunGAgentTestExtensions
     public static Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request) =>
         agent.HandleStartAsync(new AgentRunStartRequested
         {
-            Request = request,
+            Request = WithRunId(agent, request),
         });
+
+    private static NeedsLlmReplyEvent WithRunId(AgentRunGAgent agent, NeedsLlmReplyEvent request)
+    {
+        var clone = request.Clone();
+        if (string.IsNullOrWhiteSpace(clone.RunId))
+        {
+            clone.RunId = AgentRunActorIds.TryGetRunId(agent.Id, out var runId)
+                ? runId.Value
+                : "run-" + (string.IsNullOrWhiteSpace(clone.CorrelationId)
+                    ? Guid.NewGuid().ToString("N")
+                    : clone.CorrelationId.Trim());
+        }
+
+        return clone;
+    }
 }

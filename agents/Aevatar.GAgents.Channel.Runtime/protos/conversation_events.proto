@@ -49,8 +49,9 @@ message NeedsLlmReplyEvent {
   // command copy may carry it so AgentRunGAgent can apply the route before execution.
   // Never persist to event store, projection, read model, or actor state.
   aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
-  // Stable run identity owned by AgentRunGAgent. Dispatcher adapters may use
-  // correlation_id only as a bounded fallback for older persisted requests.
+  // Stable run identity owned by AgentRunGAgent. New dispatch MUST set this
+  // explicitly before persistence and before handoff to the run dispatcher.
+  // correlation_id is trace-only and MUST NOT be used to derive actor identity.
   string run_id = 11;
   // Runtime command-only LLM control carrier. ConversationGAgent clears this on
   // the copy persisted to actor state; the run-bound command may carry it to the
