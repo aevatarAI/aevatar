@@ -104,6 +104,14 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
 
+### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
+
+任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash tools/refactor-loop/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
+
+理由:`task-notification` 触发的 turn 容易陷入"处理 marker → spawn 下一步 → end turn"线性思维,会跳过 peek 而错过 maintainer 与此 task 并行的新评论。Auric 2026-05-22 04:15 #779 "命名/架构也很差" 评论在 controller spawn #796 r3 judge 期间到达,因为没 peek 漏读 ~20 min,Auric 直接报错 "没监控到"。
+
+例外:turn 唯一动作是 ScheduleWakeup(纯休眠)可省 peek。
+
 ### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
 
 **60s** 周期 daemon(per Auric 2026-05-21 "60s 就扫描一次"),监控 actual vs expected codex 并发数:
@@ -133,6 +141,51 @@ disown
 - ❌ wakeup ScheduleWakeup 但本 turn 0 codex spawn(等 wakeup 才动 = lazy / 死循环)
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
+
+### Controller helper 库:`tools/refactor-loop/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
+
+7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
+
+```bash
+source tools/refactor-loop/controller_lib.sh
+
+safe_worktree iter25 cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
+open_pr_with_label "iter25 cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
+merge_pr 781                                              # auto-close linked issue + cleanup labels
+render_template implement.md out.md                       # 处理 {{var}} 和 $VAR 两种语法
+sweep_stale_labels                                        # 清 closed but 仍挂 in-flight label
+validate_prompt out.md                                    # check 0 unresolved {{var}}
+```
+
+**强制**:
+- 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder(iter25 #784 事故)
+- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴
+- worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
+- PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量(iter22 #690 误发事故)
+
+**Label 生命周期(强制状态机)**:
+
+```
+issue/PR 状态 → 期望 label
+
+design issue:
+  open + 🤖 ai → 🔍 design-solving       (solver/judge 跑)
+  open + 🤖 ai → 🛠 implementing         (implement 派出)
+  open + 🆘 human:卡死-需-rework         (escalate philosophy/split)
+  closed       → 🎉 phase:merged          (via PR merge)
+  closed       → wontfix                  (per maintainer drop directive)
+
+cluster PR:
+  open + 🤖 ai → 🚀 phase:pr-open + 👀 reviewing  (reviewer 派出)
+  open + 🤖 ai → 🚀 phase:pr-open + 🔧 fixing     (fix codex)
+  open + 🆘 human:卡死-需-rework                  (reflector escalate-human)
+  closed merged → 🎉 phase:merged                  (via merge_pr)
+  closed       → (no phase, branch deleted)
+
+rollup PR(#690-style):
+  open → 🚀 phase:pr-open + 🤖 human:auto-推进     (passive integration)
+  注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
+```
 
 ### Spawn pattern — Bash `run_in_background: true`(强制,per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到")
 
@@ -569,6 +622,23 @@ Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{p
 ---
 
 ## Phase 4 — Merge & Push (controller, not codex)
+
+### Post-merge trunk build verify(强制,per Auric 2026-05-22 "#779 8h 漏读" + iter25 #788/#795 trunk break 事故)
+
+两个 PR 单独 merge OK,**顺序 merge 后 trunk 可能 build 挂**(API 重命名 + 第二 PR 引用旧名)。merge 后必须:
+
+```bash
+cd $REPO_ROOT
+git pull --ff-only origin auto-refact-dev
+dotnet build src/<top-level-project-or-slnx> --nologo 2>&1 | tail -3
+```
+
+若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):
+- 在 `aevatar-wt-hotfix-trunk` worktree 跑 codex 修
+- 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iter25 hotfix 模板)
+- IMPLEMENT_DONE marker + controller commit/push 到 auto-refact-dev 直接
+
+事故记忆:#788(iter25-cluster-026)用 `ICommandTargetBinder<,,>`/`CommandTargetBindingResult<>`,#795(iter25-cluster-002 observation-lifecycle)把这两个名字重构成 `ICommandObservationLifecycle<,,,,>`/`CommandObservationBindingResult<>`。各自 PR 都 CI 绿,但 merge 顺序后 main trunk 编译挂。
 
 **cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd .refactor-loop/worktrees/<id>` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
 

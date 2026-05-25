@@ -46,6 +46,8 @@ internal sealed class AGUIEventToResponsesSseAdapter
 
     public string AggregatedText => _aggregatedText.ToString();
 
+    public bool HasFailed { get; private set; }
+
     public IReadOnlyList<(string ToolCallId, string ToolName, string? Result)> CompletedToolCalls =>
         _completedToolCalls;
 
@@ -147,11 +149,12 @@ internal sealed class AGUIEventToResponsesSseAdapter
                 {
                     var error = evt.RunError;
                     var message = string.IsNullOrWhiteSpace(error?.Message)
-                        ? "Team invocation failed."
+                        ? "GAgent invocation failed."
                         : error!.Message;
                     var code = string.IsNullOrWhiteSpace(error?.Code)
-                        ? "team_invocation_failed"
+                        ? "gagent_invocation_failed"
                         : error!.Code;
+                    HasFailed = true;
                     await WriteFrameAsync(
                         "response.failed",
                         new
@@ -260,6 +263,7 @@ internal sealed class AGUIEventToResponsesSseAdapter
         string message,
         CancellationToken ct)
     {
+        HasFailed = true;
         await WriteFrameAsync(
             "response.failed",
             new

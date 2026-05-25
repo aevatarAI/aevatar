@@ -68,6 +68,9 @@ public sealed record UpsertScriptDefinitionCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: script runtime commands derived command id and correlation id from the runtime run id
+//   New principle: command dispatch can carry explicit tracking ids without changing the target run identity
 public sealed record RunScriptRuntimeCommand(
     string RuntimeActorId,
     string RunId,
@@ -75,11 +78,17 @@ public sealed record RunScriptRuntimeCommand(
     string ScriptRevision,
     string DefinitionActorId,
     string RequestedEventType,
-    string? ScopeId) : ICommandContextSeed
+    string? ScopeId,
+    string? ExplicitCommandId = null,
+    string? ExplicitCorrelationId = null) : ICommandContextSeed
 {
-    public string? CommandId => ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId);
+    public string? CommandId => string.IsNullOrWhiteSpace(ExplicitCommandId)
+        ? ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId)
+        : ExplicitCommandId;
 
-    public string? CorrelationId => RunId;
+    public string? CorrelationId => string.IsNullOrWhiteSpace(ExplicitCorrelationId)
+        ? RunId
+        : ExplicitCorrelationId;
 
     public IReadOnlyDictionary<string, string>? Headers => null;
 }

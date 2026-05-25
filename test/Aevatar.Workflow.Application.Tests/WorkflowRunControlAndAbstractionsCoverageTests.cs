@@ -591,7 +591,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldAggregateRollbackFailure_WhenBindingAndRollbackBothFail()
+    public async Task WorkflowRunObservationLifecycle_ShouldAggregateRollbackFailure_WhenBindingAndRollbackBothFail()
     {
         var projectionPort = new FakeProjectionPort
         {
@@ -602,7 +602,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         {
             DestroyException = new InvalidOperationException("destroy failed"),
         };
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "workflow-1",
@@ -612,10 +612,16 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var act = async () => await binder.BindAsync(
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
+        var act = async () => await lifecycle.BindAsync(
             new WorkflowChatRunRequest("hello", "workflow-1", null),
-            target,
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
+            {
+                Target = target,
+                Context = context,
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "workflow-1", "cmd-1", "corr-1"),
+            },
             CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<AggregateException>();

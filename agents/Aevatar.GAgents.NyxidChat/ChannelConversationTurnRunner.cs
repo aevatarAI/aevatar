@@ -962,23 +962,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            var previousMetadata = AgentToolRequestContext.CurrentMetadata;
-            try
-            {
-                AgentToolRequestContext.CurrentMetadata = await BuildAgentBuilderMetadataAsync(
+            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
+                       await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
                     ResolveUserAccessToken(activity, runtimeContext),
-                    ct);
+                    ct))))
+            {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
                 replyContent = relayDecisionMatched
                     ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
                     : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
-            finally
-            {
-                AgentToolRequestContext.CurrentMetadata = previousMetadata;
             }
         }
 

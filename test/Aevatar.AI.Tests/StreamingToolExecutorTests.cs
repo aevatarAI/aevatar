@@ -283,18 +283,23 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task MetadataPropagation_ShouldSetAsyncLocalDuringExecution()
+    public async Task TypedContextPropagation_ShouldSetAsyncLocalDuringExecutionAndRestore()
     {
-        string? capturedMetadata = null;
+        string? capturedToken = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
         var tools = new ToolManager();
         tools.Register(new DelegateAgentTool("meta-check", _ =>
         {
-            capturedMetadata = AgentToolRequestContext.TryGet("auth_token");
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("auth_token");
+            capturedCallId = AgentToolRequestContext.CallId;
             return "ok";
         }));
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "typed-secret",
             ["auth_token"] = "secret-123",
         };
 
@@ -305,9 +310,10 @@ public class StreamingToolExecutorTests
 
         await foreach (var _ in executor.GetRemainingResultsAsync(CancellationToken.None)) { }
 
-        capturedMetadata.Should().Be("secret-123");
-        // Metadata should be cleared after execution
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        capturedToken.Should().Be("typed-secret");
+        capturedExternal.Should().Be("secret-123");
+        capturedCallId.Should().Be("tc-1");
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]

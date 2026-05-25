@@ -1,27 +1,27 @@
-# 任务：实施 {{cluster_id}}
+# 任务：实施 ${CLUSTER_ID}
 
-你以无人值守模式在 worktree `{{worktree_path}}` 中工作，对应分支 `{{branch}}`。
+你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。
 
 ## 必读上下文
 
 1. 主仓库 `$REPO_ROOT/CLAUDE.md` 全部强制条款。
-2. 完整审计：`$REPO_ROOT/.refactor-loop/runs/audit-iter-{{iteration}}.md` 中 "{{cluster_id}}" 一节。
+2. 完整审计：`$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 中 "${CLUSTER_ID}" 一节。
 3. `docs/canon/` 下相关权威文档。
 
 ## 错误模式 / 设计原则
 
-- **错误模式**：{{old_pattern}}
-- **设计原则**：{{new_principle}}
+- **错误模式**：${OLD_PATTERN}
+- **设计原则**：${NEW_PRINCIPLE}
 
 ## 硬约束
 
 1. **作用域**：仅修改下列文件；扩展前必须打印 `SCOPE_EXTEND: <file> <reason>`：
-{{scope_paths}}
+${SCOPE_PATHS}
 2. **代码注释**：被重构的每个类/关键方法必须新增/更新一段：
    ```
-   // Refactor (iter{{iteration}}/{{cluster_id}}):
-   //   Old pattern: {{old_pattern}}
-   //   New principle: {{new_principle}}
+   // Refactor (iter${ITERATION}/${CLUSTER_ID}):
+   //   Old pattern: ${OLD_PATTERN}
+   //   New principle: ${NEW_PRINCIPLE}
    ```
    3-5 行内；不是 changelog，是代码自我说明。
 3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型须注释 "refactor helper, no behavior change"。
@@ -41,16 +41,16 @@
 6. 跑架构守卫，失败则修复。
 7. `git add -A && git status` 确认改动。
 8. **不要 commit**，把改动留在工作树。
-9. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/implement-{{cluster_id}}.md`：
+9. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`：
    - 修改文件列表（带行数）
    - 测试结果
    - deviation 记录
    - `SCOPE_EXTEND` 记录
-10. 末尾打印 `IMPLEMENT_DONE:{{cluster_id}}:<status>` 其中 status ∈ {ok, partial, blocked}。
+10. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
 
 ## 红线
 
-- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-{{cluster_id}}.md`（controller 期望的摘要输出位置）和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-{{cluster_id}}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
+- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
 - 禁止 `git commit` / `git push` / `git checkout <branch>`。
 - 禁止安装新依赖。
 - 禁止跳过测试或加 `[Skip]`。
@@ -60,7 +60,7 @@
 
 `verification_hints` 内容：
 
-{{verification_hints}}
+${VERIFICATION_HINTS}
 
 开始执行。
 

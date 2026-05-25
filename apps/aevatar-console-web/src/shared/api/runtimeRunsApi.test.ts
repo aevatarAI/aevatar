@@ -265,6 +265,30 @@ describe("runtimeRunsApi", () => {
     });
   });
 
+  it("routes streamChat through the team stream endpoint when teamId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamChat(
+      "scope-1",
+      {
+        prompt: "Run it",
+      },
+      new AbortController().signal,
+      { teamId: "team-1", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/teams/team-1/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
   it("routes scoped streamChat through the scope default service endpoint", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -540,6 +564,36 @@ describe("runtimeRunsApi", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/members/joker/invoke/run",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
+  it("routes generic endpoint invokes through the team endpoint path when teamId is provided", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        requestId: "cmd-2",
+        targetActorId: "actor-2",
+        endpointId: "run",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.invokeEndpoint(
+      "scope-1",
+      {
+        endpointId: "run",
+        prompt: "Launch the endpoint",
+        commandId: "cmd-2",
+      },
+      { teamId: "team-1", serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/teams/team-1/invoke/run",
       expect.objectContaining({
         method: "POST",
       })

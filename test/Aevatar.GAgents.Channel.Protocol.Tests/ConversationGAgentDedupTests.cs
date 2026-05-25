@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -409,6 +411,38 @@ public sealed class ConversationGAgentDedupTests
         ContainsSubsequence(events[0].EventData.Value.ToByteArray(), Encoding.UTF8.GetBytes(sentinelUserAccessToken))
             .ShouldBeFalse("relay user access token must stay out of persisted admission event bytes");
         publisher.Sent.ShouldContain(message => message is NyxRelayCallbackTurnRequestedEvent);
+    }
+
+    [Fact]
+    public void HandleNyxRelayCallbackTurnRequestedAsync_MustOptInToSelfHandling()
+    {
+        // Regression guard for the 2026-05-21 prod Lark outage. The admit handler self-sends
+        // NyxRelayCallbackTurnRequestedEvent via SendToAsync(Id, ...); EventHandlerAttribute
+        // defaults AllowSelfHandling=false, so a bare [EventHandler] causes the EventPublisher
+        // pipeline (StaticHandlerAdapter) to silently drop the envelope when
+        // PublisherActorId == this.Id and the turn never fires. The RecordingEventPublisher
+        // used by the other tests in this file only records and does not dispatch, so
+        // behavioral tests cannot catch this attribute drift — this reflection-level
+        // assertion is the cheapest reliable regression marker.
+        //
+        // Do NOT also assert OnlySelfHandling=true here: that flag gates by envelope
+        // TopologyAudience (must be Self), but SendToAsync(Id, ...) produces a Direct route
+        // whose audience reads back as Unspecified, so enabling OnlySelfHandling would
+        // re-filter the same envelope we are admitting.
+        var method = typeof(ConversationGAgent).GetMethod(
+            nameof(ConversationGAgent.HandleNyxRelayCallbackTurnRequestedAsync),
+            BindingFlags.Instance | BindingFlags.Public);
+        method.ShouldNotBeNull();
+        var attr = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attr.ShouldNotBeNull(
+            "HandleNyxRelayCallbackTurnRequestedAsync must be decorated with [EventHandler].");
+        attr!.AllowSelfHandling.ShouldBeTrue(
+            "Self-sent NyxRelayCallbackTurnRequestedEvent requires AllowSelfHandling=true; " +
+            "without it the pipeline drops the envelope and Lark/Telegram bots stop replying.");
+        attr.OnlySelfHandling.ShouldBeFalse(
+            "OnlySelfHandling must stay false: it gates by envelope TopologyAudience.Self, " +
+            "but SendToAsync(Id, ...) produces a Direct-route envelope whose audience is " +
+            "Unspecified, so enabling this flag would re-drop the admitted event.");
     }
 
     [Fact]

@@ -103,7 +103,7 @@ public sealed class ToolProviderHttpClientOwnershipTests
     }
 
     [Fact]
-    public async Task ConnectedServiceSpecCache_ShouldCacheSuccessfulFactoryFetches()
+    public async Task ConnectedServiceSpecCache_ShouldUseNamedFactoryClientForEachLiveFetch()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -117,12 +117,15 @@ public sealed class ToolProviderHttpClientOwnershipTests
         var first = await cache.GetOrFetchAsync("github", "svc-1", null, "secret-token", CancellationToken.None);
         var second = await cache.GetOrFetchAsync("github", "svc-1", null, "secret-token", CancellationToken.None);
 
-        first.Should().BeSameAs(second);
+        first.Should().BeEquivalentTo(second);
         first.Should().ContainSingle().Which.Path.Should().Be("/repos");
-        factory.CreatedNames.Should().ContainSingle().Which.Should().Be(ConnectedServiceSpecCache.HttpClientName);
-        handler.Requests.Should().ContainSingle();
+        factory.CreatedNames.Should().HaveCount(2)
+            .And.OnlyContain(name => name == ConnectedServiceSpecCache.HttpClientName);
+        handler.Requests.Should().HaveCount(2, "connected-service spec hints must not keep process-local OpenAPI snapshots");
         handler.Requests[0].RequestUri!.ToString().Should().Be("https://nyx.test/api/v1/proxy/services/svc-1/openapi.json");
         handler.Requests[0].Headers.Authorization!.Parameter.Should().Be("secret-token");
+        handler.Requests[1].RequestUri!.ToString().Should().Be("https://nyx.test/api/v1/proxy/services/svc-1/openapi.json");
+        handler.Requests[1].Headers.Authorization!.Parameter.Should().Be("secret-token");
     }
 
     private static string BuildOpenApiJson() =>

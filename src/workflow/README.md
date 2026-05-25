@@ -56,7 +56,7 @@ flowchart LR
 1. Host/API 把输入规范化为 `WorkflowChatRunRequest`。
 2. CQRS Core 通过 `ICommandDispatchService` / `DefaultCommandDispatchPipeline` 驱动这次命令。
 3. Application 通过 `WorkflowRunCommandTargetResolver` 解析 interaction 目标；accepted-only dispatch 使用 `WorkflowRunAcceptedCommandTargetResolver` 解析 receipt-only 目标。
-4. interaction 路径由 `WorkflowRunCommandTargetBinder` 为 run actor 建立 projection lease 与 live sink；accepted-only 路径使用 `NoOpCommandTargetBinder` 与 `DefaultCommandDispatchService`，只生成 accepted receipt，不 drain session event stream。
+4. interaction 路径由 `WorkflowRunObservationLifecycle` 为 run actor 建立 projection lease 与 live sink；accepted-only 路径使用 `DefaultCommandDispatchService`，只生成 accepted receipt，不 drain session event stream。
 5. `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 把 `ChatRequestEvent` 包进 `EventEnvelope` 后投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
 7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 持续回推事件给客户端。

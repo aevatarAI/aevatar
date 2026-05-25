@@ -58,10 +58,9 @@ public sealed class HouseholdEntityTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        // 1. Extract metadata from request context
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
-        var scopeId = AgentToolRequestContext.TryGet("scope_id");
-        var metadata = AgentToolRequestContext.CurrentMetadata;
+        // 1. Extract typed request context
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var scopeId = AgentToolRequestContext.ScopeId;
 
         // 2. Parse arguments
         string? message;
@@ -98,9 +97,10 @@ public sealed class HouseholdEntityTool : IAgentTool
                         ?? await _runtime.CreateAsync<HouseholdEntity>(actorId, ct);
 
             var chatEvent = new HouseholdChatEvent { Prompt = message };
-            if (metadata != null)
+            var externalMetadata = AgentToolRequestContext.Current?.ExternalMetadata;
+            if (externalMetadata != null)
             {
-                foreach (var kv in metadata)
+                foreach (var kv in externalMetadata)
                     chatEvent.Metadata[kv.Key] = kv.Value;
             }
 

@@ -59,6 +59,9 @@ internal sealed class GAgentDraftRunCommandTarget
         IEventSink<AGUIEvent> sink,
         string sessionId)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -285,13 +288,13 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     }
 }
 
-internal sealed class GAgentDraftRunCommandTargetBinder
-    : ICommandTargetBinder<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>
+internal sealed class GAgentDraftRunObservationLifecycle
+    : ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
     private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
-    public GAgentDraftRunCommandTargetBinder(
+    public GAgentDraftRunObservationLifecycle(
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
@@ -299,16 +302,19 @@ internal sealed class GAgentDraftRunCommandTargetBinder
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<GAgentDraftRunStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<GAgentDraftRunStartError>> BindAsync(
         GAgentDraftRunCommand command,
-        GAgentDraftRunCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: draft-run binder attached terminal/live projections during command preparation.
+        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<AGUIEvent>();
         IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
@@ -341,7 +347,7 @@ internal sealed class GAgentDraftRunCommandTargetBinder
                 attachment.LiveSinkLease,
                 sink,
                 ResolveSessionId(command, context));
-            return CommandTargetBindingResult<GAgentDraftRunStartError>.Success();
+            return CommandObservationBindingResult<GAgentDraftRunStartError>.Success();
         }
         catch
         {

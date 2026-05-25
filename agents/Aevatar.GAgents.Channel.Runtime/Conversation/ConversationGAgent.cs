@@ -159,7 +159,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await HandleInboundActivityCoreAsync(activity, runtimeContext);
     }
 
-    [EventHandler]
+    // AllowSelfHandling is required: admission persists then self-sends NyxRelayCallbackTurnRequestedEvent
+    // via SendToAsync(Id, ...). EventHandlerAttribute defaults AllowSelfHandling=false, which causes
+    // StaticHandlerAdapter to drop the envelope when PublisherActorId == this.Id, so the handler never
+    // runs and the bot goes silent with zero log signature (2026-05-21 prod Lark outage).
+    // OnlySelfHandling is NOT set here: it gates by envelope TopologyAudience (must be Self), but
+    // SendToAsync produces a Direct route whose audience reads back as Unspecified, so adding
+    // OnlySelfHandling=true would re-filter the same envelope we are trying to admit. Pairs with
+    // RoleGAgent.cs:73 (same SendToAsync + AllowSelfHandling-only pattern).
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleNyxRelayCallbackTurnRequestedAsync(NyxRelayCallbackTurnRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);

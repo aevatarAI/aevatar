@@ -21,7 +21,7 @@ public class ConnectedServiceSpecCacheTests
         """;
 
     [Fact]
-    public async Task GetOrFetchAsync_FetchesAndCachesSpec()
+    public async Task GetOrFetchAsync_FetchesSpecWithoutProcessLocalSnapshot()
     {
         var handler = new FakeHttpHandler(GithubSpec);
         var http = new HttpClient(handler);
@@ -35,10 +35,9 @@ public class ConnectedServiceSpecCacheTests
         ops![0].Service.Should().Be("github");
         handler.RequestCount.Should().Be(1);
 
-        // Second call should use cache
         var ops2 = await cache.GetOrFetchAsync("github", "svc-github", null, "token123");
         ops2.Should().BeEquivalentTo(ops);
-        handler.RequestCount.Should().Be(1, "should use cached result");
+        handler.RequestCount.Should().Be(2, "spec hints must re-read NyxID instead of serving process-local OpenAPI facts");
     }
 
     [Fact]
@@ -94,7 +93,7 @@ public class ConnectedServiceSpecCacheTests
     }
 
     [Fact]
-    public async Task GetOrFetchAsync_DifferentSpecUrls_CacheSeparately()
+    public async Task GetOrFetchAsync_UsesLiveFetchForEachSpecUrl()
     {
         var handler = new FakeHttpHandler(GithubSpec);
         var http = new HttpClient(handler);
@@ -105,7 +104,7 @@ public class ConnectedServiceSpecCacheTests
         handler.RequestCount.Should().Be(1);
 
         await cache.GetOrFetchAsync("github", "svc-github", "https://nyx.test/v2/spec.json", "token");
-        handler.RequestCount.Should().Be(2, "different spec URLs must not share cache entry");
+        handler.RequestCount.Should().Be(2, "each request should read the requested NyxID/OpenAPI URL directly");
     }
 
     [Fact]

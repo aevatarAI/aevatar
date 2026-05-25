@@ -29,6 +29,7 @@ import {
   describeStudioMemberBindingRevisionContext,
   describeStudioMemberBindingRevisionTarget,
   formatStudioMemberBindingImplementationKind,
+  normalizeStudioMemberBindingImplementationKind,
   type StudioAuthSession,
   type StudioMemberBindingContract,
   type StudioMemberBindingRevision,
@@ -52,6 +53,7 @@ type StudioMemberBindPanelProps = {
   readonly buildWorkflowYamls?: (() => Promise<string[]>) | null;
   readonly initialEndpointId?: string;
   readonly memberId?: string;
+  readonly teamId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
@@ -452,6 +454,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   scopeId,
   services,
   memberId,
+  teamId,
   initialServiceId,
   initialEndpointId,
   preferredServiceId,
@@ -479,6 +482,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     useState<PendingBindNotice | null>(null);
   const runsCurrentWorkflowDraft = Boolean(buildWorkflowYamls);
   const normalizedMemberId = trimOptional(memberId);
+  const normalizedTeamId = trimOptional(teamId);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -679,6 +683,13 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         return;
       }
 
+      const invokeRouteTarget =
+        normalizeStudioMemberBindingImplementationKind(
+          currentPublishedRevision?.implementationKind,
+        ) === 'gagent' && normalizedTeamId
+          ? { teamId: normalizedTeamId }
+          : { serviceId: selectedService.serviceId };
+
       if (isChatServiceEndpoint(selectedEndpoint)) {
         const accumulator = createRuntimeEventAccumulator();
         const response = await runtimeRunsApi.streamChat(
@@ -687,10 +698,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
           },
           new AbortController().signal,
-          {
-            memberId: normalizedMemberId,
-            serviceId: selectedService.serviceId,
-          },
+          invokeRouteTarget,
         );
 
         for await (const event of parseBackendSSEStream(response, {})) {
@@ -718,10 +726,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           endpointId: selectedEndpoint.endpointId,
           prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
         },
-        {
-          memberId: normalizedMemberId,
-          serviceId: selectedService.serviceId,
-        },
+        invokeRouteTarget,
       );
 
       setSmokeTestResult({

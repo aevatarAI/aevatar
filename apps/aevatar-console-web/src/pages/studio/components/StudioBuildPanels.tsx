@@ -483,6 +483,13 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   status: 'idle',
 };
 
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
+function createGAgentDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
+}
+
 function getRunDebugLines(state: DraftRunState): string[] {
   return [
     state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
@@ -3165,6 +3172,15 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   );
 };
 
+export type StudioGAgentBuildState = {
+  readonly actorTypeName: string;
+  readonly displayName: string;
+  readonly initialPrompt: string;
+  readonly persistenceMode: 'grain' | 'ephemeral';
+  readonly role: string;
+  readonly tools: readonly string[];
+};
+
 export type StudioGAgentBuildPanelProps = {
   readonly scopeId?: string;
   readonly currentMemberLabel: string;
@@ -3173,7 +3189,8 @@ export type StudioGAgentBuildPanelProps = {
   readonly gAgentTypesError: unknown;
   readonly selectedGAgentTypeName: string;
   readonly onSelectGAgentTypeName: (value: string) => void;
-  readonly onContinueToBind: () => void;
+  readonly onBuildStateChange?: (state: StudioGAgentBuildState) => void;
+  readonly onContinueToBind: (state: StudioGAgentBuildState) => void;
 };
 
 export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
@@ -3184,6 +3201,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   gAgentTypesError,
   selectedGAgentTypeName,
   onSelectGAgentTypeName,
+  onBuildStateChange,
   onContinueToBind,
 }) => {
   const [displayName, setDisplayName] = React.useState(currentMemberLabel || 'Member GAgent');
@@ -3218,6 +3236,17 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         .filter(Boolean),
     [toolsDraft],
   );
+  const currentBuildState = React.useMemo<StudioGAgentBuildState>(
+    () => ({
+      actorTypeName: selectedTypeName,
+      displayName: displayName.trim(),
+      initialPrompt: initialPrompt.trim(),
+      persistenceMode,
+      role: role.trim(),
+      tools: toolTags,
+    }),
+    [displayName, initialPrompt, persistenceMode, role, selectedTypeName, toolTags],
+  );
 
   React.useEffect(() => {
     if (!selectedGAgentTypeName && selectedTypeName) {
@@ -3228,6 +3257,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   React.useEffect(() => {
     setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
   }, [currentMemberLabel]);
+
+  React.useEffect(() => {
+    onBuildStateChange?.(currentBuildState);
+  }, [currentBuildState, onBuildStateChange]);
 
   React.useEffect(
     () => () => {
@@ -3249,6 +3282,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createGAgentDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setRunState({
       ...IDLE_DRAFT_RUN_STATE,
       status: 'running',
@@ -3260,6 +3298,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         {
           actorTypeName: selectedTypeName,
           prompt: runPrompt,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -3275,6 +3314,14 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState({
+            ...IDLE_DRAFT_RUN_STATE,
+            error: reason.message,
+            status: 'error',
+          });
+        }
         return;
       }
 
@@ -3284,6 +3331,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         status: 'error',
       });
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -3393,8 +3441,9 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={!selectedTypeName}
             type="primary"
-            onClick={onContinueToBind}
+            onClick={() => onContinueToBind(currentBuildState)}
           >
             Continue to Bind
           </Button>

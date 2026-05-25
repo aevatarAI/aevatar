@@ -57,10 +57,10 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
 
         protected static ResponsesToolExecutionScope ResolveScope()
         {
-            var scopeId = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.ScopeId);
-            var ownerSubject = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.OwnerSubject);
-            var responseId = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.ResponseId)
-                             ?? AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.RequestId);
+            var scopeId = AgentToolRequestContext.ScopeId;
+            var ownerSubject = AgentToolRequestContext.OwnerSubject;
+            var responseId = AgentToolRequestContext.ResponseId
+                             ?? AgentToolRequestContext.RequestId;
             if (string.IsNullOrWhiteSpace(scopeId) ||
                 string.IsNullOrWhiteSpace(ownerSubject) ||
                 string.IsNullOrWhiteSpace(responseId))
@@ -393,7 +393,7 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
                 return cached.ResultJson;
             }
 
-            var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? string.Empty;
+            var token = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty;
             var resultJson = string.IsNullOrWhiteSpace(token)
                 ? """{"error":"No NyxID access token available. User must be authenticated."}"""
                 : await _webClient.SearchAsync(token, query.Trim(), maxResults, ct);

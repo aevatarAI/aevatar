@@ -1435,6 +1435,49 @@ describe("TeamDetailPage", () => {
     expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
   });
 
+  it("does not assign an unrelated scope service to a Team with no members", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      displayName: "test03",
+      memberCount: 0,
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:gagent-1",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "member-m-9833881c18e14c19aab60b2b9c7e998f",
+        displayName: "gagent-1",
+        defaultServingRevisionId: "rev-gagent",
+        activeServingRevisionId: "rev-gagent",
+        deploymentId: "dep-gagent",
+        primaryActorId: "actor-gagent",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-05-21T09:00:00Z",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "test03" }),
+    ).toBeTruthy();
+    expect(await screen.findByText("暂无团队构成")).toBeTruthy();
+    expect(screen.getByText("服务待配置")).toBeTruthy();
+    expect(screen.getByText("当前还没有匹配到主服务入口")).toBeTruthy();
+    expect(screen.queryByText("gagent-1")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
+  });
+
   it("uses the real Team roster when teamId is selected", async () => {
     window.history.replaceState(
       {},

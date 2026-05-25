@@ -105,6 +105,22 @@ message ForwardToModel {
 }
 
 message ForwardToGAgent {
+  // Identifier whose interpretation depends on ingress source_kind:
+  //   - CHAT_SOURCE_KIND_VOICE: raw Orleans grain key. The voice ingress
+  //     binds /ws/voice/{actorId} directly to this actor.
+  //   - CHAT_SOURCE_KIND_NYX_RELAY: raw Orleans grain key. Overrides
+  //     NeedsLlmReplyEvent.TargetActorId on the relay path so the LLM
+  //     reply is dispatched to the named ConversationGAgent actor.
+  //   - CHAT_SOURCE_KIND_NYX_RESPONSES (LLM facade): Studio memberId.
+  //     The LLM facade has no raw-actor binding path, so the field is
+  //     resolved via IMemberPublishedServiceResolver to a published
+  //     service id, then invoked through IStaticGAgentStreamInvocationPort.
+  //     This matches issue #588's invariant that every invoke resolves
+  //     to a member identity.
+  //   - CHAT_SOURCE_KIND_DIRECT (NyxIdChat create): raw Orleans grain key.
+  //     Overrides the default conversation actor id at create time.
+  // ADR-0024 §D5 documents this asymmetry. The field name `actor_id` is
+  // historical; per-ingress meaning is what matters.
   string actor_id = 1;
   // Optional voice module to attach to on the target actor. Only used
   // when source_kind = CHAT_SOURCE_KIND_VOICE; ignored otherwise.
@@ -124,10 +140,14 @@ message Reject {
 // ForwardToTeam targets a Studio team entry-member's published GAgent service.
 // Ingress resolves (team_id, endpoint_id) into a concrete published_service_id
 // via ITeamEntryMemberResolver, then dispatches through
-// IStaticGAgentStreamInvocationPort<AGUIEvent>. v1 supports this only on
-// GAgent-native entries (NyxIdChat / Relay / Voice); LLM facade entries
-// (/v1/responses, /v1/messages) reject ForwardToTeam at the boundary because
-// their wire protocol can't carry an AGUI stream.
+// IStaticGAgentStreamInvocationPort<AGUIEvent>.
+//
+// Supported on GAgent-native entries (NyxIdChat / Relay / Voice) and on the
+// OpenAI Responses facade (/v1/responses), where AGUI events are mapped to
+// Responses SSE / JSON via AGUIEventToResponsesSseAdapter (~280 lines of typed
+// mapping; the event vocabularies are structurally isomorphic). The Anthropic
+// Messages facade (/v1/messages) currently still rejects this at HTTP 501;
+// adding it is symmetric to /v1/responses but tracked as separate work.
 message ForwardToTeam {
   // Studio team id (REQUIRED).
   string team_id = 1;

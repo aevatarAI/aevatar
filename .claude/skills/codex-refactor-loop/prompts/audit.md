@@ -45,7 +45,7 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 
 ### Step 3 — Candidate 文件（必写，与 cluster 文件分离）
 
-写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-{{iteration}}-candidates.ndjson`：每行一个 candidate。
+写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}-candidates.ndjson`：每行一个 candidate。
 
 ```json
 {"rule_id": "<CLAUDE clause id>", "path": "<file>", "line": <int>, "evidence": "<one-line code snippet>", "verdict": "accept|reject", "reject_reason": "<if reject>", "prior_cluster_overlap": "<cluster-id|none>"}
@@ -147,7 +147,7 @@ human_brief:
 
 ### Step 6 — 终止 marker
 
-- 有 cluster → 末尾打印 `AUDIT_DONE:/Users/auric/aevatar/.refactor-loop/runs/audit-iter-{{iteration}}.md:<N>`
+- 有 cluster → 末尾打印 `AUDIT_DONE:/Users/auric/aevatar/.refactor-loop/runs/audit-iter-${ITERATION}.md:<N>`
 - **0 cluster** → 必须满足：manifest 完整 + candidates ndjson 存在 + 每个 reject 都有 evidence + 至少跑了 1 次 "second-pass" 命令对最高风险类别复扫。否则输出 `AUDIT_INCOMPLETE:<reason>` 而不是 `AUDIT_DONE:none:0`
 
 ## 红线 — 反 anchoring

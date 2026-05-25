@@ -297,6 +297,74 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldExposeTypedToolContext()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", _ => string.Join(
+            "|",
+            AgentToolRequestContext.NyxIdAccessToken,
+            AgentToolRequestContext.ScopeId,
+            AgentToolRequestContext.CallId,
+            AgentToolRequestContext.ChannelMessageId)));
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            tools: tools,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Credentials = new AgentToolCredentials("typed-access", null, null),
+                    Caller = new AgentToolCallerContext("typed-scope", null, null),
+                    Channel = new AgentToolChannelContext(null, null, null, "typed-message", null),
+                },
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, requestId: "request-typed"))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[0].Metadata.Should().BeEmpty();
+        provider.StreamRequests[1].Metadata.Should().BeEmpty();
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
+            m.Role == "tool" &&
+            m.Content != null &&
+            m.Content.StartsWith("typed-access|typed-scope|text-tc-", StringComparison.Ordinal) &&
+            m.Content.EndsWith("|typed-message", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldForwardRequestIdAndMergeMetadata()
     {
         var provider = new StreamingProvider(["A"]);

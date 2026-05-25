@@ -76,12 +76,18 @@ function buildScopedTeamPath(scopeId: string, teamId: string): string {
 type RuntimeRouteTarget = {
   memberId?: string;
   serviceId?: string;
+  teamId?: string;
 };
 
 function buildInvocationBasePath(
   scopeId: string,
   options?: RuntimeRouteTarget
 ): string {
+  const teamId = trimOptional(options?.teamId);
+  if (teamId) {
+    return buildScopedTeamPath(scopeId, teamId);
+  }
+
   const memberId = trimOptional(options?.memberId);
   if (memberId) {
     return buildScopedMemberPath(scopeId, memberId);

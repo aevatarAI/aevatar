@@ -443,20 +443,6 @@ const TeamDetailPage: React.FC = () => {
     [],
   );
 
-  const {
-    lens,
-    runsQuery,
-    preferredMemberSummary,
-    serviceRevisionsQuery,
-    servicesQuery,
-    workflowsQuery,
-  } = useTeamRuntimeLens(scopeId, {
-    enabled: hasTeamIdentity,
-    preferredMemberId,
-    preferredRunId,
-    preferredServiceId,
-  });
-
   const teamMembersQuery = useQuery({
     enabled: hasTeamIdentity,
     queryFn: () => studioApi.listTeamMembers(scopeId, selectedTeamId),
@@ -482,6 +468,31 @@ const TeamDetailPage: React.FC = () => {
     ((teamMembersQuery.failureCount > 0 &&
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
+  const teamMemberServiceIds = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? [])
+        .map((member) => trimText(member.publishedServiceId))
+        .filter(Boolean),
+    [teamMembersQuery.data?.members],
+  );
+  const hasExplicitRuntimeFocus = Boolean(
+    trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
+  );
+  const {
+    lens,
+    runsQuery,
+    preferredMemberSummary,
+    serviceRevisionsQuery,
+    servicesQuery,
+    workflowsQuery,
+  } = useTeamRuntimeLens(scopeId, {
+    allowScopeServiceFallback: false,
+    enabled: hasTeamIdentity,
+    preferredMemberId,
+    preferredRunId,
+    preferredServiceId,
+    teamMemberServiceIds,
+  });
 
   React.useEffect(() => {
     if (!teamEditorOpen || !teamSummaryQuery.data) {
@@ -539,7 +550,7 @@ const TeamDetailPage: React.FC = () => {
   }, [fallbackWorkflowSummary, routeState.workflowId, workflowsQuery.data]);
 
   const focusedOperationalUnit = React.useMemo(() => {
-    if (!activeWorkflowSummary) {
+    if (!activeWorkflowSummary || !hasExplicitRuntimeFocus) {
       return null;
     }
 
@@ -561,6 +572,7 @@ const TeamDetailPage: React.FC = () => {
     });
   }, [
     activeWorkflowSummary,
+    hasExplicitRuntimeFocus,
     lens.currentService?.serviceId,
     preferredServiceId,
     preferredRunId,
@@ -868,6 +880,10 @@ const TeamDetailPage: React.FC = () => {
       }));
     }
 
+    if (!hasExplicitRuntimeFocus) {
+      return [];
+    }
+
     return [
       {
         key: "fallback-workflow",
@@ -893,6 +909,7 @@ const TeamDetailPage: React.FC = () => {
     activeRunId,
     currentRunFriendly,
     currentServiceFriendly,
+    hasExplicitRuntimeFocus,
     teamRosterRows,
     workflowNameValue,
   ]);
