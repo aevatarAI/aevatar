@@ -47,7 +47,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldSkipUnavailableOpenerAndContinueWithHealthyParticipant()
+    public async Task RequestDiscussionAsync_ShouldDispatchDiscussionRequestWithoutLocalProgression()
     {
         var (coordinator, actor, store, llmProvider) = CreateCoordinator();
         var participants = await coordinator.EnsureParticipantsJoinedAsync(
@@ -61,7 +61,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
         var roomParticipants = participants.Take(2).ToList();
 
-        await coordinator.GenerateRepliesAsync(
+        await coordinator.RequestDiscussionAsync(
             roomParticipants,
             actor,
             "Discuss the roadmap for the next release.",
@@ -69,32 +69,24 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "test-token",
             CancellationToken.None);
 
-        llmProvider.Requests.Should().HaveCount(2);
-        llmProvider.Requests[0].RequestId.Should().Contain("node-a");
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
+        llmProvider.Requests.Should().BeEmpty();
 
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+        var requests = actor.Events
+            .Where(envelope => envelope.Payload!.Is(StreamingProxyNyxDiscussionRequested.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<StreamingProxyNyxDiscussionRequested>())
             .ToList();
 
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Should().NotContain(evt => evt.Content.StartsWith("当前暂时不可用", StringComparison.Ordinal));
-        messageEvents.Single().Content.Should().Contain("reply from");
-        messageEvents.Single().Content.Should().Contain("node-b");
-        messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
-        leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a");
+        requests.Should().ContainSingle();
+        requests.Single().SessionId.Should().Be("session-1");
+        requests.Single().Prompt.Should().Be("Discuss the roadmap for the next release.");
+        requests.Single().Participants.Should().HaveCount(2);
+        actor.Events.Should().NotContain(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor));
+        actor.Events.Should().NotContain(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor));
         store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldIgnoreUnavailableTextResponseAndContinueWithHealthyParticipant()
+    public async Task RequestParticipantReplyAsync_ShouldReturnFailureContinuation_WhenResponseIsUnavailable()
     {
         var (coordinator, actor, store, llmProvider) = CreateCoordinator(request =>
         {
@@ -112,50 +104,35 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             };
         });
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
+        var roomParticipants = BuildParticipants();
+
+        await coordinator.RequestParticipantReplyAsync(
             "room-1",
-            actor,
-            store,
-            "test-token",
-            CancellationToken.None,
-            preferredRoute: "/api/v1/proxy/s/openclaw/node-a");
-
-        var roomParticipants = participants.Take(2).ToList();
-
-        await coordinator.GenerateRepliesAsync(
-            roomParticipants,
-            actor,
-            "Discuss the roadmap for the next release.",
-            "session-1",
-            "test-token",
+            new StreamingProxyNyxParticipantWorkItem(
+                "session-1",
+                "test-token",
+                1,
+                StreamingProxyDefaults.MaxDiscussionRounds,
+                roomParticipants[0],
+                roomParticipants,
+                []),
             CancellationToken.None);
 
-        llmProvider.Requests.Should().HaveCount(2);
+        llmProvider.Requests.Should().HaveCount(1);
         llmProvider.Requests[0].RequestId.Should().Contain("node-a");
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
 
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+        var failures = actor.Events
+            .Where(envelope => envelope.Payload!.Is(StreamingProxyNyxParticipantReplyFailed.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<StreamingProxyNyxParticipantReplyFailed>())
             .ToList();
 
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Single().Content.Should().Contain("reply from");
-        messageEvents.Single().Content.Should().Contain("node-b");
-        messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
-        leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().BeEmpty();
+        failures.Should().ContainSingle();
+        failures.Single().ParticipantId.Should().Contain("node-a");
+        actor.Events.Should().NotContain(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor));
     }
 
     [Fact]
-    public async Task GenerateRepliesAsync_ShouldUseStreamContentWhenSynchronousContentIsMissing()
+    public async Task RequestParticipantReplyAsync_ShouldReturnSuccessContinuation_WhenStreamContentArrives()
     {
         var (coordinator, actor, store, llmProvider) = CreateCoordinator(
             responseFactory: _ => new LLMResponse(),
@@ -165,41 +142,31 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
                 new LLMStreamChunk { FinishReason = "stop", IsLast = true },
             ]);
 
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            "scope-1",
+        var roomParticipants = BuildParticipants().Skip(1).Take(1).ToList();
+
+        await coordinator.RequestParticipantReplyAsync(
             "room-1",
-            actor,
-            store,
-            "test-token",
-            CancellationToken.None,
-            preferredRoute: "/api/v1/proxy/s/openclaw/node-b");
-
-        var roomParticipants = participants.Take(1).ToList();
-
-        await coordinator.GenerateRepliesAsync(
-            roomParticipants,
-            actor,
-            "Discuss the roadmap for the next release.",
-            "session-1",
-            "test-token",
+            new StreamingProxyNyxParticipantWorkItem(
+                "session-1",
+                "test-token",
+                1,
+                1,
+                roomParticipants[0],
+                roomParticipants,
+                []),
             CancellationToken.None);
 
         llmProvider.Requests.Should().HaveCount(1);
 
-        var messageEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+        var replies = actor.Events
+            .Where(envelope => envelope.Payload!.Is(StreamingProxyNyxParticipantReplySucceeded.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<StreamingProxyNyxParticipantReplySucceeded>())
             .ToList();
 
-        var leftEvents = actor.Events
-            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
-            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
-            .ToList();
-
-        messageEvents.Should().HaveCount(1);
-        messageEvents.Single().Content.Should().Contain("streamed reply from");
-        messageEvents.Single().SessionId.Should().Be("session-1");
-        leftEvents.Should().BeEmpty();
+        replies.Should().ContainSingle();
+        replies.Single().Content.Should().Contain("streamed reply from");
+        replies.Single().SessionId.Should().Be("session-1");
+        actor.Events.Should().NotContain(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor));
     }
 
     [Fact]
@@ -225,6 +192,20 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()
         => CreateCoordinator(null);
+
+    private static List<StreamingProxyNyxParticipantDefinition> BuildParticipants() =>
+    [
+        new(
+            "svc-node-a|node-a|/api/v1/proxy/s/openclaw/node-a",
+            "/api/v1/proxy/s/openclaw/node-a",
+            "OpenClaw-Node (1)",
+            "claude-sonnet-4-5-20250929"),
+        new(
+            "svc-node-b|node-b|/api/v1/proxy/s/openclaw/node-b",
+            "/api/v1/proxy/s/openclaw/node-b",
+            "OpenClaw-Node (2)",
+            "claude-sonnet-4-5-20250929"),
+    ];
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory)

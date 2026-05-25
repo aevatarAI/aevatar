@@ -239,19 +239,12 @@ public static class StreamingProxyEndpoints
                     if (participants.Count == 0 || string.IsNullOrWhiteSpace(accessToken))
                         return;
 
-                    var terminalState = DetermineParticipantTerminalState(await participantCoordinator.GenerateRepliesAsync(
+                    await participantCoordinator.RequestDiscussionAsync(
                         participants,
                         actor,
                         prompt,
                         sessionId,
                         accessToken,
-                        token));
-                    await PublishTerminalStateAsync(
-                        actorDispatchPort,
-                        actor.Id,
-                        sessionId,
-                        terminalState.Status,
-                        terminalState.ErrorMessage,
                         token);
                 },
                 ct);
@@ -673,12 +666,6 @@ public static class StreamingProxyEndpoints
         //   New principle: endpoints publish commands through IActorDispatchPort with runtime-neutral delivery.
         return actorDispatchPort.DispatchAsync(actorId, envelope, ct);
     }
-
-    private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
-        int successfulReplies) =>
-        successfulReplies > 0
-            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
-            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 
     private static async Task TryPublishCanceledTerminalStateAsync(
         IActorDispatchPort actorDispatchPort,

@@ -19,7 +19,7 @@
 | `StreamingProxyGAgent` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyGAgent.cs` | 房间 actor，本质上是 group chat broker；持久化事件、更新房间内消息/参与者状态、向订阅者发布事件 |
 | `IGAgentActorRegistryCommandPort` / `IGAgentActorRegistryQueryPort` / `IScopeResourceAdmissionPort` | `src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentRegistryPorts.cs` | room ownership 的写入、列表查询与 command admission 边界 |
 | `IStreamingProxyParticipantQueryPort` | `src/Aevatar.Studio.Application/Studio/Abstractions/IStreamingProxyParticipantQueryPort.cs` | room participant 查询入口，读取 `StreamingProxyGAgent` 当前态 readmodel |
-| `StreamingProxyNyxParticipantCoordinator` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs` | 在带 Bearer Token 时发现 Nyx 可用 provider，把它们自动加入房间并生成多轮回复 |
+| `StreamingProxyNyxParticipantCoordinator` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs` | 在带 Bearer Token 时发现 Nyx 可用 provider，并按 room actor 发出的单个 participant work item 执行 Nyx/LLM I/O |
 | `StreamingProxySseWriter` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs` | 把 actor 事件映射成 SSE frame 输出给客户端 |
 
 ## 2. 总体拓扑
@@ -134,17 +134,21 @@ sequenceDiagram
         SUB->>SSE: "WriteParticipantJoinedAsync"
         SSE-->>CL: "PARTICIPANT_JOINED"
 
-        API->>NYX: "GenerateRepliesAsync(...)"
-        loop "每个 round / participant"
-            NYX->>LLM: "provider.ChatAsync(request)"
+        API->>NYX: "RequestDiscussionAsync(...)"
+        NYX->>ACT: "Dispatch StreamingProxyNyxDiscussionRequested"
+        loop "actor-owned round / participant continuation"
+            ACT->>ACT: "persist transcript / active participants / round cursor"
+            ACT->>NYX: "RequestParticipantReplyAsync(work item)"
+            NYX->>LLM: "provider.ChatStreamAsync(request)"
             LLM-->>NYX: "reply"
-            NYX->>ACT: "Dispatch GroupChatMessageEvent"
-            ACT->>ACT: "PersistDomainEventAsync"
+            NYX->>ACT: "Dispatch Nyx reply succeeded/failed"
+            ACT->>ACT: "record reply or prune failed participant"
+            ACT->>ACT: "Persist GroupChatMessageEvent or ParticipantLeftEvent"
             ACT-->>SUB: "Publish GroupChatMessageEvent"
             SUB->>SSE: "WriteAgentMessageAsync"
             SSE-->>CL: "AGENT_MESSAGE"
         end
-        API->>SSE: "WriteRunFinishedAsync"
+        ACT->>ACT: "Persist terminal session state"
         SSE-->>CL: "RUN_FINISHED"
     else "没有 Token，或没有可用 Nyx participants"
         note over API: "进入 activityChannel + timeout 等待模式"
@@ -201,26 +205,30 @@ participant membership 的唯一写侧事实在 `StreamingProxyGAgentState.Parti
 
 ### 6.2 自动回复生成
 
-`GenerateRepliesAsync(...)` 的行为是：
+Nyx 自动回复的推进由 `StreamingProxyGAgent` 状态和事件处理驱动；`StreamingProxyNyxParticipantCoordinator` 只做 provider 发现和单次 participant LLM I/O。
 
-1. 按当前 active participants 决定总轮次。
+1. room actor 持有 `StreamingProxyNyxDiscussionSession`：
+   - active participant 集合
+   - 当前 round / participant cursor
+   - transcript
+   - 成功回复计数与 terminal 状态
+2. actor 按当前 active participants 决定总轮次。
    - 多 participant 时最多 `4` 轮。
    - 单 participant 时只跑 `1` 轮。
-2. 为每个 participant 构造一次 LLM request：
+3. actor 为当前 participant 发出单个 work item，coordinator 构造一次 LLM request：
    - system prompt 明确它是 room 内 participant
    - user prompt 带原始 topic 和最近 transcript
    - metadata 带 `NyxIdAccessToken` 和 `NyxIdRoutePreference`
-3. 调 `NyxID provider.ChatAsync(...)` 拿回复。
-4. 对回复做规范化，去掉 speaker label，避免串写别人的回复。
-5. 把回复重新封装为 `GroupChatMessageEvent` 打回 room actor。
+4. coordinator 调 `NyxID provider.ChatStreamAsync(...)` 拿回复，并把结果作为 `StreamingProxyNyxParticipantReplySucceeded/Failed` continuation 打回 room actor。
+5. actor 在事件处理里记录 transcript、裁剪失败 participant、推进 round，并把成功回复持久化为 `GroupChatMessageEvent`。
 
 注意这里的房间推进不是“直接把 LLM 文本写 SSE”，而是：
 
 1. `LLM reply`
-2. 转成 `GroupChatMessageEvent`
+2. 转成 Nyx reply continuation
 3. 回到 `StreamingProxyGAgent`
-4. actor 再发布事件
-5. SSE 订阅端再收到 `AGENT_MESSAGE`
+4. actor 持久化 `GroupChatMessageEvent` 或 `GroupChatParticipantLeftEvent`
+5. SSE 订阅端再收到 `AGENT_MESSAGE` / `PARTICIPANT_LEFT`
 
 也就是说，SSE 输出仍然以 actor 事件流为单一来源。
 

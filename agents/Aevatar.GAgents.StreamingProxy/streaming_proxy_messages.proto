@@ -29,6 +29,7 @@ message StreamingProxyGAgentState {
   repeated StreamingProxyChatMessage messages = 3;
   int64 next_sequence = 4;
   map<string, StreamingProxyChatSessionTerminalRecord> terminal_sessions = 5;
+  map<string, StreamingProxyNyxDiscussionSession> nyx_discussion_sessions = 6;
 }
 
 message StreamingProxyChatSessionTerminalRecord {
@@ -36,6 +37,39 @@ message StreamingProxyChatSessionTerminalRecord {
   StreamingProxyChatSessionTerminalStatus status = 2;
   google.protobuf.Timestamp terminal_at = 3;
   string error_message = 4;
+}
+
+enum StreamingProxyNyxDiscussionStatus {
+  NYX_DISCUSSION_STATUS_UNSPECIFIED = 0;
+  NYX_DISCUSSION_STATUS_ACTIVE = 1;
+  NYX_DISCUSSION_STATUS_COMPLETED = 2;
+  NYX_DISCUSSION_STATUS_FAILED = 3;
+}
+
+message StreamingProxyNyxParticipant {
+  string participant_id = 1;
+  string route_preference = 2;
+  string display_name = 3;
+  string model = 4;
+}
+
+message StreamingProxyNyxTranscriptEntry {
+  string speaker = 1;
+  string content = 2;
+}
+
+message StreamingProxyNyxDiscussionSession {
+  string session_id = 1;
+  string prompt = 2;
+  int32 current_round = 3;
+  int32 total_rounds = 4;
+  int32 current_participant_index = 5;
+  int32 current_round_successful_replies = 6;
+  int32 total_successful_replies = 7;
+  StreamingProxyNyxDiscussionStatus status = 8;
+  string terminal_error_message = 9;
+  repeated StreamingProxyNyxParticipant active_participants = 10;
+  repeated StreamingProxyNyxTranscriptEntry transcript = 11;
 }
 
 // ─── Events ───
@@ -76,6 +110,59 @@ message StreamingProxyChatSessionTerminalStateChanged {
   StreamingProxyChatSessionTerminalStatus status = 2;
   google.protobuf.Timestamp terminal_at = 3;
   string error_message = 4;
+}
+
+message StreamingProxyNyxDiscussionRequested {
+  string session_id = 1;
+  string prompt = 2;
+  string access_token = 3;
+  repeated StreamingProxyNyxParticipant participants = 4;
+}
+
+message StreamingProxyNyxDiscussionStarted {
+  string session_id = 1;
+  string prompt = 2;
+  repeated StreamingProxyNyxParticipant participants = 3;
+  int32 total_rounds = 4;
+}
+
+message StreamingProxyNyxParticipantReplySucceeded {
+  string session_id = 1;
+  string access_token = 2;
+  int32 round = 3;
+  string participant_id = 4;
+  string display_name = 5;
+  string content = 6;
+}
+
+message StreamingProxyNyxParticipantReplyFailed {
+  string session_id = 1;
+  string access_token = 2;
+  int32 round = 3;
+  string participant_id = 4;
+  string display_name = 5;
+  string error_message = 6;
+}
+
+message StreamingProxyNyxParticipantReplyRecorded {
+  string session_id = 1;
+  int32 round = 2;
+  string participant_id = 3;
+  string display_name = 4;
+  string content = 5;
+}
+
+message StreamingProxyNyxParticipantFailureRecorded {
+  string session_id = 1;
+  int32 round = 2;
+  string participant_id = 3;
+  string display_name = 4;
+  string error_message = 5;
+}
+
+message StreamingProxyNyxDiscussionRoundAdvanced {
+  string session_id = 1;
+  int32 round = 2;
 }
 
 message StreamingProxyRoomSessionEnvelope {

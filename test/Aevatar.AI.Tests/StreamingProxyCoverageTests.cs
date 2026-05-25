@@ -12,6 +12,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -818,22 +819,6 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
-    {
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "DetermineParticipantTerminalState",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        var failed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [0])!;
-        failed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
-        failed.ErrorMessage.Should().Be("StreamingProxy chat completed without any participant replies.");
-
-        var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [1])!;
-        completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
-        completed.ErrorMessage.Should().BeNull();
-    }
-
-    [Fact]
     public async Task TryPublishFailedTerminalStateAsync_ShouldEmitFailedTerminalEvent_WhenCompletionIsUnknown()
     {
         var actor = new StubActor("room-a");
@@ -1313,6 +1298,97 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task StreamingProxyGAgent_ShouldPruneFailedNyxParticipant_AndContinueWithNextParticipant()
+    {
+        var coordinator = new RecordingNyxCoordinator();
+        using var provider = BuildStreamingProxyAgentProvider(coordinator);
+        var agent = CreateAgent(provider, "room-a");
+
+        await agent.ActivateAsync();
+        await agent.HandleNyxDiscussionRequested(new StreamingProxyNyxDiscussionRequested
+        {
+            SessionId = "session-a",
+            Prompt = "Discuss release risk",
+            AccessToken = "token-a",
+            Participants =
+            {
+                BuildNyxParticipant("node-a", "Node A"),
+                BuildNyxParticipant("node-b", "Node B"),
+            },
+        });
+
+        coordinator.WorkItems.Should().ContainSingle();
+        coordinator.WorkItems[0].Participant.ParticipantId.Should().Be("node-a");
+
+        await agent.HandleNyxParticipantReplyFailed(new StreamingProxyNyxParticipantReplyFailed
+        {
+            SessionId = "session-a",
+            AccessToken = "token-a",
+            Round = 1,
+            ParticipantId = "node-a",
+            DisplayName = "Node A",
+            ErrorMessage = "unavailable",
+        });
+
+        var session = agent.State.NyxDiscussionSessions["session-a"];
+        session.ActiveParticipants.Select(x => x.ParticipantId).Should().Equal("node-b");
+        session.CurrentParticipantIndex.Should().Be(0);
+        coordinator.WorkItems.Should().HaveCount(2);
+        coordinator.WorkItems[1].Participant.ParticipantId.Should().Be("node-b");
+        agent.State.Participants.Should().NotContain(x => x.AgentId == "node-a");
+    }
+
+    [Fact]
+    public async Task StreamingProxyGAgent_ShouldAdvanceNyxRound_FromActorState()
+    {
+        var coordinator = new RecordingNyxCoordinator();
+        using var provider = BuildStreamingProxyAgentProvider(coordinator);
+        var agent = CreateAgent(provider, "room-a");
+
+        await agent.ActivateAsync();
+        await agent.HandleNyxDiscussionRequested(new StreamingProxyNyxDiscussionRequested
+        {
+            SessionId = "session-a",
+            Prompt = "Discuss release risk",
+            AccessToken = "token-a",
+            Participants =
+            {
+                BuildNyxParticipant("node-a", "Node A"),
+                BuildNyxParticipant("node-b", "Node B"),
+            },
+        });
+
+        await agent.HandleNyxParticipantReplySucceeded(new StreamingProxyNyxParticipantReplySucceeded
+        {
+            SessionId = "session-a",
+            AccessToken = "token-a",
+            Round = 1,
+            ParticipantId = "node-a",
+            DisplayName = "Node A",
+            Content = "First answer.",
+        });
+        await agent.HandleNyxParticipantReplySucceeded(new StreamingProxyNyxParticipantReplySucceeded
+        {
+            SessionId = "session-a",
+            AccessToken = "token-a",
+            Round = 1,
+            ParticipantId = "node-b",
+            DisplayName = "Node B",
+            Content = "Second answer.",
+        });
+
+        var session = agent.State.NyxDiscussionSessions["session-a"];
+        session.CurrentRound.Should().Be(2);
+        session.CurrentParticipantIndex.Should().Be(0);
+        session.CurrentRoundSuccessfulReplies.Should().Be(0);
+        session.TotalSuccessfulReplies.Should().Be(2);
+        session.Transcript.Select(x => x.Speaker).Should().Equal("Node A", "Node B");
+        coordinator.WorkItems.Should().HaveCount(3);
+        coordinator.WorkItems[2].Round.Should().Be(2);
+        coordinator.WorkItems[2].Participant.ParticipantId.Should().Be("node-a");
+    }
+
+    [Fact]
     public async Task StreamingProxySseWriter_ShouldStartStream_AndSerializeRoomFrames()
     {
         var context = new DefaultHttpContext();
@@ -1359,6 +1435,28 @@ public class StreamingProxyCoverageTests
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
         return agent;
     }
+
+    private static ServiceProvider BuildStreamingProxyAgentProvider(
+        StreamingProxyNyxParticipantCoordinator coordinator)
+    {
+        return new ServiceCollection()
+            .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton(coordinator)
+            .BuildServiceProvider();
+    }
+
+    private static StreamingProxyNyxParticipant BuildNyxParticipant(
+        string participantId,
+        string displayName) =>
+        new()
+        {
+            ParticipantId = participantId,
+            RoutePreference = $"/api/v1/proxy/s/openclaw/{participantId}",
+            DisplayName = displayName,
+            Model = "claude-sonnet-4-5-20250929",
+        };
 
     private static EventEnvelope CreateTopologyEnvelope(IMessage payload) =>
         new()
@@ -2007,6 +2105,28 @@ public class StreamingProxyCoverageTests
         public ILLMProvider GetProvider(string name) => provider;
         public ILLMProvider GetDefault() => provider;
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class RecordingNyxCoordinator()
+        : StreamingProxyNyxParticipantCoordinator(
+            new StubActorDispatchPort(new StubActorRuntime()),
+            new StubLlmProviderFactory(new StubLlmProvider()),
+            new ConfigurationBuilder().Build(),
+            new StubHttpClientFactory(),
+            NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance)
+    {
+        public List<StreamingProxyNyxParticipantWorkItem> WorkItems { get; } = [];
+
+        public override Task RequestParticipantReplyAsync(
+            string roomId,
+            StreamingProxyNyxParticipantWorkItem workItem,
+            CancellationToken ct)
+        {
+            _ = roomId;
+            _ = ct;
+            WorkItems.Add(workItem);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubHttpClientFactory : IHttpClientFactory
