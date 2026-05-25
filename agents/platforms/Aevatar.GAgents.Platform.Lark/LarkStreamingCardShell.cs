@@ -36,4 +36,16 @@ public static class LarkStreamingCardShell
         };
         return JsonSerializer.Serialize(card, JsonOptions);
     }
+
+    // Refactor (iter98/cluster-763): Old pattern: finalize callers inlined a top-level
+    // streaming_mode settings patch. New principle: Platform.Lark owns the CardKit settings
+    // schema and emits Lark's nested config shape for PATCH /settings.
+    public static string BuildCloseStreamingSettingsJson()
+    {
+        var settings = new
+        {
+            config = new { streaming_mode = false },
+        };
+        return JsonSerializer.Serialize(settings, JsonOptions);
+    }
 }

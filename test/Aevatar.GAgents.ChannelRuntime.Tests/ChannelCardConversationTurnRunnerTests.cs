@@ -71,6 +71,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
         cardKit.StreamCalls.Should().OnlyContain(call => call.Token == "runtime-card-token-2");
         cardKit.SettingsCalls.Should().ContainSingle();
         cardKit.SettingsCalls[0].Token.Should().Be("runtime-card-token-2");
+        cardKit.SettingsCalls[0].Request.SettingsJson.Should().Be("""{"config":{"streaming_mode":false}}""");
     }
 
     private static ConversationTurnRuntimeContext RuntimeContext(string token) =>
