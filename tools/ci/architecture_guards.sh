@@ -35,6 +35,7 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
 fi
 
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
+bash tools/ci/static_service_activation_guard.sh || exit $?
 
 if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   echo "Solution must not include legacy host projects."

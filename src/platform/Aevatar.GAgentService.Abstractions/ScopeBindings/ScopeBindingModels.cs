@@ -24,9 +24,17 @@ public sealed record ScopeBindingGAgentEndpoint(
     string Description);
 
 public sealed record ScopeBindingGAgentSpec(
-    string ActorTypeName,
+    string AgentKind,
     IReadOnlyList<ScopeBindingGAgentEndpoint> Endpoints,
-    string? AgentKind = null);
+    string? ActorTypeName = null)
+{
+    public ScopeBindingGAgentSpec(
+        string actorTypeName,
+        IReadOnlyList<ScopeBindingGAgentEndpoint> endpoints)
+        : this(string.Empty, endpoints, actorTypeName)
+    {
+    }
+}
 
 public sealed record ScopeBindingUpsertRequest(
     string ScopeId,

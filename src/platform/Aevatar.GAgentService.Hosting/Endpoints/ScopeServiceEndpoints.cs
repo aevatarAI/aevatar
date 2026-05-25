@@ -193,7 +193,7 @@ public static class ScopeServiceEndpoints
                     request.GAgent == null
                         ? null
                         : new ScopeBindingGAgentSpec(
-                            request.GAgent.ActorTypeName,
+                            request.GAgent.AgentKind ?? string.Empty,
                             (request.GAgent.Endpoints ?? [])
                             .Select(endpoint => new ScopeBindingGAgentEndpoint(
                                 endpoint.EndpointId,
@@ -203,7 +203,7 @@ public static class ScopeServiceEndpoints
                                 endpoint.ResponseTypeUrl,
                                 endpoint.Description))
                             .ToArray(),
-                            request.GAgent.AgentKind),
+                            request.GAgent.ActorTypeName),
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,

@@ -32,7 +32,8 @@ public sealed record GAgentDraftRunCommand(
     string? PreferredLlmRoute = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
-    bool UseCorrelationIdAsFallbackSessionId = true) : ICommandContextSeed
+    bool UseCorrelationIdAsFallbackSessionId = true,
+    string? AgentKind = null) : ICommandContextSeed
 {
     public string? CommandId => null;
 
