@@ -31,7 +31,7 @@ public sealed class ChannelBotRegistrationStartupServiceTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
         var projectionActivator = new ChannelBotRegistrationProjectionBootstrapActivator(activationService);
         var startupService = new ChannelBotRegistrationStartupService(

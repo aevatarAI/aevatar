@@ -229,7 +229,7 @@ public sealed class ChannelRegistrationToolTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)

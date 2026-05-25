@@ -205,7 +205,7 @@ public sealed class SkillRunnerCommandPortTests
             Projection = CreateProjectionPort(out var activation, out _);
             Activation = activation;
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(Task.CompletedTask);
+                .Returns(ActorDispatchPortTestSupport.AcceptAsync);
             Port = new SkillRunnerCommandPort(Runtime, Dispatch);
         }
 

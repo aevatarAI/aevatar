@@ -26,7 +26,7 @@ public sealed class DeviceCommandFacadeTests
                 DeviceRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var facade = DeviceCommandFacadeTestSupport.CreateRegistrationFacade(actorRuntime, dispatchPort);
 
         var receipt = await facade.RegisterAsync(new DeviceRegisterCommand
@@ -120,7 +120,7 @@ public sealed class DeviceCommandFacadeTests
                 "household-scope-a",
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var facade = DeviceCommandFacadeTestSupport.CreateCallbackFacade(queryPort, actorRuntime, dispatchPort);
 
         var result = await facade.DispatchCallbackAsync(new DeviceCallbackDispatchCommand(

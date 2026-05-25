@@ -27,7 +27,7 @@ public sealed class ChannelRegistrationCommandFacadeTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var facade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, dispatchPort);
 
         var receipt = await facade.RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
