@@ -128,6 +128,18 @@ public sealed class ScopeGAgentAguiEventMapperTests
         }).Should().BeEquivalentTo(wrapped);
     }
 
+    [Theory]
+    [InlineData("", "LLM request failed.")]
+    [InlineData("   ", "LLM request failed.")]
+    [InlineData(" LLM request failed: upstream ", "LLM request failed: upstream")]
+    [InlineData("LLM request failed [tools=none] upstream", "LLM request failed [tools=none] upstream")]
+    [InlineData("LLM request failed [tools=none]:    ", "LLM request failed [tools=none]:")]
+    [InlineData("LLM request failed [tools=chrono_grep,chrono_glob]: NyxID authentication required", "NyxID authentication required")]
+    public void NormalizeLlmFailureMessage_ShouldNormalizeToolAnnotatedFailures(string content, string expected)
+    {
+        ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content).Should().Be(expected);
+    }
+
     [Fact]
     public void BuildToolApprovalStruct_ShouldHandleDecodeFailure()
     {

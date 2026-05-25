@@ -364,6 +364,10 @@ public class RoleGAgentReplayContractTests
         });
 
         publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .BeEmpty();
+        publisher.Published
             .OfType<TextMessageEndEvent>()
             .Should()
             .ContainSingle(x =>
@@ -375,6 +379,7 @@ public class RoleGAgentReplayContractTests
             .EventData
             .Unpack<RoleChatSessionCompletedEvent>();
         completed.Content.Should().Be("[[AEVATAR_LLM_ERROR]] provider exploded");
+        completed.ContentEmitted.Should().BeFalse();
         completed.RoleId.Should().Be("role-timeout");
     }
 
@@ -410,11 +415,21 @@ public class RoleGAgentReplayContractTests
         });
 
         publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .BeEmpty();
+        publisher.Published
             .OfType<TextMessageEndEvent>()
             .Should()
             .ContainSingle(x =>
                 x.SessionId == "session-tool-failure" &&
                 x.Content == "LLM request failed [tools=dangerous_tool]: provider exploded");
+
+        var completed = (await store.GetEventsAsync("role-tool-failure"))
+            .Single(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal))
+            .EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        completed.ContentEmitted.Should().BeFalse();
     }
 
     [Fact]
@@ -568,6 +583,116 @@ public class RoleGAgentReplayContractTests
         var persisted = await inner.GetEventsAsync("role-persist-fail");
         persisted.Should().NotContain(x =>
             x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompletedSessionReplay_WhenFailureContentWasNotStreamed_ShouldNotPublishDisplayContent()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+
+        var agent1 = CreateAgent(services, "role-failure-replay");
+        await agent1.ActivateAsync();
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "counting",
+            SystemPrompt = "system",
+        });
+        await agent1.DeactivateAsync();
+
+        await store.AppendAsync(
+            "role-failure-replay",
+            [
+                StateEventFor(
+                    "role-failure-replay",
+                    2,
+                    new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = "session-failure-replay",
+                        Prompt = "hello",
+                        Content = "LLM request failed [tools=none]: upstream",
+                        ContentEmitted = false,
+                    }),
+            ],
+            expectedVersion: 1);
+
+        var publisher = new RecordingEventPublisher();
+        var agent2 = CreateAgent(services, "role-failure-replay");
+        agent2.EventPublisher = publisher;
+        await agent2.ActivateAsync();
+
+        await agent2.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-failure-replay",
+        });
+
+        publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .BeEmpty();
+        publisher.Published
+            .OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-failure-replay" &&
+                x.Content == "LLM request failed [tools=none]: upstream");
+    }
+
+    [Fact]
+    public async Task CompletedSessionReplay_WhenMarkerFailureContentWasNotStreamed_ShouldNotPublishDisplayContent()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+
+        var agent1 = CreateAgent(services, "role-marker-failure-replay");
+        await agent1.ActivateAsync();
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "counting",
+            SystemPrompt = "system",
+        });
+        await agent1.DeactivateAsync();
+
+        await store.AppendAsync(
+            "role-marker-failure-replay",
+            [
+                StateEventFor(
+                    "role-marker-failure-replay",
+                    2,
+                    new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = "session-marker-failure-replay",
+                        Prompt = "hello",
+                        Content = "[[AEVATAR_LLM_ERROR]] upstream",
+                        ContentEmitted = false,
+                    }),
+            ],
+            expectedVersion: 1);
+
+        var publisher = new RecordingEventPublisher();
+        var agent2 = CreateAgent(services, "role-marker-failure-replay");
+        agent2.EventPublisher = publisher;
+        await agent2.ActivateAsync();
+
+        await agent2.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-marker-failure-replay",
+        });
+
+        publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .BeEmpty();
+        publisher.Published
+            .OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-marker-failure-replay" &&
+                x.Content == "[[AEVATAR_LLM_ERROR]] upstream");
     }
 
     [Fact]
