@@ -600,8 +600,13 @@ Team CRUD:
 - `POST   /api/scopes/{scopeId}/teams`            — create team
 - `GET    /api/scopes/{scopeId}/teams`            — list teams in scope
 - `GET    /api/scopes/{scopeId}/teams/{teamId}`   — read team
-- `PATCH  /api/scopes/{scopeId}/teams/{teamId}`   — update display name / description (Merge Patch semantics, see below)
-- `POST   /api/scopes/{scopeId}/teams/{teamId}/archive` — archive (irreversible)
+- `PATCH  /api/scopes/{scopeId}/teams/{teamId}`   — update display name / description (Merge Patch semantics, see below); returns `202 Accepted` with an accepted/no-change command receipt and `Location: /api/scopes/{scopeId}/teams/{teamId}`
+- `POST   /api/scopes/{scopeId}/teams/{teamId}/archive` — archive (irreversible); returns `202 Accepted` with an accepted command receipt and `Location: /api/scopes/{scopeId}/teams/{teamId}`
+
+Team update/archive responses are dispatch admission receipts, not
+post-dispatch read-model snapshots. Callers that need the visible team state
+must follow the `Location` resource and treat it as an eventually consistent
+read-model query.
 
 Team -> Member listing (read model query, filtered):
 

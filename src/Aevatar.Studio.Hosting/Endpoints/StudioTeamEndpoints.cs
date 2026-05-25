@@ -199,12 +199,12 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            var detail = await teamService.UpdateAsync(
+            var receipt = await teamService.UpdateAsync(
                 scopeId,
                 teamId,
                 new UpdateStudioTeamRequest(displayNamePatch, descriptionPatch),
                 ct);
-            return Results.Ok(detail);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -228,7 +228,8 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.ArchiveAsync(scopeId, teamId, ct));
+            var receipt = await teamService.ArchiveAsync(scopeId, teamId, ct);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {

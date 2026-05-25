@@ -59,7 +59,7 @@ public sealed class StudioTeamService : IStudioTeamService
         return summary;
     }
 
-    public async Task<StudioTeamSummaryResponse> UpdateAsync(
+    public async Task<StudioTeamCommandResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
@@ -91,17 +91,15 @@ public sealed class StudioTeamService : IStudioTeamService
                     $"description must be at most {StudioTeamInputLimits.MaxDescriptionLength} characters.");
         }
 
-        await _commandPort.UpdateAsync(scopeId, teamId, request, ct);
-        return await GetAsync(scopeId, teamId, ct);
+        return await _commandPort.UpdateAsync(scopeId, teamId, request, ct);
     }
 
-    public async Task<StudioTeamSummaryResponse> ArchiveAsync(
+    public Task<StudioTeamCommandResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default)
     {
-        await _commandPort.ArchiveAsync(scopeId, teamId, ct);
-        return await GetAsync(scopeId, teamId, ct);
+        return _commandPort.ArchiveAsync(scopeId, teamId, ct);
     }
 
     public async Task SetEntryMemberAsync(

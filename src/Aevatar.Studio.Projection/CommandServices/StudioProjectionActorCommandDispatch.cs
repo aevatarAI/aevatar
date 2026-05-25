@@ -36,7 +36,8 @@ internal sealed class StudioProjectionActorCommandTarget(IActor actor) : IActorC
 internal sealed record StudioProjectionActorCommandReceipt(
     string ActorId,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    DateTimeOffset? AckedAt = null);
 
 internal sealed record StudioProjectionActorCommandStartError(string Message);
 
@@ -139,7 +140,9 @@ internal sealed class StudioProjectionActorCommandDispatch
                 result.Error?.Message ?? "Studio projection actor command dispatch failed.");
         }
 
-        return result.Receipt;
+        return result.Admission == null
+            ? result.Receipt
+            : result.Receipt with { AckedAt = result.Admission.AckedAt };
     }
 }
 
