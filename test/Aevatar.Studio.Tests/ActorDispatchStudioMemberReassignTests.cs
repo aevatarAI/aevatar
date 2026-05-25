@@ -15,7 +15,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     private const string ScopeId = "scope-1";
 
     [Fact]
-    public async Task CreateAsync_WithTeamId_ShouldDispatchCreatedThenReassigned()
+    public async Task CreateAsync_WithTeamId_ShouldDispatchCreatedThenMemberReassignedOnly()
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
@@ -32,7 +32,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
 
         summary.TeamId.Should().Be("t-1");
 
-        dispatch.Dispatches.Should().HaveCount(3);
+        dispatch.Dispatches.Should().HaveCount(2);
 
         dispatch.Dispatches[0].Envelope.Payload.Is(StudioMemberCreatedEvent.Descriptor).Should().BeTrue();
         var created = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberCreatedEvent>();
@@ -43,8 +43,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
         reassigned.HasFromTeamId.Should().BeFalse();
         reassigned.ToTeamId.Should().Be("t-1");
 
-        dispatch.Dispatches[2].Envelope.Payload.Is(StudioMemberReassignedEvent.Descriptor).Should().BeTrue();
-        dispatch.Dispatches[2].ActorId.Should().StartWith("studio-team:");
+        dispatch.Dispatches.Should().OnlyContain(x => x.ActorId.StartsWith("studio-member:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -68,7 +67,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     }
 
     [Fact]
-    public async Task ReassignTeamAsync_ShouldDispatchToMemberAndTeams()
+    public async Task ReassignTeamAsync_ShouldDispatchToMemberOnly()
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
@@ -80,19 +79,16 @@ public sealed class ActorDispatchStudioMemberReassignTests
             toTeamId: "t-new",
             CancellationToken.None);
 
-        dispatch.Dispatches.Should().HaveCount(3);
+        dispatch.Dispatches.Should().ContainSingle();
 
         dispatch.Dispatches[0].ActorId.Should().Be("studio-member:scope-1:m-1");
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
         evt.FromTeamId.Should().Be("t-old");
         evt.ToTeamId.Should().Be("t-new");
-
-        dispatch.Dispatches[1].ActorId.Should().Be("studio-team:scope-1:t-old");
-        dispatch.Dispatches[2].ActorId.Should().Be("studio-team:scope-1:t-new");
     }
 
     [Fact]
-    public async Task ReassignTeamAsync_PureAssign_ShouldDispatchToMemberAndDestTeam()
+    public async Task ReassignTeamAsync_PureAssign_ShouldDispatchToMemberOnly()
     {
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
@@ -103,9 +99,8 @@ public sealed class ActorDispatchStudioMemberReassignTests
             toTeamId: "t-new",
             CancellationToken.None);
 
-        dispatch.Dispatches.Should().HaveCount(2);
+        dispatch.Dispatches.Should().ContainSingle();
         dispatch.Dispatches[0].ActorId.Should().Be("studio-member:scope-1:m-1");
-        dispatch.Dispatches[1].ActorId.Should().Be("studio-team:scope-1:t-new");
 
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
         evt.HasFromTeamId.Should().BeFalse();
@@ -113,7 +108,7 @@ public sealed class ActorDispatchStudioMemberReassignTests
     }
 
     [Fact]
-    public async Task ReassignTeamAsync_PureUnassign_ShouldDispatchToMemberAndSourceTeam()
+    public async Task ReassignTeamAsync_PureUnassign_ShouldDispatchToMemberOnly()
     {
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
@@ -124,9 +119,8 @@ public sealed class ActorDispatchStudioMemberReassignTests
             toTeamId: null,
             CancellationToken.None);
 
-        dispatch.Dispatches.Should().HaveCount(2);
+        dispatch.Dispatches.Should().ContainSingle();
         dispatch.Dispatches[0].ActorId.Should().Be("studio-member:scope-1:m-1");
-        dispatch.Dispatches[1].ActorId.Should().Be("studio-team:scope-1:t-old");
 
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
         evt.FromTeamId.Should().Be("t-old");
@@ -134,26 +128,26 @@ public sealed class ActorDispatchStudioMemberReassignTests
     }
 
     [Fact]
-    public void ReassignTeamAsync_BothNull_ShouldReject()
+    public async Task ReassignTeamAsync_BothNull_ShouldReject()
     {
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: null, toTeamId: null);
 
-        act.Should().ThrowAsync<InvalidOperationException>()
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*at least one*");
     }
 
     [Fact]
-    public void ReassignTeamAsync_BothEqual_ShouldReject()
+    public async Task ReassignTeamAsync_BothEqual_ShouldReject()
     {
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: "t-same", toTeamId: "t-same");
 
-        act.Should().ThrowAsync<InvalidOperationException>()
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must differ*");
     }
 

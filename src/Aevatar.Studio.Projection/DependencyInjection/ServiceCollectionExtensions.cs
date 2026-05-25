@@ -100,6 +100,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            StudioTeamRosterFanoutMaterializer>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<

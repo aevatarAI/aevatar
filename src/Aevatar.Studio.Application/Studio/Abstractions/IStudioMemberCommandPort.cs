@@ -49,10 +49,10 @@ public interface IStudioMemberCommandPort
     /// assign passes <c>fromTeamId == null</c>; pure unassign passes
     /// <c>toTeamId == null</c>; move passes both.
     ///
-    /// The implementation dispatches the same <c>StudioMemberReassignedEvent</c>
-    /// to the member actor and to the affected TeamGAgents (source and / or
-    /// destination), where each TeamGAgent applies an idempotent set
-    /// operation against its persisted roster.
+    /// The implementation dispatches <c>StudioMemberReassignedEvent</c> only
+    /// to the member actor. A durable committed-state consumer fans the
+    /// committed event out to affected TeamGAgents, where each TeamGAgent
+    /// applies an idempotent set operation against its persisted roster.
     /// </summary>
     Task ReassignTeamAsync(
         string scopeId,

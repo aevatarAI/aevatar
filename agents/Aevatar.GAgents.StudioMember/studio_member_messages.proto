@@ -328,8 +328,9 @@ message StudioMemberBindingTerminalAcknowledged {
 }
 
 // Single reassignment event covers assign / unassign / move (ADR-0017).
-// Both source and destination StudioTeamGAgents apply idempotent set
-// operations against this event.
+// A durable committed-state consumer dispatches this committed event to the
+// source and destination StudioTeamGAgents. Each TeamGAgent applies
+// idempotent set operations against this event.
 //
 // from_team_id and to_team_id are `optional` so absence carries the
 // "unassigned" intent; empty-string sentinels are not used.
