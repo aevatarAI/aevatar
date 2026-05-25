@@ -1060,6 +1060,185 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task Cancel_ForeignResponse_Returns403()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_foreign",
+            "other-user",
+            "other-user",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_foreign",
+            1,
+            "resp_foreign:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_foreign/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        AssertErrorBody(
+            body,
+            "response_scope_mismatch",
+            "permission_error",
+            "response id is not visible to the current caller scope.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Cancel_OriginMismatch_Returns403()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_channel",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.Channel,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_channel",
+            1,
+            "resp_channel:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_channel/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        AssertErrorBody(
+            body,
+            "response_origin_mismatch",
+            "permission_error",
+            "response id origin does not match the current ingress origin.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Cancel_ExpiredResponse_Returns400()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_expired",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Expired,
+            DateTimeOffset.UtcNow.AddHours(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_expired",
+            2,
+            "resp_expired:status:expired"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_expired/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        AssertErrorBody(
+            body,
+            "response_expired",
+            "invalid_request_error",
+            "response id refers to an expired response session.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithExpiredForwardedToolCallContinuation_Returns400()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:expired",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Expired,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    """{"error":"tool_call_expired","call_id":"call_1"}""",
+                    DateTimeOffset.UtcNow.AddMinutes(-5),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        AssertErrorBody(
+            body,
+            "tool_call_not_available",
+            "invalid_request_error",
+            "Forwarded tool call 'call_1' is Expired and cannot receive a result.");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithoutBearer_ShouldReturnUnauthorized()
     {
         var provider = new RecordingLLMProvider();
@@ -2282,6 +2461,20 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static void AssertErrorBody(
+        string body,
+        string expectedCode,
+        string expectedType,
+        string expectedMessage)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var error = doc.RootElement.GetProperty("error");
+        error.GetProperty("code").GetString().Should().Be(expectedCode);
+        error.GetProperty("type").GetString().Should().Be(expectedType);
+        error.GetProperty("message").GetString().Should().Be(expectedMessage);
+        error.GetProperty("param").ValueKind.Should().Be(JsonValueKind.Null);
+    }
 
     private sealed class RecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
