@@ -57,6 +57,34 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         cache!.ResultJson.Should().Be("""{"content":"fresh"}""");
     }
 
+    [Fact]
+    public async Task QueryReader_ShouldResolveLegacyReadModel_WhenReadableReadModelIsMissing()
+    {
+        var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
+        var projector = new ResponsesAgentToolStateCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")));
+        var reader = new ResponsesAgentToolStateQueryReader(store);
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(ScopeId, OwnerSubject);
+
+        await projector.ProjectAsync(
+            new ResponsesAgentToolStateCurrentStateProjectionContext
+            {
+                RootActorId = legacyActorId,
+                ProjectionKind = "responses-agent-tools",
+            },
+            WrapCommittedState(DateTimeOffset.Parse("2026-05-12T00:01:00+00:00")));
+
+        var readableActorId = ResponseAgentToolStateIds.BuildActorId(ScopeId, OwnerSubject);
+        (await store.GetAsync(readableActorId)).Should().BeNull();
+        var snapshot = await reader.GetAsync(ScopeId, OwnerSubject);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ActorId.Should().Be(legacyActorId);
+        snapshot.ScopeId.Should().Be(ScopeId);
+        snapshot.OwnerSubject.Should().Be(OwnerSubject);
+    }
+
     private static EventEnvelope WrapCommittedState(DateTimeOffset observedAt)
     {
         var state = new ResponsesAgentToolState
