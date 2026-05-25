@@ -330,7 +330,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
+    public async Task HandleReplyGenerationTimedOutAsync_ObsoleteCallback_DoesNotFailRunOrDropConversation()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -361,18 +361,20 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-generation-timeout-race",
         });
 
-        var timeout = scheduler.Timeouts.Should().ContainSingle(
-            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor)).Subject;
+        scheduler.Timeouts.Should().NotContain(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor));
 
-        await runtime.HandleReplyGenerationTimedOutAsync(
-            timeout.TriggerEnvelope.Payload.Unpack<AgentRunReplyGenerationTimedOut>());
+        await runtime.HandleReplyGenerationTimedOutAsync(new AgentRunReplyGenerationTimedOut
+        {
+            RunId = "run-generation-timeout-race",
+            CorrelationId = "corr-generation-timeout-race",
+            TargetActorId = "actor-1",
+            TimedOutAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Attempt = generationExecutor.Starts.Single().Attempt,
+        });
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
-        runtime.State.ErrorCode.Should().Be("llm_reply_timeout");
-        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
-        var dropped = handled.Single().Payload.Unpack<DeferredLlmReplyDroppedEvent>();
-        dropped.CorrelationId.Should().Be("corr-generation-timeout-race");
-        dropped.Reason.Should().Be("llm_reply_timeout");
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        handled.Should().NotContain(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
 
         await runtime.HandleReplyGenerationCompletedAsync(new AgentRunReplyGenerationCompleted
         {
@@ -386,10 +388,10 @@ public sealed class AgentRunGAgentTests
             Request = generationExecutor.Starts.Single().Request.Clone(),
         });
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
-        runtime.State.ProducedReplyText.Should().BeEmpty();
-        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
-        handled.Should().NotContain(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Be("late executor reply");
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+        handled.Should().NotContain(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
     }
 
     [Fact]
@@ -1531,15 +1533,13 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_ShouldEmitTimeoutFallbackReply_WhenGeneratorHangsPastBudget()
+    public async Task HandleStartAsync_ResponseTimeoutSeconds_ShouldNotCancelReplyGeneration()
     {
-        // Without a cancellation budget on the LLM run, a tool that hangs (broken sandbox,
-        // unreachable proxy upstream, slow remote SSH) would pin the run actor turn indefinitely
-        // and Lark would stay on the loading reaction forever. The runtime caps each turn at
-        // the relay ResponseTimeoutSeconds and folds the cancellation into a user-visible
-        // fallback reply with errorCode=llm_reply_timeout.
         var collector = new AsyncLocalInteractiveReplyCollector();
-        var replyGenerator = new HangingReplyGenerator();
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "slow but valid",
+        };
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
         EventEnvelope? handled = null;
@@ -1565,13 +1565,12 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-timeout",
         });
 
-        replyGenerator.WasCancelled.Should().BeTrue();
+        replyGenerator.CancellationTokenObserved.Should().BeFalse();
         handled.Should().NotBeNull();
         var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
-        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
-        ready.ErrorCode.Should().Be("llm_reply_timeout");
-        ready.ErrorSummary.Should().Contain("1s budget");
-        ready.Outbound.Text.Should().NotBeNullOrWhiteSpace();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
+        ready.ErrorCode.Should().BeEmpty();
+        ready.Outbound.Text.Should().Be("slow but valid");
     }
 
     [Fact]
@@ -2617,6 +2616,8 @@ public sealed class AgentRunGAgentTests
 
         public bool CaptureSucceeded { get; private set; }
 
+        public bool CancellationTokenObserved { get; private set; }
+
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
         public Action<LLMControlContext>? LlmControlObserver { get; init; }
@@ -2641,6 +2642,7 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct)
         {
             CallCount++;
+            CancellationTokenObserved = ct.IsCancellationRequested;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
             if (llmControl is not null)

@@ -1,7 +1,6 @@
 using System.Linq;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Abstractions.Slash;
 using FluentAssertions;
 using Xunit;
 using Aevatar.GAgents.Authoring.Lark;
@@ -141,9 +140,9 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Theory]
-    [InlineData("/foobar", "Unknown command: /foobar")]
-    [InlineData("/", "Unknown command: /")]
-    public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash(string text, string expected)
+    [InlineData("/foobar")]
+    [InlineData("/goal draft Q2 launch")]
+    public void TryResolve_ShouldFallThrough_ForUnknownSlashSkillShortcut(string text)
     {
         var inbound = new ChannelInboundEvent
         {
@@ -153,11 +152,8 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
 
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeFalse();
-        decision.ReplyPayload.Should().Contain(expected);
-        decision.ReplyPayload.Should().Contain("/agents");
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
     }
 
     [Theory]
@@ -176,28 +172,6 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         matched.Should().BeFalse();
         decision.Should().BeNull();
-    }
-
-    [Fact]
-    public void TryResolve_ShouldMergeSlashRegistryDescriptors_ForUnknownSlash()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            Text = "/foobar",
-        };
-        var registry = new ChannelSlashCommandRegistry(new IChannelSlashCommandHandler[]
-        {
-            new StubSlashHandler(new ChannelSlashCommandUsage("init", string.Empty, "Bind NyxID")),
-            new StubSlashHandler(new ChannelSlashCommandUsage("model", "use <service-number|model-name>", "Pick LLM")),
-        });
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision, registry);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.ReplyPayload.Should().Contain("/init");
-        decision.ReplyPayload.Should().Contain("/model use <service-number|model-name>");
     }
 
     [Fact]
@@ -250,13 +224,4 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().BeNull();
     }
 
-    private sealed class StubSlashHandler(ChannelSlashCommandUsage usage) : IChannelSlashCommandHandler
-    {
-        public string Name => usage.Name;
-        public bool RequiresBinding => false;
-        public ChannelSlashCommandUsage Usage => usage;
-
-        public Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct) =>
-            Task.FromResult<MessageContent?>(null);
-    }
 }

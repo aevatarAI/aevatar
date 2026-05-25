@@ -30,21 +30,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
-    /// Optional hard upper bound on a single LLM reply turn. Mirrors
-    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>. The default disables the cap because
-    /// long Ornn skill workflows should keep running rather than surface a generic timeout.
-    /// A configured positive value enables the watchdog.
-    /// </summary>
-    internal const int FallbackTimeoutSecondsDefault = 0;
-
-    /// <summary>
     /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
     /// </summary>
     internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
 
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
-    private const string GenerationTimeoutCallbackPrefix = "agent-run-generation-timeout";
     internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
@@ -301,25 +292,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     [EventHandler]
-    public async Task HandleReplyGenerationTimedOutAsync(AgentRunReplyGenerationTimedOut command)
+    public Task HandleReplyGenerationTimedOutAsync(AgentRunReplyGenerationTimedOut command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
-            return;
-
-        await DispatchGenerationTimeoutDropNotificationAsync(command);
-
-        await PersistDomainEventAsync(new AgentRunFailedEvent
-        {
-            RunId = command.RunId,
-            CorrelationId = command.CorrelationId,
-            TargetActorId = command.TargetActorId,
-            ErrorCode = "llm_reply_timeout",
-            ErrorSummary = $"LLM reply generation exceeded {(int)ResolveFallbackTimeout().TotalSeconds}s budget.",
-            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
-
-        await ScheduleTerminalCleanupAsync(command.RunId);
+        _logger.LogInformation(
+            "Ignoring obsolete agent run generation timeout: runId={RunId} correlation={CorrelationId} attempt={Attempt}",
+            command.RunId,
+            command.CorrelationId,
+            command.Attempt);
+        return Task.CompletedTask;
     }
 
     [EventHandler]
@@ -420,7 +401,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Attempt = attempt,
         });
 
-        await ScheduleGenerationTimeoutAsync(request, runId, attempt);
         await _generationExecutor.StartAsync(
             new AgentRunReplyGenerationExecutionRequest(
                 runId,
@@ -687,16 +667,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
-    private TimeSpan ResolveFallbackTimeout()
-    {
-        if (_relayOptions is null)
-            return TimeSpan.FromSeconds(FallbackTimeoutSecondsDefault);
-        var configured = _relayOptions.ResponseTimeoutSeconds;
-        if (configured <= 0)
-            return TimeSpan.Zero;
-        return TimeSpan.FromSeconds(configured);
-    }
-
     private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>
         request.Activity?.OutboundDelivery is
         {
@@ -726,36 +696,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             throw new AgentRunOutputDispatchException(
                 $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
-                ex);
-        }
-    }
-
-    private async Task DispatchGenerationTimeoutDropNotificationAsync(AgentRunReplyGenerationTimedOut command)
-    {
-        if (string.IsNullOrWhiteSpace(command.TargetActorId) ||
-            string.IsNullOrWhiteSpace(command.CorrelationId))
-        {
-            return;
-        }
-
-        var dropped = new DeferredLlmReplyDroppedEvent
-        {
-            CorrelationId = command.CorrelationId,
-            Reason = "llm_reply_timeout",
-            DroppedAtUnixMs = command.TimedOutAtUnixMs > 0
-                ? command.TimedOutAtUnixMs
-                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        };
-
-        try
-        {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(command.TargetActorId, dropped, outputCts.Token);
-        }
-        catch (Exception ex)
-        {
-            throw new AgentRunOutputDispatchException(
-                $"Failed to send agent run generation timeout drop event to conversation actor '{command.TargetActorId}'.",
                 ex);
         }
     }
@@ -840,41 +780,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             _logger.LogWarning(
                 ex,
                 "Failed to schedule terminal agent run cleanup: runId={RunId} actorId={ActorId}",
-                runId,
-                Id);
-        }
-    }
-
-    private async Task ScheduleGenerationTimeoutAsync(NeedsLlmReplyEvent request, string runId, int attempt)
-    {
-        if (_callbackScheduler is null)
-            return;
-
-        var fallbackTimeout = ResolveFallbackTimeout();
-        if (fallbackTimeout <= TimeSpan.Zero)
-            return;
-
-        try
-        {
-            await _callbackScheduler.ScheduleTimeoutAsync(
-                BuildTimeoutRequest(
-                    BuildGenerationTimeoutCallbackId(runId, attempt),
-                    fallbackTimeout,
-                    new AgentRunReplyGenerationTimedOut
-                    {
-                        RunId = runId,
-                        CorrelationId = request.CorrelationId,
-                        TargetActorId = request.TargetActorId,
-                        TimedOutAtUnixMs = _timeProvider.GetUtcNow().Add(fallbackTimeout).ToUnixTimeMilliseconds(),
-                        Attempt = attempt,
-                    }),
-                ct: CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to schedule agent run generation timeout: runId={RunId} actorId={ActorId}",
                 runId,
                 Id);
         }
@@ -978,16 +883,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Take(96)
             .ToArray();
         return $"{OutputDispatchRetryCallbackPrefix}:{new string(chars)}";
-    }
-
-    private static string BuildGenerationTimeoutCallbackId(string runId, int attempt)
-    {
-        var normalized = NormalizeOptional(runId) ?? "unknown";
-        var chars = normalized
-            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
-            .Take(96)
-            .ToArray();
-        return $"{GenerationTimeoutCallbackPrefix}:{new string(chars)}:{attempt}";
     }
 
     private async Task EnsureTargetActorAsync(string targetActorId)

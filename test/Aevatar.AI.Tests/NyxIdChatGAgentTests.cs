@@ -142,7 +142,14 @@ public class NyxIdChatGAgentTests
 
         // ─── Streaming content events ───
 
-        // Both rounds' text must appear as content deltas in order
+        // RoleGAgent keeps the core ChatRuntime stream transparent by default; the
+        // Lark/NyxId deferred reply path opts into hiding tool-call preamble text.
+        llmProviderFactory.StreamRequests[1].Messages.Should().ContainSingle(message =>
+            message.Role == "assistant" &&
+            message.Content == round1Text &&
+            message.ToolCalls != null &&
+            message.ToolCalls.Count == 1 &&
+            message.ToolCalls[0].Id == toolCallId);
         var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
             .Select(x => x.Delta).ToList();
         deltas.Should().ContainInOrder(round1Text, round2Text);
@@ -151,8 +158,6 @@ public class NyxIdChatGAgentTests
 
         var endEvent = eventPublisher.Published.OfType<TextMessageEndEvent>()
             .Should().ContainSingle().Subject;
-        // End event content must be exactly round1 + optional whitespace + round2.
-        // Substring extraction (not Replace) so duplicated text is caught.
         endEvent.Content.Should().StartWith(round1Text);
         endEvent.Content.Should().EndWith(round2Text);
         var middle = endEvent.Content[round1Text.Length..^round2Text.Length];

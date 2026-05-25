@@ -238,7 +238,8 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: activity.Conversation?.CanonicalKey,
-            agentName: "NyxIdConversationReply");
+            agentName: "NyxIdConversationReply",
+            suppressToolCallRoundText: true);
 
         var output = new StringBuilder();
         // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last
@@ -265,7 +266,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                 continue;
 
             output.Append(chunk.DeltaContent);
-            if (streamingSink is not null)
+            if (streamingSink is not null && ShouldStreamVisibleReply(output.ToString()))
                 await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
@@ -273,6 +274,14 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             Text: output.ToString(),
             Usage: aggregatedUsage,
             FinishReason: lastFinishReason);
+    }
+
+    private static bool ShouldStreamVisibleReply(string accumulatedText)
+    {
+        if (string.IsNullOrWhiteSpace(accumulatedText))
+            return false;
+
+        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
     }
 
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round

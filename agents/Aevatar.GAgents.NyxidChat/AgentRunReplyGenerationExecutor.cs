@@ -133,11 +133,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
-        var fallbackTimeout = ResolveFallbackTimeout();
-        using var timeoutCts = fallbackTimeout > TimeSpan.Zero
-            ? new CancellationTokenSource(fallbackTimeout)
-            : new CancellationTokenSource();
-
         try
         {
             IDisposable? interactiveReplyScope = null;
@@ -153,13 +148,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                             generationContext.LlmControl,
                             generationContext.ToolContext,
                             streamingState,
-                            timeoutCts.Token)
+                            CancellationToken.None)
                         .ConfigureAwait(false)
                     : await _replyGenerator.GenerateReplyAsync(
                             request.Activity!,
                             generationContext.Metadata,
                             streamingState,
-                            timeoutCts.Token)
+                            CancellationToken.None)
                         .ConfigureAwait(false);
                 replyText = replyResult.Text ?? string.Empty;
                 if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
@@ -196,20 +191,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 errorSummary = "Reply generator returned an empty response.";
                 replyText = "Sorry, I wasn't able to generate a response. Please try again.";
             }
-        }
-        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested)
-        {
-            terminalState = LlmReplyTerminalState.Failed;
-            errorCode = "llm_reply_timeout";
-            errorSummary = $"LLM reply generation exceeded {(int)fallbackTimeout.TotalSeconds}s budget.";
-            replyText = "Sorry, this took too long to process - the model or one of its tools didn't " +
-                        "respond in time. Please try again, or rephrase the request.";
-            _logger.LogWarning(
-                ex,
-                "Deferred LLM reply timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
-                (int)fallbackTimeout.TotalSeconds,
-                workItem.RunId,
-                request.CorrelationId);
         }
         catch (Exception ex)
         {
@@ -453,16 +434,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         return control;
-    }
-
-    private TimeSpan ResolveFallbackTimeout()
-    {
-        if (_relayOptions is null)
-            return TimeSpan.FromSeconds(AgentRunGAgent.FallbackTimeoutSecondsDefault);
-        var configured = _relayOptions.ResponseTimeoutSeconds;
-        if (configured <= 0)
-            return TimeSpan.Zero;
-        return TimeSpan.FromSeconds(configured);
     }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)

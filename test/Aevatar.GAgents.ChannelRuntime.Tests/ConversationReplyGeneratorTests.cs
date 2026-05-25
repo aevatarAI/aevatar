@@ -290,6 +290,41 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithToolCallPreamble_DoesNotStreamProcessNarration()
+    {
+        var providerFactory = new ToolCallingPreambleProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-tool-preamble",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-preamble" },
+                Content = new MessageContent { Text = "/daily eanzhao" },
+            },
+            new Dictionary<string, string>(),
+            sink,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("最终日报");
+        sink.Emissions.Should().Equal("…", "最终日报");
+        sink.Emissions.Should().NotContain(text => text.Contains("开始执行", StringComparison.Ordinal));
+        sink.Emissions.Should().NotContain(text => text.Contains("先查目录", StringComparison.Ordinal));
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[1].Messages.Any(message =>
+            message.Role == "assistant" &&
+            message.Content == "开始执行 chrono-ai-daily，先查目录结构。" &&
+            message.ToolCalls is { Count: 1 }).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
@@ -723,6 +758,46 @@ public sealed class ConversationReplyGeneratorTests
                 yield break;
             }
 
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-calling-preamble";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (request.Messages.Any(static message => message.Role == "tool"))
+            {
+                yield return new LLMStreamChunk { DeltaContent = "最终日报" };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "开始执行 chrono-ai-daily，先查目录结构。" };
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall

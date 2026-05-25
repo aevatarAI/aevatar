@@ -6,11 +6,9 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public class NyxIdRelayOptions
 {
     /// <summary>
-    /// Optional hard upper bound on a single LLM reply turn (LLM thinking + tool rounds +
-    /// final streaming dispatch). The default disables this cap because long Ornn skill
-    /// workflows are expected to continue via more skill/tool calls, not fail with a generic
-    /// timeout. Set a positive value only for deployments that explicitly want an in-process
-    /// watchdog.
+    /// Deprecated compatibility setting. LLM reply generation no longer applies this value as
+    /// a hard timeout; long Ornn skill workflows must keep running until they finish or return
+    /// an explicit tool/skill failure. Kept so older configuration files still bind cleanly.
     /// </summary>
     public int ResponseTimeoutSeconds { get; set; } = 0;
 
