@@ -12,6 +12,7 @@ using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -33,6 +34,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -150,6 +152,8 @@ public sealed class MainnetHostCompositionTests
 
         using var app = builder.Build();
         var registry = app.Services.GetRequiredService<IToolSetRegistry>();
+        app.Services.GetRequiredService<IOptions<ChatRoutingOptions>>()
+            .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be(ToolSetNames.WorkspaceDefault);
 
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
@@ -177,14 +181,11 @@ public sealed class MainnetHostCompositionTests
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
+        larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
+            .Equal(workspace.Sources.Select(static source => source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
+        larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
-        larkSelfNotify.Sources.Should().HaveCount(2);
-        var larkSelfNotifyTools = await larkSelfNotify.Sources
-            .OfType<LarkAgentToolSource>()
-            .Single()
-            .DiscoverToolsAsync();
-        larkSelfNotifyTools.Select(static tool => tool.Name).Should().Equal("lark_messages_send");
 
         var voice = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime });
         voice.IsSuccess.Should().BeTrue(voice.Error?.Message);

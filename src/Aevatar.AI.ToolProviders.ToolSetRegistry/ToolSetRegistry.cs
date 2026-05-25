@@ -59,9 +59,37 @@ public sealed class ToolSetRegistry : IToolSetRegistry
         }
 
         var sources = new List<IAgentToolSource>(registration.Sources.Count);
+        var resolutionStack = new HashSet<string>(StringComparer.Ordinal);
+        AddSources(registration, sources, resolutionStack);
+
+        return ToolSetResolveResult.Success(registration.Name, sources);
+    }
+
+    private void AddSources(
+        ToolSetRegistration registration,
+        List<IAgentToolSource> sources,
+        HashSet<string> resolutionStack)
+    {
+        if (!resolutionStack.Add(registration.Name))
+        {
+            throw new InvalidOperationException(
+                $"Tool set '{registration.Name}' includes itself through a cycle.");
+        }
+
+        foreach (var includeName in registration.IncludeToolSetNames)
+        {
+            if (!_registrations.TryGetValue(includeName, out var includedRegistration))
+            {
+                throw new InvalidOperationException(
+                    $"Tool set '{registration.Name}' includes unknown tool set '{includeName}'.");
+            }
+
+            AddSources(includedRegistration, sources, resolutionStack);
+        }
+
         foreach (var sourceRegistration in registration.Sources)
             sources.Add(sourceRegistration.SourceFactory(_serviceProvider));
 
-        return ToolSetResolveResult.Success(registration.Name, sources);
+        resolutionStack.Remove(registration.Name);
     }
 }

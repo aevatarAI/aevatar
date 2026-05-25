@@ -125,7 +125,7 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -233,7 +233,10 @@ public sealed class MainnetResponsesEndpointsTests
         output[1].GetProperty("arguments").GetString().Should().Be("""{"city":"Singapore"}""");
 
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().ContainSingle();
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["get_weather", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
         sessions.ForwardedToolCalls.Should().ContainSingle();
         var persisted = sessions.ForwardedToolCalls[0].Call;
         persisted.CallId.Should().Be("call_weather_1");
@@ -304,11 +307,13 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.StreamCallCount.Should().Be(2);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().HaveCount(2);
-        provider.LastRequest.Tools![0].Name.Should().Be("Task");
-        provider.LastRequest.Tools[0].Description.Should().Be("Aevatar task dispatcher");
-        provider.LastRequest.Tools[0].ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
-        provider.LastRequest.Tools[1].Name.Should().Be("aevatar_notes");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["Task", "aevatar_notes", "aevatar_invoke_gagent"]);
+        var taskTool = provider.LastRequest.Tools.Single(static tool => tool.Name == "Task");
+        taskTool.Description.Should().Be("Aevatar task dispatcher");
+        taskTool.ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
         provider.LastRequest.Messages.Should().HaveCount(3);
         provider.LastRequest.Messages[1].ToolCalls.Should().ContainSingle()
             .Which.Name.Should().Be("Task");
@@ -772,9 +777,144 @@ public sealed class MainnetResponsesEndpointsTests
             .Should()
             .Be("""{"temperature":28}""");
         provider.LastRequest.Should().BeNull();
-        sessions.Registered.Should().BeEmpty();
+        sessions.Registered.Should().ContainSingle()
+            .Which.PreviousResponseId.Should().Be("resp_previous");
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("""{"temperature":28}""");
         sessions.ToolResults.Should().BeEmpty();
         sessions.ResolvedToolResults.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithExpiredForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:expired",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Expired,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    """{"error":"tool_call_expired","call_id":"call_1"}""",
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithCancelledForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:cancelled",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Cancelled,
+                    DateTimeOffset.UtcNow.AddMinutes(30),
+                    null,
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null,
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -887,6 +1027,10 @@ public sealed class MainnetResponsesEndpointsTests
         doc.RootElement.GetProperty("previous_response_id").GetString().Should().Be("resp_previous");
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].PreviousResponseId.Should().Be("resp_previous");
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Messages.Should().ContainSingle();
+        provider.LastRequest.Messages[0].Role.Should().Be("user");
+        provider.LastRequest.Messages[0].Content.Should().Be("continue");
     }
 
     [Fact]
@@ -920,7 +1064,44 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        body.Should().Contain("previous_response_expired");
+        GetErrorCode(body).Should().Be("previous_response_expired");
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithCancelledPreviousResponse_ShouldReturnStructuredNotAvailableError_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Cancelled,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:status:cancelled"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"continue","previous_response_id":"resp_previous"}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("previous_response_not_available");
+        body.Should().NotContain("secret-token");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -956,7 +1137,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_scope_mismatch");
+        GetErrorCode(body).Should().Be("response_scope_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -992,7 +1173,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_origin_mismatch");
+        GetErrorCode(body).Should().Be("response_origin_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -1046,6 +1227,40 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponsesCancel_WithExpiredResponse_ShouldReturnStructuredExpiredError()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_expired",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Expired,
+            DateTimeOffset.UtcNow.AddHours(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_expired",
+            2,
+            "resp_expired:status:5"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_expired/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("response_expired");
+        body.Should().NotContain("secret-token");
+        sessions.StatusUpdates.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1117,7 +1332,9 @@ public sealed class MainnetResponsesEndpointsTests
         });
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
 
@@ -1198,7 +1415,9 @@ public sealed class MainnetResponsesEndpointsTests
                 ]);
         });
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
 
@@ -1221,7 +1440,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.StreamCallCount.Should().Be(2);
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
         AssertToolArgument(argumentsJson, "actor_id", "auth-pipeline-member");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "auth ok");
         body.Should().Contain("\"text\":\"auth ok\"");
 
         await app.StopAsync();
@@ -1472,8 +1691,11 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        // Only the function-typed tool reaches the LLM provider; built-ins are dropped.
-        provider.LastRequest!.Tools.Should().ContainSingle();
+        // Built-ins are dropped; function-typed tools and default route tools reach the LLM provider.
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["Bash", "aevatar_invoke_gagent"]);
     }
 
     [Fact]
@@ -1643,6 +1865,10 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("routed-tool-model");
+        provider.LastRequest.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["do_thing", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
     }
 
     [Fact]
@@ -1701,7 +1927,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         responseSessions.Registered.Should().ContainSingle();
-        responseSessions.RecordedCompletions.Should().BeEmpty();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "hello agent");
         provider.StreamCallCount.Should().Be(2);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
@@ -1710,7 +1936,6 @@ public sealed class MainnetResponsesEndpointsTests
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest, "aevatar_invoke_gagent");
         AssertToolArgument(argumentsJson, "actor_id", "member-7");
         AssertToolArgument(argumentsJson, "payload.prompt", "hi gagent");
-        responseSessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -1763,7 +1988,7 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.completed");
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
         AssertToolArgument(argumentsJson, "actor_id", "member-stream");
-        responseSessions.RecordedCompletions.Should().BeEmpty();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "alpha beta");
     }
 
     [Fact]
@@ -1920,7 +2145,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent")
             .Should().Contain("\"actor_id\":\"ghost-member\"");
-        responseSessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
@@ -1993,7 +2218,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent")
             .Should().Contain("\"actor_id\":\"bad/member\"");
-        responseSessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
@@ -2027,7 +2252,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         responseSessions.Registered.Should().ContainSingle();
-        responseSessions.RecordedCompletions.Should().BeEmpty();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "hello world");
         provider.StreamCallCount.Should().Be(2);
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
         AssertToolArgument(argumentsJson, "team_id", "team-1");
@@ -2086,7 +2311,7 @@ public sealed class MainnetResponsesEndpointsTests
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
         AssertToolArgument(argumentsJson, "team_id", "team-2");
         AssertToolArgument(argumentsJson, "endpoint_id", "chat");
-        responseSessions.RecordedCompletions.Should().BeEmpty();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "alpha beta");
     }
 
     [Fact]
@@ -2122,7 +2347,7 @@ public sealed class MainnetResponsesEndpointsTests
         var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
         AssertToolArgument(argumentsJson, "team_id", "missing-team");
         AssertToolArgument(argumentsJson, "endpoint_id", "chat");
-        responseSessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
@@ -2191,7 +2416,9 @@ public sealed class MainnetResponsesEndpointsTests
         });
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
         builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
@@ -2216,6 +2443,21 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
+        Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault,
+            },
+        });
+
+    private static string? GetErrorCode(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
 
     private static IReadOnlyList<IReadOnlyList<LLMStreamChunk>> ToolThenTextBatches(
         string callId,
@@ -2728,7 +2970,13 @@ public sealed class MainnetResponsesEndpointsTests
                             .ToArray(),
                         clone.CompletedAt?.ToDateTimeOffset(),
                         string.IsNullOrWhiteSpace(clone.FailureCode) ? null : clone.FailureCode,
-                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage),
+                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage,
+                        clone.Usage is null
+                            ? null
+                            : new TokenUsage(
+                                clone.Usage.PromptTokens,
+                                clone.Usage.CompletionTokens,
+                                clone.Usage.TotalTokens)),
                 };
             }
 

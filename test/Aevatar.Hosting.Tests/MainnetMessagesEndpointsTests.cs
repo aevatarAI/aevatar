@@ -222,8 +222,11 @@ public sealed class MainnetMessagesEndpointsTests
         content[0].GetProperty("input").GetProperty("city").GetString().Should().Be("SF");
 
         provider.LastRequest.Should().NotBeNull();
-        var tool = provider.LastRequest!.Tools.Should().ContainSingle().Subject;
-        tool.Name.Should().Be("get_weather");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["get_weather", "aevatar_invoke_gagent"]);
+        var tool = provider.LastRequest.Tools.Single(static tool => tool.Name == "get_weather");
         tool.Description.Should().Be("Look up the weather.");
         tool.ParametersSchema.Should().Contain("\"city\"");
         tool.IsReadOnly.Should().BeTrue();
@@ -688,7 +691,9 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().ContainSingle().Which.Name.Should().Be("aevatar_invoke_gagent");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should().Contain("aevatar_invoke_gagent");
         provider.LastRequest.Model.Should().Be("original-claude");
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
@@ -722,7 +727,9 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new MessagesStaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         builder.Services.AddToolSetRegistry(options =>
@@ -742,6 +749,15 @@ public sealed class MainnetMessagesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
+        Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault,
+            },
+        });
 
     private sealed class MessagesRecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {

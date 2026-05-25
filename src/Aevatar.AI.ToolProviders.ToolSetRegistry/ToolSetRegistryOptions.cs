@@ -20,21 +20,46 @@ public sealed class ToolSetRegistryOptions
         Func<IServiceProvider, IAgentToolSource> sourceFactory,
         string? description = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(sourceFactory);
 
-        var normalizedName = name.Trim();
-        if (_registrations.Any(registration =>
-                string.Equals(registration.Name, normalizedName, StringComparison.Ordinal)))
+        AddRegistration(
+            name,
+            [],
+            [new ToolSetSourceRegistration(sourceFactory)],
+            description);
+        return this;
+    }
+
+    public ToolSetRegistryOptions AddToolSet(
+        string name,
+        IReadOnlyList<string> includeToolSetNames,
+        IReadOnlyList<Func<IServiceProvider, IAgentToolSource>> sourceFactories,
+        string? description = null)
+    {
+        ArgumentNullException.ThrowIfNull(includeToolSetNames);
+        ArgumentNullException.ThrowIfNull(sourceFactories);
+        if (includeToolSetNames.Count == 0 && sourceFactories.Count == 0)
         {
-            throw new InvalidOperationException(
-                $"Tool set '{normalizedName}' is already registered.");
+            throw new ArgumentException(
+                "A tool set must contain at least one included tool set or source factory.",
+                nameof(sourceFactories));
         }
 
-        _registrations.Add(new ToolSetRegistration(
-            normalizedName,
-            [new ToolSetSourceRegistration(sourceFactory)],
-            description ?? string.Empty));
+        if (sourceFactories.Any(static factory => factory is null))
+            throw new ArgumentException("Tool set source factories cannot contain null entries.", nameof(sourceFactories));
+
+        var includes = includeToolSetNames
+            .Select(static include => include?.Trim() ?? string.Empty)
+            .Where(static include => !string.IsNullOrWhiteSpace(include))
+            .ToArray();
+        if (includes.Length != includeToolSetNames.Count)
+            throw new ArgumentException("Included tool set names cannot contain empty entries.", nameof(includeToolSetNames));
+
+        AddRegistration(
+            name,
+            includes,
+            sourceFactories.Select(static factory => new ToolSetSourceRegistration(factory)).ToArray(),
+            description);
         return this;
     }
 
@@ -50,18 +75,11 @@ public sealed class ToolSetRegistryOptions
         if (sourceFactories.Any(static factory => factory is null))
             throw new ArgumentException("Tool set source factories cannot contain null entries.", nameof(sourceFactories));
 
-        var normalizedName = name.Trim();
-        if (_registrations.Any(registration =>
-                string.Equals(registration.Name, normalizedName, StringComparison.Ordinal)))
-        {
-            throw new InvalidOperationException(
-                $"Tool set '{normalizedName}' is already registered.");
-        }
-
-        _registrations.Add(new ToolSetRegistration(
-            normalizedName,
+        AddRegistration(
+            name,
+            [],
             sourceFactories.Select(static factory => new ToolSetSourceRegistration(factory)).ToArray(),
-            description ?? string.Empty));
+            description);
         return this;
     }
 
@@ -93,10 +111,36 @@ public sealed class ToolSetRegistryOptions
             }).ToArray(),
             description);
     }
+
+    private void AddRegistration(
+        string name,
+        IReadOnlyList<string> includeToolSetNames,
+        IReadOnlyList<ToolSetSourceRegistration> sources,
+        string? description)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(includeToolSetNames);
+        ArgumentNullException.ThrowIfNull(sources);
+
+        var normalizedName = name.Trim();
+        if (_registrations.Any(registration =>
+                string.Equals(registration.Name, normalizedName, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"Tool set '{normalizedName}' is already registered.");
+        }
+
+        _registrations.Add(new ToolSetRegistration(
+            normalizedName,
+            includeToolSetNames.ToArray(),
+            sources.ToArray(),
+            description ?? string.Empty));
+    }
 }
 
 public sealed record ToolSetRegistration(
     string Name,
+    IReadOnlyList<string> IncludeToolSetNames,
     IReadOnlyList<ToolSetSourceRegistration> Sources,
     string Description);
 

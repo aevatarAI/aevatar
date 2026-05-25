@@ -25,10 +25,15 @@ public sealed class EnvChatRouteFallbackProvider : IChatRouteFallbackProvider
             modelName = _options.Value.Defaults.FallbackModel;
         }
 
+        var forwardToModel = new ForwardToModel { ModelName = modelName ?? string.Empty };
+        var toolSetName = _options.Value.Defaults.DefaultForwardToModelToolSetName;
+        if (!string.IsNullOrWhiteSpace(toolSetName))
+            forwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName.Trim() };
+
         return ChatRouteResolver.NewDecision(
             new ChatRouteAction
             {
-                ForwardToModel = new ForwardToModel { ModelName = modelName ?? string.Empty },
+                ForwardToModel = forwardToModel,
             },
             matchedRuleId: string.Empty,
             usedFallback: true);

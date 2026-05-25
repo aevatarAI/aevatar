@@ -31,6 +31,31 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_NullSnapshot_WhenDefaultToolSetConfigured_ShouldInjectDefaultToolSetIntoFallbackDecision()
+    {
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(new ChatRouteDecision
+        {
+            Action = ForwardToModelAction("fallback-model"),
+            UsedFallback = true,
+        });
+        var resolver = new ChatRouteResolver(
+            fallback,
+            Options.Create(new ChatRoutingOptions
+            {
+                Defaults = new ChatRoutingDefaultsOptions
+                {
+                    DefaultForwardToModelToolSetName = "workspace.default",
+                },
+            }));
+
+        var decision = resolver.Resolve(null, new ChatRouteInput());
+
+        decision.UsedFallback.Should().BeTrue();
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+    }
+
+    [Fact]
     public void Resolve_RulesEmpty_ReturnsDefaultTarget()
     {
         var resolver = NewResolver();
@@ -63,6 +88,35 @@ public sealed class ChatRouteResolverTests
 
         decision.MatchedRuleId.Should().Be("daily");
         decision.Action.ForwardToModel.ModelName.Should().Be("daily-model");
+    }
+
+    [Fact]
+    public void Resolve_ForwardToModelWithoutToolSetRef_WhenDefaultToolSetConfigured_ShouldInjectDefaultToolSet()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var snapshot = new ChatRoutePolicySnapshot(ForwardToModelAction("default-model"), []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+    }
+
+    [Fact]
+    public void Resolve_ForwardToModelWithToolSetRef_WhenDefaultToolSetConfigured_ShouldPreserveExplicitToolSet()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var action = ForwardToModelAction(
+            "default-model",
+            includeToolSetRef: true,
+            includeToolChoiceHint: true);
+        var snapshot = new ChatRoutePolicySnapshot(action, []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+        decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
+        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
     }
 
     [Fact]
@@ -464,7 +518,11 @@ public sealed class ChatRouteResolverTests
             Environment.SetEnvironmentVariable(EnvChatRouteFallbackProvider.DefaultModelEnvironmentVariable, "env-model");
             var provider = new EnvChatRouteFallbackProvider(Options.Create(new ChatRoutingOptions
             {
-                Defaults = new ChatRoutingDefaultsOptions { FallbackModel = "option-model" },
+                Defaults = new ChatRoutingDefaultsOptions
+                {
+                    FallbackModel = "option-model",
+                    DefaultForwardToModelToolSetName = "workspace.default",
+                },
             }));
 
             var decision = provider.GetFallbackDecision();
@@ -472,6 +530,7 @@ public sealed class ChatRouteResolverTests
             decision.UsedFallback.Should().BeTrue();
             decision.MatchedRuleId.Should().BeEmpty();
             decision.Action.ForwardToModel.ModelName.Should().Be("env-model");
+            decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
         }
         finally
         {
@@ -502,6 +561,7 @@ public sealed class ChatRouteResolverTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ChatRouting:Defaults:FallbackModel"] = "configured-model",
+                ["ChatRouting:Defaults:DefaultForwardToModelToolSetName"] = "workspace.default",
             })
             .Build();
         var services = new ServiceCollection();
@@ -515,9 +575,11 @@ public sealed class ChatRouteResolverTests
 
         provider.GetRequiredService<IOptions<ChatRoutingOptions>>()
             .Value.Defaults.FallbackModel.Should().Be("configured-model");
+        provider.GetRequiredService<IOptions<ChatRoutingOptions>>()
+            .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be("workspace.default");
     }
 
-    private static ChatRouteResolver NewResolver()
+    private static ChatRouteResolver NewResolver(string defaultToolSetName = "")
     {
         var fallback = Substitute.For<IChatRouteFallbackProvider>();
         fallback.GetFallbackDecision().Returns(new ChatRouteDecision
@@ -525,7 +587,15 @@ public sealed class ChatRouteResolverTests
             Action = ForwardToModelAction("fallback-model"),
             UsedFallback = true,
         });
-        return new ChatRouteResolver(fallback);
+        return new ChatRouteResolver(
+            fallback,
+            Options.Create(new ChatRoutingOptions
+            {
+                Defaults = new ChatRoutingDefaultsOptions
+                {
+                    DefaultForwardToModelToolSetName = defaultToolSetName,
+                },
+            }));
     }
 
     internal static ChatRouteAction ForwardToModelAction(string modelName) =>

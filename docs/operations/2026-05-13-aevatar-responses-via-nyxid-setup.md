@@ -6,7 +6,7 @@
 
 - Responses 客户端走 `/v1/responses` 和 `/v1/models`，这是主入口。
 - Claude Code 这类 Messages-only 客户端走 `/v1/messages`，Chat Completions-only 客户端走 `/v1/chat/completions`。
-- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用直连 tool-source plan 和工具分类；Ornn skill bridge 会在三条入口注入 `use_skill` 和 `ornn_search_skills`，chat-route `ToolSetRef` 指定的 tool sources 也会三条入口同样注入。
+- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用直连 tool-source plan 和工具分类；Ornn skill bridge 会在三条入口注入 `use_skill` 和 `ornn_search_skills`，Mainnet 会默认补 `workspace.default` route tool set，chat-route `ToolSetRef` 指定的专用 tool set 也会三条入口同样注入。`lark.self_notify`、`voice.realtime` 必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 默认可见。
 - 客户端只持有 NyxID API key，不直接接触任何 LLM 供应商凭据。
 
 ## 1. 链路速览

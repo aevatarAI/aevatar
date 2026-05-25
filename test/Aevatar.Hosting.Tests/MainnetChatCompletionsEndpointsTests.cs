@@ -200,9 +200,12 @@ public sealed class MainnetChatCompletionsEndpointsTests
         toolCall.GetProperty("function").GetProperty("arguments").GetString().Should().Be("""{"city":"SF"}""");
 
         provider.LastRequest.Should().NotBeNull();
-        var tool = provider.LastRequest!.Tools.Should().ContainSingle().Subject;
-        tool.Name.Should().Be("get_weather");
-        tool.ParametersSchema.Should().Contain("\"city\"");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["get_weather", "aevatar_invoke_team"]);
+        provider.LastRequest.Tools.Single(static tool => tool.Name == "get_weather")
+            .ParametersSchema.Should().Contain("\"city\"");
     }
 
     [Fact]
@@ -271,7 +274,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().ContainSingle().Which.Name.Should().Be("aevatar_invoke_team");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should().Contain("aevatar_invoke_team");
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("choices")[0]
             .GetProperty("message")
@@ -321,7 +326,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesRouteResolver>(new ChatCompletionsNoopRouteResolver());
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
@@ -424,7 +431,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.Services.AddSingleton(callerScopeResolver ?? new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new ChatCompletionsStaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new ChatCompletionsNoopRouteResolver());
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
@@ -445,6 +454,15 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
+        Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault,
+            },
+        });
 
     private sealed class ChatCompletionsRecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {

@@ -35,6 +35,56 @@ public sealed class ToolSetRegistryTests
     }
 
     [Fact]
+    public void Resolve_ShouldReturnIncludedSourcesBeforeOwnSources()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<FirstSource>();
+        services.AddSingleton<SecondSource>();
+        services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                "workspace.default",
+                [sp => sp.GetRequiredService<FirstSource>()]);
+            options.AddToolSet(
+                "lark.self_notify",
+                ["workspace.default"],
+                [sp => sp.GetRequiredService<SecondSource>()]);
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IToolSetRegistry>();
+
+        var result = registry.Resolve(new ChatRouteToolSetRef { Name = "lark.self_notify" });
+
+        result.IsSuccess.Should().BeTrue();
+        result.Name.Should().Be("lark.self_notify");
+        result.Sources.Select(static source => source.GetType())
+            .Should()
+            .Equal(typeof(FirstSource), typeof(SecondSource));
+    }
+
+    [Fact]
+    public void Resolve_ShouldFailFast_WhenIncludedToolSetIsUnknown()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<FirstSource>();
+        services.AddToolSetRegistry(options =>
+            options.AddToolSet(
+                "lark.self_notify",
+                ["workspace.default"],
+                [sp => sp.GetRequiredService<FirstSource>()]));
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IToolSetRegistry>();
+
+        var act = () => registry.Resolve(new ChatRouteToolSetRef { Name = "lark.self_notify" });
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*includes unknown tool set 'workspace.default'*");
+    }
+
+    [Fact]
     public void Resolve_ShouldReturnStructuredError_WhenNameIsUnknown()
     {
         var services = new ServiceCollection();

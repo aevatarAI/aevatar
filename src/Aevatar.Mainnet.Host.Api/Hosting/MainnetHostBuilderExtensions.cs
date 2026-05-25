@@ -117,6 +117,10 @@ public static class MainnetHostBuilderExtensions
         // selection pattern as AddScheduledAgents / AddDeviceRegistration).
         builder.Services.AddChatRoutingAgents(builder.Configuration);
         builder.Services.AddChatRoutingCore();
+        builder.Services.Configure<ChatRoutingOptions>(options =>
+        {
+            options.Defaults.DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault;
+        });
         // Implement (issue #695):
         //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
         //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
@@ -238,31 +242,13 @@ public static class MainnetHostBuilderExtensions
                 "Default /v1/responses workspace tool composition.");
             options.AddToolSet(
                 ToolSetNames.LarkSelfNotify,
-                [
-                    CreateLarkSelfNotifyToolSource,
-                    CreateToolSource<QueryReadModelToolSource>,
-                ],
-                "Minimal push-to-my-Lark tool composition.");
+                [ToolSetNames.WorkspaceDefault],
+                [],
+                "Lark route tool composition with the default workspace tools.");
             options.AddToolSet(
                 ToolSetNames.VoiceRealtime,
-                [
-                    CreateToolSource<InvokeGAgentToolSource>,
-                    CreateToolSource<InvokeTeamToolSource>,
-                    CreateToolSource<StartWorkflowToolSource>,
-                    CreateToolSource<ObserveRunToolSource>,
-                    CreateToolSource<QueryReadModelToolSource>,
-                    CreateToolSource<ResponsesAevatarToolProvider>,
-                    CreateToolSource<ChannelInteractiveReplyToolSource>,
-                    CreateToolSource<ChannelRegistrationToolSource>,
-                    CreateToolSource<AgentDeliveryTargetToolSource>,
-                    CreateToolSource<NyxIdAgentToolSource>,
-                    CreateToolSource<LarkAgentToolSource>,
-                    CreateToolSource<TelegramAgentToolSource>,
-                    CreateToolSource<ChronoStorageAgentToolSource>,
-                    CreateToolSource<WebAgentToolSource>,
-                    CreateToolSource<SkillsAgentToolSource>,
-                    CreateToolSource<OrnnAgentToolSource>,
-                ],
+                [ToolSetNames.WorkspaceDefault],
+                [],
                 "Placeholder realtime voice composition.");
         });
 
@@ -272,31 +258,6 @@ public static class MainnetHostBuilderExtensions
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
         where TSource : class, IAgentToolSource
         => ActivatorUtilities.CreateInstance<TSource>(serviceProvider);
-
-    private static IAgentToolSource CreateLarkSelfNotifyToolSource(IServiceProvider serviceProvider)
-    {
-        var baseOptions = serviceProvider.GetRequiredService<LarkToolOptions>();
-        var sendOnlyOptions = new LarkToolOptions
-        {
-            ProviderSlug = baseOptions.ProviderSlug,
-            EnableMessageSend = true,
-            EnableMessageReply = false,
-            EnableMessageReactionCreate = false,
-            EnableMessageReactionList = false,
-            EnableMessageReactionDelete = false,
-            EnableMessageSearch = false,
-            EnableMessageBatchGet = false,
-            EnableChatLookup = false,
-            EnableSheetsAppendRows = false,
-            EnableApprovalsList = false,
-            EnableApprovalsAct = false,
-        };
-
-        return new LarkAgentToolSource(
-            sendOnlyOptions,
-            serviceProvider.GetRequiredService<NyxIdToolOptions>(),
-            serviceProvider.GetRequiredService<ILarkNyxClient>());
-    }
 
     public static WebApplication MapAevatarMainnetHost(this WebApplication app)
     {

@@ -724,13 +724,13 @@ public sealed class AevatarInvocationToolSourceTests
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
         public Exception? Failure { get; set; }
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             if (Failure != null)
                 throw Failure;
 
             Calls.Add((actorId, envelope.Clone()));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

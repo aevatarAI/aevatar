@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.ChatRouting.Core;
 
@@ -9,11 +10,14 @@ namespace Aevatar.ChatRouting.Core;
 public sealed class ChatRouteResolver
 {
     private readonly IChatRouteFallbackProvider _fallbackProvider;
+    private readonly IOptions<ChatRoutingOptions> _options;
 
     public ChatRouteResolver(
-        IChatRouteFallbackProvider fallbackProvider)
+        IChatRouteFallbackProvider fallbackProvider,
+        IOptions<ChatRoutingOptions>? options = null)
     {
         _fallbackProvider = fallbackProvider ?? throw new ArgumentNullException(nameof(fallbackProvider));
+        _options = options ?? Options.Create(new ChatRoutingOptions());
     }
 
     // Implement (issue #693):
@@ -25,7 +29,7 @@ public sealed class ChatRouteResolver
 
         if (snapshot is null)
         {
-            return _fallbackProvider.GetFallbackDecision();
+            return ApplyDefaultToolSet(_fallbackProvider.GetFallbackDecision());
         }
 
         foreach (var rule in snapshot.Rules)
@@ -46,10 +50,10 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
-            return BuildDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false);
+            return ApplyDefaultToolSet(BuildDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false));
         }
 
-        return BuildDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false);
+        return ApplyDefaultToolSet(BuildDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false));
     }
 
     private static bool HasAction(ChatRouteAction? action) =>
@@ -96,6 +100,31 @@ public sealed class ChatRouteResolver
         string matchedRuleId,
         bool usedFallback)
         => NewDecision(action, matchedRuleId, usedFallback);
+
+    private ChatRouteDecision ApplyDefaultToolSet(ChatRouteDecision decision)
+    {
+        var toolSetName = _options.Value.Defaults.DefaultForwardToModelToolSetName;
+        if (string.IsNullOrWhiteSpace(toolSetName))
+            return decision;
+
+        ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName);
+        ApplyDefaultToolSet(decision.OriginalAction?.ForwardToModel, toolSetName);
+        return decision;
+    }
+
+    private static void ApplyDefaultToolSet(ForwardToModel? forwardToModel, string toolSetName)
+    {
+        if (forwardToModel is null)
+            return;
+
+        if (forwardToModel.ToolSetRef is not null &&
+            !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
+        {
+            return;
+        }
+
+        forwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName.Trim() };
+    }
 }
 
 internal static class ChatRouteActionTranslator
