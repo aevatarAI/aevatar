@@ -447,6 +447,33 @@ public sealed class ConversationGAgentDedupTests
             "Unspecified, so enabling this flag would re-drop the admitted event.");
     }
 
+    [Theory]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredLlmReplyDispatchRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredInboundTurnRetryRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationTimeoutFiredAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationTimeoutFiredAsync), true)]
+    public void ConversationSelfContinuationHandlers_MustOptInToSelfHandling(
+        string handlerName,
+        bool selfAudience)
+    {
+        var method = typeof(ConversationGAgent).GetMethod(
+            handlerName,
+            BindingFlags.Instance | BindingFlags.Public);
+        method.ShouldNotBeNull();
+
+        var attr = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attr.ShouldNotBeNull($"{handlerName} must be decorated with [EventHandler].");
+        attr!.AllowSelfHandling.ShouldBeTrue(
+            $"{handlerName} handles an actor-owned continuation or timeout whose " +
+            "PublisherActorId is the conversation actor itself.");
+        attr.OnlySelfHandling.ShouldBeFalse(
+            selfAudience
+                ? $"{handlerName} must currently allow runtime callback envelopes whose route shape may vary by scheduler."
+                : $"{handlerName} receives Direct self-dispatch envelopes, so OnlySelfHandling would filter it.");
+    }
+
     [Fact]
     public async Task HandleNyxRelayCallbackTurnRequestedAsync_WithSanitizedAdmission_RestoresRuntimeTokenOnlyForTurn()
     {

@@ -24,11 +24,12 @@ public sealed partial class ConversationGAgent
     /// proxy directly rather than channel-relay's <c>/reply{,/update}</c> surface.
     /// </summary>
     /// <remarks>
-    /// Fallback semantics: when card creation fails (<see cref="CreationFailed"/>), the
-    /// dispatcher routes the turn to the legacy text-edit sink (<c>NyxRelayStreamingPhase</c>
-    /// machine). Once <see cref="Streaming"/> is reached, the card path owns the turn —
-    /// mid-stream rate-limit / table-limit failures terminate the turn at
-    /// <see cref="Terminated"/> with the last flushed text persisted as partial.
+    /// Fallback semantics: Lark CardKit streaming is the primary production Lark path.
+    /// Message edit is only a fallback for card creation/pre-send failure or explicitly
+    /// non-CardKit deployments; do not roll production Lark back from CardKit to message
+    /// edit as an incident mitigation. Once <see cref="Streaming"/> is reached, the card
+    /// path owns the turn — mid-stream rate-limit / table-limit failures terminate the
+    /// turn at <see cref="Terminated"/> with the last flushed text persisted as partial.
     /// </remarks>
     private enum LarkCardStreamingPhase
     {
@@ -908,7 +909,10 @@ public sealed partial class ConversationGAgent
         return true;
     }
 
-    [EventHandler]
+    // CardKit executor continuations are dispatched back to this actor with
+    // CreateDirect(Id, Id). Without AllowSelfHandling, StaticHandlerAdapter filters
+    // the completed signal after Lark already accepted the card create/stream API call.
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleLarkCardOperationCompletedAsync(LarkCardOperationCompletedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -1230,7 +1234,7 @@ public sealed partial class ConversationGAgent
         return $"{operationName}_threw:{exceptionType}";
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleLarkCardOperationTimeoutFiredAsync(LarkCardOperationTimeoutFiredEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);

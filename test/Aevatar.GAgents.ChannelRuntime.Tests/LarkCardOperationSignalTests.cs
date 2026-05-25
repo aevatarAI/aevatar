@@ -50,6 +50,40 @@ public sealed class LarkCardOperationSignalTests
     }
 
     [Fact]
+    public async Task LarkCardCreateSelfDispatch_AdvancesStreamingStateThroughPipeline()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(
+            "conv-lark-card-self-dispatch",
+            new RecordingCardRunner(),
+            dispatch,
+            store);
+
+        await agent.HandleEventAsync(Envelope(agent.Id,
+            CreateCardStreamChunk("corr-self-dispatch", "relay-msg-1", "hello")));
+
+        var completionEnvelope = await dispatch.WaitForEnvelopeAsync<LarkCardOperationCompletedEvent>();
+        completionEnvelope.Route.PublisherActorId.Should().Be(agent.Id);
+        completionEnvelope.Route.Direct.TargetActorId.Should().Be(agent.Id);
+
+        await agent.HandleEventAsync(completionEnvelope);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        lifecycle.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardStreaming);
+        lifecycle.CardId.Should().Be("card_ok");
+        lifecycle.CardMessageId.Should().Be("om_card_msg");
+        lifecycle.LarkCardInFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        lifecycle.LastFlushedText.Should().Be("hello");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events
+            .Select(e => e.EventType)
+            .Should()
+            .Contain(ConversationReplyLifecycleChangedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
     public async Task LarkCardOperationCompleted_ActorReconstructsRichContinuation()
     {
         var store = new InMemoryEventStore();
@@ -364,8 +398,16 @@ public sealed class LarkCardOperationSignalTests
         public async Task<T> WaitForPayloadAsync<T>()
             where T : IMessage<T>, new()
         {
-            var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var envelope = await WaitForEnvelopeAsync<T>();
             return envelope.Payload.Unpack<T>();
+        }
+
+        public async Task<EventEnvelope> WaitForEnvelopeAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            envelope.Payload.Unpack<T>();
+            return envelope;
         }
     }
 

@@ -61,6 +61,29 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public async Task AddNyxIdTools_WithSshBypass_DiscoversSshExecWithoutLocalApprovalHandler()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.test";
+            options.EnableSshExecTool = true;
+            options.BypassSshExecApproval = true;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+
+        var tools = await source.DiscoverToolsAsync();
+        var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
+        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
     public void AddWebTools_RegistersWebApiClientThroughFactory()
     {
         var services = new ServiceCollection();

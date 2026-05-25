@@ -453,7 +453,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             result.ErrorCode);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeferredLlmReplyDispatchRequestedAsync(DeferredLlmReplyDispatchRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -521,7 +521,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             reason);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeferredInboundTurnRetryRequestedAsync(DeferredInboundTurnRetryRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -1303,7 +1303,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return $"relay_text_threw:{exceptionType}";
     }
 
-    [EventHandler]
+    // Text-edit streaming is the fallback path behind Lark CardKit. Its Task.Run
+    // executor also reports completion through a self-dispatched Direct envelope,
+    // so the handler must opt in to self handling or the fallback cannot progress.
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleNyxRelayTextOperationCompletedAsync(NyxRelayTextOperationCompletedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -1472,7 +1475,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, finalText, state.EditCount + 1);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleNyxRelayTextOperationTimeoutFiredAsync(NyxRelayTextOperationTimeoutFiredEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
