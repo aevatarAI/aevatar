@@ -15,6 +15,7 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs"
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
 )
+MAPPED_CURRENT_STATE_HELPER="src/Aevatar.CQRS.Projection.Core/Orchestration/MappedCurrentStateProjectionMaterializer.cs"
 
 legacy_reader_hits="$(
   rg -n "IProjectionDocumentReader<|_documentReader|IProjectionEventReducer<|_reducersByType|EventEnvelopeTimestampResolver\\.Resolve\\(" \
@@ -30,9 +31,16 @@ fi
 
 missing_committed_hits="$(
   for file in "${FILES[@]}"; do
-    if ! rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
-      echo "${file}"
+    if rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
+      continue
     fi
+
+    if rg -q "MappedCurrentStateProjectionMaterializer<" "${file}" &&
+       rg -q "CommittedStateEventEnvelope\\.TryUnpackState<" "${MAPPED_CURRENT_STATE_HELPER}"; then
+      continue
+    fi
+
+    echo "${file}"
   done
 )"
 
