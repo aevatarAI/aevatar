@@ -7,7 +7,7 @@ public sealed class ProjectionDispatchAggregateException : Exception
 {
     public ProjectionDispatchAggregateException(
         IReadOnlyList<ProjectionDispatchFailure> failures)
-        : base(BuildMessage(failures), failures.Count > 0 ? failures[0].Exception : null)
+        : base(BuildMessage(failures), BuildInnerException(failures))
     {
         Failures = failures.ToArray();
     }
@@ -22,6 +22,14 @@ public sealed class ProjectionDispatchAggregateException : Exception
         var projectorList = string.Join(", ", failures.Select(x => $"{x.ProjectorName}#{x.ProjectorOrder}"));
         return $"Projection dispatch failed for {failures.Count} projector(s): {projectorList}.";
     }
+
+    private static Exception? BuildInnerException(IReadOnlyList<ProjectionDispatchFailure> failures) =>
+        failures.Count switch
+        {
+            0 => null,
+            1 => failures[0].Exception,
+            _ => new AggregateException(failures.Select(static failure => failure.Exception)),
+        };
 }
 
 /// <summary>
