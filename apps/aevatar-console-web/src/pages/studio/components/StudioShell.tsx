@@ -50,6 +50,7 @@ export type StudioLifecycleStep = {
 type StudioShellProps = {
   readonly alerts?: React.ReactNode;
   readonly contentOverflow?: 'auto' | 'hidden';
+  readonly contentScrollMode?: 'contained' | 'page';
   readonly contextBar?: React.ReactNode;
   readonly currentLifecycleStep?: string;
   readonly inventoryActions?: React.ReactNode;
@@ -59,7 +60,6 @@ type StudioShellProps = {
   readonly onSelectMember?: (memberKey: string) => void;
   readonly pageTitle: string;
   readonly pageToolbar?: React.ReactNode;
-  readonly railFooter?: React.ReactNode;
   readonly selectedMemberKey?: string;
   readonly showPageHeader?: boolean;
   readonly children: React.ReactNode;
@@ -139,6 +139,8 @@ const shellMainStyle: React.CSSProperties = {
   flex: 1,
   flexDirection: 'column',
   minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
 };
 
 const shellContentStyle: React.CSSProperties = {
@@ -265,11 +267,6 @@ const railPillStyle: React.CSSProperties = {
   lineHeight: '16px',
   minHeight: 22,
   padding: '0 8px',
-};
-
-const railFooterStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
 };
 
 const inlineInfoButtonStyle: React.CSSProperties = {
@@ -406,6 +403,7 @@ function handleCardKeyboardSelect(
 const StudioShell: React.FC<StudioShellProps> = ({
   alerts,
   contentOverflow = 'auto',
+  contentScrollMode = 'contained',
   contextBar,
   currentLifecycleStep,
   inventoryActions,
@@ -475,6 +473,31 @@ const StudioShell: React.FC<StudioShellProps> = ({
       return buildMemberSearchText(member).includes(normalizedSearch);
     });
   }, [memberFilter, memberSearch, members]);
+  const usesPageScroll = contentScrollMode === 'page';
+  const mainStyle = usesPageScroll
+    ? ({
+        ...shellMainStyle,
+        overflowX: 'hidden',
+        overflowY: 'auto',
+      } satisfies React.CSSProperties)
+    : shellMainStyle;
+  const contentStyle = usesPageScroll
+    ? ({
+        ...shellContentStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : shellContentStyle;
+  const pageBodyStyle = usesPageScroll
+    ? ({
+        ...shellPageBodyStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : ({
+        ...shellPageBodyStyle,
+        overflowY: contentOverflow,
+      } satisfies React.CSSProperties);
 
   return (
     <div style={shellRootStyle}>
@@ -566,6 +589,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   memberKindIconByKey[kind] ?? memberKindIconByKey.unknown;
 
                 return (
+                  // biome-ignore lint/a11y/useSemanticElements: The member card keeps the existing composite card interaction contract.
                   <div
                     key={member.key}
                     aria-current={isSelected ? 'true' : undefined}
@@ -737,7 +761,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
 
       </aside>
 
-      <div style={shellMainStyle}>
+      <div data-testid="studio-shell-main" style={mainStyle}>
         {contextBar}
         {lifecycleSteps.length > 0 ? (
           <div data-testid="studio-lifecycle-section" style={lifecycleSectionStyle}>
@@ -846,7 +870,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           </div>
         ) : null}
         {alerts ? <div style={shellAlertsStyle}>{alerts}</div> : null}
-        <div data-testid="studio-shell-content" style={shellContentStyle}>
+        <div data-testid="studio-shell-content" style={contentStyle}>
           {showPageHeader ? (
             <div style={shellHeaderStyle}>
               <Typography.Title level={4} style={shellHeaderTitleStyle}>
@@ -855,12 +879,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
               {pageToolbar}
             </div>
           ) : null}
-          <div
-            style={{
-              ...shellPageBodyStyle,
-              overflowY: contentOverflow,
-            }}
-          >
+          <div style={pageBodyStyle}>
             {children}
           </div>
         </div>
