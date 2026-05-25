@@ -54,7 +54,7 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
         try
         {
@@ -91,7 +91,7 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
         }
     }

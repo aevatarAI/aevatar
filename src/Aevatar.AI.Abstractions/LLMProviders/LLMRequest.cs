@@ -16,11 +16,17 @@ public sealed class LLMRequest
     /// <summary>Stable request identifier used for cross-boundary correlation in replay/dedup/outbox scenarios.</summary>
     public string? RequestId { get; init; }
 
-    /// <summary>Additional metadata passed through to the provider/middleware.</summary>
+    /// <summary>External/provider passthrough annotations only. Aevatar-owned control facts belong to typed contexts.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
     /// <summary>Typed caller/session semantics used by Aevatar-owned orchestration paths.</summary>
     public LLMRequestCallerContext? CallerContext { get; init; }
+
+    /// <summary>Typed tool execution context used by Aevatar-owned tool providers.</summary>
+    public AgentToolExecutionContext? ToolContext { get; init; }
+
+    /// <summary>Typed model/route/tool-round controls used before provider metadata fallback.</summary>
+    public LLMRequestRoutingContext? RoutingContext { get; init; }
 
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }

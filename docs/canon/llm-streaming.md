@@ -44,7 +44,7 @@ owner: eanzhao
 | 层 | 组件 | 职责 |
 |---|---|---|
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
-| Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
+| Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunObservationLifecycle` | 命令目标解析、observation lifecycle、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具/媒体事件 |
 | Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionRunEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + workflow run-event 实时分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEventEnvelope>`、`EventChannel<WorkflowRunEventEnvelope>` | 会话事件总线与 live sink 通道 |
@@ -53,7 +53,7 @@ owner: eanzhao
 
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:17`
 2. `src/Aevatar.CQRS.Core/Interactions/FallbackCommandInteractionService.cs`
-3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
+3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunObservationLifecycle.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:106`
 5. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
 6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
@@ -68,7 +68,7 @@ flowchart TB
     C["Client"] --> H["Workflow Capability API\nPOST /api/chat | GET /api/ws/chat | POST /api/workflows/resume | POST /api/workflows/signal"]
     H --> CMD["ICommandDispatchService / ICommandInteractionService"]
     CMD --> RES["WorkflowRunCommandTargetResolver"]
-    CMD --> BND["WorkflowRunCommandTargetBinder"]
+    CMD --> BND["WorkflowRunObservationLifecycle"]
     BND --> LIF["IWorkflowExecutionProjectionPort"]
     LIF --> LEASE["WorkflowExecutionRuntimeLease"]
     LIF --> SUB["AttachLiveSinkAsync(lease, sink)"]
@@ -154,7 +154,7 @@ sequenceDiagram
 
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:44`
 2. `src/Aevatar.CQRS.Core/Interactions/FallbackCommandInteractionService.cs`
-3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
+3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunObservationLifecycle.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:122`
 5. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
 6. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:45`

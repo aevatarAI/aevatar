@@ -115,6 +115,7 @@ public sealed class ProjectionScopeGAgentBaseTests
         agent.State.RootActorId = "root-actor";
         agent.State.ProjectionKind = "test-kind";
         agent.State.SessionId = "session-1";
+        agent.State.Mode = ProjectionScopeMode.DurableMaterialization;
         agent.State.Active = true;
         agent.State.Released = false;
 
@@ -168,15 +169,20 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TrackingEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
         public int DiscardCallCount { get; private set; }
-        public long CurrentVersion => 0;
+        public EventStoreCommitResult ConfirmResult { get; init; } = new();
+        public long CurrentVersion => ConfirmResult.LatestVersion;
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage { }
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
+            Task.FromResult(ConfirmResult);
         public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
         public Task<ProjectionScopeState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<ProjectionScopeState?>(null);
         public void DiscardPendingEvents() => DiscardCallCount++;
-        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) => current;
+        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
+            evt is ProjectionScopeWatermarkAdvancedEvent watermark
+                ? ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark)
+                : current;
     }
+
 }

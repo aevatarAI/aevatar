@@ -291,6 +291,12 @@ public sealed class NyxIdApiClient : IDisposable
     public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
 
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: approval status reads were hidden inside a blocking remote handler loop.
+    //   New principle: status reads are single-shot calls driven by actor self-continuation events.
+    public Task<string> GetApprovalStatusAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/status", ct);
+
     public Task<string> ListApprovalGrantsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/grants", ct);
 

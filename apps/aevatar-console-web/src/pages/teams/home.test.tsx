@@ -8,6 +8,7 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamsHomePage from "./home";
+import { rememberPendingTeamRosterSummary } from "./pendingTeamRoster";
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
@@ -128,6 +129,7 @@ function buildMemberRunCatalog(memberId: string) {
 describe("TeamsHomePage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    window.sessionStorage.clear();
     clearStoredAuthSession();
     jest.clearAllMocks();
 
@@ -336,7 +338,7 @@ describe("TeamsHomePage", () => {
           displayName: "未归队成员",
           description: "还没有 Team",
           implementationKind: "workflow",
-          lifecycleStage: "created",
+          lifecycleStage: "active",
           publishedServiceId: "",
           lastBoundRevisionId: null,
           teamId: null,
@@ -375,6 +377,41 @@ describe("TeamsHomePage", () => {
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("keeps a just-created Team visible while the roster projection catches up", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [],
+      nextPageToken: null,
+    });
+    rememberPendingTeamRosterSummary({
+      teamId: "t-new",
+      scopeId: "scope-a",
+      displayName: "刚创建的团队",
+      description: "roster 投影还没追上",
+      lifecycleStage: "active",
+      memberCount: 0,
+      createdAt: "2026-05-19T09:00:00Z",
+      updatedAt: "2026-05-19T09:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "刚创建的团队" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Team 标识：t-new")).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
+      ),
+    ).toBeNull();
   });
 
   it("opens the real create-team page from the empty Team roster state", async () => {

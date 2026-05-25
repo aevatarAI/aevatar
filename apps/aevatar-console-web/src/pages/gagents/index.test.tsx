@@ -333,6 +333,7 @@ describe("GAgentsPage", () => {
           actorTypeName: "Tests.OrdersGAgent, Tests",
           prompt: "hello agent",
           preferredActorId: undefined,
+          timeoutMs: 30000,
         },
         expect.any(AbortSignal)
       );

@@ -7,6 +7,11 @@ cd "${ROOT_DIR}"
 CLI_FRONTEND_DIR="tools/Aevatar.Tools.Cli/Frontend"
 DEMO_PLAYGROUND_DIR="demos/Aevatar.Demos.Workflow.Web/wwwroot"
 
+if [[ ! -d "${CLI_FRONTEND_DIR}" || ! -d "${DEMO_PLAYGROUND_DIR}" ]]; then
+  echo "Playground asset drift guard: playground sources were removed from this repository (skipping)."
+  exit 0
+fi
+
 failures=0
 
 normalize_css() {

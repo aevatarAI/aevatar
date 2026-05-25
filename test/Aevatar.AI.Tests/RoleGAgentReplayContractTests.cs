@@ -157,6 +157,35 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task InitializeRoleEvent_ShouldInitializeLifecycleModulesAppliedAfterActivation()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var moduleFactory = new CountingEventModuleFactory();
+        var services = BuildServices(store, services =>
+        {
+            services.AddSingleton<IEventModuleFactory<IEventHandlerContext>>(moduleFactory);
+        });
+
+        var agent = CreateAgent(services, "role-lifecycle-module");
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "mock",
+            SystemPrompt = "system",
+            EventModules = "lifecycle",
+        });
+
+        var module = agent.GetModules().OfType<CountingLifecycleModule>().Single();
+        module.InitializeCallCount.Should().Be(1);
+        module.DisposeCallCount.Should().Be(0);
+
+        await agent.DeactivateAsync();
+
+        module.DisposeCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task CompletedSession_ShouldReplayCachedCompletionWithoutCallingProviderAgain()
     {
         var store = new InMemoryEventStoreForTests();
@@ -711,17 +740,6 @@ public class RoleGAgentReplayContractTests
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse
-            {
-                Content = response,
-                FinishReason = "stop",
-                Usage = new TokenUsage(1, 1, 2),
-            });
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
@@ -753,6 +771,7 @@ public class RoleGAgentReplayContractTests
             {
                 "routable" => new CountingRoutableModule(),
                 "bypass" => new CountingBypassModule(),
+                "lifecycle" => new CountingLifecycleModule(),
                 _ => null,
             };
             return module != null;
@@ -765,6 +784,29 @@ public class RoleGAgentReplayContractTests
         public int Priority => 0;
         public bool CanHandle(EventEnvelope envelope) => envelope != null;
         public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class CountingLifecycleModule : ILifecycleAwareEventModule
+    {
+        public string Name => "lifecycle";
+        public int Priority => 0;
+        public int InitializeCallCount { get; private set; }
+        public int DisposeCallCount { get; private set; }
+        public bool CanHandle(EventEnvelope envelope) => envelope != null;
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
+
+        public Task InitializeAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            InitializeCallCount++;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCallCount++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class CountingBypassModule : IEventModule<IEventHandlerContext>, IRouteBypassModule
@@ -788,13 +830,6 @@ public class RoleGAgentReplayContractTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            throw exception;
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

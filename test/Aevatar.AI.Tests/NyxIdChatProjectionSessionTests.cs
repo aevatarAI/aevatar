@@ -30,7 +30,7 @@ public sealed class NyxIdChatProjectionSessionTests
         var sink = new RecordingEventSink();
 
         var lease = await port.EnsureChatProjectionAsync("chat-actor-1", "session-1", CancellationToken.None);
-        await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
@@ -39,7 +39,7 @@ public sealed class NyxIdChatProjectionSessionTests
                 Delta = "hello",
             },
         });
-        await port.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
 
         var request = activation.Requests.Should().ContainSingle().Subject;

@@ -11,6 +11,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -78,6 +79,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowBindingProjectionPort>();
         services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            WorkflowCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<ProjectionWorkflowActorBindingReader>();
         services.TryAddSingleton<IWorkflowActorBindingReader>(sp =>
             sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());

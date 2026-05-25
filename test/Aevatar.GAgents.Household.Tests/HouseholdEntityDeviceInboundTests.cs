@@ -246,12 +246,6 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     {
         public string Name => name;
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = "NO_ACTION — no intervention needed." });
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

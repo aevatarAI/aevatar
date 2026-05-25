@@ -265,10 +265,6 @@ public class MiddlewarePipelineTests
     {
         public string Name => "fake";
 
-        public Task<Aevatar.AI.Abstractions.LLMProviders.LLMResponse> ChatAsync(
-            Aevatar.AI.Abstractions.LLMProviders.LLMRequest request, CancellationToken ct) =>
-            Task.FromResult(new Aevatar.AI.Abstractions.LLMProviders.LLMResponse { Content = "response" });
-
         public IAsyncEnumerable<Aevatar.AI.Abstractions.LLMProviders.LLMStreamChunk> ChatStreamAsync(
             Aevatar.AI.Abstractions.LLMProviders.LLMRequest request, CancellationToken ct) =>
             AsyncEnumerable.Empty<Aevatar.AI.Abstractions.LLMProviders.LLMStreamChunk>();

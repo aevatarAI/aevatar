@@ -137,21 +137,37 @@ public sealed class ServiceServingProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceTrafficViewProjectionPort) &&
             x.ImplementationType == typeof(ServiceTrafficViewProjectionPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceServingSetProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceServingSetProjector));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceTrafficViewProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceTrafficViewProjector));
-        services.Should().Contain(x =>
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceDeploymentCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceDeploymentCatalogProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceDeploymentCatalogProjector>(x.ImplementationType));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRolloutProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceRolloutProjector>(x.ImplementationType));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRolloutCommandObservationProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceRolloutCommandObservationProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceServingSetProjectionContext>) &&
+            IsObservedCurrentStateMaterializerFor<ServiceServingSetProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceTrafficViewProjectionContext>) &&
+            IsObservedCurrentStateMaterializerFor<ServiceTrafficViewProjector>(x.ImplementationType));
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TProjector>(Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    private static bool IsObservedCurrentStateMaterializerFor<TProjector>(Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedCurrentStateProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]

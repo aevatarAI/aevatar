@@ -9,7 +9,7 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdChatServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddNyxIdChat_ShouldRegisterRelayReplayGuard()
+    public void AddNyxIdChat_ShouldNotRegisterRelayReplayGuard()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -22,8 +22,10 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         services.AddNyxIdChat(configuration);
         using var provider = services.BuildServiceProvider();
 
-        provider.GetRequiredService<INyxIdRelayReplayGuard>()
-            .Should().BeOfType<NyxIdRelayReplayGuard>();
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(NyxIdRelayAuthValidator));
     }

@@ -2,11 +2,10 @@ using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Hosting.Tests;
 
-public sealed class CachingResponsesRouteResolverTests
+public sealed class ResponsesRouteResolverTests
 {
     [Fact]
     public async Task ResolveRouteValueAsync_ShouldReturnSlugRouteValue_FromCatalog()
@@ -16,7 +15,7 @@ public sealed class CachingResponsesRouteResolverTests
             MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
             MakeService("chrono-llm", "/api/v1/proxy/s/chrono-llm", allowed: true),
         ], null));
-        var resolver = new CachingResponsesRouteResolver(catalog, NullLogger<CachingResponsesRouteResolver>.Instance);
+        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
 
         (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
             .Should().Be("/api/v1/llm/anthropic/v1");
@@ -31,7 +30,7 @@ public sealed class CachingResponsesRouteResolverTests
         [
             MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
         ], null));
-        var resolver = new CachingResponsesRouteResolver(catalog, NullLogger<CachingResponsesRouteResolver>.Instance);
+        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
 
         (await resolver.ResolveRouteValueAsync("mistralai", "bearer-1", CancellationToken.None))
             .Should().BeNull();
@@ -50,52 +49,50 @@ public sealed class CachingResponsesRouteResolverTests
         [
             MakeService("chrono-llm", "/api/v1/proxy/s/chrono-llm", allowed: false),
         ], null));
-        var resolver = new CachingResponsesRouteResolver(catalog, NullLogger<CachingResponsesRouteResolver>.Instance);
+        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
 
         (await resolver.ResolveRouteValueAsync("chrono-llm", "bearer-1", CancellationToken.None))
             .Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
-    public async Task ResolveRouteValueAsync_ShouldHitCacheWithinTtlAndRefetchAfter()
+    public async Task ResolveRouteValueAsync_ShouldReadCurrentCatalogOnEachCall()
     {
-        // Catalog HTTP fetches are expensive (~2 NyxID round-trips); the resolver
-        // sits on the /v1/responses hot path. Cache must keep repeated lookups
-        // for the same bearer in-memory, and naturally refresh after the TTL.
-        var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
+        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
+        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
+        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
+        var catalog = new MutableCatalogPort(new NyxIdLlmServicesResult(
         [
             MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
         ], null));
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var resolver = new CachingResponsesRouteResolver(
-            catalog,
-            NullLogger<CachingResponsesRouteResolver>.Instance,
-            time);
+        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
 
-        await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None);
-        await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None);
-        catalog.FetchCount.Should().Be(1, "second lookup within TTL is a cache hit");
+        (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
+            .Should().Be("/api/v1/llm/anthropic/v1");
 
-        time.Advance(TimeSpan.FromMinutes(6));
-        await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None);
-        catalog.FetchCount.Should().Be(2, "TTL has passed → refetch");
+        catalog.Result = new NyxIdLlmServicesResult(
+        [
+            MakeService("anthropic", "/api/v1/llm/anthropic/v2", allowed: true),
+        ], null);
+
+        (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
+            .Should().Be("/api/v1/llm/anthropic/v2");
+        catalog.FetchCount.Should().Be(2, "route facts are read from the current request catalog, not singleton memory");
     }
 
     [Fact]
-    public async Task ResolveRouteValueAsync_ShouldKeepPerBearerCacheSeparate()
+    public async Task ResolveRouteValueAsync_ShouldReadCatalogForEachBearer()
     {
-        // Different bearers can see different services (per-user proxy connections).
-        // Cache must key by bearer hash so user A's view doesn't leak to user B.
         var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
         [
             MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
         ], null));
-        var resolver = new CachingResponsesRouteResolver(catalog, NullLogger<CachingResponsesRouteResolver>.Instance);
+        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
 
         await resolver.ResolveRouteValueAsync("anthropic", "bearer-A", CancellationToken.None);
         await resolver.ResolveRouteValueAsync("anthropic", "bearer-B", CancellationToken.None);
 
-        catalog.FetchCount.Should().Be(2, "distinct bearers must each warm their own cache slot");
+        catalog.FetchCount.Should().Be(2, "each request bearer is resolved against its current catalog");
     }
 
     private static NyxIdLlmService MakeService(string slug, string routeValue, bool allowed) =>
@@ -122,6 +119,23 @@ public sealed class CachingResponsesRouteResolverTests
         {
             FetchCount++;
             return Task.FromResult(_result);
+        }
+
+        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
+            throw new NotSupportedException("Provision not used by route resolver.");
+    }
+
+    private sealed class MutableCatalogPort : IUserLlmCatalogPort
+    {
+        public int FetchCount { get; private set; }
+        public NyxIdLlmServicesResult Result { get; set; }
+
+        public MutableCatalogPort(NyxIdLlmServicesResult result) => Result = result;
+
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            FetchCount++;
+            return Task.FromResult(Result);
         }
 
         public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>

@@ -119,9 +119,9 @@
 ## 项目结构与模块组织
 - `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
-- `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
-- `tools/`：开发工具；`demos/`：示例与演示程序。
-- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
+- `docs/`：架构与设计文档。
+- `tools/ci/`：CI 门禁脚本；`tools/docs/`：文档 lint 与索引工具。
+- `apps/aevatar-console-web/`：前端控制台工作目录，必须保留。
 
 ## 构建、测试与本地运行
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
@@ -134,9 +134,14 @@
 - `bash tools/ci/projection_state_version_guard.sh`：校验 current-state readmodel 路径不发明本地 state version。
 - `bash tools/ci/projection_state_mirror_current_state_guard.sh`：校验新的 `*CurrentState*Projector` 不回读同类 readmodel。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
-- `bash tools/ci/playground_asset_drift_guard.sh`：校验 CLI playground 与 Demo Web 静态资源漂移。
 - `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
-- `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/AI/CQRS/Workflow/Hosting/Distributed）。
+- `bash tools/ci/test_solution_ownership_guard.sh`：校验测试项目只由 `aevatar.slnx` 或慢测守卫拥有。
+- `bash tools/ci/slow_test_guards.sh`：执行独立慢测门禁。
+- `bash tools/docs/lint.sh`：执行文档 lint（也由架构门禁调用）。
+- `pnpm --dir apps/aevatar-console-web install --frozen-lockfile`：还原前端依赖。
+- `pnpm --dir apps/aevatar-console-web tsc`：前端类型检查。
+- `pnpm --dir apps/aevatar-console-web test --runInBand`：前端测试。
+- `pnpm --dir apps/aevatar-console-web build`：前端生产构建。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 

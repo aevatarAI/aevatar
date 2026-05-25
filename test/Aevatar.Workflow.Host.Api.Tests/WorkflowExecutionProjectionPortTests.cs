@@ -48,12 +48,12 @@ public sealed class WorkflowExecutionProjectionPortTests
         });
         var sink = new RecordingRunEventSink();
 
-        await port.AttachLiveSinkAsync(lease, sink);
+        var liveSinkLease = await port.AttachLiveSinkAsync(lease, sink);
         await hub.Handler!(new WorkflowRunEventEnvelope
         {
             Custom = new WorkflowCustomEventPayload { Name = "event-1" },
         });
-        await port.DetachLiveSinkAsync(lease, sink);
+        await port.DetachLiveSinkAsync(liveSinkLease);
 
         hub.SubscribeCalls.Should().Be(1);
         hub.LastScopeId.Should().Be("actor-1");

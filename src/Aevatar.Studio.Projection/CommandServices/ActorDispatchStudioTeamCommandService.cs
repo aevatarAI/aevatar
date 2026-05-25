@@ -126,6 +126,45 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
         await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
     }
 
+    public async Task SetEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioTeamConventions.NormalizeScopeId(scopeId);
+        var normalizedTeamId = StudioTeamConventions.NormalizeTeamId(teamId);
+        var normalizedMemberId = Aevatar.GAgents.StudioMember.StudioMemberConventions.NormalizeMemberId(memberId);
+
+        var evt = new StudioTeamEntryMemberChangedEvent
+        {
+            TeamId = normalizedTeamId,
+            ScopeId = normalizedScopeId,
+            EntryMemberId = normalizedMemberId,
+            ChangedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+    }
+
+    public async Task ClearEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioTeamConventions.NormalizeScopeId(scopeId);
+        var normalizedTeamId = StudioTeamConventions.NormalizeTeamId(teamId);
+
+        var evt = new StudioTeamEntryMemberChangedEvent
+        {
+            TeamId = normalizedTeamId,
+            ScopeId = normalizedScopeId,
+            ChangedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+    }
+
     private async Task DispatchAsync(string scopeId, string teamId, IMessage payload, CancellationToken ct)
     {
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);

@@ -54,7 +54,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -131,7 +131,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     /// </summary>
     private static string? ResolveSandboxSlugFromContext()
     {
-        var context = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.ConnectedServicesContext);
+        var context = AgentToolRequestContext.ConnectedServicesContext;
         if (string.IsNullOrWhiteSpace(context))
             return null;
 

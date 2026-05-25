@@ -64,7 +64,8 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             createdActorIds: [],
             projectionPort,
             projectionPort,
-            new NoOpWorkflowRunActorPort());
+            new NoOpWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -75,6 +76,27 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         var receipt = factory.Create(target, context);
 
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
+    }
+
+    [Fact]
+    public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromAcceptedTargetAndContext()
+    {
+        var target = new WorkflowRunAcceptedCommandTarget(
+            new FakeActor("actor-accepted"),
+            "direct",
+            createdActorIds: [],
+            new NoOpWorkflowRunActorPort());
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-accepted",
+            "cmd-accepted",
+            "corr-accepted",
+            new Dictionary<string, string>());
+        var factory = new WorkflowRunAcceptedReceiptFactory();
+        var typedFactory = (Aevatar.CQRS.Core.Abstractions.Commands.ICommandReceiptFactory<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>)factory;
+
+        var receipt = typedFactory.Create(target, context);
+
+        receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-accepted", "direct", "cmd-accepted", "corr-accepted"));
     }
 
     private sealed class NoOpProjectionPort
@@ -96,15 +118,13 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(null);
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
-
+            Task.FromResult<IAsyncDisposable?>(null);
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

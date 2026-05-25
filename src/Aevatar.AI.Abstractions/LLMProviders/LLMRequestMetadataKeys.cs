@@ -2,6 +2,9 @@ namespace Aevatar.AI.Abstractions.LLMProviders;
 
 public static class LLMRequestMetadataKeys
 {
+    // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+    //   Old pattern: these owned keys were the tool/LLM control plane.
+    //   New principle: constants remain for legacy mapper/boundary translation only.
     public const string RequestId = "aevatar.request_id";
     public const string CallId = "aevatar.call_id";
     public const string ScopeId = "aevatar.scope_id";

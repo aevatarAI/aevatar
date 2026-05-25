@@ -23,7 +23,6 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
-    private readonly IToolApprovalHandler? _remoteApprovalHandler;
     private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdChatGAgent(
@@ -34,19 +33,19 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
-        IToolApprovalHandler? approvalHandler = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
-               approvalHandler: new YieldApprovalHandler())
+               approvalHandler: new YieldApprovalHandler(),
+               remoteToolApprovalPort: remoteToolApprovalPort)
     {
         _skillRegistry = skillRegistry;
-        _remoteApprovalHandler = approvalHandler;
         _relayOptions = relayOptions;
     }
 
-    /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
-    protected override IToolApprovalHandler? ResolveRemoteApprovalHandler() => _remoteApprovalHandler;
-
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: NyxID chat passed remote approval as a blocking local IToolApprovalHandler.
+    //   New principle: local handler yields; remote port submit/status is owned by RoleGAgent continuation.
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(State.RoleName))

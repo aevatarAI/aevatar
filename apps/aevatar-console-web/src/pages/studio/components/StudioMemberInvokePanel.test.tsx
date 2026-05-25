@@ -250,7 +250,6 @@ describe('StudioMemberInvokePanel', () => {
         },
         expect.any(AbortSignal),
         {
-          memberId: 'joker',
           serviceId: 'joker',
         },
       );
@@ -259,6 +258,164 @@ describe('StudioMemberInvokePanel', () => {
     expect(await screen.findByText(/핵심 단어로 나누면/)).toBeTruthy();
     expect(screen.getByText(/빠른 요약/)).toBeTruthy();
     expect(screen.queryByText('可以拆成这些重点词：')).toBeNull();
+  });
+
+  it('routes GAgent chat invokes through the team stream endpoint', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'joker',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-gagent',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-gagent',
+          failureReason: '',
+          implementationKind: 'gagent',
+          inlineWorkflowCount: 0,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-gagent',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-gagent',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: 'Aevatar.GAgents.GAgent',
+          status: 'Published',
+          workflowDefinitionActorId: '',
+          workflowName: '',
+        },
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'joker',
+            endpoints: [
+              {
+                description: 'Chat with joker.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-joker',
+            serviceId: 'joker',
+          },
+        ],
+        teamId: 'team-1',
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Run the gagent team.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Run the gagent team.',
+        },
+        expect.any(AbortSignal),
+        {
+          teamId: 'team-1',
+        },
+      );
+    });
+  });
+
+  it('routes workflow chat invokes through the team stream endpoint when team context is present', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'workspace-demo',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-workflow',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-workflow',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-workflow',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-workflow',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'scope-workflow:scope-1:workspace-demo',
+          workflowName: 'workspace-demo',
+        },
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'member-workspace-demo',
+          },
+        ],
+        teamId: 'team-1',
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Run the team member.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Run the team member.',
+        },
+        expect.any(AbortSignal),
+        {
+          teamId: 'team-1',
+        },
+      );
+    });
   });
 
   it('records runs into the merged Runs area and shows technical detail inline', async () => {
@@ -336,7 +493,6 @@ describe('StudioMemberInvokePanel', () => {
             prompt: 'Route this escalation to billing review.',
           }),
           {
-            memberId: 'default',
             serviceId: 'default',
           },
         );

@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
@@ -41,6 +42,13 @@ public static class ServiceCollectionExtensions
             context => new ServiceConfigurationRuntimeLease(context));
         services.TryAddSingleton<ServiceConfigurationProjectionPort>();
         services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ServiceGovernanceCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceConfigurationQueryReader, ServiceConfigurationQueryReader>();
         services.AddProjectionArtifactMaterializer<

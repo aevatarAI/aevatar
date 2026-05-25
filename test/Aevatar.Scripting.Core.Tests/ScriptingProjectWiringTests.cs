@@ -41,14 +41,23 @@ public sealed class ScriptingProjectWiringTests
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>>()
-            .Should().Contain(x => x is ScriptReadModelProjector)
-            .And.Contain(x => x is ScriptNativeDocumentProjector)
-            .And.Contain(x => x is ScriptNativeGraphProjector);
+            .Should().Contain(x => IsObservedCurrentStateMaterializerFor<ScriptReadModelProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptNativeDocumentProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptNativeGraphProjector>(x));
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>>()
-            .Should().Contain(x => x is ScriptDefinitionSnapshotProjector)
-            .And.Contain(x => x is ScriptCatalogEntryProjector);
+            .Should().Contain(x => IsObservedCurrentStateMaterializerFor<ScriptDefinitionSnapshotProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptCatalogEntryProjector>(x));
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>>()
-            .Should().ContainSingle(x => x is ScriptEvolutionReadModelProjector);
+            .Should().ContainSingle(x => IsObservedCurrentStateMaterializerFor<ScriptEvolutionReadModelProjector>(x));
+    }
+
+    private static bool IsObservedCurrentStateMaterializerFor<TProjector>(object materializer)
+    {
+        var type = materializer.GetType();
+        return type.IsGenericType &&
+               type.Name.StartsWith("ObservedCurrentStateProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]

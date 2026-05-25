@@ -12,11 +12,13 @@ internal sealed class WorkflowRunCommandTarget
     : IActorCommandDispatchTarget,
       ICommandEventTarget<WorkflowRunEventEnvelope>,
       ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
+      ICommandDetachedContinuationTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -25,8 +27,12 @@ internal sealed class WorkflowRunCommandTarget
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
+        // Refactor (iter18/cluster-005):
+        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
+        //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
             ? throw new ArgumentException("Workflow name is required.", nameof(workflowName))
@@ -35,6 +41,7 @@ internal sealed class WorkflowRunCommandTarget
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
 
     public IActor Actor { get; }
@@ -43,14 +50,20 @@ internal sealed class WorkflowRunCommandTarget
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
     public bool DispatchFailureCleanupCompleted { get; private set; }
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<WorkflowRunEventEnvelope> sink)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
@@ -81,7 +94,8 @@ internal sealed class WorkflowRunCommandTarget
         {
             try
             {
-                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+                await _projectionPort.DetachLiveSinkAsync(LiveSinkLease, ct);
+                LiveSinkLease = null;
             }
             catch (Exception ex)
             {
@@ -109,6 +123,14 @@ internal sealed class WorkflowRunCommandTarget
         CancellationToken ct = default) =>
         ReleaseAfterInteractionCoreAsync(receipt, cleanup, ct);
 
+    public Task PublishDetachedCommandSignalAsync(
+        DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,
+        CancellationToken ct = default) =>
+        // Refactor (iter17/cluster-036):
+        // Old pattern: the generic detached worker resolved durable workflow state and destroyed created actors.
+        // New principle: workflow target consumes detached signals and owns durable fallback plus cleanup decisions.
+        PublishDetachedCommandSignalCoreAsync(signal, ct);
+
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,
         bool destroyCreatedActors = false,
@@ -116,6 +138,7 @@ internal sealed class WorkflowRunCommandTarget
     {
         Exception? firstException = null;
         var projectionLease = ProjectionLease;
+        var liveSinkLease = LiveSinkLease;
         var liveSink = LiveSink;
 
         if (projectionLease != null && liveSink != null)
@@ -124,10 +147,12 @@ internal sealed class WorkflowRunCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    liveSinkLease,
                     liveSink,
                     onDetachedAsync,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
             }
             catch (Exception ex)
@@ -142,6 +167,7 @@ internal sealed class WorkflowRunCommandTarget
                 try
                 {
                     await CompleteAndDisposeLiveSinkAsync(liveSink, ct);
+                    LiveSinkLease = null;
                     LiveSink = null;
                 }
                 catch (Exception ex)
@@ -156,6 +182,7 @@ internal sealed class WorkflowRunCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
@@ -262,5 +289,38 @@ internal sealed class WorkflowRunCommandTarget
         }
 
         await ReleaseAsync(destroyCreatedActors: false, ct: ct);
+    }
+
+    private async Task PublishDetachedCommandSignalCoreAsync(
+        DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+
+        var observedCompleted = signal is DetachedCommandCompleted<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>;
+        var observedCompletion = signal switch
+        {
+            DetachedCommandCompleted<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> completed => completed.Completion,
+            DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> timeout => timeout.Completion,
+            _ => WorkflowProjectionCompletionStatus.Unknown,
+        };
+
+        var durableCompletion = observedCompleted
+            ? CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete
+            : await _durableCompletionResolver.ResolveAsync(signal.Receipt, ct);
+
+        if (!observedCompleted && durableCompletion.HasTerminalCompletion)
+        {
+            observedCompleted = true;
+            observedCompletion = durableCompletion.Completion;
+        }
+
+        await ReleaseAfterInteractionCoreAsync(
+            signal.Receipt,
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                observedCompleted,
+                observedCompletion,
+                durableCompletion),
+            ct);
     }
 }

@@ -361,6 +361,8 @@ public sealed class IdempotentStepExecutionTests
     {
         public string RunId { get; set; } = "run-1";
 
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
         public Any? GetExecutionState(string scopeKey) =>

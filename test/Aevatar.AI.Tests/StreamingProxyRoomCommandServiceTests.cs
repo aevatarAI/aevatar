@@ -139,6 +139,35 @@ public sealed class StreamingProxyRoomCommandServiceTests
     }
 
     [Fact]
+    public async Task CreateRoomAsync_ShouldNotUseSubscriptionProjectionAsCommandAdmission()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            registry,
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.CreateRoomAsync(
+            new StreamingProxyRoomCreateCommand("scope-a", "Incident Room"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(StreamingProxyRoomCreateStatus.Created);
+        registry.RegisteredActors.Should().ContainSingle();
+        registry.UnregisteredActors.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        operations.Should().ContainInOrder(
+            $"runtime:create:{result.RoomId}",
+            $"dispatch:{result.RoomId}",
+            $"actor:init:{result.RoomId}",
+            $"registry:register:{result.RoomId}");
+        operations.Should().NotContain(x => x.StartsWith("projection:ensure-subscription:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task CreateRoomAsync_ShouldNotDestroyRoom_WhenRollbackUnregisterFails()
     {
         var operations = new List<string>();
