@@ -21,6 +21,8 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
         "domain workflows), or says \"挂载/use/load this skill\". " +
+        "Also call this when a loaded skill leaves you blocked by a missing capability, unknown workflow step, " +
+        "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
         "Returns matching skill names + descriptions; follow up with use_skill to load and activate one.";

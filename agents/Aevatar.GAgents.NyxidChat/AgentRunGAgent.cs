@@ -30,11 +30,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
-    /// Hard upper bound on a single LLM reply turn. Mirrors
-    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c> (default 300s).
-    /// A configured value of <c>0</c> or negative is treated as "disable the cap".
+    /// Optional hard upper bound on a single LLM reply turn. Mirrors
+    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>. The default disables the cap because
+    /// long Ornn skill workflows should keep running rather than surface a generic timeout.
+    /// A configured positive value enables the watchdog.
     /// </summary>
-    internal const int FallbackTimeoutSecondsDefault = 300;
+    internal const int FallbackTimeoutSecondsDefault = 0;
 
     /// <summary>
     /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).

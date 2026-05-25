@@ -393,6 +393,36 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_DefaultRelayOptions_ShouldNotScheduleGenerationTimeout()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var generationExecutor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            callbackScheduler: scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-no-generation-timeout",
+            RunId = "run-no-generation-timeout",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-no-generation-timeout",
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyGenerationRequested);
+        generationExecutor.Starts.Should().ContainSingle();
+        scheduler.Timeouts.Should().NotContain(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunReplyGenerationTimedOut.Descriptor));
+    }
+
+    [Fact]
     public async Task ProduceAndDispatch_WhenPersistDispatchedFails_DoesNotDeliverDuplicateFallbackReply()
     {
         // Once DispatchReadyEventAsync delivers the reply to the conversation actor, the user

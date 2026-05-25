@@ -6,14 +6,13 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public class NyxIdRelayOptions
 {
     /// <summary>
-    /// Hard upper bound on a single LLM reply turn (LLM thinking + tool rounds + final
-    /// streaming dispatch). 300s gives margin for multi-step tool chains common in the
-    /// aevatar Lark bot flow — search a skill, hit a remote endpoint, summarize the result —
-    /// without letting a genuine hang pin the run actor turn forever. Set to <c>0</c> or
-    /// negative on a deployment that has its own watchdog and prefers no in-process cap;
-    /// see <c>AgentRunGAgent.ResolveFallbackTimeout</c>.
+    /// Optional hard upper bound on a single LLM reply turn (LLM thinking + tool rounds +
+    /// final streaming dispatch). The default disables this cap because long Ornn skill
+    /// workflows are expected to continue via more skill/tool calls, not fail with a generic
+    /// timeout. Set a positive value only for deployments that explicitly want an in-process
+    /// watchdog.
     /// </summary>
-    public int ResponseTimeoutSeconds { get; set; } = 300;
+    public int ResponseTimeoutSeconds { get; set; } = 0;
 
     public int MaxBufferedResponseChars { get; set; } = 16 * 1024;
 

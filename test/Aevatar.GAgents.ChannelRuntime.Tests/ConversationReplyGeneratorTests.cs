@@ -71,6 +71,8 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().Contain("chrono-ai-daily");
+        systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
+        systemPrompt.Should().Contain("ornn_search_skills");
     }
 
     [Fact]
