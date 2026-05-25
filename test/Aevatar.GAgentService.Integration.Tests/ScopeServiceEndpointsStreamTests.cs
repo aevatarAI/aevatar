@@ -422,7 +422,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishContentFrames_FromCommittedTerminalSuccess_WhenContentWasNotEmitted()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishTypedRunFinishedResultWithoutSyntheticTextContent_WhenContentWasNotEmitted()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -445,18 +445,17 @@ public sealed class ScopeServiceEndpointsStreamTests
                 correlationId: "cmd-1"),
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(4);
-        sessionHub.Published[0].Event.TextMessageStart.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageStart!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[0].Event.TextMessageStart.Role.Should().Be("assistant");
-        sessionHub.Published[1].Event.TextMessageContent.Should().NotBeNull();
-        sessionHub.Published[1].Event.TextMessageContent!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("pong");
-        sessionHub.Published[2].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[2].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[3].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[3].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[3].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageStart);
+        sessionHub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageContent);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Result.Unpack<GAgentDraftRunResultPayload>().Output.Should().Be("pong");
     }
 
     [Fact]
@@ -675,6 +674,37 @@ public sealed class ScopeServiceEndpointsStreamTests
         sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
         sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
         sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishTypedRunFinishedResultWithoutSyntheticTextContent_WhenCompletionWasAlreadyEmitted()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "committed final",
+                    ContentEmitted = true,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageContent);
+        var runFinished = sessionHub.Published[1].Event.RunFinished;
+        runFinished.Should().NotBeNull();
+        runFinished!.Result.Unpack<GAgentDraftRunResultPayload>().Output.Should().Be("committed final");
     }
 
     [Fact]

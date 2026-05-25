@@ -548,6 +548,8 @@ internal sealed class GAgentDraftRunFinalizeEmitter
                 {
                     ThreadId = receipt.ActorId,
                     RunId = receipt.CommandId,
+                    // Refactor (iter98/cluster-790): Old: terminal RunFinished carried no typed result, so consumers needed backend text-frame synthesis for missed live deltas. New: result packs GAgentDraftRunResultPayload and consumers use result.output fallback.
+                    Result = Any.Pack(new GAgentDraftRunResultPayload()),
                 },
             },
             ct).AsTask();
