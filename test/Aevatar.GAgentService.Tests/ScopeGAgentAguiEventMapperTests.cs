@@ -106,6 +106,18 @@ public sealed class ScopeGAgentAguiEventMapperTests
     }
 
     [Fact]
+    public void TryMap_ShouldMapEmptyCompletionContent_ToTextMessageEnd()
+    {
+        var textEnd = ScopeGAgentAguiEventMapper.TryMap(
+            BuildEventEnvelope(new AiTextEnd { Content = string.Empty, SessionId = "s-empty" }));
+
+        textEnd.Should().NotBeNull();
+        textEnd!.TextMessageEnd.Should().NotBeNull();
+        textEnd.TextMessageEnd!.MessageId.Should().Be("s-empty");
+        textEnd.RunError.Should().BeNull();
+    }
+
+    [Fact]
     public void TryMap_ShouldHandleUnknownPayloadAndWrappedAguiEvent()
     {
         ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope

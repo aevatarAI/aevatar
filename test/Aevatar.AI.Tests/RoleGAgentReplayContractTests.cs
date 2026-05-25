@@ -696,6 +696,37 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task PublishMissingDisplayContentAsync_WhenCompletionWasNotEmitted_ShouldPublishContentAndMarkEmitted()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, "role-missing-display-content");
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        var replayRecord = CreateSessionReplayRecord("final answer", contentEmitted: false);
+        var method = typeof(RoleGAgent).GetMethod(
+            "PublishMissingDisplayContentAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+
+        var task = method!.Invoke(agent, ["session-missing-display", replayRecord])
+            .Should()
+            .BeAssignableTo<Task>()
+            .Subject;
+        await task;
+
+        publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-missing-display" &&
+                x.Delta == "final answer");
+        GetSessionReplayRecordContentEmitted(task).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleChatRequest_WhenReplayHasFinalOnlyContent_ShouldPublishDisplayContentBeforeEnd()
     {
         var store = new InMemoryEventStoreForTests();
@@ -806,6 +837,29 @@ public class RoleGAgentReplayContractTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [actorId]);
+    }
+
+    private static object CreateSessionReplayRecord(string content, bool contentEmitted)
+    {
+        var replayRecordType = typeof(RoleGAgent).GetNestedType(
+            "SessionReplayRecord",
+            BindingFlags.NonPublic);
+        replayRecordType.Should().NotBeNull();
+
+        return Activator.CreateInstance(
+            replayRecordType!,
+            content,
+            string.Empty,
+            Array.Empty<ToolCall>(),
+            Array.Empty<ContentPart>(),
+            contentEmitted)!;
+    }
+
+    private static bool GetSessionReplayRecordContentEmitted(Task task)
+    {
+        var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
+        var property = result.GetType().GetProperty("ContentEmitted")!;
+        return (bool)property.GetValue(result)!;
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher
