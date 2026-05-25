@@ -222,6 +222,125 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitMoveFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-old",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-new",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().ContainSingle();
+        var reassigned = eventSourcing.RaisedEvents.Single()
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.FromTeamId.Should().Be("team-old");
+        reassigned.ToTeamId.Should().Be("team-new");
+
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitPureAssignFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = NewCreatedScriptMember(now);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-X",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+
+        var reassigned = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.HasFromTeamId.Should().BeFalse();
+        reassigned.ToTeamId.Should().Be("team-X");
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldNoOp_WhenTargetMatchesAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitUnassignFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        var reassigned = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.FromTeamId.Should().Be("team-1");
+        reassigned.HasToTeamId.Should().BeFalse();
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Bound_ShouldCaptureLastBindingAndAdvanceLifecycle()
     {
         var now = DateTimeOffset.UtcNow;

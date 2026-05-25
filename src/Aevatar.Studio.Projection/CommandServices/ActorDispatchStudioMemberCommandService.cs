@@ -106,42 +106,31 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         { TeamId = responseTeamId };
     }
 
-    public Task ReassignTeamAsync(
+    public async Task PatchTeamAssignmentAsync(
         string scopeId,
         string memberId,
-        string? fromTeamId,
-        string? toTeamId,
+        string? targetTeamId,
         CancellationToken ct = default)
     {
         var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
         var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
-
-        // At least one side must be present (ADR-0017 §Locked Rule 4). Wire
-        // values arrive here already shaped — null means absent.
-        if (fromTeamId == null && toTeamId == null)
-        {
-            throw new InvalidOperationException(
-                "reassign requires at least one of fromTeamId / toTeamId.");
-        }
-
-        // Both present and equal is rejected — that's a no-op move that
-        // never appears as a wire event.
-        if (fromTeamId != null && toTeamId != null
-            && string.Equals(fromTeamId, toTeamId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "fromTeamId and toTeamId must differ when both are present.");
-        }
-
-        var fromNormalized = fromTeamId == null
+        var targetNormalized = targetTeamId == null
             ? null
-            : StudioTeamConventions.NormalizeTeamId(fromTeamId);
-        var toNormalized = toTeamId == null
-            ? null
-            : StudioTeamConventions.NormalizeTeamId(toTeamId);
+            : StudioTeamConventions.NormalizeTeamId(targetTeamId);
 
-        return ReassignTeamInternalAsync(
-            normalizedScopeId, normalizedMemberId, fromNormalized, toNormalized, ct);
+        var evt = new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = normalizedMemberId,
+            ScopeId = normalizedScopeId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (targetNormalized != null)
+            evt.TargetTeamId = targetNormalized;
+
+        // Refactor (iter96/cluster-545):
+        //   Old: application layer derived from_team_id and dispatched reassignment/fanout semantics.
+        //   New: PATCH intent enters StudioMemberGAgent; member actor commits the reassignment event, materializer fans out.
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
     private async Task ReassignTeamInternalAsync(

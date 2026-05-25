@@ -398,11 +398,11 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
-        public Task ReassignTeamAsync(
-            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+        public Task PatchTeamAssignmentAsync(
+            string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default)
         {
-            OperationsInOrder.Add("ReassignTeam");
+            OperationsInOrder.Add("PatchTeamAssignment");
             return Task.CompletedTask;
         }
     }
