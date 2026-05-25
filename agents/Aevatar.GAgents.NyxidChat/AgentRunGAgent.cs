@@ -75,6 +75,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Match(current, evt)
             .On<AgentRunStartedEvent>(ApplyStarted)
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
+            .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
@@ -201,51 +202,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     [EventHandler]
-    public async Task HandleReplyGenerationCompletedAsync(AgentRunReplyGenerationCompleted command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
-            return;
-
-        var request = command.Request?.Clone() ?? new NeedsLlmReplyEvent
-        {
-            CorrelationId = command.CorrelationId,
-            TargetActorId = command.TargetActorId,
-            RunId = command.RunId,
-        };
-        ApplyTargetRefOverrides(request);
-        if (string.IsNullOrWhiteSpace(request.TargetActorId))
-            request.TargetActorId = command.TargetActorId;
-
-        try
-        {
-            await ProduceAndDispatchAsync(
-                request,
-                command.RunId,
-                command.ReplyText ?? string.Empty,
-                command.Outbound,
-                command.TerminalState,
-                command.ErrorCode ?? string.Empty,
-                command.ErrorSummary ?? string.Empty);
-        }
-        catch (AgentRunOutputDispatchException ex)
-        {
-            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
-                return;
-
-            await PersistFailedAsync(
-                request,
-                command.RunId,
-                "agent_run_output_dispatch_failed",
-                ex.Message);
-        }
-        catch (Exception ex)
-        {
-            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
-        }
-    }
-
-    [EventHandler]
     public async Task HandleOutputDispatchRetryAsync(AgentRunOutputDispatchRetryRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -315,11 +271,30 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             request.TargetActorId = command.TargetActorId;
 
-        await PersistFailedAsync(
-            request,
-            command.RunId,
-            NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed",
-            command.ErrorSummary ?? string.Empty);
+        var errorCode = NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed";
+        var errorSummary = command.ErrorSummary ?? string.Empty;
+        try
+        {
+            await ProduceAndDispatchAsync(
+                request,
+                command.RunId,
+                "Sorry, I wasn't able to generate a response. Please try again.",
+                null,
+                LlmReplyTerminalState.Failed,
+                errorCode,
+                errorSummary);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                return;
+
+            await PersistFailedAsync(request, command.RunId, errorCode, errorSummary);
+        }
+        catch (Exception ex)
+        {
+            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
+        }
     }
 
     [EventHandler]
@@ -443,13 +418,204 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         });
 
         await ScheduleGenerationTimeoutAsync(request, runId, attempt);
-        await _generationExecutor.StartAsync(
-            new AgentRunReplyGenerationExecutionRequest(
-                runId,
+        await StartPerStepReplyGenerationAsync(request, runId, attempt);
+    }
+
+    private async Task StartPerStepReplyGenerationAsync(NeedsLlmReplyEvent request, string runId, int attempt)
+    {
+        var generationContext = await BuildInitialStepStateAsync(request, runId, attempt);
+        await PersistStepStateAsync(generationContext);
+        await PublishAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = attempt,
+            StepIndex = generationContext.NextStepIndex,
+            Request = request.Clone(),
+            StepState = generationContext.Clone(),
+        }, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        int attempt)
+    {
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
+        // New principle: AgentRunGAgent persists the per-step waterline and advances through typed self-messages.
+        return await _generationExecutor.BuildInitialStepStateAsync(
+                new AgentRunReplyGenerationExecutionRequest(runId, Id, attempt, request.Clone()),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
+    {
+        await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
+        {
+            RunId = stepState.RunId,
+            CorrelationId = stepState.CorrelationId,
+            TargetActorId = stepState.TargetActorId,
+            Attempt = stepState.Attempt,
+            StepState = stepState.Clone(),
+        });
+    }
+
+    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteLlmStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
                 Id,
-                attempt,
-                request.Clone()),
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
             CancellationToken.None);
+    }
+
+    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteToolStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
+            CancellationToken.None);
+    }
+
+    private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        await ProduceAndDispatchAsync(
+            request,
+            stepState.RunId,
+            hasReplyText
+                ? stepState.AccumulatedText
+                : "Sorry, I wasn't able to generate a response. Please try again.",
+            stepState.OutboundIntent?.Clone(),
+            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            hasReplyText ? string.Empty : "empty_reply",
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
+    }
+
+    private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
+    {
+        if (stepState.PendingToolCalls.Count > 0)
+            return false;
+
+        if (stepState.FinalNoToolsStep)
+            return true;
+
+        if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
+            return true;
+
+        if (stepState.Round >= stepState.MaxToolRounds)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+    }
+
+    private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(AgentRunReplyStepState stepState)
+    {
+        var next = stepState.Clone();
+        next.FinalNoToolsStep = true;
+        next.NextStepIndex++;
+        await PersistStepStateAsync(next);
+        return next;
+    }
+
+    private bool IsCurrentStepContinuation(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
+            return false;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null)
+            return stepIndex <= 1;
+
+        return stepIndex == currentStep.NextStepIndex || stepIndex == currentStep.NextStepIndex + 1;
+    }
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextLlmStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextToolStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextLlmStepAsync(AgentRunNextLlmStepRequestedEvent command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            return;
+
+        var isCompletedLlmStep = State.GenerationStep is not null &&
+                                 command.StepState is not null &&
+                                 command.StepIndex == State.GenerationStep.NextStepIndex + 1;
+
+        if (command.StepState is not null)
+            await PersistStepStateAsync(command.StepState);
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+
+        var stepState = command.StepState ?? State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (ShouldCompleteAfterLlmStep(stepState, isCompletedLlmStep))
+        {
+            await CompletePerStepReplyAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.PendingToolCalls.Count > 0)
+        {
+            await DispatchToolStepExecutorAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextToolStepAsync(AgentRunNextToolStepRequestedEvent command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            return;
+
+        if (command.StepState is not null)
+            await PersistStepStateAsync(command.StepState);
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+        var stepState = command.StepState ?? State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
     }
 
     /// <summary>
@@ -1262,6 +1428,20 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.Status = AgentRunStatus.ReplyGenerationRequested;
         next.GenerationRequestedAtUnixMs = evt.RequestedAtUnixMs;
         next.GenerationAttempt = evt.Attempt;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyReplyStepStateUpdated(
+        AgentRunGAgentState current,
+        AgentRunReplyStepStateUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        if (evt.Attempt > 0)
+            next.GenerationAttempt = evt.Attempt;
+        next.GenerationStep = evt.StepState?.Clone();
         return next;
     }
 
