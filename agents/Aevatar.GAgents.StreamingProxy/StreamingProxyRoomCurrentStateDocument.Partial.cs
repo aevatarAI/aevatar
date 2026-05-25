@@ -1,9 +1,9 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 
-namespace Aevatar.Studio.Projection.ReadModels;
+namespace Aevatar.GAgents.StreamingProxy;
 
-public sealed partial class StreamingProxyParticipantCurrentStateDocument
-    : IProjectionReadModel<StreamingProxyParticipantCurrentStateDocument>
+public sealed partial class StreamingProxyRoomCurrentStateDocument
+    : IProjectionReadModel<StreamingProxyRoomCurrentStateDocument>
 {
     string IProjectionReadModel.ActorId => ActorId;
 

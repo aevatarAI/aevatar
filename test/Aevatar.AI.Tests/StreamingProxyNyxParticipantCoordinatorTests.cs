@@ -43,7 +43,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         joinedEvents.Should().HaveCount(3);
         joinedEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
 
-        store.ListParticipants("room-1").Should().HaveCount(3);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -67,9 +67,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
         llmProvider.Requests.Should().HaveCount(2);
         llmProvider.Requests[0].RequestId.Should().Contain("node-a");
@@ -92,7 +90,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
         leftEvents.Should().HaveCount(1);
         leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -131,9 +129,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
         llmProvider.Requests.Should().HaveCount(2);
         llmProvider.Requests[0].RequestId.Should().Contain("node-a");
@@ -155,7 +151,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
         leftEvents.Should().HaveCount(1);
         leftEvents.Single().AgentId.Should().Contain("node-a");
-        store.ListParticipants("room-1").Should().HaveCount(2);
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     [Fact]
@@ -186,9 +182,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "Discuss the roadmap for the next release.",
             "session-1",
             "test-token",
-            CancellationToken.None,
-            store,
-            "room-1");
+            CancellationToken.None);
 
         llmProvider.Requests.Should().HaveCount(1);
 
@@ -226,8 +220,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         participants.Should().ContainSingle();
         participants.Single().RoutePreference.Should().Be("/api/v1/proxy/s/openclaw/legacy");
         participants.Single().Model.Should().Be("legacy-model");
-        store.ListParticipants("room-1").Should().ContainSingle(entry =>
-            entry.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
+        store.ListParticipants("room-1").Should().BeEmpty();
     }
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()
@@ -486,7 +479,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         }
     }
 
-    private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
+    private sealed class RecordingParticipantStore : IStreamingProxyParticipantQueryPort
     {
         private readonly Dictionary<string, List<ParticipantStoreEntry>> _rooms = new(StringComparer.OrdinalIgnoreCase);
 
@@ -498,44 +491,6 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
                 ? existing.ToList()
                 : [];
             return Task.FromResult(participants);
-        }
-
-        public Task AddAsync(
-            string roomId,
-            string agentId,
-            string displayName,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_rooms.TryGetValue(roomId, out var participants))
-            {
-                participants = [];
-                _rooms[roomId] = participants;
-            }
-
-            participants.RemoveAll(entry => string.Equals(entry.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
-            participants.Add(new ParticipantStoreEntry(agentId, displayName, DateTimeOffset.UtcNow));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveParticipantAsync(
-            string roomId,
-            string agentId,
-            CancellationToken cancellationToken = default)
-        {
-            if (_rooms.TryGetValue(roomId, out var participants))
-            {
-                participants.RemoveAll(entry => string.Equals(entry.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
-                if (participants.Count == 0)
-                    _rooms.Remove(roomId);
-            }
-
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
-        {
-            _rooms.Remove(roomId);
-            return Task.CompletedTask;
         }
 
         public IReadOnlyList<ParticipantStoreEntry> ListParticipants(string roomId) =>

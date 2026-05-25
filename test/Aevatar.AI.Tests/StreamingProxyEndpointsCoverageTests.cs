@@ -96,9 +96,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnStoredParticipants()
+    public async Task HandleListParticipantsAsync_ShouldReturnQueriedParticipants()
     {
-        var participantStore = new RecordingParticipantStore
+        var participantQueryPort = new RecordingParticipantStore
         {
             Participants =
             [
@@ -111,7 +111,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            participantQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -123,9 +123,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenStoreThrows()
+    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenQueryPortThrows()
     {
-        var participantStore = new RecordingParticipantStore
+        var participantQueryPort = new RecordingParticipantStore
         {
             ThrowOnList = new InvalidOperationException("list failed"),
         };
@@ -135,7 +135,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            participantQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -172,14 +172,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
-        var participantStore = new RecordingParticipantStore();
+        var participantQueryPort = new RecordingParticipantStore();
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             "room-1",
-            participantStore,
+            participantQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -206,13 +206,13 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         string roomId,
-        IStreamingProxyParticipantStore participantStore,
+        IStreamingProxyParticipantQueryPort participantQueryPort,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantQueryPort, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -319,7 +319,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         }
     }
 
-    private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
+    private sealed class RecordingParticipantStore : IStreamingProxyParticipantQueryPort
     {
         public Exception? ThrowOnList { get; init; }
         public IReadOnlyList<AppStreamingProxyParticipant> Participants { get; init; } = [];
@@ -335,33 +335,6 @@ public sealed class StreamingProxyEndpointsCoverageTests
             return Task.FromResult(Participants);
         }
 
-        public Task AddAsync(
-            string roomId,
-            string agentId,
-            string displayName,
-            CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            _ = agentId;
-            _ = displayName;
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveParticipantAsync(
-            string roomId,
-            string agentId,
-            CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            _ = agentId;
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class RecordingActorRuntime(List<string> operations, IActor actor) : IActorRuntime

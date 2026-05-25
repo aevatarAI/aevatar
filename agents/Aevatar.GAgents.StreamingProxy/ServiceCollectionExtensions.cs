@@ -68,7 +68,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingProxyCurrentStateProjectionPort>();
         services.AddCurrentStateProjectionMaterializer<
             StreamingProxyCurrentStateProjectionContext,
+            StreamingProxyRoomCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            StreamingProxyCurrentStateProjectionContext,
             StreamingProxyChatSessionTerminalProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StreamingProxyRoomCurrentStateDocument>,
+            StreamingProxyRoomCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StreamingProxyChatSessionTerminalSnapshot>,
             StreamingProxyChatSessionTerminalSnapshotMetadataProvider>();
@@ -112,7 +118,10 @@ public static class ServiceCollectionExtensions
         IConfiguration? configuration)
     {
         if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<StreamingProxyChatSessionTerminalSnapshot, string>)))
+        {
+            EnsureStreamingProxyRoomCurrentStateReadModelProvider(services, configuration);
             return;
+        }
 
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
@@ -127,6 +136,7 @@ public static class ServiceCollectionExtensions
 
         if (elasticsearchEnabled)
         {
+            AddElasticsearchStreamingProxyRoomCurrentStateReadModelProvider(services, configuration);
             services.AddElasticsearchDocumentProjectionStore<StreamingProxyChatSessionTerminalSnapshot, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration!),
                 metadataFactory: sp => sp
@@ -137,8 +147,46 @@ public static class ServiceCollectionExtensions
             return;
         }
 
+        AddInMemoryStreamingProxyRoomCurrentStateReadModelProvider(services);
         services.AddInMemoryDocumentProjectionStore<StreamingProxyChatSessionTerminalSnapshot, string>(
             keySelector: readModel => readModel.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());
+    }
+
+    private static void EnsureStreamingProxyRoomCurrentStateReadModelProvider(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<StreamingProxyRoomCurrentStateDocument, string>)))
+            return;
+
+        if (ResolveElasticsearchDocumentEnabled(configuration))
+        {
+            AddElasticsearchStreamingProxyRoomCurrentStateReadModelProvider(services, configuration);
+            return;
+        }
+
+        AddInMemoryStreamingProxyRoomCurrentStateReadModelProvider(services);
+    }
+
+    private static void AddElasticsearchStreamingProxyRoomCurrentStateReadModelProvider(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        services.AddElasticsearchDocumentProjectionStore<StreamingProxyRoomCurrentStateDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration!),
+            metadataFactory: sp => sp
+                .GetRequiredService<IProjectionDocumentMetadataProvider<StreamingProxyRoomCurrentStateDocument>>()
+                .Metadata,
+            keySelector: readModel => readModel.ActorId,
+            keyFormatter: key => key);
+    }
+
+    private static void AddInMemoryStreamingProxyRoomCurrentStateReadModelProvider(IServiceCollection services)
+    {
+        services.AddInMemoryDocumentProjectionStore<StreamingProxyRoomCurrentStateDocument, string>(
+            keySelector: readModel => readModel.ActorId,
             keyFormatter: key => key,
             defaultSortSelector: readModel => readModel.UpdatedAt.ToDateTimeOffset());
     }

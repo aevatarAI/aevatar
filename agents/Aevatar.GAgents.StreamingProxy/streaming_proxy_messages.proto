@@ -3,6 +3,7 @@ package aevatar.gagents.streamingproxy;
 option csharp_namespace = "Aevatar.GAgents.StreamingProxy";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
 import "agent_messages.proto";
 
 // ─── State ───
@@ -92,4 +93,13 @@ message StreamingProxyChatSessionTerminalSnapshot {
   StreamingProxyChatSessionTerminalStatus status = 8;
   google.protobuf.Timestamp terminal_at = 9;
   string error_message = 10;
+}
+
+message StreamingProxyRoomCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
 }

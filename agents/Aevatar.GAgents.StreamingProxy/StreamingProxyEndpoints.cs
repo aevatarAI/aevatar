@@ -124,7 +124,6 @@ public static class StreamingProxyEndpoints
         string roomId,
         [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -155,15 +154,6 @@ public static class StreamingProxyEndpoints
                 new { error = "Failed to delete room" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
-        try
-        {
-            await participantStore.RemoveRoomAsync(roomId, ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to remove participants for room {RoomId}", roomId);
-        }
         return Results.Ok();
     }
 
@@ -179,7 +169,7 @@ public static class StreamingProxyEndpoints
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
-        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] IStreamingProxyParticipantQueryPort participantQueryPort,
         [FromServices] StreamingProxyNyxParticipantCoordinator participantCoordinator,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -240,7 +230,7 @@ public static class StreamingProxyEndpoints
                             scopeId,
                             roomId,
                             actor,
-                            participantStore,
+                            participantQueryPort,
                             accessToken,
                             token,
                             preferredRoute,
@@ -255,9 +245,7 @@ public static class StreamingProxyEndpoints
                         prompt,
                         sessionId,
                         accessToken,
-                        token,
-                        participantStore,
-                        roomId));
+                        token));
                     await PublishTerminalStateAsync(
                         actorDispatchPort,
                         actor.Id,
@@ -456,7 +444,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] IStreamingProxyParticipantQueryPort participantQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -475,7 +463,7 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var participants = await participantStore.ListAsync(roomId, ct);
+            var participants = await participantQueryPort.ListAsync(roomId, ct);
             return Results.Ok(participants);
         }
         catch (OperationCanceledException) { throw; }
@@ -496,7 +484,6 @@ public static class StreamingProxyEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -536,17 +523,6 @@ public static class StreamingProxyEndpoints
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
         };
         await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
-
-        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
-        try
-        {
-            await participantStore.AddAsync(roomId, agentId, displayName, ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to persist participant {AgentId} in room {RoomId}", agentId, roomId);
-        }
 
         return Results.Ok(new { status = "joined", agentId });
     }

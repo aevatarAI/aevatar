@@ -8,7 +8,6 @@ using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
-using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Workspace;
@@ -30,7 +29,7 @@ namespace Aevatar.Studio.Hosting;
 /// configuration. Required by the actor-backed stores
 /// (<c>IRoleCatalogStore</c>, <c>IConnectorCatalogStore</c>,
 /// <c>IChatHistoryStore</c>, <c>IGAgentActorRegistryQueryPort</c>,
-/// <c>IUserMemoryStore</c>, <c>IStreamingProxyParticipantStore</c>) that read
+/// <c>IUserMemoryStore</c>) that read
 /// from these documents via <c>IProjectionDocumentReader</c>.
 /// </summary>
 internal static class StudioProjectionReadModelServiceCollectionExtensions
@@ -67,7 +66,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
-            RegisterElasticsearch<StreamingProxyParticipantCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
@@ -82,7 +80,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
-            RegisterInMemory<StreamingProxyParticipantCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
@@ -134,7 +131,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<StreamingProxyParticipantCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
@@ -219,7 +215,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             ConnectorCatalogState.Descriptor,
             RoleCatalogState.Descriptor,
             UserMemoryState.Descriptor,
-            StreamingProxyParticipantGAgentState.Descriptor,
             ChatHistoryIndexState.Descriptor,
             ChatConversationState.Descriptor,
             StudioMemberState.Descriptor,

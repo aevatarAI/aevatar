@@ -1,13 +1,12 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Studio.Projection.ReadModels;
 
-namespace Aevatar.Studio.Projection.Metadata;
+namespace Aevatar.GAgents.StreamingProxy;
 
-public sealed class StreamingProxyParticipantCurrentStateDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<StreamingProxyParticipantCurrentStateDocument>
+public sealed class StreamingProxyRoomCurrentStateDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<StreamingProxyRoomCurrentStateDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "studio-streaming-proxy-participant",
+        IndexName: "studio-streaming-proxy-room",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,

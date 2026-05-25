@@ -27,7 +27,6 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ChronoStorage\Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>

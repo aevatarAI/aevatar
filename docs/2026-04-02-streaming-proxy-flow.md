@@ -18,7 +18,7 @@
 | `StreamingProxyEndpoints` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs` | 提供 room CRUD、`:chat`、`messages`、`messages:stream`、participant 管理 HTTP/SSE 入口 |
 | `StreamingProxyGAgent` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyGAgent.cs` | 房间 actor，本质上是 group chat broker；持久化事件、更新房间内消息/参与者状态、向订阅者发布事件 |
 | `IGAgentActorRegistryCommandPort` / `IGAgentActorRegistryQueryPort` / `IScopeResourceAdmissionPort` | `src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentRegistryPorts.cs` | room ownership 的写入、列表查询与 command admission 边界 |
-| `IStreamingProxyParticipantStore` | `src/Aevatar.Studio.Application/Studio/Abstractions/IStreamingProxyParticipantStore.cs` | room participant 的持久化索引，供 participant 查询、自动加入与失败移除时使用 |
+| `IStreamingProxyParticipantQueryPort` | `src/Aevatar.Studio.Application/Studio/Abstractions/IStreamingProxyParticipantQueryPort.cs` | room participant 查询入口，读取 `StreamingProxyGAgent` 当前态 readmodel |
 | `StreamingProxyNyxParticipantCoordinator` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs` | 在带 Bearer Token 时发现 Nyx 可用 provider，把它们自动加入房间并生成多轮回复 |
 | `StreamingProxySseWriter` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs` | 把 actor 事件映射成 SSE frame 输出给客户端 |
 
@@ -29,7 +29,7 @@
 flowchart TB
     CL["Client / OpenClaw"] --> API["StreamingProxyEndpoints\n/api/scopes/{scopeId}/streaming-proxy/..."]
     API --> REG["GAgent registry ports\ncommand / query / admission"]
-    API --> PSTORE["IStreamingProxyParticipantStore\nparticipant index"]
+    API --> PQUERY["IStreamingProxyParticipantQueryPort\nroom current-state readmodel"]
     API --> RT["IActorRuntime"]
     RT --> ACT["StreamingProxyGAgent\nroom actor"]
     API --> SUB["IActorEventSubscriptionProvider"]
@@ -194,14 +194,10 @@ flowchart LR
 
 `EnsureParticipantsJoinedAsync(...)` 的行为是：
 
-1. 先从 `StreamingProxyActorStore` 读取已有 participant。
+1. 先从 `IStreamingProxyParticipantQueryPort` 读取 room actor 当前态 readmodel 中已有 participant。
 2. 对新增 participant 投递 `GroupChatParticipantJoinedEvent` 给 room actor。
-3. 同时更新 `StreamingProxyActorStore` 的 participant 查询索引。
 
-所以当前实现里，participant 有两份表现层状态：
-
-1. actor 内 `_proxyState.Participants`
-2. `StreamingProxyActorStore` 里的 query list
+participant membership 的唯一写侧事实在 `StreamingProxyGAgentState.Participants`；查询只读取该状态的投影副本。
 
 ### 6.2 自动回复生成
 
@@ -244,15 +240,13 @@ flowchart LR
 sequenceDiagram
     participant EXT as "External Participant"
     participant API as "StreamingProxyEndpoints"
-    participant STORE as "StreamingProxyActorStore"
     participant ACT as "StreamingProxyGAgent"
     participant SUB as "Actor Event Subscription"
     participant SSE as "StreamingProxySseWriter"
     participant CL as "Client"
 
     EXT->>API: "POST /participants"
-    API->>ACT: "HandleEventAsync(GroupChatParticipantJoinedEvent)"
-    API->>STORE: "AddParticipant(...)"
+    API->>ACT: "Dispatch GroupChatParticipantJoinedEvent"
     ACT-->>SUB: "Publish joined event"
     SUB->>SSE: "WriteParticipantJoinedAsync"
     SSE-->>CL: "PARTICIPANT_JOINED"
@@ -304,18 +298,18 @@ sequenceDiagram
 
 状态分别落在三处：
 
-1. `StreamingProxyActorStore`
-   - room 列表
-   - participant 查询索引
-2. `StreamingProxyGAgent` 事件与 `_proxyState`
+1. registry actor state
+   - room ownership
+2. `StreamingProxyGAgent` 事件与状态
    - 房间名
    - participant 集合
    - message transcript
    - `next_sequence`
-3. SSE 订阅流
+3. Projection readmodel / SSE 订阅流
+   - participant 查询读取 `StreamingProxyRoomCurrentStateDocument`
    - 只承载实时输出，不承载查询事实
 
-如果只看当前代码，真正驱动前端实时展示的是 actor 发布的 `GroupChat*` 事件，不是 `StreamingProxyActorStore`。
+如果只看当前代码，真正驱动前端实时展示的是 actor 发布的 `GroupChat*` 事件；participant 查询读取同一 room actor 当前态的投影副本。
 
 ## 11. 关键代码锚点
 
@@ -323,6 +317,5 @@ sequenceDiagram
 2. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs`
 3. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyGAgent.cs`
 4. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs`
-5. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyActorStore.cs`
-6. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs`
-7. `agents/Aevatar.GAgents.StreamingProxy/streaming_proxy_messages.proto`
+5. `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs`
+6. `agents/Aevatar.GAgents.StreamingProxy/streaming_proxy_messages.proto`

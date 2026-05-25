@@ -98,7 +98,6 @@ GAgentBase                              ← 无状态底座
 | `ConnectorCatalogGAgent` | `GAgentBase<ConnectorCatalogState>` | `ConnectorCatalogState` | Connector 目录 |
 | `DeviceRegistrationGAgent` | `GAgentBase<DeviceRegistrationState>` | `DeviceRegistrationState` | 设备注册 |
 | `StreamingProxyGAgent` | `GAgentBase<StreamingProxyGAgentState>` | `StreamingProxyGAgentState` | 流式代理房间 |
-| `StreamingProxyParticipantGAgent` | `GAgentBase<StreamingProxyParticipantGAgentState>` | `StreamingProxyParticipantGAgentState` | 流式代理参与者 |
 | `ConversationGAgent` | `GAgentBase<ConversationGAgentState>` | `ConversationGAgentState` | 渠道对话（Lark/Telegram） |
 | `ChannelBotRegistrationGAgent` | `GAgentBase<ChannelBotRegistrationStoreState>` | `ChannelBotRegistrationStoreState` | 渠道 Bot 注册 |
 | `ChannelUserBindingGAgent` | `GAgentBase<ChannelUserBindingState>` | `ChannelUserBindingState` | 渠道用户绑定 |
@@ -131,7 +130,7 @@ GAgentBase                              ← 无状态底座
 | `RoleCatalogGAgent` | role_name → role spec |
 | `ConnectorCatalogGAgent` | connector_name → connector config |
 | `UserAgentCatalogGAgent` | user + agent_id → catalog entry |
-| `StreamingProxyParticipantGAgent` | room_id → participant set |
+| `StreamingProxyGAgent` | room_id → participant set + messages |
 | `ChatHistoryIndexGAgent` | user → conversation list |
 
 **共性模式**：`Upsert → Tombstone → Compact`，状态内维护 `last_applied_event_version`，projection 直出 current-state read model。
@@ -314,7 +313,7 @@ abstract class RunGAgentBase<TState> : GAgentBase<TState>
 
 #### 4.1.2 `CatalogGAgentBase<TState, TKey, TEntry>` — 目录索引基类
 
-**适用对象**：`ScriptCatalogGAgent`、`GAgentRegistryGAgent`、`RoleCatalogGAgent`、`ConnectorCatalogGAgent`、`UserAgentCatalogGAgent`、`StreamingProxyParticipantGAgent`、`ChatHistoryIndexGAgent`
+**适用对象**：`ScriptCatalogGAgent`、`GAgentRegistryGAgent`、`RoleCatalogGAgent`、`ConnectorCatalogGAgent`、`UserAgentCatalogGAgent`、`ChatHistoryIndexGAgent`
 
 **可抽取的通用能力**：
 ```

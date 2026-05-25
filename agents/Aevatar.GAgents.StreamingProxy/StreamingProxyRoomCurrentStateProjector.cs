@@ -2,25 +2,22 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.StreamingProxyParticipant;
-using Aevatar.Studio.Projection.Orchestration;
-using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Studio.Projection.Projectors;
+namespace Aevatar.GAgents.StreamingProxy;
 
 /// <summary>
-/// Materializes <see cref="StreamingProxyParticipantGAgentState"/> committed events into
-/// <see cref="StreamingProxyParticipantCurrentStateDocument"/> in the projection document store.
+/// Materializes <see cref="StreamingProxyGAgentState"/> committed events into
+/// <see cref="StreamingProxyRoomCurrentStateDocument"/> in the projection document store.
 /// </summary>
-public sealed class StreamingProxyParticipantCurrentStateProjector
-    : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
+public sealed class StreamingProxyRoomCurrentStateProjector
+    : ICurrentStateProjectionMaterializer<StreamingProxyCurrentStateProjectionContext>
 {
-    private readonly IProjectionWriteDispatcher<StreamingProxyParticipantCurrentStateDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<StreamingProxyRoomCurrentStateDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
-    public StreamingProxyParticipantCurrentStateProjector(
-        IProjectionWriteDispatcher<StreamingProxyParticipantCurrentStateDocument> writeDispatcher,
+    public StreamingProxyRoomCurrentStateProjector(
+        IProjectionWriteDispatcher<StreamingProxyRoomCurrentStateDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -28,14 +25,14 @@ public sealed class StreamingProxyParticipantCurrentStateProjector
     }
 
     public async ValueTask ProjectAsync(
-        StudioMaterializationContext context,
+        StreamingProxyCurrentStateProjectionContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!CommittedStateEventEnvelope.TryUnpackState<StreamingProxyParticipantGAgentState>(
+        if (!CommittedStateEventEnvelope.TryUnpackState<StreamingProxyGAgentState>(
                 envelope,
                 out _,
                 out var stateEvent,
@@ -48,7 +45,7 @@ public sealed class StreamingProxyParticipantCurrentStateProjector
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
 
-        var document = new StreamingProxyParticipantCurrentStateDocument
+        var document = new StreamingProxyRoomCurrentStateDocument
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
