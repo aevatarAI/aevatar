@@ -151,6 +151,9 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         string? toTeamIdNormalized,
         CancellationToken ct)
     {
+        // Refactor (iter96/cluster-544):
+        //   Old: command service dispatch 后顺序 fanout 到 team service(不可靠,无 durable)
+        //   New: committed state event -> StudioTeamRosterFanoutMaterializer 投递 team actor inbox(durable + actor retry)
         var reassignedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
 
         var evt = new StudioMemberReassignedEvent

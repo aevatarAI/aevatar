@@ -128,26 +128,26 @@ public sealed class ActorDispatchStudioMemberReassignTests
     }
 
     [Fact]
-    public void ReassignTeamAsync_BothNull_ShouldReject()
+    public async Task ReassignTeamAsync_BothNull_ShouldReject()
     {
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: null, toTeamId: null);
 
-        act.Should().ThrowAsync<InvalidOperationException>()
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*at least one*");
     }
 
     [Fact]
-    public void ReassignTeamAsync_BothEqual_ShouldReject()
+    public async Task ReassignTeamAsync_BothEqual_ShouldReject()
     {
         var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.ReassignTeamAsync(
             ScopeId, "m-1", fromTeamId: "t-same", toTeamId: "t-same");
 
-        act.Should().ThrowAsync<InvalidOperationException>()
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must differ*");
     }
 
