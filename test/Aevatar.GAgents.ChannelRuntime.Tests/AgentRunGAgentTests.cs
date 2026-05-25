@@ -1064,8 +1064,7 @@ public sealed class AgentRunGAgentTests
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
         var handled = new List<EventEnvelope>();
-        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
-            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        AgentRunStatus? statusWhenNotified = null;
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -1075,6 +1074,12 @@ public sealed class AgentRunGAgentTests
             {
                 InteractiveRepliesEnabled = true,
                 StreamingRepliesEnabled = false,
+            });
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call =>
+            {
+                handled.Add(call.Arg<EventEnvelope>());
+                statusWhenNotified = runtime.State.Status;
             });
 
         var request = new NeedsLlmReplyEvent
@@ -1091,6 +1096,8 @@ public sealed class AgentRunGAgentTests
 
         handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
         runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        statusWhenNotified.Should().Be(AgentRunStatus.Dropped, "AgentRunDroppedEvent must be persisted before notifying");
+        runtime.State.DropNotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -1314,7 +1321,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_ShouldScheduleRetry_WhenDropSignalIsNotAccepted()
+    public async Task HandleStartAsync_ShouldScheduleDropNotificationRetry_WhenDropSignalIsNotAccepted()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -1349,19 +1356,89 @@ public sealed class AgentRunGAgentTests
 
         await runtime.HandleStartAsync(request);
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Started);
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        runtime.State.PendingDropNotificationRunId.Should().Be(runtime.State.RunId);
+        runtime.State.PendingDropNotificationCorrelationId.Should().Be("corr-retry-drop");
+        runtime.State.PendingDropNotificationTargetActorId.Should().Be("actor-1");
+        runtime.State.PendingDropNotificationReason.Should().Be("missing_relay_reply_token");
+        runtime.State.DropNotificationDispatchedAtUnixMs.Should().Be(0);
         handled.Should().BeEmpty();
         replyGenerator.CallCount.Should().Be(0);
+
+        scheduler.Timeouts.Should().NotContain(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor),
+            "drop notification retry must stay separate from ready-output retry");
+        var retry = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunDropNotificationRetryRequested.Descriptor))
+            .Subject;
+        retry.ActorId.Should().Be(runtime.Id);
+        retry.DueTime.Should().Be(AgentRunGAgent.DropNotificationRetryDelay);
+        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunDropNotificationRetryRequested>();
+        retryCommand.RunId.Should().Be(runtime.State.RunId);
+        retryCommand.CorrelationId.Should().Be("corr-retry-drop");
+        retryCommand.TargetActorId.Should().Be("actor-1");
+
+        await runtime.HandleDropNotificationRetryAsync(retryCommand);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        runtime.State.DropNotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        var dropped = handled.Single().Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-retry-drop");
+        dropped.Reason.Should().Be("missing_relay_reply_token");
+        dropped.DroppedAtUnixMs.Should().Be(runtime.State.PendingDropNotificationDroppedAtUnixMs);
+    }
+
+    [Fact]
+    public async Task HandleDropNotificationRetryAsync_WhenTargetDoesNotMatch_DropsStaleRetry()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "should not run" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-drop-retry",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        });
 
         var retryCommand = scheduler.Timeouts.Should().ContainSingle(
-                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
-            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>();
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunDropNotificationRetryRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunDropNotificationRetryRequested>();
 
-        await runtime.HandleOutputDispatchRetryAsync(retryCommand);
+        var wrongTarget = retryCommand.Clone();
+        wrongTarget.TargetActorId = "actor-2";
+        await runtime.HandleDropNotificationRetryAsync(wrongTarget);
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Started);
-        replyGenerator.CallCount.Should().Be(0);
         handled.Should().BeEmpty();
+        runtime.State.DropNotificationDispatchedAtUnixMs.Should().Be(0);
+
+        await runtime.HandleDropNotificationRetryAsync(retryCommand);
+
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        runtime.State.DropNotificationDispatchedAtUnixMs.Should().BeGreaterThan(0);
     }
 
     [Fact]

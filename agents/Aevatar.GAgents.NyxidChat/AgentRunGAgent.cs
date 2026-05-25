@@ -44,6 +44,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
+    internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
+    private const string DropNotificationRetryCallbackPrefix = "agent-run-drop-notification-retry";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
@@ -76,6 +78,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
+            .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
             .On<AgentRunCleanupCompletedEvent>(ApplyCleanupCompleted)
             .OrCurrent();
@@ -273,6 +276,25 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             if (!await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
                 throw;
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleDropNotificationRetryAsync(AgentRunDropNotificationRetryRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!IsCurrentDropNotificationRetry(command))
+            return;
+
+        try
+        {
+            await DispatchPendingDropNotificationAsync();
+            await TryPersistDropNotificationDispatchedAsync();
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            await TryScheduleDropNotificationRetryAsync(command.Attempt + 1, ex);
         }
     }
 
@@ -533,17 +555,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
     {
-        if (CanNotifyDrop(request))
-            await DispatchDropNotificationAsync(request, reason);
-
-        await PersistDomainEventAsync(new AgentRunDroppedEvent
+        // Refactor (iter99/cluster-605-drop-outbox):
+        //   Old pattern: notify DeferredLlmReplyDroppedEvent before persisting AgentRunDroppedEvent; notification failure left no actor-owned retry fact.
+        //   New principle: persist the drop outbox fact first, then notify; retry callbacks replay the notification from AgentRunGAgentState.
+        var dropped = new AgentRunDroppedEvent
         {
             RunId = runId,
             CorrelationId = request.CorrelationId,
             TargetActorId = request.TargetActorId,
             Reason = reason,
             DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+        };
+        await PersistDomainEventAsync(dropped);
+
+        if (CanNotifyDrop(request))
+        {
+            try
+            {
+                await DispatchPendingDropNotificationAsync();
+                await TryPersistDropNotificationDispatchedAsync();
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                await TryScheduleDropNotificationRetryAsync(1, ex);
+            }
+        }
 
         await ScheduleTerminalCleanupAsync(runId);
     }
@@ -582,6 +618,29 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             TargetActorId = request.TargetActorId,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+    }
+
+    private async Task TryPersistDropNotificationDispatchedAsync()
+    {
+        try
+        {
+            await PersistDomainEventAsync(new AgentRunDropNotificationDispatchedEvent
+            {
+                RunId = State.PendingDropNotificationRunId,
+                CorrelationId = State.PendingDropNotificationCorrelationId,
+                TargetActorId = State.PendingDropNotificationTargetActorId,
+                DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to persist AgentRunDropNotificationDispatchedEvent after successful drop notification; " +
+                "drop outbox may retry until the dispatched marker is committed. runId={RunId} correlation={CorrelationId}",
+                State.PendingDropNotificationRunId,
+                State.PendingDropNotificationCorrelationId);
+        }
     }
 
     private async Task PersistFailedAsync(
@@ -733,6 +792,35 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
+    private async Task DispatchPendingDropNotificationAsync()
+    {
+        var targetActorId = NormalizeOptional(State.PendingDropNotificationTargetActorId);
+        var correlationId = NormalizeOptional(State.PendingDropNotificationCorrelationId);
+        if (targetActorId is null || correlationId is null)
+            return;
+
+        var dropped = new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = correlationId,
+            Reason = State.PendingDropNotificationReason ?? string.Empty,
+            DroppedAtUnixMs = State.PendingDropNotificationDroppedAtUnixMs > 0
+                ? State.PendingDropNotificationDroppedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        };
+
+        try
+        {
+            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
+            await SendToAsync(targetActorId, dropped, outputCts.Token);
+        }
+        catch (Exception ex)
+        {
+            throw new AgentRunOutputDispatchException(
+                $"Failed to send deferred LLM reply drop event to conversation actor '{targetActorId}' (reason '{dropped.Reason}').",
+                ex);
+        }
+    }
+
     private async Task DispatchGenerationTimeoutDropNotificationAsync(AgentRunReplyGenerationTimedOut command)
     {
         if (string.IsNullOrWhiteSpace(command.TargetActorId) ||
@@ -815,6 +903,47 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ex,
                 "Failed to schedule agent run output retry: runId={RunId} actorId={ActorId}",
                 runId,
+                Id);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryScheduleDropNotificationRetryAsync(
+        int attempt,
+        AgentRunOutputDispatchException dispatchException)
+    {
+        _logger.LogWarning(
+            dispatchException,
+            "Agent run drop notification was not accepted; run remains retryable from drop outbox state: runId={RunId} correlation={CorrelationId}",
+            State.PendingDropNotificationRunId,
+            State.PendingDropNotificationCorrelationId);
+
+        if (_callbackScheduler is null)
+            return false;
+
+        try
+        {
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildDropNotificationRetryCallbackId(State.PendingDropNotificationRunId, attempt),
+                    DropNotificationRetryDelay,
+                    new AgentRunDropNotificationRetryRequested
+                    {
+                        RunId = State.PendingDropNotificationRunId,
+                        CorrelationId = State.PendingDropNotificationCorrelationId,
+                        TargetActorId = State.PendingDropNotificationTargetActorId,
+                        Attempt = Math.Max(1, attempt),
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    }),
+                ct: CancellationToken.None);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule agent run drop notification retry: runId={RunId} actorId={ActorId}",
+                State.PendingDropNotificationRunId,
                 Id);
             return false;
         }
@@ -915,6 +1044,41 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return command.Attempt <= 0 || State.GenerationAttempt == command.Attempt;
     }
 
+    private bool IsCurrentDropNotificationRetry(AgentRunDropNotificationRetryRequested command)
+    {
+        if (State.Status is not AgentRunStatus.Dropped)
+            return false;
+
+        if (State.DropNotificationDispatchedAtUnixMs != 0)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) ||
+            string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationRunId) &&
+            !string.Equals(State.PendingDropNotificationRunId, command.RunId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) &&
+            !string.Equals(State.PendingDropNotificationCorrelationId, command.CorrelationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId) &&
+            !string.Equals(State.PendingDropNotificationTargetActorId, command.TargetActorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private NeedsLlmReplyEvent BuildOutputDispatchRetryRequest(AgentRunOutputDispatchRetryRequested command) =>
         new()
         {
@@ -981,6 +1145,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Take(96)
             .ToArray();
         return $"{OutputDispatchRetryCallbackPrefix}:{new string(chars)}";
+    }
+
+    private static string BuildDropNotificationRetryCallbackId(string runId, int attempt)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{DropNotificationRetryCallbackPrefix}:{new string(chars)}:{Math.Max(1, attempt)}";
     }
 
     private static string BuildGenerationTimeoutCallbackId(string runId, int attempt)
@@ -1174,6 +1348,24 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.DroppedAtUnixMs;
         next.ErrorCode = evt.Reason;
         next.ErrorSummary = string.Empty;
+        next.PendingDropNotificationRunId = evt.RunId;
+        next.PendingDropNotificationCorrelationId = evt.CorrelationId;
+        next.PendingDropNotificationTargetActorId = evt.TargetActorId;
+        next.PendingDropNotificationReason = evt.Reason;
+        next.PendingDropNotificationDroppedAtUnixMs = evt.DroppedAtUnixMs;
+        next.DropNotificationDispatchedAtUnixMs = 0;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyDropNotificationDispatched(
+        AgentRunGAgentState current,
+        AgentRunDropNotificationDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.DropNotificationDispatchedAtUnixMs = evt.DispatchedAtUnixMs;
         return next;
     }
 
