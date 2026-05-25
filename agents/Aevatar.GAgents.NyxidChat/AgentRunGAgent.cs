@@ -456,7 +456,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             errorCode,
             errorSummary);
 
-        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await DispatchReadyEventAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -479,6 +479,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var outbound = State.ProducedOutbound;
         await DispatchReadyEventAsync(
             request,
+            runId,
             State.ProducedReplyText ?? string.Empty,
             outbound,
             State.ProducedTerminalState,
@@ -648,6 +649,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DispatchReadyEventAsync(
         NeedsLlmReplyEvent request,
+        string runId,
         string replyText,
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
@@ -673,6 +675,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             // entry. The actor consumes these fields and never persists them.
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
+            RunId = runId,
         };
         try
         {

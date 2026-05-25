@@ -409,6 +409,44 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_LegacyPendingRequestMissingRunId_DropsWithoutDispatch()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner();
+        var store = new InMemoryEventStore();
+        const string agentId = "conv-legacy-pending-missing-run";
+        await AppendStateEventAsync(
+            store,
+            agentId,
+            new NeedsLlmReplyEvent
+            {
+                CorrelationId = "legacy-corr-missing-run",
+                TargetActorId = "conversation:actor",
+                RegistrationId = "reg-1",
+                Activity = CreateActivity("legacy-corr-missing-run", "conv:slack:C1"),
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            },
+            version: 1);
+        var (agent, _) = CreateAgent(runner, agentId, dispatcher, store: store);
+
+        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
+        {
+            CorrelationId = "legacy-corr-missing-run",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        dispatcher.Dispatched.ShouldBeEmpty();
+        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "legacy-corr-missing-run");
+        var failed = (await store.GetEventsAsync(agent.Id))
+            .Where(e => e.EventType.Contains(nameof(ConversationContinueFailedEvent), StringComparison.Ordinal))
+            .Select(e => ConversationContinueFailedEvent.Parser.ParseFrom(e.EventData.Value))
+            .LastOrDefault();
+        failed.ShouldNotBeNull();
+        failed!.ErrorCode.ShouldBe("legacy_pending_llm_reply_missing_run_id_dropped");
+        failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
+    }
+
+    [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_WithCallbackJti_PersistsAdmissionBeforeRunner()
     {
         var observedAtMs = DateTimeOffset.UtcNow.AddSeconds(-17).ToUnixTimeMilliseconds();
@@ -760,6 +798,7 @@ public sealed class ConversationGAgentDedupTests
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
+            RunId = "run-act-llm-ready",
         };
 
         await agent.HandleLlmReplyReadyAsync(ready);
@@ -773,7 +812,7 @@ public sealed class ConversationGAgentDedupTests
         events.Count.ShouldBe(3);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
-        agent.State.LastReplyDelivery.RunId.ShouldBe("act-llm-ready");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("run-act-llm-ready");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
         agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe(string.Empty);
     }
@@ -804,9 +843,10 @@ public sealed class ConversationGAgentDedupTests
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
+            RunId = "run-corr-delivered",
         });
 
-        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivered");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("run-corr-delivered");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
         agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe("om_delivery_ok");
         agent.State.LastReplyDelivery.Delivered.AckedAtUnixMs.ShouldBeGreaterThan(0);
@@ -833,9 +873,10 @@ public sealed class ConversationGAgentDedupTests
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
+            RunId = "run-corr-delivery-failed",
         });
 
-        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivery-failed");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("run-corr-delivery-failed");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
         agent.State.LastReplyDelivery.Failed.ErrorCode.ShouldBe("lark_send_failed");
         agent.State.LastReplyDelivery.Failed.ErrorMessage.ShouldBe("lark rejected send");

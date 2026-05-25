@@ -716,7 +716,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var delivered = new LlmReplyDeliveredEvent
             {
                 CorrelationId = evt.CorrelationId ?? string.Empty,
-                RunId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.RunId ?? string.Empty,
                 AckedAtUnixMs = nowMs,
                 ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
             };
@@ -748,7 +748,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var deliveryFailed = new LlmReplyDeliveryFailedEvent
         {
             CorrelationId = evt.CorrelationId ?? string.Empty,
-            RunId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
             FailedAtUnixMs = nowMs,
             ErrorCode = result.ErrorCode ?? string.Empty,
             ErrorMessage = result.ErrorSummary ?? string.Empty,
@@ -1713,7 +1713,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = evt.CorrelationId ?? string.Empty,
-            RunId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
         };

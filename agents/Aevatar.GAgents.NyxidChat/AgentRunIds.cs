@@ -1,5 +1,8 @@
 namespace Aevatar.GAgents.NyxidChat;
 
+// Refactor (iter98/cluster-002):
+//   Old pattern: actor id 由 CorrelationId 字符串拼出(ActorIdPrefix + correlationId)
+//   New principle: run_id 是 actor id 的唯一构成;correlation_id 只用于 trace 传播
 internal readonly record struct AgentRunId
 {
     private const string Prefix = "agent-run-";
@@ -13,10 +16,11 @@ internal readonly record struct AgentRunId
 
     public static AgentRunId Parse(string? value, string paramName = "runId")
     {
-        _ = paramName;
         var normalized = Normalize(value);
         if (normalized is null)
-            throw new InvalidOperationException("Deferred LLM reply request requires explicit run_id for AgentRunGAgent dispatch.");
+            throw new ArgumentException(
+                "Deferred LLM reply request requires explicit run_id for AgentRunGAgent dispatch.",
+                paramName);
 
         return new AgentRunId(normalized);
     }

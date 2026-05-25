@@ -122,6 +122,9 @@ message LlmReplyReadyEvent {
   // NeedsLlmReplyEvent verbatim.
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
+  // AgentRunGAgent run_id producing this reply. correlation_id remains trace-only
+  // and MUST NOT be used as actor/run identity.
+  string run_id = 12;
 }
 
 enum ConversationReplyLifecycleMode {
@@ -463,8 +466,7 @@ enum FailureKind {
 // or other side-channel signals.
 message LlmReplyDeliveredEvent {
   string correlation_id = 1;
-  // AgentRunGAgent run_id producing this reply (used to anchor delivery
-  // against a specific committed reply).
+  // AgentRunGAgent run_id producing this reply.
   string run_id = 2;
   int64 acked_at_unix_ms = 3;
   // Channel-side message id from the sink ack (e.g. Lark message_id).

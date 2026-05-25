@@ -76,7 +76,7 @@ public sealed class AgentRunGAgentTests
             Activity = BuildRelayActivity(),
         }, CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
+        await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*run_id*");
         dispatchPort.Dispatches.Should().BeEmpty();
         actorRuntime.Dispatches.Should().BeEmpty();
@@ -1636,6 +1636,7 @@ public sealed class AgentRunGAgentTests
 
         handled.Should().NotBeNull();
         var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.RunId.Should().Be(runtime.State.RunId);
         ready.ReplyToken.Should().Be("relay-token-echo");
         ready.ReplyTokenExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
     }
