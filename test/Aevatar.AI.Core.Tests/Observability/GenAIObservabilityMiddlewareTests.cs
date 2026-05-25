@@ -378,8 +378,6 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     private sealed class FakeLLMProvider(string name = "fake") : ILLMProvider
     {
         public string Name => name;
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct) =>
-            Task.FromResult(new LLMResponse { Content = "r" });
         public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct) =>
             AsyncEnumerable.Empty<LLMStreamChunk>();
     }

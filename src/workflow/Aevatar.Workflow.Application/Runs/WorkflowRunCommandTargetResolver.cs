@@ -11,17 +11,20 @@ internal sealed class WorkflowRunCommandTargetResolver
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
 
     public async Task<CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>> ResolveAsync(
@@ -45,6 +48,7 @@ internal sealed class WorkflowRunCommandTargetResolver
                 actorResolution.CreatedActorIds,
                 _projectionPort,
                 _materializationActivationPort,
-                _actorPort));
+                _actorPort,
+                _durableCompletionResolver));
     }
 }

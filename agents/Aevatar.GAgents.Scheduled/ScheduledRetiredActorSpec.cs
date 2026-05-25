@@ -2,9 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.Compatibility;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -17,16 +15,13 @@ namespace Aevatar.GAgents.Scheduled;
 /// skill-runner / workflow-agent actors previously hosted by the deleted
 /// <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
 ///
-/// Dynamic discovery is gated on the catalog itself looking retired
-/// (matches a retired runtime-type token, or runtime type unavailable but
-/// stream still has events). On a fully-migrated cluster this gate keeps
-/// the catalog walk a no-op even though the cleanup runs every startup.
+/// Dynamic discovery is gated on the catalog itself matching a retired
+/// runtime-type token. On a fully-migrated cluster this gate keeps the catalog
+/// read-model query a no-op even though the cleanup runs every startup.
 ///
-/// When the gate fires, generated agent ids are read from the
-/// <see cref="UserAgentCatalogDocument"/> read model first (survives event
-/// stream snapshot+compaction), and merged with any catalog upsert events
-/// not yet projected. Without the read-model path, snapshotted entries
-/// would be silently dropped after compaction.
+/// Refactor (iter22/cluster-003):
+///   Old pattern: retired actor discovery replayed catalog event streams and parsed actorId prefixes.
+///   New principle: dynamic targets come only from typed catalog read models; actorId stays opaque.
 /// </summary>
 public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 {
@@ -40,7 +35,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
     // and drive their cleanup. New agents never carry these tokens; delete with the
     // retired workflow_agent constants once all legacy actors are gone.
     private const string LegacyWorkflowAgentType = "workflow_agent";
-    private const string LegacyWorkflowAgentActorIdPrefix = "workflow-agent";
     private const int ReadModelPageSize = 500;
 
     public override string SpecId => "scheduled";
@@ -80,23 +74,17 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         IServiceProvider services,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // Refactor (iter22/cluster-003):
+        //   Old pattern: dynamic cleanup replayed catalog event streams and inferred actor type from actorId text.
+        //   New principle: cleanup enumerates typed catalog read-model rows and treats actorId as an opaque address.
         var typeProbe = services.GetRequiredService<IActorTypeProbe>();
-        var eventStore = services.GetRequiredService<IEventStore>();
         var logger = services.GetService<ILogger<ScheduledRetiredActorSpec>>()
                      ?? NullLogger<ScheduledRetiredActorSpec>.Instance;
 
-        if (!await ShouldDiscoverFromCatalogAsync(typeProbe, eventStore, ct).ConfigureAwait(false))
+        if (!await ShouldDiscoverFromCatalogAsync(typeProbe, ct).ConfigureAwait(false))
             yield break;
 
-        var agentIds = new HashSet<string>(StringComparer.Ordinal);
-
         foreach (var actorId in await DiscoverFromReadModelBestEffortAsync(services, logger, ct).ConfigureAwait(false))
-            agentIds.Add(actorId);
-
-        foreach (var actorId in await DiscoverFromCatalogEventsAsync(eventStore, ct).ConfigureAwait(false))
-            agentIds.Add(actorId);
-
-        foreach (var actorId in agentIds)
         {
             yield return new RetiredActorTarget(
                 actorId,
@@ -120,7 +108,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 
     private async Task<bool> ShouldDiscoverFromCatalogAsync(
         IActorTypeProbe typeProbe,
-        IEventStore eventStore,
         CancellationToken ct)
     {
         var catalogTarget = Targets.First(static target =>
@@ -132,14 +119,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 
         if (catalogTarget.MatchesRuntimeType(runtimeTypeName))
             return true;
-
-        if (string.IsNullOrWhiteSpace(runtimeTypeName))
-        {
-            var version = await eventStore
-                .GetVersionAsync(UserAgentCatalogGAgent.WellKnownId, ct)
-                .ConfigureAwait(false);
-            return version > 0;
-        }
 
         return false;
     }
@@ -163,12 +142,11 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         }
         catch (Exception ex)
         {
-            // Read-model probe is the snapshot+compaction patch — never block startup
-            // when the projection store is unavailable. Fall back to event-stream walk;
-            // un-compacted clusters still get cleaned, compacted ones merely degrade.
+            // Read-model discovery is maintenance best effort; failed typed queries
+            // skip dynamic generated-agent cleanup rather than side-reading events.
             logger.LogWarning(
                 ex,
-                "Retired user-agent discovery from {DocumentType} read model failed; falling back to catalog event stream walk.",
+                "Retired user-agent discovery from {DocumentType} read model failed; skipping dynamic generated-agent targets.",
                 nameof(UserAgentCatalogDocument));
             return [];
         }
@@ -211,52 +189,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         return ids.ToArray();
     }
 
-    private static async Task<IReadOnlyList<string>> DiscoverFromCatalogEventsAsync(
-        IEventStore eventStore,
-        CancellationToken ct)
-    {
-        var events = await eventStore
-            .GetEventsAsync(UserAgentCatalogGAgent.WellKnownId, ct: ct)
-            .ConfigureAwait(false);
-        if (events.Count == 0)
-            return [];
-
-        var agentIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var evt in events)
-        {
-            if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogUpsertedEvent>(evt.EventData, out var upserted))
-                AddCatalogAgentId(agentIds, upserted!.Entry);
-            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonedEvent>(evt.EventData, out var tombstoned))
-                AddCatalogAgentId(agentIds, tombstoned!.AgentId);
-            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonesCompactedEvent>(
-                         evt.EventData,
-                         out var compacted))
-            {
-                foreach (var agentId in compacted!.AgentIds)
-                    AddCatalogAgentId(agentIds, agentId);
-            }
-        }
-
-        return agentIds.ToArray();
-    }
-
-    private static void AddCatalogAgentId(HashSet<string> agentIds, UserAgentCatalogEntry? entry)
-    {
-        if (entry == null)
-            return;
-
-        if (IsGeneratedUserAgent(entry.AgentId, entry.AgentType))
-            agentIds.Add(entry.AgentId.Trim());
-    }
-
-    private static void AddCatalogAgentId(HashSet<string> agentIds, string? agentId)
-    {
-        if (!IsGeneratedUserAgent(agentId, agentType: null))
-            return;
-
-        agentIds.Add(agentId!.Trim());
-    }
-
     private static bool IsGeneratedUserAgent(string? agentId, string? agentType)
     {
         var normalizedId = agentId?.Trim();
@@ -269,7 +201,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             return true;
         }
 
-        return normalizedId.StartsWith($"{SkillRunnerDefaults.ActorIdPrefix}-", StringComparison.Ordinal) ||
-               normalizedId.StartsWith($"{LegacyWorkflowAgentActorIdPrefix}-", StringComparison.Ordinal);
+        return false;
     }
 }

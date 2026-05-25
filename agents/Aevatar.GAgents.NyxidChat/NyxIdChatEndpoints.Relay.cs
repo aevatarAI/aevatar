@@ -25,6 +25,9 @@ public static partial class NyxIdChatEndpoints
     /// (slash commands, agent-builder cards, workflow resume cards) is the responsibility of
     /// <c>ChannelConversationTurnRunner</c> so the webhook stays a thin adapter.
     /// </summary>
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
@@ -32,6 +35,7 @@ public static partial class NyxIdChatEndpoints
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+        [FromServices] Aevatar.GAgents.Scheduled.INyxIdCurrentUserResolver nyxIdCurrentUserResolver,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -115,12 +119,27 @@ public static partial class NyxIdChatEndpoints
             activity.OutboundDelivery ??= new OutboundDeliveryContext();
             activity.TransportExtras ??= new TransportExtras();
             activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
+            activity.TransportExtras.NyxRegistrationScopeId = scopeId.Trim();
+            // Resolve sender NyxID at ingress so the actor can build a per-user
+            // caller scope for chat-route policy lookup without making an HTTP
+            // call inside the turn. Fail-soft: log + leave empty so policy
+            // resolution falls through to scope-only / default policies.
+            activity.TransportExtras.NyxSenderUserId =
+                await TryResolveSenderNyxUserIdAsync(
+                    nyxIdCurrentUserResolver,
+                    validation.UserAccessToken,
+                    logger,
+                    ct);
             var relayInbound = new NyxRelayInboundActivity
             {
                 Activity = activity,
                 ReplyToken = payload.ReplyToken?.Trim() ?? string.Empty,
                 ReplyTokenExpiresAtUnixMs = ResolveReplyTokenExpiresAtUnixMs(payload.ReplyToken, relayOptions),
                 CorrelationId = activity.OutboundDelivery.CorrelationId,
+                RelayApiKeyId = validation.RelayApiKeyId ?? string.Empty,
+                CallbackJti = validation.CallbackJti ?? string.Empty,
+                CallbackObservedAtUnixMs = validation.CallbackObservedAtUnixMs,
+                CallbackReplayExpiresAtUnixMs = validation.CallbackReplayExpiresAtUnixMs,
             };
 
             var actorId = BuildScopedRelayConversationActorId(scopeId, activity.Conversation.CanonicalKey);
@@ -231,6 +250,34 @@ public static partial class NyxIdChatEndpoints
                 payload.MessageId,
                 nyxAgentApiKeyId);
             return null;
+        }
+    }
+
+    private static async Task<string> TryResolveSenderNyxUserIdAsync(
+        Aevatar.GAgents.Scheduled.INyxIdCurrentUserResolver resolver,
+        string? userAccessToken,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var token = NormalizeOptional(userAccessToken);
+        if (token is null)
+            return string.Empty;
+
+        try
+        {
+            var resolved = NormalizeOptional(await resolver.ResolveCurrentUserIdAsync(token, ct));
+            return resolved ?? string.Empty;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to resolve sender NyxID at relay ingress; chat-routing per-user policies will not match for this turn.");
+            return string.Empty;
         }
     }
 

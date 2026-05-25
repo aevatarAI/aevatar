@@ -153,7 +153,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
         await using var sink = new EventChannel<EventEnvelope>(capacity: 64);
-        await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
 
         try
         {
@@ -172,7 +172,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease, sink, ct);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
             await projectionPort.ReleaseActorProjectionAsync(lease, ct);
         }
     }
@@ -200,7 +200,7 @@ internal static class ScriptEvolutionIntegrationTestKit
             if (!IsReady(snapshot))
             {
                 await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-                await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
+                var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
                 try
                 {
                     snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
@@ -212,7 +212,7 @@ internal static class ScriptEvolutionIntegrationTestKit
                 }
                 finally
                 {
-                    await projectionPort.DetachLiveSinkAsync(lease, sink, ct);
+                    await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
                 }
             }
 

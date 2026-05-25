@@ -101,7 +101,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
 
-        _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex);
+        _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex, _logger);
         _writer = new ElasticsearchOptimisticWriter<TReadModel>(
             _httpClient, _formatter, _parser, _autoCreateIndex, _missingIndexBehavior, _logger);
     }

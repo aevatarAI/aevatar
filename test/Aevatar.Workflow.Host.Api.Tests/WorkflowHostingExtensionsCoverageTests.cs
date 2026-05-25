@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -40,6 +41,11 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             EnvironmentName = Environments.Development,
         });
 
+        builder.Services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example";
+        });
+
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
@@ -47,6 +53,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             {
                 aiOptions.EnableMCPTools = false;
                 aiOptions.EnableSkills = false;
+                aiOptions.EnableOrnnSkills = false;
                 aiOptions.ApiKey = "demo-key";
                 aiOptions.DefaultProvider = "openai";
             };

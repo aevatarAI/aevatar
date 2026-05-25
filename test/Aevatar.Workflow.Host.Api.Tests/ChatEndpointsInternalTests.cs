@@ -45,6 +45,30 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldReturnAcceptedPayload_WithoutWaitingForTerminalWorkflowEvents()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("cmd-1");
+        service.DispatchCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldPreserveOpaqueActorIdInAcceptedLocationAndPayload()
     {
         const string opaqueActorId = "script-runtime:opaque-actor-9";
@@ -1065,12 +1089,14 @@ public sealed class ChatEndpointsInternalTests
 
         public Exception? DispatchException { get; set; }
         public WorkflowChatRunRequest? LastCommand { get; private set; }
+        public int DispatchCalls { get; private set; }
 
         public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
             WorkflowChatRunRequest command,
             CancellationToken ct = default)
         {
             LastCommand = command;
+            DispatchCalls++;
             ct.ThrowIfCancellationRequested();
             if (DispatchException != null)
                 throw DispatchException;

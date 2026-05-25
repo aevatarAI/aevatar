@@ -1,0 +1,228 @@
+---
+title: Chat Route Policy — Config Actor + Boundary Resolver
+status: Accepted
+owner: eanzhao
+---
+
+# ADR-0024: Chat Route Policy — Config Actor + Boundary Resolver
+
+## Context
+
+Aevatar today has four ingress paths that each hard-route inbound traffic to a
+single destination, with no central place a user / scope owner can change the
+policy:
+
+| Source | Endpoint | Current target |
+|---|---|---|
+| Direct chat | `/api/scopes/{scopeId}/nyxid-chat/...` | hard-codes `NyxIdChatGAgent` |
+| NyxID relay (Lark / Telegram) | `/api/webhooks/nyxid-relay` → `ConversationGAgent` | runner picked via DI singleton; one path |
+| NyxID Responses | `/v1/responses` + `/v1/messages` | `ILLMProviderFactory.GetDefault()` directly; no GAgent |
+| Voice | `/ws/voice` + dev/admin `/ws/voice/{actorId}` | policy-aware entry resolves target; explicit actorId entry is gated bypass |
+
+Issues #672 + #674 introduce one user-configurable layer that decides which
+target GAgent or LLM model handles each inbound request. The earlier proposal
+("an agent chat router GAgent") was rejected during #672 / #608 reviews: a
+new intermediary actor would (a) violate the Harness boundary from #568, (b)
+duplicate state ownership versus per-entry actors, and (c) add a serial actor
+hop on the hot path without changing the policy decision shape.
+
+This ADR records the **shape** that replaces "router actor": one config-only
+aggregate per scope, one stateless library function used by entries, and one
+read-side projection. v1 scope deliberately stops short of a configuration UI,
+workflow-typed actions, and a voice scratch actor.
+
+## Decision
+
+### D1 — Three-part form, no router actor
+
+Routing is split into three objects with disjoint responsibilities:
+
+| Role | Form | Owner | Lifecycle |
+|---|---|---|---|
+| **Policy authority** | `ChatRoutePolicyGAgent` (config aggregate) | per-scope, long-lived | event-sourced |
+| **Decision engine** | `ChatRouteResolver` (library function) | imported by each entry | stateless |
+| **Query view** | `ChatRoutePolicyCurrentStateDocument` | projection | committed → readmodel |
+
+`ChatRoutePolicyGAgent` only handles config commands (`Upsert*`,
+`RemoveRule*`) — never turn dispatch, never reply tokens, never
+audio frames. `ChatRouteResolver.Resolve(snapshot, input) → ChatRouteDecision`
+is a pure function each entry calls before its existing dispatch path. The
+readmodel is a coverage replica of the actor's current `ChatRoutePolicyState`.
+
+**Therefore:** zero new actor hops on the hot path; the policy actor only
+participates in writes; decisions are observed once at the boundary and
+discarded.
+
+### D2 — Decisions are transient
+
+`ChatRouteDecision` MUST NOT be persisted to actor state, event stores,
+readmodel documents, or persistent logs. Telemetry MAY record
+`matched_rule_id`, `used_fallback`, `resolved_at` for observability, but the
+decision structure itself stays at the ingress boundary and is dropped after
+the calling entry consumes it. The same constraint that #672 review imposed
+on `reply_token` applies here.
+
+### D3 — Strong-typed inputs and outputs throughout
+
+Per CLAUDE.md "字段命名与 Metadata 决策树" step 1: anything that influences
+control flow, compatibility, or stable lookup is a typed proto field or typed
+sub-message. For routing this includes:
+
+- `ChatSourceKind` (enum), `ToolMode` (enum)
+- `ChatRouteInput.model` + `ChatRouteMatch.model` for stable model-based rules
+- `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
+- `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
+- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
+  `ForwardToTeam` (oneof variants)
+- `ForwardToTeam.team_id` + `ForwardToTeam.endpoint_id` (typed strings) —
+  resolved at ingress to a Studio entry-member's `published_service_id` via
+  `ITeamEntryMemberResolver`, never persisted in the decision
+- `VoiceInput.voice_module_name` (typed string) — chooses among
+  `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
+  `voice_presence_minicpm_o` registered at bootstrap
+
+`map<string, string> metadata` bag is **not allowed** anywhere in this proto.
+Caller credentials, reply tokens, and connection identifiers are explicitly
+out of scope and never reach `ChatRouteInput`.
+
+### D4 — Endpoint naming: `/ws/voice`, not `/ws/chat`
+
+The existing repository already mounts `/api/ws/chat` for text JSON chat. The
+voice transport is binary PCM16 frames + JSON text control frames
+(`WebSocketVoiceTransport`); mixing both protocols on `/ws/chat` makes the
+upgrade ambiguous to clients and reviewers. The policy-aware voice endpoint
+is therefore `/ws/voice` (no `actorId` in route); the existing explicit-actor
+endpoint stays at `/ws/voice/{actorId}` and is restricted to a dev/admin
+scope in Phase 4 so prod traffic doesn't bypass policy.
+
+### D5 — v1 scope reduction
+
+`ForwardToGAgent`, `ForwardToModel`, and `ForwardToTeam` are implemented in v1.
+
+- `Reject` is declared on the wire but unused by v1 rule semantics — it lets
+  endpoints uniformly return HTTP 403 when policy lookup fails closed.
+- `ForwardToWorkflow` is reserved on the wire only — no implementation.
+- `ForwardToTeam` and `ForwardToGAgent` are supported on both GAgent-native
+  ingress entries (NyxIdChat, Relay, Voice) and the OpenAI-shaped LLM facade
+  entry (`/v1/responses`).
+    - On GAgent-native ingress the proto field `ForwardToGAgent.actor_id`
+      means a raw Orleans grain key bound directly to the ingress (Voice
+      binds `/ws/voice/{actorId}`; NyxIdChat overrides
+      `NeedsLlmReplyEvent.TargetActorId`). `ForwardToTeam` resolves
+      `(team_id, endpoint_id)` to a Studio entry-member's
+      `published_service_id` via `ITeamEntryMemberResolver` and dispatches
+      through `IStaticGAgentStreamInvocationPort<AGUIEvent>`.
+    - On the LLM facade (`/v1/responses`) both variants flow through the
+      same AGUI → Responses SSE/JSON adapter
+      (`AGUIEventToResponsesSseAdapter`). `ForwardToTeam` uses
+      `ITeamEntryMemberResolver`; `ForwardToGAgent.actor_id` is interpreted
+      as a Studio `memberId` (per issue #588: every invoke must resolve to
+      a member identity) and goes through `IMemberPublishedServiceResolver`.
+      The wire-format assumption ("OpenAI Responses cannot carry AGUI")
+      that an earlier draft of this ADR relied on did not hold up against
+      the actual proto: AGUI events
+      (`text_message_start/content/end`, `tool_call_start/end`,
+      `run_started/finished`) are structurally isomorphic with Responses
+      SSE events (`response.created`, `response.output_text.delta/done`,
+      `response.output_item.added/done`, `response.completed`), so the
+      adapter is ~280 lines of typed mapping, not an independent milestone.
+    - `/v1/messages` (Anthropic Messages facade) still rejects both
+      `ForwardToTeam` and `ForwardToGAgent` at HTTP 501. Adding them is
+      symmetric to the `/v1/responses` work but is not in this milestone;
+      track separately.
+    - `ForwardToGAgent` has no `endpoint_id` field, so `/v1/responses`
+      pins the invocation to the conventional `"chat"` endpoint on the
+      resolved member's published service. Callers that need a non-default
+      endpoint should use `ForwardToTeam` (which carries `endpoint_id`)
+      or the direct Studio member invoke surface
+      (`POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}[:stream]`).
+- No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
+  `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
+  reads the `actorId` from the route directly and short-circuits the
+  resolver. The previous `Bypass` oneof variant has been removed (tag 5
+  reserved on the wire) because letting a persisted policy encode a
+  dev-only bypass target contradicted CLAUDE.md "API 字段单一语义".
+- No voice "scratch actor" (`ForwardToModel` over `/ws/voice`); voice in v1
+  must target an existing voice-enabled GAgent.
+
+The write side also drops `ResetChatRoutePolicyRequested`: because
+`default_target` is REQUIRED whenever the actor exists (per D6 below), a
+"wipe and clear" command would leave an invalid persisted state that
+neither matches the cold-start fallback path nor a fully-configured one.
+Callers that want to start over should issue `UpsertChatRoutePolicyRequested`
+with the desired `default_target` and an empty `rules` list — atomic,
+single-event, no temporary invalid window.
+
+### D6 — Default target and fallback
+
+`ChatRoutePolicyState.default_target` is **required** when the actor exists.
+When the policy actor itself does not exist yet (cold start) or the readmodel
+is unavailable, the resolver falls back to a hardcoded
+`ForwardToModel(env AEVATAR_DEFAULT_LLM_MODEL)` decision and sets
+`used_fallback = true`. This is the single piece of state that ingress code
+holds — and only as configuration, not as event-sourced fact. Existing
+"user default agent" concepts are out of scope: the policy actor's
+`default_target` covers them.
+
+### D7 — Caller identity stays an external type
+
+`ChatRouteCallerScope` mirrors `Aevatar.GAgents.Scheduled.OwnerScope` field
+for field. We do not import the Scheduled proto here so this Abstractions
+project stays at the bottom of the dependency graph; a thin mapping happens
+at Phase 2's `CompositeCallerScopeResolver → ChatRouteCallerScope` boundary.
+Moving `OwnerScope` itself to `Aevatar.Foundation.Abstractions` is a later
+refactor outside the ingress milestone.
+
+## Boundaries with adjacent issues
+
+- **#568 (Harness boundary)**: this ADR honors it by *not* introducing a
+  router actor. `ChatRoutePolicyGAgent` is a single-purpose config aggregate;
+  the resolver is a library function; no Harness / Runtime / ChatRuntime
+  surface appears.
+- **#608 (ChatRuntime / boundary adapter)**: the entry-side resolver call is
+  the boundary adapter #608 frames. We add no new actor on top.
+- **#596 (run-actor continuation)**: `ChatRouteResolver` runs *before*
+  `AgentRunGAgent` — it decides which target run actor to feed. Run actors
+  remain authoritative for execution.
+- **#560 (StreamSessionGAgent RFC)**: out of scope. The `/ws/voice` policy
+  endpoint owns *which actor to attach to*. Cross-host reconnect, frame
+  sequencing, replay are #560's concerns and are not solved here. If #560
+  later lands `SessionStreamGAgent`, this ADR's wire shape continues to
+  hold: the resolver still produces a target actor id; the attach layer
+  changes underneath.
+
+## Out of scope
+
+- Configuration UI (Studio / CLI surfaces for `Upsert*` commands).
+- `ForwardToWorkflow` implementation.
+- `ForwardToModel` over `/ws/voice` (would need a scratch voice-enabled
+  actor — explicitly deferred per #674 review).
+- Telemetry pipeline for `matched_rule_id` (will arrive via existing run
+  trace channels in a later issue).
+- Moving `OwnerScope` to `Aevatar.Foundation.Abstractions`.
+- Decommissioning `/ws/voice/{actorId}` — it stays available, gated by a
+  dev/admin scope.
+
+## Consequences
+
+- One new proto-only project (`Aevatar.ChatRouting.Abstractions`) joins the
+  graph at the bottom; nothing in `agents/` or `src/Aevatar.Foundation.*`
+  depends on it yet (subsequent phases add dependencies inward).
+- Four existing ingress entries (NyxIdChat, Responses, Messages, Relay) will
+  each add one resolver call in Phase 3 — no schema breakage at the
+  ingress, no new actor in the dispatch path.
+- Phase 4 is the first Mainnet host mount of `MapVoicePresenceWebSocket`;
+  the existing CLI #205 path continues to work via the dev-scoped explicit
+  endpoint.
+- Reverting to a router-actor shape later would require unwinding every
+  resolver call site. The boundary form is intentionally costly to walk
+  back from — this is what protects #568's anti-Harness invariant.
+
+## Verification
+
+- proto compiles in the new project; no agent or other src project
+  references it during Phase 0.
+- `bash tools/docs/lint.sh` passes; `bash tools/docs/build-index.sh` lists
+  this ADR.
+- subsequent phases verify their own deltas; this ADR ships separately as
+  the foundation commit.

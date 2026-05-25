@@ -14,11 +14,14 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     public string Name => "ornn_search_skills";
 
     public string Description =>
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: skill lookup guidance competed with deleted NyxID generic service capability discovery.
+        //   New principle: Ornn skill discovery remains the typed instruction-package lookup; nyxid_proxy is only a live downstream proxy surface.
         "Search the user's Ornn skill library for matching skill packages. " +
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
         "domain workflows), or says \"挂载/use/load this skill\". " +
-        "Prefer this over nyxid_proxy / nyxid_search_capabilities path-guessing — those discover service APIs, " +
+        "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
         "Returns matching skill names + descriptions; follow up with use_skill to load and activate one.";
 
@@ -35,7 +38,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 

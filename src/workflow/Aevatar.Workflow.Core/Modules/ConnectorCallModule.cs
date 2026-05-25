@@ -49,14 +49,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
             {
-                SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
+                SecureInputRuntimeContextAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
             }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            SecureInputRuntimeItemsAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            SecureInputRuntimeContextAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
             return;
         }
 
@@ -322,7 +322,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (SecureInputRuntimeItemsAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
+        if (SecureInputRuntimeContextAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
         {
             return value;
         }
@@ -489,7 +489,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
         IWorkflowExecutionContext ctx)
     {
-        if (ConnectorAuthorizationRuntimeItemsAccess.TryGetAuthorization(ctx, out var authorization) &&
+        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
             !string.IsNullOrWhiteSpace(authorization))
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

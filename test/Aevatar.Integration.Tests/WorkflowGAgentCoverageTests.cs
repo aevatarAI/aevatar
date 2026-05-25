@@ -13,6 +13,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -226,6 +227,7 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
         var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        SeedRuntimeContext(agent);
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_valid",
@@ -233,6 +235,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
+        SeedRuntimeContext(agent);
         runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
@@ -246,6 +249,7 @@ public class WorkflowGAgentCoverageTests
         agent.State.FinalOutput.Should().BeEmpty();
         agent.State.FinalError.Should().BeEmpty();
         agent.State.ExecutionStates.Should().BeEmpty();
+        AssertRuntimeContextCleared(agent);
         runtime.Unlinked.Should().Contain(oldChildActorId);
         runtime.Destroyed.Should().Contain(oldChildActorId);
 
@@ -312,6 +316,7 @@ public class WorkflowGAgentCoverageTests
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_replay",
             runId: "run-replay");
+        SeedRuntimeContext(agent1);
         await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_replay",
@@ -319,6 +324,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done",
         });
+        AssertRuntimeContextCleared(agent1);
         await agent1.DeactivateAsync();
 
         var persisted = await eventStore.GetEventsAsync(agent1.Id);
@@ -969,6 +975,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        SeedRuntimeContext(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -980,6 +987,7 @@ public class WorkflowGAgentCoverageTests
         agent.State.Status.Should().Be("stopped");
         agent.State.FinalError.Should().Be("manual-stop");
         agent.State.ExecutionStates.Should().BeEmpty();
+        AssertRuntimeContextCleared(agent);
         runtime.Unlinked.Should().Contain(roleActorId);
         runtime.Destroyed.Should().Contain(roleActorId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
@@ -1009,6 +1017,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop-async");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        SeedRuntimeContext(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -1026,6 +1035,7 @@ public class WorkflowGAgentCoverageTests
         agent.State.Status.Should().Be("stopped");
         agent.State.FinalError.Should().Be("requested");
         agent.State.ExecutionStates.Should().BeEmpty();
+        AssertRuntimeContextCleared(agent);
         runtime.Unlinked.Should().Contain(roleActorId);
         runtime.Destroyed.Should().Contain(roleActorId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
@@ -1143,6 +1153,7 @@ public class WorkflowGAgentCoverageTests
                     EventData = Any.Pack(new RoleChatSessionCompletedEvent
                     {
                         SessionId = "session-1",
+                        RoleId = "role_a",
                         Content = "reply",
                         ReasoningContent = "reasoning",
                         Prompt = "prompt",
@@ -1380,6 +1391,28 @@ public class WorkflowGAgentCoverageTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [agentId]);
+    }
+
+    private static void SeedRuntimeContext(WorkflowRunGAgent agent)
+    {
+        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
+        runtimeContext.LlmOverrides.NyxIdAccessToken = "token";
+        runtimeContext.LlmOverrides.ModelOverride = "model";
+        runtimeContext.LlmOverrides.NyxIdRoutePreference = "route";
+        runtimeContext.Connector.Authorization = "Bearer secret";
+        runtimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
+        runtimeContext.CapturedSecureInputs.Set(agent.RunId, "api_key", "secret");
+    }
+
+    private static void AssertRuntimeContextCleared(WorkflowRunGAgent agent)
+    {
+        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
+        runtimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
+        runtimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        runtimeContext.LlmOverrides.NyxIdRoutePreference.Should().BeNull();
+        runtimeContext.Connector.Authorization.Should().BeNull();
+        runtimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
+        runtimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     private static string BuildValidWorkflowYaml(

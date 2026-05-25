@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -11,13 +9,11 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdProxyTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
-    private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
 
-    public NyxIdProxyTool(NyxIdApiClient client, IServiceDiscoveryCache? cache = null, ILogger? logger = null)
+    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
     {
         _client = client;
-        _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -70,8 +66,11 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
-        var orgToken = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdOrgToken);
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -176,10 +175,6 @@ public sealed class NyxIdProxyTool : IAgentTool
                 }
             }
 
-            // Populate cache with both service lists
-            _cache.SetSlugs(HashToken(userToken), userSlugs);
-            _cache.SetSlugs(HashToken(orgToken), ParseServiceSlugs(orgDoc));
-
             return System.Text.Json.JsonSerializer.Serialize(merged);
         }
         catch (System.Text.Json.JsonException ex)
@@ -215,25 +210,19 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     /// <summary>
     /// Check whether a given token can access a service by slug.
-    /// Uses cache first, falls back to live discovery.
+    /// Reads NyxID's live proxy-services surface for every route decision.
     /// </summary>
     private async Task<bool> ServiceExistsForTokenAsync(
         string token, string slug, CancellationToken ct)
     {
-        var hash = HashToken(token);
-
-        // Check cache first
-        var cached = _cache.GetSlugs(hash);
-        if (cached != null)
-            return cached.Contains(slug);
-
-        // Cache miss — fetch and cache
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源; routing checks read the live NyxID proxy-services surface and never keep slug facts in a process-local cache.
         try
         {
             var servicesJson = await _client.DiscoverProxyServicesAsync(token, ct);
             using var doc = System.Text.Json.JsonDocument.Parse(servicesJson);
             var slugs = ParseServiceSlugs(doc);
-            _cache.SetSlugs(hash, slugs);
             return slugs.Contains(slug);
         }
         catch
@@ -286,12 +275,6 @@ public sealed class NyxIdProxyTool : IAgentTool
             foreach (var item in items.EnumerateArray())
                 yield return item;
         }
-    }
-
-    private static string HashToken(string token)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToHexString(bytes)[..16];
     }
 
     /// <summary>
@@ -348,4 +331,5 @@ public sealed class NyxIdProxyTool : IAgentTool
             return false;
         }
     }
+
 }

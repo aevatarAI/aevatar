@@ -31,7 +31,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
         var sink = new RecordingEventSink();
 
         var lease = await port.EnsureRunProjectionAsync("script-actor-1", "run-1", CancellationToken.None);
-        await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             RunFinished = new RunFinishedEvent
@@ -40,7 +40,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
                 RunId = "run-1",
             },
         });
-        await port.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
 
         var request = activation.Requests.Should().ContainSingle().Subject;

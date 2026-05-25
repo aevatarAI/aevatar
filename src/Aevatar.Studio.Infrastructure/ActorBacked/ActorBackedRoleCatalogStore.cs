@@ -12,8 +12,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
 /// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
-/// Local workspace operations (import, draft backup) delegate to
-/// <see cref="IStudioWorkspaceStore"/>.
+/// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
 /// </summary>
 internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
@@ -25,7 +24,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IStudioWorkspaceStore _localWorkspaceStore;
+    private readonly IStudioLocalRoleCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
@@ -33,14 +32,14 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
-        IStudioWorkspaceStore localWorkspaceStore,
+        IStudioLocalRoleCatalogImportReader localImportReader,
         IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
-        _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
+        _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -84,7 +83,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     public async Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var localCatalog = await _localWorkspaceStore.GetRoleCatalogAsync(cancellationToken);
+        var localCatalog = await _localImportReader.ReadAsync(cancellationToken);
         if (!localCatalog.FileExists)
         {
             throw new InvalidOperationException($"Local role catalog not found at '{localCatalog.FilePath}'.");
@@ -145,8 +144,6 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
-
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
@@ -166,7 +163,6 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
 
     // Post-write version is deterministic only when caller supplied expected_version

@@ -20,16 +20,13 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
 
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly ILlmSessionCurrentStateProjectionPort _projectionPort;
 
     public LlmSessionRegistrationAdapter(
         IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        ILlmSessionCurrentStateProjectionPort projectionPort)
+        IActorDispatchPort dispatchPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
     public async Task<LlmSessionRegistrationResult> RegisterAsync(
@@ -46,7 +43,6 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
 
         var actorId = LlmSessionIds.NewActorId();
         var actor = await _runtime.CreateAsync<LlmSessionGAgent>(actorId, ct: ct);
-        await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
 
         var prepared = record.Clone();
         if (prepared.CreatedAt == null)
@@ -55,6 +51,9 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
         if (prepared.Status == LlmSessionStatus.Unspecified)
             prepared.Status = LlmSessionStatus.Accepted;
 
+        // Refactor (iter18/cluster-006):
+        //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+        //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
         var envelope = CreateEnvelope(
             actor.Id,
             Any.Pack(new RegisterResponseSessionRequested

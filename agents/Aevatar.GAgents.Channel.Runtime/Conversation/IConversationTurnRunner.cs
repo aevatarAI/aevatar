@@ -80,13 +80,22 @@ public sealed record ConversationStreamChunkResult(
         new(false, null, editUnsupported, errorCode, errorSummary);
 }
 
+// Refactor (iter17/cluster-038):
+//   Old pattern: relay reply/user credentials both rode on persisted ChatActivity transport extras.
+//   New principle: same-turn Nyx credentials are runtime-only context while durable activity copies stay sanitized.
 public sealed record NyxRelayReplyTokenContext(
     string CorrelationId,
     string ReplyToken,
     string ReplyMessageId,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc,
+    string? NyxUserAccessToken = null);
 
-public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? NyxRelayReplyToken)
+// Refactor (iter17/cluster-038):
+//   Old pattern: concrete turn runners re-read transient relay credentials from durable activity payloads.
+//   New principle: ConversationGAgent passes non-persisted credentials explicitly through per-turn runtime context.
+public sealed record ConversationTurnRuntimeContext(
+    NyxRelayReplyTokenContext? NyxRelayReplyToken,
+    string? NyxUserAccessToken = null)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }

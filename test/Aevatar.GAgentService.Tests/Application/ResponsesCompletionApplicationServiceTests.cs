@@ -631,9 +631,6 @@ public sealed class ResponsesCompletionApplicationServiceTests
 
         public List<LLMRequest> Requests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)

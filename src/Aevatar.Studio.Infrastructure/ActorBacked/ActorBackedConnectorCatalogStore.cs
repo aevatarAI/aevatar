@@ -12,7 +12,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// Actor-backed implementation of <see cref="IConnectorCatalogStore"/>.
 /// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
-/// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
+/// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
 /// </summary>
 internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
@@ -24,7 +24,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAppScopeResolver _scopeResolver;
-    private readonly IStudioWorkspaceStore _workspaceStore;
+    private readonly IStudioLocalConnectorCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
@@ -32,14 +32,14 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         IStudioActorBootstrap bootstrap,
         IActorDispatchPort dispatchPort,
         IAppScopeResolver scopeResolver,
-        IStudioWorkspaceStore workspaceStore,
+        IStudioLocalConnectorCatalogImportReader localImportReader,
         IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
-        _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
+        _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -95,7 +95,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        var localCatalog = await _workspaceStore.GetConnectorCatalogAsync(cancellationToken);
+        var localCatalog = await _localImportReader.ReadAsync(cancellationToken);
         if (!localCatalog.FileExists)
         {
             throw new InvalidOperationException(
@@ -158,8 +158,6 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
-
         return new StoredConnectorDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
@@ -179,7 +177,6 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
             evt.ExpectedVersion = expectedVersion.Value;
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
 
-        await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
 
     // Post-write version is deterministic only when caller supplied expected_version

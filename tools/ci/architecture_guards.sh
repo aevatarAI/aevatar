@@ -52,6 +52,19 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+# Refactor (iter18/cluster-001):
+#   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+#   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+if rg -n "Task<LLMResponse>[[:space:]]+ChatAsync[[:space:]]*\(" \
+  src/Aevatar.AI.Abstractions/LLMProviders/ILLMProvider.cs \
+  src/Aevatar.AI.Core/LLMProviders \
+  src/Aevatar.AI.LLMProviders.* \
+  -g '*.cs'
+then
+  echo "Provider-level Task<LLMResponse> ChatAsync is forbidden. Use ChatStreamAsync plus ChatStreamContentAggregator for offline aggregation."
+  exit 1
+fi
+
 if rg -n "CommandContext\.Metadata|AgentRunContext\.Metadata|LLMCallContext\.Metadata|ToolCallContext\.Metadata|GAgentExecutionHookContext\.Metadata" \
   src test
 then
@@ -362,8 +375,12 @@ set +e
 # Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
 # Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
 # by requiring the call to be on a reader/document field (dot prefix pattern).
+projection_document_reader_scan_roots=(src test)
+if [[ -d demos ]]; then
+  projection_document_reader_scan_roots+=(demos)
+fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" src test demos \
+  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
     | xargs -r rg -n "\.ListAsync\(" \
     | rg -i "(reader|document|projection).*\.ListAsync"
 )"
@@ -507,7 +524,9 @@ function register_base(class_name, base_clause, parts, first_base)
   if (line ~ /^[[:space:]]*\/\//)
     next;
 
-  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=)/)
+  # match State.Foo = / += / -= / *= / /= / %= / ++ / -- (real mutations)
+  # exclude State.Foo == (comparison) — `=` must NOT be followed by another `=`
+  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=[^=])/)
   {
     state_mutation[FILENAME] = state_mutation[FILENAME] sprintf("%s:%d:%s\n", FILENAME, FNR, line);
   }
@@ -582,7 +601,11 @@ then
   exit 1
 fi
 
-if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
+type_url_scan_roots=(src)
+if [[ -d demos ]]; then
+  type_url_scan_roots+=(demos)
+fi
+if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" "${type_url_scan_roots[@]}"; then
   echo "Found string-based event type matching."
   exit 1
 fi
@@ -647,6 +670,18 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
   exit 1
 fi
 
+tool_context_metadata_hits="$(
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
+    -g '*.cs' \
+    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+)"
+
+if [ -n "${tool_context_metadata_hits}" ]; then
+  echo "${tool_context_metadata_hits}"
+  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
+  exit 1
+fi
+
 transition_override_without_matcher=""
 while IFS= read -r transition_file; do
   [ -z "${transition_file}" ] && continue
@@ -673,7 +708,7 @@ fi
 
 mass_transit_v9_refs="$(
   rg -n "<Package(Reference|Version) Include=\"MassTransit(\.[^\"]*)?\" Version=\"9\." \
-    Directory.Packages.props src test demos tools \
+    Directory.Packages.props src test tools \
     -g 'Directory.Packages.props' -g '*.csproj' || true
 )"
 
@@ -1174,6 +1209,9 @@ bash tools/ci/runtime_callback_guards.sh
 
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
+
+echo "Running Nyx relay replay authority guard..."
+python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
 
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh

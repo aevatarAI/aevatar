@@ -297,6 +297,74 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldExposeTypedToolContext()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", _ => string.Join(
+            "|",
+            AgentToolRequestContext.NyxIdAccessToken,
+            AgentToolRequestContext.ScopeId,
+            AgentToolRequestContext.CallId,
+            AgentToolRequestContext.ChannelMessageId)));
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            tools: tools,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Credentials = new AgentToolCredentials("typed-access", null, null),
+                    Caller = new AgentToolCallerContext("typed-scope", null, null),
+                    Channel = new AgentToolChannelContext(null, null, null, "typed-message", null),
+                },
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, requestId: "request-typed"))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[0].Metadata.Should().BeEmpty();
+        provider.StreamRequests[1].Metadata.Should().BeEmpty();
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
+            m.Role == "tool" &&
+            m.Content != null &&
+            m.Content.StartsWith("typed-access|typed-scope|text-tc-", StringComparison.Ordinal) &&
+            m.Content.EndsWith("|typed-message", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldForwardRequestIdAndMergeMetadata()
     {
         var provider = new StreamingProvider(["A"]);
@@ -350,7 +418,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldReturnSyntheticResultWithoutCallingProvider()
+    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldAggregateStreamAdapterWithoutCallingProvider()
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
@@ -369,8 +437,76 @@ public sealed class ChatRuntimeStreamingBufferTests
         var result = await runtime.ChatAsync("hello");
 
         result.Should().Be("short-circuit");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenProviderStreamsContent_ShouldAggregateWithoutCallingProviderChatAsync()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+
+        var result = await runtime.ChatAsync("hello");
+
+        result.Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void UserFacingAiExecutorSurfaces_ShouldNotDirectlyCallProviderChatAsyncOutsideProviderBoundary()
+    {
+        var root = FindRepositoryRoot();
+        var scannedRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core"),
+            Path.Combine(root, "src", "Aevatar.Studio.Hosting"),
+            Path.Combine(root, "agents", "Aevatar.GAgents.ChatbotClassifier"),
+        };
+        var offenders = scannedRoots
+            .SelectMany(scanRoot => Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories))
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => x.line.Contains("provider.ChatAsync", StringComparison.Ordinal)
+                            || x.line.Contains("_provider.ChatAsync", StringComparison.Ordinal))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProviderContractSurfaces_ShouldNotDeclareNonStreamingChatAsync()
+    {
+        var root = FindRepositoryRoot();
+        var providerContractFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Abstractions",
+            "LLMProviders",
+            "ILLMProvider.cs");
+        var concreteProviderRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core", "LLMProviders"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.MEAI"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.NyxId"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.Tornado"),
+        };
+
+        var scannedFiles = new[] { providerContractFile }
+            .Concat(concreteProviderRoots.SelectMany(scanRoot =>
+                Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories)));
+        var offenders = scannedFiles
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => System.Text.RegularExpressions.Regex.IsMatch(
+                    x.line,
+                    @"Task<LLMResponse>\s+ChatAsync\s*\("))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
     }
 
     [Fact]
@@ -527,13 +663,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         public string Name => "queued-streaming-provider";
         public List<LLMRequest> StreamRequests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -556,18 +685,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
-        public int ChatCallCount { get; private set; }
         public int StreamCallCount { get; private set; }
         public LLMRequest? LastStreamRequest { get; private set; }
-        public LLMRequest? LastChatRequest { get; private set; }
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastChatRequest = request;
-            ChatCallCount++;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = string.Concat(chunks) });
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
@@ -626,6 +745,20 @@ public sealed class ChatRuntimeStreamingBufferTests
 
             await next();
         }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (File.Exists(Path.Combine(current, "aevatar.slnx")))
+                return current;
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 
     private sealed class DelegateAgentRunMiddleware(

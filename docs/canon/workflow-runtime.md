@@ -202,7 +202,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
   │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
-  │     ├── WorkflowRunCommandTargetBinder: 建立 projection lease + live sink + accepted receipt
+  │     ├── WorkflowRunObservationLifecycle: 建立 projection lease + live sink；accepted receipt 由 receipt factory 生成
   │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope

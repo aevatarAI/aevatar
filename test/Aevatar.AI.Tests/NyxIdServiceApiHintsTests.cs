@@ -96,7 +96,7 @@ public class NyxIdServiceApiHintsTests
 
         hint.Should().Contain("20 endpoints");
         hint.Should().Contain("... and 15 more");
-        hint.Should().Contain("nyxid_search_capabilities");
+        hint.Should().Contain("nyxid_proxy");
     }
 
     [Fact]

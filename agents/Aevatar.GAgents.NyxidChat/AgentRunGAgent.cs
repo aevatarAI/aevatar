@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -17,6 +18,9 @@ namespace Aevatar.GAgents.NyxidChat;
 /// <summary>
 /// Run-scoped continuation owner for one deferred channel LLM reply.
 /// </summary>
+// Refactor (iter20/cluster-004):
+//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     public const string ActorIdPrefix = "channel-agent-run:";
@@ -117,6 +121,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
 
         var request = command.Request.Clone();
+        ApplyTargetRefOverrides(request);
         var runId = NormalizeOptional(request.CorrelationId) ?? Id;
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
@@ -283,6 +288,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
+        var streamingState = TryBuildStreamingReplyState(streamingSink, request);
 
         IReadOnlyDictionary<string, string> effectiveMetadata;
         using (var metadataCts = new CancellationTokenSource(MetadataBuildBudget))
@@ -303,7 +309,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "llm_reply_metadata_timeout";
                 errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
-                await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
+                await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
                 await ProduceAndDispatchAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
                 return;
             }
@@ -329,7 +335,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 var replyResult = await _replyGenerator.GenerateReplyAsync(
                     request.Activity,
                     effectiveMetadata,
-                    streamingSink,
+                    streamingState,
                     timeoutCts.Token);
                 replyText = replyResult.Text ?? string.Empty;
                 if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
@@ -350,11 +356,11 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 interactiveReplyScope?.Dispose();
             }
 
-            if (streamingSink is not null &&
+            if (streamingState is not null &&
                 outboundIntent is null &&
                 !string.IsNullOrWhiteSpace(replyText))
             {
-                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
+                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
             }
 
             if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
@@ -398,7 +404,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             // text (timeout / classifier / empty reply), surface that text on the live
             // streaming card/edit message before the LlmReplyReadyEvent lands. Carried over
             // from feature/lark-bot's dispatch hardening.
-            await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
+            await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
         }
 
         await ProduceAndDispatchAsync(
@@ -412,17 +418,17 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     private async Task FinalizeFailureStreamingSinkAsync(
-        TurnStreamingReplySink? streamingSink,
+        StreamingReplyRunState? streamingState,
         string replyText,
         MessageContent? outboundIntent)
     {
-        if (streamingSink is not null &&
+        if (streamingState is not null &&
             outboundIntent is null &&
             !string.IsNullOrWhiteSpace(replyText))
         {
             try
             {
-                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
+                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -704,32 +710,132 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return null;
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
-        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
-            ? _relayOptions.StreamingCardKitFlushIntervalMs
-            : _relayOptions.StreamingFlushIntervalMs));
-        var maxInterimChunks = cardMode
-            ? int.MaxValue
-            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
         return new TurnStreamingReplySink(
             _actorDispatchPort,
             targetActorId,
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
-            throttle,
+            request.ReplyToken,
+            request.ReplyTokenExpiresAtUnixMs,
             _timeProvider,
             _logger,
-            maxInterimChunks,
             cardMode);
+    }
+
+    private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink, NeedsLlmReplyEvent request)
+    {
+        if (sink is null || _relayOptions is null)
+            return null;
+
+        var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
+            ? _relayOptions.StreamingCardKitFlushIntervalMs
+            : _relayOptions.StreamingFlushIntervalMs));
+        var maxInterimChunks = cardMode
+            ? int.MaxValue
+            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
+
+        return new StreamingReplyRunState(sink, throttle, maxInterimChunks, _timeProvider);
+    }
+
+    /// <summary>
+    /// Actor-owned coalescing state for one generated reply stream.
+    /// </summary>
+    /// <remarks>
+    /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+    ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
+    ///   New principle: this run flow owns throttling, duplicate suppression, interim caps, and final flush ordering before dispatch; throttled deltas never block the actor turn.
+    /// </remarks>
+    private sealed class StreamingReplyRunState : IStreamingReplySink
+    {
+        private readonly TurnStreamingReplySink _sink;
+        private readonly TimeSpan _throttle;
+        private readonly int _maxInterimChunks;
+        private readonly TimeProvider _timeProvider;
+        private string _lastEmittedText = string.Empty;
+        private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
+        private int _chunksEmitted;
+        private string _pendingText = string.Empty;
+
+        public StreamingReplyRunState(
+            TurnStreamingReplySink sink,
+            TimeSpan throttle,
+            int maxInterimChunks,
+            TimeProvider timeProvider)
+        {
+            _sink = sink;
+            _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
+            _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
+            _timeProvider = timeProvider;
+        }
+
+        public Task OnDeltaAsync(string accumulatedText, CancellationToken ct) =>
+            TryDispatchAsync(accumulatedText, isFinal: false, ct);
+
+        public Task FinalizeAsync(string finalText, CancellationToken ct) =>
+            TryDispatchAsync(finalText, isFinal: true, ct);
+
+        private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            if (string.Equals(text, _lastEmittedText, StringComparison.Ordinal))
+            {
+                if (isFinal || string.Equals(text, _pendingText, StringComparison.Ordinal))
+                    ClearPending();
+                return;
+            }
+
+            if (!isFinal && _chunksEmitted >= _maxInterimChunks)
+            {
+                StashPending(text);
+                return;
+            }
+
+            if (!isFinal)
+            {
+                var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                if (elapsed < _throttle)
+                {
+                    StashPending(text);
+                    return;
+                }
+            }
+
+            await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
+            if (_sink.ChunksEmitted > _chunksEmitted)
+            {
+                _lastEmittedText = text;
+                _lastEmitAt = _timeProvider.GetUtcNow();
+                _chunksEmitted = _sink.ChunksEmitted;
+                if (isFinal || string.Equals(_pendingText, text, StringComparison.Ordinal))
+                    ClearPending();
+            }
+        }
+
+        private void StashPending(string text)
+        {
+            _pendingText = text;
+        }
+
+        private void ClearPending()
+        {
+            _pendingText = string.Empty;
+        }
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
         NeedsLlmReplyEvent request,
         CancellationToken ct)
     {
+        var routedModel = NormalizeOptional(request.TargetRef?.ForwardToModel?.ModelName);
         var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
 
         await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
+        if (routedModel is not null)
+            metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
 
         var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(userAccessToken))
@@ -987,6 +1093,71 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var actor = await _actorRuntime.GetAsync(targetActorId);
         if (actor is null)
             await _actorRuntime.CreateAsync<ConversationGAgent>(targetActorId, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Applies the chat-route boundary decision carried on
+    /// <see cref="NeedsLlmReplyEvent.TargetRef"/> to the cloned request before
+    /// it flows into <c>ProcessAsync</c>. Without this the typed field is
+    /// written by <c>ConversationGAgent</c> + persisted but no downstream
+    /// consumer ever reads it — Forward* actions silently no-op on the relay
+    /// path while only <c>Reject</c> is honored at the resolver edge.
+    ///
+    /// Action semantics on the relay run-actor path:
+    /// <list type="bullet">
+    ///   <item><c>ForwardToGAgent.actor_id</c> → overrides
+    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
+    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
+    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
+    ///   <item><c>ForwardToModel.model_name</c> → sets
+    ///     <c>metadata[LLMRequestMetadataKeys.ModelOverride]</c>. The chat
+    ///     route policy is more specific than the bot owner's default model,
+    ///     so it intentionally overwrites a bot-owner-config-supplied model
+    ///     when both are present.</item>
+    ///   <item><c>Reject</c> → resolver-side already failed the turn before
+    ///     the run was dispatched; this method shouldn't see it.</item>
+    ///   <item>Anything else / no TargetRef → no-op (resolver returned
+    ///     fallback / no policy / unsupported v2 action).</item>
+    /// </list>
+    /// </summary>
+    private void ApplyTargetRefOverrides(NeedsLlmReplyEvent request)
+    {
+        var targetRef = request.TargetRef;
+        if (targetRef is null)
+            return;
+
+        switch (targetRef.ActionCase)
+        {
+            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
+                var forwardedActorId = NormalizeOptional(targetRef.ForwardToGagent?.ActorId);
+                if (forwardedActorId is not null &&
+                    !string.Equals(forwardedActorId, request.TargetActorId, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "Chat-route override: redirecting run target actor {Original} → {Override} (correlation={CorrelationId})",
+                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
+                        forwardedActorId,
+                        request.CorrelationId);
+                    request.TargetActorId = forwardedActorId;
+                }
+                break;
+            case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
+                if (routedModel is not null)
+                {
+                    _logger.LogInformation(
+                        "Chat-route override: pinning LLM model to {Model} (correlation={CorrelationId})",
+                        routedModel,
+                        request.CorrelationId);
+                    request.Metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
+                }
+                break;
+            default:
+                // ForwardToWorkflow is v2 (no relay-side implementation);
+                // Reject was handled at the resolver before run dispatch;
+                // None means resolver returned no rule + no default.
+                break;
+        }
     }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)

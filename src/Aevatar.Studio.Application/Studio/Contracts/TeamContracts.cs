@@ -20,7 +20,10 @@ public sealed record StudioTeamSummaryResponse(
     string LifecycleStage,
     int MemberCount,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    public string? EntryMemberId { get; init; }
+}
 
 public sealed record StudioTeamRosterResponse(
     string ScopeId,
@@ -62,6 +65,9 @@ public readonly struct PatchValue<T>
 public sealed record UpdateStudioTeamRequest(
     PatchValue<string> DisplayName = default,
     PatchValue<string> Description = default);
+
+public sealed record SetStudioTeamEntryMemberRequest(
+    string MemberId);
 
 /// <summary>
 /// Centralized input bounds for team contract — mirrors

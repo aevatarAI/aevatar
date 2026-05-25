@@ -44,6 +44,7 @@ public sealed class UserAgentCatalogCommandPortTests
         env.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
         await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
         await fixture.Runtime.Received().GetAsync(CatalogActorId);
+        await fixture.Activation.DidNotReceiveWithAnyArgs().EnsureAsync(default!, default);
     }
 
     [Fact]
@@ -87,6 +88,7 @@ public sealed class UserAgentCatalogCommandPortTests
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
         await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+        await fixture.Activation.DidNotReceiveWithAnyArgs().EnsureAsync(default!, default);
     }
 
     [Theory]
@@ -123,6 +125,7 @@ public sealed class UserAgentCatalogCommandPortTests
         source.Should().NotContain(string.Concat("Task", ".Delay"));
         source.Should().NotContain("projectionWait");
         source.Should().NotContain("StateVersion");
+        source.Should().NotContain("EnsureProjectionForActorAsync");
     }
 
     [Fact]
@@ -181,6 +184,7 @@ public sealed class UserAgentCatalogCommandPortTests
     private sealed class Fixture
     {
         public UserAgentCatalogProjectionPort ProjectionPort { get; }
+        public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public IActorRuntime Runtime { get; }
         public IActorDispatchPort Dispatch { get; }
         public List<EventEnvelope> Captured { get; } = new();
@@ -200,12 +204,12 @@ public sealed class UserAgentCatalogCommandPortTests
                         ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
                     })));
             ProjectionPort = new UserAgentCatalogProjectionPort(activation);
+            Activation = activation;
 
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
                 .Returns(Task.CompletedTask);
 
             Port = new UserAgentCatalogCommandPort(
-                ProjectionPort,
                 Runtime,
                 Dispatch);
         }

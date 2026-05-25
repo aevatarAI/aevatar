@@ -22,6 +22,11 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
+// Refactor (iter16/cluster-031):
+//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+//                bag for request metadata, LLM overrides, authorization, secure values
+//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -36,7 +41,7 @@ public sealed class WorkflowRunGAgent
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
-    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
+    private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
@@ -99,6 +104,8 @@ public sealed class WorkflowRunGAgent
         ? Id
         : State.RunId;
 
+    WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
+
     public Any? GetExecutionState(string scopeKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
@@ -109,28 +116,6 @@ public sealed class WorkflowRunGAgent
 
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         State.ExecutionStates.ToList();
-
-    public bool TryGetExecutionItem(
-        string itemKey,
-        out object? value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        return _executionItems.TryGetValue(itemKey, out value);
-    }
-
-    public void SetExecutionItem(
-        string itemKey,
-        object? value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        _executionItems[itemKey] = value;
-    }
-
-    public bool RemoveExecutionItem(string itemKey)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        return _executionItems.Remove(itemKey);
-    }
 
     public Task UpsertExecutionStateAsync(
         string scopeKey,
@@ -241,9 +226,7 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Propagate per-request metadata (e.g. NyxID token, model override)
-        // to execution items so that inner LLM steps can forward them.
-        PropagateRequestMetadataToExecutionItems(request.Metadata);
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
 
         await EnsureAgentTreeAsync();
 
@@ -258,20 +241,6 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
         });
-
-        if (request.Metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))
-            ConnectorAuthorizationRuntimeItemsAccess.SetAuthorization(this, authorization);
-        else
-            ConnectorAuthorizationRuntimeItemsAccess.RemoveAuthorization(this);
-
-        if (request.Metadata.Count > 0)
-        {
-            WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, request.Metadata);
-        }
-        else
-        {
-            WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(this);
-        }
 
         await PublishAsync(new StartWorkflowEvent
         {
@@ -447,7 +416,7 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
-        _executionItems.Clear();
+        _runtimeContext.Clear();
         DisableExecutionModules();
         if (evt.Success)
         {
@@ -901,7 +870,7 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeStop, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, stateBeforeStop, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
-        _executionItems.Clear();
+        _runtimeContext.Clear();
         DisableExecutionModules();
 
         Logger.LogInformation(
@@ -1002,22 +971,6 @@ public sealed class WorkflowRunGAgent
         return WorkflowCompilationResult.Success(parsed);
     }
 
-    private static readonly string[] PropagatedMetadataKeys =
-    [
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-    ];
-
-    private void PropagateRequestMetadataToExecutionItems(
-        Google.Protobuf.Collections.MapField<string, string> metadata)
-    {
-        foreach (var key in PropagatedMetadataKeys)
-        {
-            if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
-                _executionItems[key] = value.Trim();
-        }
-    }
-
     private static string ResolveScopeId(
         string? requestedScopeId,
         Google.Protobuf.Collections.MapField<string, string>? metadata,
@@ -1104,7 +1057,7 @@ public sealed class WorkflowRunGAgent
         IReadOnlyCollection<string> childActorIds,
         CancellationToken ct)
     {
-        _executionItems.Clear();
+        _runtimeContext.Clear();
         foreach (var childActorId in childActorIds)
         {
             await _runtime.UnlinkAsync(childActorId, ct);

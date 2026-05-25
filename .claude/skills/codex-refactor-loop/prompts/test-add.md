@@ -1,23 +1,23 @@
-# 任务：补测试覆盖重构引入的未覆盖代码 — {{cluster_id}}
+# 任务：补测试覆盖重构引入的未覆盖代码 — ${CLUSTER_ID}
 
-worktree: `{{worktree_path}}`，分支 `{{branch}}`。
+worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}`。
 
 ## 必读
 
 1. `/Users/auric/aevatar/CLAUDE.md` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
-2. `/Users/auric/aevatar/.refactor-loop/runs/audit-iter-N.md` 中 `{{cluster_id}}` 一节
-3. `/Users/auric/aevatar/.refactor-loop/runs/implement-{{cluster_id}}.md`
+2. `/Users/auric/aevatar/.refactor-loop/runs/audit-iter-N.md` 中 `${CLUSTER_ID}` 一节
+3. `/Users/auric/aevatar/.refactor-loop/runs/implement-${CLUSTER_ID}.md`
 4. **未覆盖行报告**：以下文件:行号 是 codecov 标记为 patch miss/partial 的位置：
 
 ```
-{{uncovered_lines}}
+${UNCOVERED_LINES}
 ```
 
 5. 现有测试项目结构（`test/Aevatar.*.Tests/`），参考同模式现有测试风格。
 
 ## 目标
 
-把 patch coverage 提到 **≥ {{target_threshold}}%**（默认 80%），focus 在重构**引入或改动**的行为上。
+把 patch coverage 提到 **≥ ${TARGET_THRESHOLD}%**（默认 80%），focus 在重构**引入或改动**的行为上。
 
 ## 硬约束
 
@@ -33,7 +33,7 @@ worktree: `{{worktree_path}}`，分支 `{{branch}}`。
 
 6. **代码注释**：每个新测试 class 加：
    ```csharp
-   // Test-add (test-coverage/{{cluster_id}}):
+   // Test-add (test-coverage/${CLUSTER_ID}):
    //   Covers refactor-introduced behavior in <file>:<line range>.
    //   Cluster intent: <one-line summary from implement.md>.
    ```
@@ -48,27 +48,27 @@ worktree: `{{worktree_path}}`，分支 `{{branch}}`。
 4. 实施测试。
 5. 跑：
    ```
-   dotnet test {{primary_test_project_csproj}} --nologo --filter "<new test class names>"
+   dotnet test ${PRIMARY_TEST_PROJECT_CSPROJ} --nologo --filter "<new test class names>"
    ```
    必须全部通过。
 6. 本地 codecov 验证（如果工具可用）：
    ```
-   dotnet test {{primary_test_project_csproj}} --nologo --collect:"XPlat Code Coverage" \
+   dotnet test ${PRIMARY_TEST_PROJECT_CSPROJ} --nologo --collect:"XPlat Code Coverage" \
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
 7. 跑 `bash /Users/auric/aevatar/tools/ci/test_stability_guards.sh` —— 必须通过（禁 `Task.Delay` 等）。
 8. `git add -A && git status`。
 9. **不 commit**。
-10. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/test-add-{{cluster_id}}.md`：
+10. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`：
     - 新增/修改测试文件 + 行数
     - 每个 uncovered 行 → 哪个 test 覆盖（mapping table）
     - 是否所有 uncovered 行都被覆盖；如有未能覆盖的，写明 `TEST_BLOCKED` 原因
     - 跑过的测试命令 + 结果
-11. 末尾打印 `TEST_ADD_DONE:{{cluster_id}}:<status>` 其中 status ∈ {ok, partial, blocked}。
+11. 末尾打印 `TEST_ADD_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
 
 ## 红线
 
-- worktree 外**唯一可写**：`$REPO_ROOT/.refactor-loop/runs/test-add-{{cluster_id}}.md`
+- worktree 外**唯一可写**：`$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`
 - 禁止 commit/push/checkout/install。
 - **禁止改产线代码** —— 测试加不上去就 `TEST_BLOCKED`，让 controller 决定。
 - 禁止 disable / skip 现有测试。
@@ -77,3 +77,13 @@ worktree: `{{worktree_path}}`，分支 `{{branch}}`。
 - 禁止"mock everything"式测试（每个测试至少有一条真业务断言；纯 mock 验证调用次数的测试不算覆盖）。
 
 开始执行。
+
+---
+
+## AI 内容标识符(强制)
+
+所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+
+    ⟦AI:AUTO-LOOP⟧
+
+不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。

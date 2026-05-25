@@ -706,9 +706,6 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
         if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "workflows"))), StringComparison.OrdinalIgnoreCase))
             return "app";
 
-        if (normalized.EndsWith($"{Path.DirectorySeparatorChar}turing-completeness", StringComparison.OrdinalIgnoreCase))
-            return "turing";
-
         return "file";
     }
 

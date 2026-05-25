@@ -297,6 +297,16 @@ message TransportExtras {
   // chat can address it via `receive_id_type=chat_id`). For p2p DMs the chat_id is bot-specific
   // and not cross-app safe; downstream senders prefer `nyx_lark_union_id` for p2p targets.
   string nyx_lark_chat_id = 8;
+  // The Aevatar registration scope resolved at the relay ingress boundary. This typed field
+  // lets ConversationGAgent build the chat-routing caller scope before any turn runner metadata
+  // exists, without falling back to a generic metadata bag.
+  string nyx_registration_scope_id = 9;
+  // The sender's NyxID user id, resolved at the relay ingress boundary by calling NyxID `/me`
+  // with the relay-supplied user access token. Lets `ConversationGAgent` build a per-user
+  // owner scope for chat-route policy lookup (matching scope_id-only and per-user scopes
+  // alike) without re-resolving inside the actor turn. Empty when the relay payload did not
+  // surface a user access token or when `/me` resolution failed at ingress.
+  string nyx_sender_user_id = 10;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

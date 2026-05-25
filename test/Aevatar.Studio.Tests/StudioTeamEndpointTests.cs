@@ -5,6 +5,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -263,6 +264,120 @@ public sealed class StudioTeamEndpointTests
     }
 
     [Fact]
+    public async Task HandleSetEntryMemberAsync_ShouldReturn202WithoutBody_WhenAccepted()
+    {
+        var service = new InMemoryTeamService(NewSummary());
+        var result = await InvokeTeamHandle(
+            "HandleSetEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            new SetStudioTeamEntryMemberRequest("m-1"),
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+        service.SetEntryRequests.Should().ContainSingle()
+            .Which.MemberId.Should().Be("m-1");
+    }
+
+    [Fact]
+    public async Task HandleSetEntryMemberAsync_ShouldReturn404_WhenTeamMissing()
+    {
+        var service = new ThrowingTeamService(new StudioTeamNotFoundException(ScopeId, TeamId));
+        var result = await InvokeTeamHandle(
+            "HandleSetEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            new SetStudioTeamEntryMemberRequest("m-1"),
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleSetEntryMemberAsync_ShouldReturn404_WhenMemberMissing()
+    {
+        var service = new ThrowingTeamService(new StudioMemberNotFoundException(ScopeId, "m-missing"));
+        var result = await InvokeTeamHandle(
+            "HandleSetEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            new SetStudioTeamEntryMemberRequest("m-missing"),
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleSetEntryMemberAsync_ShouldReturn400_WhenValidationFails()
+    {
+        var service = new ThrowingTeamService(new InvalidOperationException("team is archived"));
+        var result = await InvokeTeamHandle(
+            "HandleSetEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            new SetStudioTeamEntryMemberRequest("m-1"),
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task HandleClearEntryMemberAsync_ShouldReturn202WithoutBody_WhenAccepted()
+    {
+        var service = new InMemoryTeamService(NewSummary());
+        var result = await InvokeTeamHandle(
+            "HandleClearEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+        service.ClearEntryCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleClearEntryMemberAsync_ShouldReturn404_WhenTeamMissing()
+    {
+        var service = new ThrowingTeamService(new StudioTeamNotFoundException(ScopeId, TeamId));
+        var result = await InvokeTeamHandle(
+            "HandleClearEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleClearEntryMemberAsync_ShouldReturn400_WhenValidationFails()
+    {
+        var service = new ThrowingTeamService(new InvalidOperationException("team is archived"));
+        var result = await InvokeTeamHandle(
+            "HandleClearEntryMemberAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
     public async Task HandleListMembersAsync_ShouldReturn200_WithFilteredMembers()
     {
         var teamService = new InMemoryTeamService(NewSummary());
@@ -348,6 +463,8 @@ public sealed class StudioTeamEndpointTests
     private sealed class InMemoryTeamService : IStudioTeamService
     {
         private readonly StudioTeamSummaryResponse _summary;
+        public List<SetStudioTeamEntryMemberRequest> SetEntryRequests { get; } = [];
+        public int ClearEntryCalls { get; private set; }
 
         public InMemoryTeamService(StudioTeamSummaryResponse summary) => _summary = summary;
 
@@ -370,6 +487,25 @@ public sealed class StudioTeamEndpointTests
         public Task<StudioTeamSummaryResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromResult(_summary);
+
+        public Task SetEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            SetStudioTeamEntryMemberRequest request,
+            CancellationToken ct = default)
+        {
+            SetEntryRequests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default)
+        {
+            ClearEntryCalls++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ThrowingTeamService : IStudioTeamService
@@ -387,6 +523,15 @@ public sealed class StudioTeamEndpointTests
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) => throw _ex;
         public Task<StudioTeamSummaryResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
+        public Task SetEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            SetStudioTeamEntryMemberRequest request,
+            CancellationToken ct = default) => throw _ex;
+        public Task ClearEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default) => throw _ex;
     }
 
     private sealed class InMemoryMemberService : IStudioMemberService

@@ -115,7 +115,7 @@ internal static class ClaimIntegrationTestKit
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, ct);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, ct);
 
         try
         {
@@ -137,7 +137,7 @@ internal static class ClaimIntegrationTestKit
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, ct);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
             await projectionPort.ReleaseActorProjectionAsync(lease!, ct);
         }
     }
@@ -152,4 +152,36 @@ internal static class ClaimIntegrationTestKit
 
     public static IReadOnlyList<string> ReadMessages(IActor actor) =>
         ((ClaimMessageSinkGAgent)actor.Agent).State.MessageTypes.ToArray();
+
+    public static async Task WaitForMessageAsync(
+        IActorRuntime runtime,
+        string actorId,
+        string messageType,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageType);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            while (!timeout.Token.IsCancellationRequested)
+            {
+                var actor = await runtime.GetAsync(actorId);
+                if (actor != null && ReadMessages(actor).Contains(messageType, StringComparer.Ordinal))
+                    return;
+
+                await Task.Yield();
+                timeout.Token.ThrowIfCancellationRequested();
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Timed out waiting for claim sink message. actor_id={actorId} message_type={messageType}");
+        }
+    }
 }

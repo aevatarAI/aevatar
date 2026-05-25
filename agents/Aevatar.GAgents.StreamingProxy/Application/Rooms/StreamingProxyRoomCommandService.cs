@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy.Application.Rooms;
 
+// Refactor (iter23/cluster-002):
+//   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+//   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
 public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomCommandService
 {
     private const string DefaultRoomName = "Group Chat";

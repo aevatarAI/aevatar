@@ -114,33 +114,21 @@ public sealed class RetiredActorCleanupHostedServiceTests
     public async Task StartAsync_ShouldCleanRetiredUserAgentsDiscoveredFromCatalogBeforeCatalogReset()
     {
         var eventStore = new InMemoryEventStore();
-        await AppendCatalogEventsAsync(eventStore,
-        [
-            new UserAgentCatalogEntry
+        var documents = new RecordingProjectionStore<UserAgentCatalogDocument>(
+            CatalogDocument("skill-runner-old", SkillRunnerDefaults.AgentType),
+            CatalogDocument("workflow-agent-old", "workflow_agent"),
+            CatalogDocument("skill-runner-current", SkillRunnerDefaults.AgentType),
+            CatalogDocument("skill-runner-proxy", SkillRunnerDefaults.AgentType),
+            new UserAgentCatalogDocument
             {
-                AgentId = "skill-runner-old",
-                AgentType = SkillRunnerDefaults.AgentType,
-            },
-            new UserAgentCatalogEntry
-            {
-                AgentId = "workflow-agent-old",
-                AgentType = "workflow_agent",
-            },
-            new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-current",
-                AgentType = SkillRunnerDefaults.AgentType,
-            },
-            new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-proxy",
-                AgentType = SkillRunnerDefaults.AgentType,
-            },
-        ]);
+                Id = "skill-runner-prefix-only",
+                ActorId = "agent-registry-store",
+            });
         await AppendSingleEventAsync(eventStore, "skill-runner-old");
         await AppendSingleEventAsync(eventStore, "workflow-agent-old");
         await AppendSingleEventAsync(eventStore, "skill-runner-current");
         await AppendSingleEventAsync(eventStore, "skill-runner-proxy");
+        await AppendSingleEventAsync(eventStore, "skill-runner-prefix-only");
 
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
         {
@@ -154,10 +142,23 @@ public sealed class RetiredActorCleanupHostedServiceTests
                 "Aevatar.GAgents.Scheduled.SkillRunnerGAgent, Aevatar.GAgents.Scheduled",
             ["skill-runner-proxy"] =
                 "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgentProxy, Aevatar.GAgents.ChannelRuntime",
+            ["skill-runner-prefix-only"] =
+                "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent, Aevatar.GAgents.ChannelRuntime",
         });
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
+        serviceCollection.AddSingleton<IActorTypeProbe>(typeProbe);
+        serviceCollection.AddSingleton<IProjectionDocumentReader<UserAgentCatalogDocument, string>>(documents);
+        serviceCollection.AddSingleton<IProjectionWriteDispatcher<UserAgentCatalogDocument>>(documents);
+
         var runtime = new RecordingActorRuntime();
         var service = CreateService(
-            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateScheduledSpec(),
+            serviceCollection.BuildServiceProvider());
 
         await service.StartAsync(CancellationToken.None);
 
@@ -166,10 +167,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
         runtime.DestroyedActorIds.Should().Contain("agent-registry-store");
         runtime.DestroyedActorIds.Should().NotContain("skill-runner-current");
         runtime.DestroyedActorIds.Should().NotContain("skill-runner-proxy");
+        runtime.DestroyedActorIds.Should().NotContain("skill-runner-prefix-only");
         (await eventStore.GetVersionAsync("skill-runner-old")).Should().Be(0);
         (await eventStore.GetVersionAsync("workflow-agent-old")).Should().Be(0);
         (await eventStore.GetVersionAsync("skill-runner-current")).Should().Be(1);
         (await eventStore.GetVersionAsync("skill-runner-proxy")).Should().Be(1);
+        (await eventStore.GetVersionAsync("skill-runner-prefix-only")).Should().Be(1);
         (await eventStore.GetVersionAsync("agent-registry-store")).Should().Be(0);
     }
 
@@ -177,17 +180,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
     public async Task StartAsync_ShouldSkipCatalogWalk_WhenCatalogRuntimeTypeIsAlreadyCurrent()
     {
         // Once the catalog actor is on the new namespace, the cleanup must not
-        // replay agent-registry-store on every startup nor probe per-entry actors —
+        // query agent-registry-store on every startup nor probe per-entry actors —
         // otherwise warm clusters pay an unbounded scan cost forever.
         var eventStore = new InMemoryEventStore();
-        await AppendCatalogEventsAsync(eventStore,
-        [
-            new UserAgentCatalogEntry
-            {
-                AgentId = "skill-runner-already-migrated",
-                AgentType = SkillRunnerDefaults.AgentType,
-            },
-        ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-already-migrated");
 
         var probedActorIds = new List<string>();
@@ -210,10 +205,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
     [Fact]
     public async Task StartAsync_ShouldDiscoverRetiredUserAgentsFromReadModel_WhenCatalogStreamHasBeenCompacted()
     {
-        // Snapshot+compaction can drop the original UserAgentCatalogUpsertedEvent
-        // entries from agent-registry-store. The discovery must still find the
-        // generated actor ids via the projection read model so they are cleaned
-        // before the catalog itself is destroyed.
+        // Refactor (iter22/cluster-003):
+        //   Old pattern: retired actor discovery replayed catalog event streams after read-model lookup.
+        //   New principle: compacted/generated actor cleanup uses typed UserAgentCatalogDocument rows only.
         var eventStore = new InMemoryEventStore();
         // No catalog events — represents the post-compaction scenario.
         await AppendSingleEventAsync(eventStore, "agent-registry-store");
@@ -293,11 +287,10 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldFallBackToCatalogEvents_WhenReadModelDiscoveryThrows()
+    public async Task StartAsync_ShouldSkipDynamicTargets_WhenReadModelDiscoveryThrows()
     {
-        // Projection store unavailable (transient error) must NOT abort startup
-        // cleanup. The read-model path is best-effort; the event-stream walk and
-        // static targets must still run.
+        // Projection store unavailable must NOT abort startup cleanup, but it
+        // also must not fall back to catalog event replay as a query path.
         var eventStore = new InMemoryEventStore();
         await AppendCatalogEventsAsync(eventStore,
         [
@@ -334,10 +327,28 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         await service.StartAsync(CancellationToken.None);
 
-        runtime.DestroyedActorIds.Should().Contain("skill-runner-recent");
+        runtime.DestroyedActorIds.Should().NotContain("skill-runner-recent");
         runtime.DestroyedActorIds.Should().Contain("agent-registry-store");
-        (await eventStore.GetVersionAsync("skill-runner-recent")).Should().Be(0);
+        (await eventStore.GetVersionAsync("skill-runner-recent")).Should().Be(1);
         (await eventStore.GetVersionAsync("agent-registry-store")).Should().Be(0);
+    }
+
+    [Fact]
+    public void ScheduledRetiredActorSpec_ShouldNotReintroduceCatalogEventReplayOrActorIdPrefixClassification()
+    {
+        // Refactor (iter22/cluster-003):
+        //   Old pattern: retired actor discovery used GetEventsAsync/GetVersionAsync and actorId StartsWith.
+        //   New principle: source stays on typed read-model enumeration without actorId pattern facts.
+        var source = File.ReadAllText(GetScheduledRetiredActorSpecSourcePath());
+        var code = StripLineComments(source);
+
+        code.Should().NotContain("IEventStore");
+        code.Should().NotContain("GetVersionAsync");
+        code.Should().NotContain("GetEventsAsync");
+        code.Should().NotContain("DiscoverFromCatalogEventsAsync");
+        code.Should().NotContain("ActorIdPrefix");
+        code.Should().NotContain("LegacyWorkflowAgentActorIdPrefix");
+        code.Should().NotContain("StartsWith");
     }
 
     [Fact]
@@ -629,6 +640,46 @@ public sealed class RetiredActorCleanupHostedServiceTests
             })
             .ToArray();
         return eventStore.AppendAsync("agent-registry-store", events, expectedVersion: 0);
+    }
+
+    private static UserAgentCatalogDocument CatalogDocument(string agentId, string agentType) =>
+        new()
+        {
+            Id = agentId,
+            ActorId = "agent-registry-store",
+            AgentType = agentType,
+        };
+
+    private static string StripLineComments(string source)
+    {
+        var lines = source
+            .Split('\n')
+            .Select(static line =>
+            {
+                var index = line.IndexOf("//", StringComparison.Ordinal);
+                return index >= 0 ? line[..index] : line;
+            });
+        return string.Join('\n', lines);
+    }
+
+    private static string GetScheduledRetiredActorSpecSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Scheduled",
+                "ScheduledRetiredActorSpec.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate ScheduledRetiredActorSpec.cs from {AppContext.BaseDirectory}");
     }
 
     private sealed class StubActorTypeProbe(IReadOnlyDictionary<string, string?> typeNames) : IActorTypeProbe
