@@ -14,6 +14,7 @@ type TeamDetailRouteState = {
   readonly serviceId: string;
   readonly tab: TeamDetailTab;
   readonly teamId: string;
+  readonly testTeam: boolean;
   readonly workflowId: string;
 };
 
@@ -87,6 +88,7 @@ export function buildTeamDetailHref(options: {
   tab?: TeamDetailTab;
   serviceId?: string;
   runId?: string;
+  testTeam?: boolean;
   workflowId?: string;
 }): string {
   const scopeId = trimOptional(options.scopeId);
@@ -109,6 +111,7 @@ export function buildTeamDetailHref(options: {
       tab: options.tab,
       serviceId: options.serviceId,
       runId: options.runId,
+      testTeam: options.testTeam ? '1' : undefined,
     },
   );
 }
@@ -188,6 +191,7 @@ export function readTeamDetailRouteState(
     serviceId: trimOptional(params.get('serviceId')),
     tab: parseTeamTab(params.get('tab'), defaultTab),
     teamId: teamIdFromPath || trimOptional(params.get('teamId')),
+    testTeam: ['1', 'true', 'yes'].includes(trimOptional(params.get('testTeam')).toLowerCase()),
     workflowId: trimOptional(params.get('workflowId')),
   };
 }

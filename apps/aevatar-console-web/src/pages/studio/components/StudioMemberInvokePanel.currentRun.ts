@@ -20,7 +20,7 @@ export type InvokeResultState = {
   readonly responseJson: string;
   readonly runId: string;
   readonly serviceId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error';
+  readonly status: 'idle' | 'running' | 'success' | 'error' | 'cancelled';
   readonly steps: RuntimeStepInfo[];
   readonly thinking: string;
   readonly toolCalls: RuntimeToolCallInfo[];
@@ -59,7 +59,7 @@ export type InvokeHistoryEntry = {
   readonly runId: string;
   readonly serviceId: string;
   readonly startedAt: number;
-  readonly status: 'success' | 'error';
+  readonly status: 'running' | 'success' | 'error' | 'cancelled';
   readonly summary: string;
   readonly snapshot: {
     readonly chatMessages: StudioInvokeChatMessage[];
@@ -186,7 +186,8 @@ function buildObserveSessionSeed(input: {
       trimOptional(input.selectedServiceDisplayName) || input.currentMemberLabel,
     startedAtUtc: toIsoTimestamp(input.currentRunRequest?.startedAt) || '',
     status:
-      input.invokeResult.status === 'error'
+      input.invokeResult.status === 'error' ||
+      input.invokeResult.status === 'cancelled'
         ? 'error'
         : input.invokeResult.status === 'success'
           ? 'success'

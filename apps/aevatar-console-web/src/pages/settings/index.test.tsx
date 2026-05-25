@@ -5,7 +5,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
-import SettingsPage from "./index";
+import SettingsPage, { buildSettingsRouteSelectOptions } from "./index";
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
@@ -169,6 +169,36 @@ describe("SettingsPage", () => {
     await waitFor(() => {
       expect(screen.getByText("1 live")).toBeTruthy();
     });
+  });
+
+  it("keeps every provider route visible in the preferred route picker", () => {
+    const options = buildSettingsRouteSelectOptions({
+      preferredRoute: "",
+      preferredRouteAvailable: true,
+      preferredRouteLabel: "NyxID Gateway",
+      readyGatewayProviderCount: 1,
+      routeProviders: [
+        {
+          providerSlug: "anthropic",
+          providerName: "Anthropic API",
+          proxyUrl: "https://nyx.example/gateway/anthropic",
+          source: "gateway_provider",
+          status: "ready",
+        },
+        {
+          providerSlug: "draft-team",
+          providerName: "Draft Team Service",
+          proxyUrl: "https://nyx.example/draft",
+          source: "user_service",
+          status: "unavailable",
+        },
+      ],
+    });
+
+    expect(JSON.stringify(options)).toContain("Anthropic API");
+    expect(JSON.stringify(options)).toContain("/api/v1/proxy/s/anthropic");
+    expect(JSON.stringify(options)).toContain("Draft Team Service");
+    expect(JSON.stringify(options)).toContain("/api/v1/proxy/s/draft-team");
   });
 
   it("does not relabel the global supported model union as a service-specific catalog", async () => {
