@@ -31,6 +31,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.Replace(ServiceDescriptor.Singleton<ITeamEntryMemberResolver, StudioTeamEntryMemberResolver>());
+        services.TryAddSingleton<UserLlmPreferenceWriter>();
+        services.TryAddSingleton<IUserConfigService, UserConfigService>();
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
 
         // Override the platform's deterministic resolver so existing

@@ -21,6 +21,8 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             .Which.ImplementationType.Should().Be(typeof(StudioTeamEntryMemberResolver));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IStudioTeamGAgentStreamInvocationService))
             .Which.ImplementationType.Should().Be(typeof(StudioTeamGAgentStreamInvocationService));
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
+            .Which.ImplementationType.Should().Be(typeof(UserConfigService));
     }
 
     private sealed class PlaceholderTeamEntryMemberResolver : ITeamEntryMemberResolver
