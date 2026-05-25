@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
@@ -91,8 +92,14 @@ public static class ServiceCollectionExtensions
         AddSimpleScriptingCommandDispatch<RollbackScriptCatalogRevisionCommand, RollbackScriptCatalogRevisionCommandTargetResolver, RollbackScriptCatalogRevisionCommandEnvelopeFactory>(services);
         services.TryAddSingleton<RuntimeScriptEvolutionInteractionService>();
         services.TryAddSingleton<RuntimeScriptDefinitionCommandService>();
-        services.TryAddSingleton<RuntimeScriptProvisioningService>();
-        services.TryAddSingleton<RuntimeScriptCommandService>();
+        services.TryAddSingleton(sp => new RuntimeScriptProvisioningService(
+            sp.GetRequiredService<ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>(),
+            sp.GetRequiredService<ICommandDispatchPipeline<ProvisionScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>(),
+            sp.GetService<IActorHandledDispatchPort>()));
+        services.TryAddSingleton(sp => new RuntimeScriptCommandService(
+            sp.GetRequiredService<ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>(),
+            sp.GetRequiredService<ICommandDispatchPipeline<RunScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>(),
+            sp.GetService<IActorHandledDispatchPort>()));
         services.TryAddSingleton<RuntimeScriptCatalogCommandService>();
         services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>());
         services.TryAddSingleton<IScriptDefinitionCommandPort>(sp => sp.GetRequiredService<RuntimeScriptDefinitionCommandService>());
