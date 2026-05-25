@@ -707,6 +707,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             await ScheduleApprovalTimeoutAsync(pendingApproval);
         }
 
+        replayRecord = await PublishMissingDisplayContentAsync(request.SessionId, replayRecord);
+
         // Publish first so consumers (relay, SSE) get the response immediately.
         // Persist is best-effort: concurrency conflicts must not block the reply.
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
@@ -956,7 +958,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, TopologyAudience.Parent);
 
-        if (trackedSession.ContentEmitted && !string.IsNullOrEmpty(trackedSession.FinalContent))
+        if (IsDisplayableCompletionContent(trackedSession.FinalContent))
         {
             await PublishAsync(new TextMessageContentEvent
             {
@@ -997,6 +999,25 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
     }
 
+    private async Task<SessionReplayRecord> PublishMissingDisplayContentAsync(
+        string sessionId,
+        SessionReplayRecord replayRecord)
+    {
+        if (replayRecord.ContentEmitted ||
+            !IsDisplayableCompletionContent(replayRecord.Content))
+        {
+            return replayRecord;
+        }
+
+        await PublishAsync(new TextMessageContentEvent
+        {
+            Delta = replayRecord.Content,
+            SessionId = sessionId,
+        }, TopologyAudience.Parent);
+
+        return replayRecord with { ContentEmitted = true };
+    }
+
     private Task PublishCompletionAsync(string sessionId, string completionContent) =>
         PublishAsync(
             new TextMessageEndEvent
@@ -1005,6 +1026,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 SessionId = sessionId,
             },
             TopologyAudience.Parent);
+
+    private static bool IsDisplayableCompletionContent(string? content) =>
+        !string.IsNullOrWhiteSpace(content) &&
+        !content.StartsWith(LlmFailureContentPrefix, StringComparison.Ordinal) &&
+        !content.StartsWith("LLM request failed", StringComparison.Ordinal);
 
     private RoleChatSessionState? ResolveTrackedSession(ChatRequestEvent request)
     {
