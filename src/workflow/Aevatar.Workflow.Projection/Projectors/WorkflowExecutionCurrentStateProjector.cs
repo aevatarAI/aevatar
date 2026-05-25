@@ -5,36 +5,29 @@ using Aevatar.Workflow.Projection.ReadModels;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowExecutionCurrentStateProjector
-    : ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>
+    : MappedCurrentStateProjectionMaterializer<
+        WorkflowExecutionMaterializationContext,
+        WorkflowRunState,
+        WorkflowExecutionCurrentStateDocument>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> _writeDispatcher;
-    private readonly IProjectionClock _clock;
-
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
         IProjectionClock clock)
+        : base(writeDispatcher, clock)
     {
-        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
-        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
-    public async ValueTask ProjectAsync(
-        WorkflowExecutionMaterializationContext context,
-        EventEnvelope envelope,
-        CancellationToken ct = default)
+    protected override WorkflowExecutionCurrentStateDocument Map(
+        MappedCurrentStateProjectionInput<WorkflowExecutionMaterializationContext, WorkflowRunState> input)
     {
-        if (!CommittedStateEventEnvelope.TryUnpackState<WorkflowRunState>(
-                envelope,
-                out _,
-                out var stateEvent,
-                out var state) ||
-            stateEvent == null ||
-            state == null)
-        {
-            return;
-        }
+        var context = input.Context;
+        var stateEvent = input.StateEvent;
+        var state = input.State;
 
-        var document = new WorkflowExecutionCurrentStateDocument
+        // Refactor (iter97/cluster-591): Old/New
+        //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
+        //   New: core mapped helper owns that projection shell; this projector keeps only WorkflowRunState -> read model mapping.
+        return new WorkflowExecutionCurrentStateDocument
         {
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
@@ -52,10 +45,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
-            UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
+            UpdatedAt = input.ObservedAt,
         };
-
-        await _writeDispatcher.UpsertAsync(document, ct);
     }
 
     private static bool? ResolveSuccess(string? status)
