@@ -21,14 +21,16 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
         IAgentTypeVerifier? agentTypeVerifier = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IStreamProvider? streams = null)
     {
         _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
             runtime,
             dispatchPort,
             agentTypeVerifier,
             streamPubSubMaintenance,
-            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>());
+            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>(),
+            streams);
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
     }
@@ -52,6 +54,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
+        await _scopeRuntime.EnsureObservationRelayAsync(scopeKey, ct).ConfigureAwait(false);
         await _scopeRuntime.DispatchAsync(
             scopeKey,
             new EnsureProjectionScopeCommand
