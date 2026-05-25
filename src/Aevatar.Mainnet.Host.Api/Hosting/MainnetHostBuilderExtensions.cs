@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
@@ -194,6 +195,12 @@ public static class MainnetHostBuilderExtensions
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
         });
+        // ssh_exec is opted in above; pair it with the canonical yielding local
+        // handler so NyxIdAgentToolSource's gate is satisfied and approval-required
+        // tool calls yield to actor-owned remote continuation (NyxIdRemoteToolApprovalPort
+        // submit/status → RoleGAgent.HandleRemoteApprovalStatusCheck). See
+        // iter23/cluster-001-nyxid-tool-approval-polling.
+        builder.Services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
