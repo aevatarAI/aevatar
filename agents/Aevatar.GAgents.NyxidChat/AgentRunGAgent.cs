@@ -770,28 +770,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(request.TargetActorId) &&
         !string.IsNullOrWhiteSpace(request.CorrelationId);
 
-    private async Task DispatchDropNotificationAsync(NeedsLlmReplyEvent request, string reason)
-    {
-        var dropped = new DeferredLlmReplyDroppedEvent
-        {
-            CorrelationId = request.CorrelationId,
-            Reason = reason,
-            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        };
-
-        try
-        {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, dropped, outputCts.Token);
-        }
-        catch (Exception ex)
-        {
-            throw new AgentRunOutputDispatchException(
-                $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
-                ex);
-        }
-    }
-
     private async Task DispatchPendingDropNotificationAsync()
     {
         var targetActorId = NormalizeOptional(State.PendingDropNotificationTargetActorId);
