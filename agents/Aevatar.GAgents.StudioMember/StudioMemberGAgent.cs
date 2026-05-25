@@ -308,6 +308,59 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await PersistDomainEventAsync(evt);
     }
 
+    /// <summary>
+    /// Evaluates PATCH team-assignment intent inside the member authority
+    /// boundary. Callers provide only the desired target; this actor derives
+    /// the current source team from <see cref="State"/>, suppresses no-ops,
+    /// commits the resulting reassignment event. Team roster fanout is driven
+    /// later by the durable committed-state materializer.
+    /// </summary>
+    // Refactor (iter96/cluster-545):
+    //   Old pattern: member actor 直发 team(部分失败不可 replay).
+    //   New principle: 只 persist committed event,fanout 由 StudioTeamRosterFanoutMaterializer 物化(committed-state idempotent).
+    [EventHandler(EndpointName = "patchTeamAssignment")]
+    public async Task HandleTeamAssignmentPatchRequested(StudioMemberTeamAssignmentPatchRequested evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "team assignment patch target does not match member authority state.");
+        }
+
+        if (evt.HasTargetTeamId && string.IsNullOrWhiteSpace(evt.TargetTeamId))
+        {
+            throw new InvalidOperationException(
+                "target_team_id must not be empty when present.");
+        }
+
+        var currentTeam = State.HasTeamId ? State.TeamId : null;
+        var targetTeam = evt.HasTargetTeamId ? NormalizeActorIdSegment(evt.TargetTeamId, "target_team_id") : null;
+        if (string.Equals(currentTeam, targetTeam, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var reassigned = new StudioMemberReassignedEvent
+        {
+            MemberId = State.MemberId,
+            ScopeId = State.ScopeId,
+            ReassignedAtUtc = evt.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (currentTeam != null)
+            reassigned.FromTeamId = currentTeam;
+        if (targetTeam != null)
+            reassigned.ToTeamId = targetTeam;
+
+        await PersistDomainEventAsync(reassigned);
+    }
+
     protected override StudioMemberState TransitionState(
         StudioMemberState current, IMessage evt)
     {
@@ -684,6 +737,16 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
         next.UpdatedAtUtc = evt.ReassignedAtUtc;
         return next;
+    }
+
+    private static string NormalizeActorIdSegment(string? value, string fieldName)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            throw new InvalidOperationException($"{fieldName} is required.");
+        if (trimmed.Contains(':'))
+            throw new InvalidOperationException($"{fieldName} must not contain ':'.");
+        return trimmed;
     }
 
     private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef)

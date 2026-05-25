@@ -43,21 +43,15 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
-    /// Reassigns a member from one team to another (ADR-0017 §Q3). At least
-    /// one of <paramref name="fromTeamId"/> / <paramref name="toTeamId"/> must
-    /// be non-null; passing both null, or both equal, is rejected. Pure
-    /// assign passes <c>fromTeamId == null</c>; pure unassign passes
-    /// <c>toTeamId == null</c>; move passes both.
-    ///
-    /// The implementation dispatches <c>StudioMemberReassignedEvent</c> only
-    /// to the member actor. A durable committed-state consumer fans the
-    /// committed event out to affected TeamGAgents, where each TeamGAgent
-    /// applies an idempotent set operation against its persisted roster.
+    /// Dispatches the caller's PATCH team-assignment intent to the
+    /// StudioMember actor. <paramref name="targetTeamId"/> null means explicit
+    /// unassign; a non-empty value means assign / move. The member actor owns
+    /// the current-team lookup, no-op decision, and committed reassignment
+    /// event construction.
     /// </summary>
-    Task ReassignTeamAsync(
+    Task PatchTeamAssignmentAsync(
         string scopeId,
         string memberId,
-        string? fromTeamId,
-        string? toTeamId,
+        string? targetTeamId,
         CancellationToken ct = default);
 }

@@ -216,11 +216,10 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             return Task.CompletedTask;
         }
 
-        public Task ReassignTeamAsync(
+        public Task PatchTeamAssignmentAsync(
             string scopeId,
             string memberId,
-            string? fromTeamId,
-            string? toTeamId,
+            string? targetTeamId,
             CancellationToken ct = default) =>
             throw new NotSupportedException("Team reassignment is not exercised by this hosted consistency test.");
     }
