@@ -257,40 +257,14 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
 
         try
         {
-            static bool IsReady(ScriptReadModelSnapshot? snapshot) =>
-                snapshot != null &&
-                !string.IsNullOrWhiteSpace(snapshot.DefinitionActorId) &&
-                !string.IsNullOrWhiteSpace(snapshot.Revision) &&
-                snapshot.ReadModelPayload != null;
-
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-            if (!IsReady(snapshot))
-            {
-                await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-                var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
-                try
-                {
-                    snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    while (!IsReady(snapshot))
-                    {
-                        await ScriptRunCommittedObservationTestHelper.WaitForAnyCommittedAsync(sink, ct);
-                        snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    }
-                }
-                finally
-                {
-                    await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
-                }
-            }
-
-            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
+            var snapshot = await WaitForSnapshotAsync(provider, runtimeActorId, ct);
+            return snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {

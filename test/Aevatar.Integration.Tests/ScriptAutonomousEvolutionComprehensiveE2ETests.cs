@@ -261,11 +261,11 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         generatedResult.NormalizedText.Should().Be("SELF-GEN:GENERATED");
 
-        var v2Summary = await ScriptEvolutionIntegrationTestKit.GetStateAsync<SelfEvolutionV2State>(
+        var v2Summary = await ScriptEvolutionIntegrationTestKit.WaitForStateAsync<SelfEvolutionV2State>(
             provider,
             v2RuntimeId,
+            state => state.DecisionV3 == "promoted" && !string.IsNullOrWhiteSpace(state.V3RuntimeId),
             CancellationToken.None);
-        v2Summary.DecisionV3.Should().Be("promoted");
         var v3RuntimeId = v2Summary.V3RuntimeId;
         (await runtime.ExistsAsync(v3RuntimeId)).Should().BeTrue();
 
