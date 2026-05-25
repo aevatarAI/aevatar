@@ -2250,6 +2250,8 @@ public sealed class ConversationGAgentDedupTests
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
+        // Refactor (iter97/cluster-098): test fixture must register ILongRunningBusinessIoExecutor
+        services.AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>();
         if (cardRunner is not null)
             services.AddSingleton(cardRunner);
         if (dispatcher is not null)
@@ -3343,5 +3345,11 @@ public sealed class ConversationGAgentDedupTests
                 ?? ConversationCardFinalizeResult.Succeeded();
             return Task.FromResult(result);
         }
+    }
+
+    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
+    {
+        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
+            workItem.ExecuteAsync(ct);
     }
 }

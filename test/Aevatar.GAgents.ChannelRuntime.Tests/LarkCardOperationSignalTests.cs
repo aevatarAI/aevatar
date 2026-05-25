@@ -217,6 +217,7 @@ public sealed class LarkCardOperationSignalTests
             .AddSingleton(dispatch)
             .AddSingleton(cardRunner)
             .AddSingleton(callbackScheduler ?? new NoopCallbackScheduler())
+            .AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -521,5 +522,11 @@ public sealed class LarkCardOperationSignalTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
             Task.CompletedTask;
+    }
+
+    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
+    {
+        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
+            workItem.ExecuteAsync(ct);
     }
 }

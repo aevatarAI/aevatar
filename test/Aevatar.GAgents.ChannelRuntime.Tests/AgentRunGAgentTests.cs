@@ -2318,6 +2318,7 @@ public sealed class AgentRunGAgentTests
         {
             _inner = new AgentRunReplyGenerationExecutor(
                 dispatchPort,
+                new ImmediateBusinessIoExecutor(),
                 replyGenerator,
                 collector,
                 relayOptions,
@@ -2343,6 +2344,12 @@ public sealed class AgentRunGAgentTests
             var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
             await agent.HandleReplyGenerationCompletedAsync(completed);
         }
+    }
+
+    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
+    {
+        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
+            workItem.ExecuteAsync(ct);
     }
 
     private sealed class ThrowingActorDispatchPort : IActorDispatchPort

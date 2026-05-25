@@ -1151,19 +1151,32 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ConversationTurnRuntimeContext runtimeContext)
     {
         var runner = ResolveRunner();
-        _ = Task.Run(() => ExecuteNyxRelayTextOperationAsync(
-            runner,
-            operation,
-            chunk.Clone(),
-            correlationId,
-            currentPlatformMessageId,
-            commandId,
-            finalText,
-            lastFlushedText,
-            editCount,
-            sequence,
-            generation,
-            runtimeContext));
+        var executor = ResolveBusinessIoExecutor();
+        var workItemId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation);
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched Nyx relay text IO from the actor turn.
+        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
+        _ = executor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                workItemId,
+                Id,
+                $"nyx-relay-text-{operation}",
+                correlationId,
+                StreamingFailureUpdateTimeout,
+                ct => ExecuteNyxRelayTextOperationAsync(
+                    runner,
+                    operation,
+                    chunk.Clone(),
+                    correlationId,
+                    currentPlatformMessageId,
+                    commandId,
+                    finalText,
+                    lastFlushedText,
+                    editCount,
+                    sequence,
+                    generation,
+                    runtimeContext,
+                    ct)),
+            CancellationToken.None);
     }
 
     private async Task ExecuteNyxRelayTextOperationAsync(
@@ -1178,17 +1191,17 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         int editCount,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         NyxRelayTextOperationCompletedEvent signal;
         try
         {
-            using var cts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             var result = await runner.RunStreamChunkAsync(
                     chunk,
                     currentPlatformMessageId,
                     runtimeContext,
-                    cts.Token)
+                    ct)
                 .ConfigureAwait(false);
             signal = new NyxRelayTextOperationCompletedEvent
             {
@@ -1909,6 +1922,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
+
+    private ILongRunningBusinessIoExecutor ResolveBusinessIoExecutor() =>
+        Services.GetRequiredService<ILongRunningBusinessIoExecutor>();
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
         string? correlationId,

@@ -16,6 +16,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
+    private readonly ILongRunningBusinessIoExecutor _businessIoExecutor;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -26,6 +27,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     public AgentRunReplyGenerationExecutor(
         IActorDispatchPort actorDispatchPort,
+        ILongRunningBusinessIoExecutor businessIoExecutor,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
@@ -36,6 +38,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IActorHandledDispatchPort? actorHandledDispatchPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _businessIoExecutor = businessIoExecutor ?? throw new ArgumentNullException(nameof(businessIoExecutor));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -51,15 +54,26 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
         var workItem = request with { Request = request.Request.Clone() };
-        _ = Task.Run(() => ExecuteAndReportAsync(workItem), CancellationToken.None);
-        return Task.CompletedTask;
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched deferred LLM reply business IO from the run actor path.
+        // New principle: actor has recorded generation intent/timeout; bounded executor owns LLM IO and returns via existing completion/failure events.
+        return _businessIoExecutor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                BuildWorkItemId(workItem),
+                workItem.RunActorId,
+                "agent-run-reply-generation",
+                workItem.Request.CorrelationId,
+                ResolveFallbackTimeout(),
+                executorCt => ExecuteAndReportAsync(workItem, executorCt)),
+            ct);
     }
 
-    private async Task ExecuteAndReportAsync(AgentRunReplyGenerationExecutionRequest workItem)
+    private async Task ExecuteAndReportAsync(
+        AgentRunReplyGenerationExecutionRequest workItem,
+        CancellationToken ct)
     {
         try
         {
-            var completed = await ExecuteAsync(workItem).ConfigureAwait(false);
+            var completed = await ExecuteAsync(workItem, ct).ConfigureAwait(false);
             await DispatchToRunActorAsync(workItem.RunActorId, completed, CancellationToken.None)
                 .ConfigureAwait(false);
         }
@@ -98,7 +112,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     }
 
     internal async Task<AgentRunReplyGenerationCompleted> ExecuteAsync(
-        AgentRunReplyGenerationExecutionRequest workItem)
+        AgentRunReplyGenerationExecutionRequest workItem,
+        CancellationToken ct = default)
     {
         var request = workItem.Request.Clone();
         string replyText;
@@ -110,8 +125,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var streamingState = TryBuildStreamingReplyState(streamingSink);
 
         ReplyGenerationContext generationContext;
-        using (var metadataCts = new CancellationTokenSource(AgentRunGAgent.MetadataBuildBudget))
+        using (var metadataCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
+            metadataCts.CancelAfter(AgentRunGAgent.MetadataBuildBudget);
             try
             {
                 generationContext = await BuildGenerationContextAsync(request, metadataCts.Token)
@@ -137,9 +153,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         var fallbackTimeout = ResolveFallbackTimeout();
-        using var timeoutCts = fallbackTimeout > TimeSpan.Zero
-            ? new CancellationTokenSource(fallbackTimeout)
-            : new CancellationTokenSource();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (fallbackTimeout > TimeSpan.Zero)
+            timeoutCts.CancelAfter(fallbackTimeout);
 
         try
         {
@@ -235,6 +251,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
     }
+
+    private static string BuildWorkItemId(AgentRunReplyGenerationExecutionRequest workItem) =>
+        $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}";
 
     private AgentRunReplyGenerationCompleted BuildCompleted(
         AgentRunReplyGenerationExecutionRequest workItem,
