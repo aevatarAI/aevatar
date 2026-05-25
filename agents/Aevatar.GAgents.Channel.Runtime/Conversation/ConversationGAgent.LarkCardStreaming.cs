@@ -1471,7 +1471,8 @@ public sealed partial class ConversationGAgent
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = correlationId,
-            RunId = correlationId,
+            RunId = NormalizeOptional(State.PendingLlmReplyRequests.FirstOrDefault(request =>
+                string.Equals(request.CorrelationId, correlationId, StringComparison.Ordinal))?.RunId) ?? string.Empty,
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"lark-card-stream:{cardMessageId}",
         };

@@ -1503,6 +1503,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
+            // Refactor (iter98/cluster-002): Old=correlation_id doubled as run identity; New=run_id is explicit before persistence/dispatch.
+            RunId = AgentRunId.New().Value,
             TargetActorId = ConversationGAgent.BuildActorId(activity.Conversation!.CanonicalKey),
             RegistrationId = registration.Id,
             Activity = requestActivity,
