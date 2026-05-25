@@ -12,6 +12,13 @@ public sealed class HealthStatusQueryPortTests
     {
         var current = new HealthProbeTargetDocument
         {
+            Id = "self-liveness",
+            Slug = "self-liveness",
+            DisplayName = "HTTP API (liveness)",
+            Category = "feature",
+        };
+        var retiredAuthGate = new HealthProbeTargetDocument
+        {
             Id = "responses-api-auth-gate",
             Slug = "responses-api-auth-gate",
             DisplayName = "Responses API auth gate",
@@ -32,12 +39,13 @@ public sealed class HealthStatusQueryPortTests
             Category = "feature",
         };
         var port = new HealthStatusQueryPort(
-            new StaticReader([current, retired, retiredSingularRouteProbe]),
+            new StaticReader([current, retiredAuthGate, retired, retiredSingularRouteProbe]),
             Options.Create(new StatusDashboardOptions()));
 
         var results = await port.ListAllAsync();
 
-        results.Select(static x => x.Slug).Should().Equal("responses-api-auth-gate");
+        results.Select(static x => x.Slug).Should().Equal("self-liveness");
+        (await port.GetBySlugAsync(retiredAuthGate.Slug)).Should().BeNull();
         (await port.GetBySlugAsync(retired.Slug)).Should().BeNull();
         (await port.GetBySlugAsync(retiredSingularRouteProbe.Slug)).Should().BeNull();
         (await port.GetBySlugAsync(current.Slug)).Should().NotBeNull();

@@ -23,27 +23,35 @@ public sealed class StatusDashboardManifestTests
         {
             "self-liveness",
             "self-readiness",
+            "aevatar-core-loop-tools",
+            "channel-bot-runtime",
+            "nyxid-http-health",
+            "nyxid-oidc-discovery",
+        });
+        var nyxIdHealth = manifest.Descriptors.Single(d => d.Slug == "nyxid-http-health");
+        nyxIdHealth.DisplayName.Should().Be("NyxID HTTP health");
+        nyxIdHealth.Category.Should().Be("upstream");
+        nyxIdHealth.ProbeKind.Should().Be("http_status");
+        nyxIdHealth.Parameters["Url"].Should().Be("${configuration:Aevatar:NyxId:Authority}/health");
+        nyxIdHealth.Parameters["ExpectedStatuses"].Should().Be("200");
+        manifest.Descriptors.Select(d => d.Slug).Should().NotContain(new[]
+        {
+            "chat-completion-api-singular-route",
             "responses-api-auth-gate",
             "messages-api-auth-gate",
             "chat-completions-api-auth-gate",
-            "aevatar-core-loop-tools",
             "models-api-auth-gate",
             "voice-websocket-auth-gate",
-            "channel-bot-runtime",
+            "channel-registration-api-auth-gate",
             "nyxid-llm-status",
             "nyxid-llm-gateway-auth-gate",
             "nyxid-channel-bots-auth-gate",
             "nyxid-channel-relay-reply-auth-gate",
         });
-        var chatCompletions = manifest.Descriptors.Single(d => d.Slug == "chat-completions-api-auth-gate");
-        chatCompletions.DisplayName.Should().Be("OpenAI Chat Completions API auth gate");
-        chatCompletions.Category.Should().Be("feature");
-        chatCompletions.ProbeKind.Should().Be("http_status");
-        chatCompletions.Parameters["Url"].Should().Be("http://127.0.0.1:9999/v1/chat/completions");
-        chatCompletions.Parameters["Method"].Should().Be("POST");
-        chatCompletions.Parameters["ExpectedStatuses"].Should().Be("401");
-        chatCompletions.Parameters["Body"].Should().Be("{}");
-        manifest.Descriptors.Select(d => d.Slug).Should().NotContain("chat-completion-api-singular-route");
+        manifest.Descriptors
+            .Select(static d => d.Parameters.TryGetValue("ExpectedStatuses", out var value) ? value : string.Empty)
+            .Should()
+            .NotContain(static value => value.Split(',', StringSplitOptions.TrimEntries).Contains("401"));
         var coreLoop = manifest.Descriptors.Single(d => d.Slug == "aevatar-core-loop-tools");
         coreLoop.DisplayName.Should().Be("Aevatar Core Loop Tools");
         coreLoop.Category.Should().Be("feature");

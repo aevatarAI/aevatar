@@ -96,42 +96,6 @@ public sealed class StatusDashboardManifest
                 ["ExpectedStatuses"] = "200",
                 ["DegradedOnNon2xx"] = "true",
             }),
-            HttpTarget(
-            slug: "responses-api-auth-gate",
-            name: "Responses API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/responses",
-            method: "POST",
-            expectedStatuses: "401",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
-            HttpTarget(
-            slug: "messages-api-auth-gate",
-            name: "Anthropic Messages API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/messages",
-            method: "POST",
-            expectedStatuses: "401",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
-            HttpTarget(
-            slug: "chat-completions-api-auth-gate",
-            name: "OpenAI Chat Completions API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/chat/completions",
-            method: "POST",
-            expectedStatuses: "401",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
             new()
             {
                 Slug = "aevatar-core-loop-tools",
@@ -145,27 +109,6 @@ public sealed class StatusDashboardManifest
                     ["RequireWorkspaceSources"] = "true",
                 },
             },
-            HttpTarget(
-            slug: "models-api-auth-gate",
-            name: "Models API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/models",
-            expectedStatuses: "401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "voice-websocket-auth-gate",
-            name: "Voice WebSocket route",
-            category: "feature",
-            url: $"{selfBaseUrl}/ws/voice",
-            expectedStatuses: "400,401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "channel-registration-api-auth-gate",
-            name: "Channel registration API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/api/channels/registrations",
-            expectedStatuses: "200,401",
-            intervalSeconds: 60),
             new()
             {
                 Slug = "channel-bot-runtime",
@@ -180,38 +123,17 @@ public sealed class StatusDashboardManifest
                 },
             },
             HttpTarget(
-            slug: "nyxid-llm-status",
-            name: "NyxID LLM status",
+            slug: "nyxid-http-health",
+            name: "NyxID HTTP health",
             category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/llm/status",
-            expectedStatuses: "200,401",
+            url: $"{NyxIdAuthorityPlaceholder}/health",
             intervalSeconds: 60),
             HttpTarget(
-            slug: "nyxid-llm-gateway-auth-gate",
-            name: "NyxID LLM gateway auth gate",
+            slug: "nyxid-oidc-discovery",
+            name: "NyxID OIDC discovery",
             category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/llm/gateway/v1/models",
-            expectedStatuses: "200,401",
+            url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
             intervalSeconds: 60),
-            HttpTarget(
-            slug: "nyxid-channel-bots-auth-gate",
-            name: "NyxID channel bots auth gate",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/channel-bots",
-            expectedStatuses: "200,401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "nyxid-channel-relay-reply-auth-gate",
-            name: "NyxID channel relay reply auth gate",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/channel-relay/reply",
-            method: "POST",
-            expectedStatuses: "200,400,401,422",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
         };
 
         return targets;

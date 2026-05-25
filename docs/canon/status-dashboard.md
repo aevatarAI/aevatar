@@ -137,7 +137,7 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 
 `static_bearer` 用于长期机器 bearer，例如 NyxID API key / Agent Key。不要把人工登录产生的短期 access token 配成这里的生产值；它会过期，过期后整组探针会一起 401。
 
-`client_credentials` 用于上游支持的 service account token。若某个业务入口需要用 bearer 解析真实调用者身份，探针必须先确认该入口支持 service account 语义，否则应使用通用 auth gate 或显式配置的自定义 HTTP target。
+`client_credentials` 用于上游支持的 service account token。若某个业务入口需要用 bearer 解析真实调用者身份，探针必须先确认该入口支持 service account 语义，否则不要把它放入默认状态面板。
 
 `readmodel_freshness` 支持的参数：
 
@@ -199,16 +199,17 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 内置 probe 包括：
 
 1. `self-liveness` / `self-readiness`。
-2. Responses、Messages、Chat Completions、Models、Voice、Channel registration 等 auth gate。
-3. `aevatar-core-loop-tools`，展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
-4. `channel-bot-runtime` readmodel freshness。
-5. NyxID LLM status、LLM gateway、channel-bots、channel-relay reply 等上游探测。
+2. `aevatar-core-loop-tools`，展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
+3. `channel-bot-runtime` readmodel freshness。
+4. NyxID `/health` 与 OIDC discovery 上游探测。
 
-生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
+默认内置 target 不包含“期望返回 401”的 auth gate。401 只能证明匿名请求被拦截，不能证明业务链路可用；若探针目标是业务健康，必须显式配置带凭证的 target，并把 `ExpectedStatuses` 设为真实成功状态（通常是 `200`）。生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
 
 ### 9.1 退役探针
 
 `chat-completion-api-singular-route` 已退役。它曾用于探测 `/v1/chat/completion` 单数误用路径是否返回 `404`，但 Mainnet Host 启用全局 auth fallback 后，未带 bearer 的未知 `/v1/*` 请求会先得到 `401`，这条探针只能反映认证中间件顺序，不能稳定证明 OpenAI 兼容入口是否正确。真实入口由 `chat-completions-api-auth-gate` 监控；单数路径不得注册由 Host route composition 测试保证。
+
+默认 auth-gate 探针已退役：`responses-api-auth-gate`、`messages-api-auth-gate`、`chat-completions-api-auth-gate`、`models-api-auth-gate`、`voice-websocket-auth-gate`、`channel-registration-api-auth-gate`、`nyxid-llm-status`、`nyxid-llm-gateway-auth-gate`、`nyxid-channel-bots-auth-gate`、`nyxid-channel-relay-reply-auth-gate`。它们长期把 `http_401` 显示成 `ok`，语义上只是认证边界检查，不是健康检查。
 
 旧的 `responses-forward-team-00` 到 `responses-forward-team-08` 分阶段探针已经退役。这组探针绑定 NyxID proxy、`/v1/responses`、chat-route、Studio Team、member binding 与 direct team invoke，长期依赖预置 token 和固定 team/member 事实，和当前“通过 Aevatar 核心功能由 LLM driven 使用”的方向不一致。
 
