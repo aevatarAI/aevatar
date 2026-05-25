@@ -234,25 +234,6 @@ message AgentRunNextToolStepRequestedEvent {
   AgentRunReplyStepState step_state = 7;
 }
 
-// Transient command sent back by the stateless generation executor after it
-// has produced an immutable reply payload. The nested request may still carry
-// command-only credentials such as reply_token; AgentRunGAgent must use them
-// only for the accepted-only LlmReplyReadyEvent handoff and must never persist
-// them into AgentRunGAgentState or AgentRun*Event facts.
-message AgentRunReplyGenerationCompleted {
-  string run_id = 1;
-  string correlation_id = 2;
-  string target_actor_id = 3;
-  string reply_text = 4;
-  aevatar.gagents.channel.abstractions.MessageContent outbound = 5;
-  aevatar.gagents.channel.runtime.LlmReplyTerminalState terminal_state = 6;
-  string error_code = 7;
-  string error_summary = 8;
-  int64 completed_at_unix_ms = 9;
-  int32 attempt = 10;
-  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 11;
-}
-
 // Transient command for executor failures that did not produce a normal reply
 // payload. It is not a persisted fact; the run actor converts it into its
 // existing failed/produced terminal facts.

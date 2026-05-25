@@ -202,51 +202,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     [EventHandler]
-    public async Task HandleReplyGenerationCompletedAsync(AgentRunReplyGenerationCompleted command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
-            return;
-
-        var request = command.Request?.Clone() ?? new NeedsLlmReplyEvent
-        {
-            CorrelationId = command.CorrelationId,
-            TargetActorId = command.TargetActorId,
-            RunId = command.RunId,
-        };
-        ApplyTargetRefOverrides(request);
-        if (string.IsNullOrWhiteSpace(request.TargetActorId))
-            request.TargetActorId = command.TargetActorId;
-
-        try
-        {
-            await ProduceAndDispatchAsync(
-                request,
-                command.RunId,
-                command.ReplyText ?? string.Empty,
-                command.Outbound,
-                command.TerminalState,
-                command.ErrorCode ?? string.Empty,
-                command.ErrorSummary ?? string.Empty);
-        }
-        catch (AgentRunOutputDispatchException ex)
-        {
-            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
-                return;
-
-            await PersistFailedAsync(
-                request,
-                command.RunId,
-                "agent_run_output_dispatch_failed",
-                ex.Message);
-        }
-        catch (Exception ex)
-        {
-            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
-        }
-    }
-
-    [EventHandler]
     public async Task HandleOutputDispatchRetryAsync(AgentRunOutputDispatchRetryRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);

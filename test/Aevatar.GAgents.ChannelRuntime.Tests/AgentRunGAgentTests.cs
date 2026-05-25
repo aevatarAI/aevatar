@@ -578,7 +578,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateCompletion()
+    public async Task HandleReplyGenerationTimedOutAsync_WhenSchedulerBeatsExecutor_NotifiesConversationAndIgnoresLateLlmStep()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -622,16 +622,24 @@ public sealed class AgentRunGAgentTests
         dropped.CorrelationId.Should().Be("corr-generation-timeout-race");
         dropped.Reason.Should().Be("llm_reply_timeout");
 
-        await runtime.HandleReplyGenerationCompletedAsync(new AgentRunReplyGenerationCompleted
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
         {
             RunId = "run-generation-timeout-race",
             CorrelationId = "corr-generation-timeout-race",
             TargetActorId = "actor-1",
-            ReplyText = "late executor reply",
-            TerminalState = LlmReplyTerminalState.Completed,
-            CompletedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Attempt = generationExecutor.InitialSteps.Single().Attempt,
             Request = generationExecutor.InitialSteps.Single().Request.Clone(),
+            StepIndex = 2,
+            StepState = new AgentRunReplyStepState
+            {
+                RunId = "run-generation-timeout-race",
+                CorrelationId = "corr-generation-timeout-race",
+                TargetActorId = "actor-1",
+                Attempt = generationExecutor.InitialSteps.Single().Attempt,
+                NextStepIndex = 2,
+                AccumulatedText = "late executor reply",
+                MaxToolRounds = 40,
+            },
         });
 
         runtime.State.Status.Should().Be(AgentRunStatus.Failed);
