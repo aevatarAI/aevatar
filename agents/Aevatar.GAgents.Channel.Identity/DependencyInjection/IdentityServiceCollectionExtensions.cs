@@ -69,9 +69,6 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             ChannelIdentityCommittedStateProjectionActivationPlanProvider>());
-        services.TryAddSingleton<
-            IChannelIdentityCommittedStateActivationService,
-            ChannelIdentityCommittedStateActivationService>();
 
         // ─── Per-binding projection (one document per ExternalSubjectRef) ───
         services.AddProjectionMaterializationRuntimeCore<
