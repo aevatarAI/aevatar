@@ -172,7 +172,7 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
         //   new=committed-state plan provider
         //   team commands return after accepted dispatch, not readmodel materialization.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
-        await _commandDispatch.DispatchAsync(actor, payload, PublisherId, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, PublisherId, ct: ct);
     }
 
     private static string GenerateTeamId()

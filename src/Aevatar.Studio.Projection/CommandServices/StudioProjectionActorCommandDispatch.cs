@@ -64,18 +64,27 @@ internal sealed class StudioProjectionActorCommandTargetResolver
 internal sealed class StudioProjectionActorCommandEnvelopeFactory
     : ICommandEnvelopeFactory<StudioProjectionActorCommand>
 {
+    internal const string DeduplicationOperationIdHeader = "aevatar-deduplication-operation-id";
+
     public EventEnvelope CreateEnvelope(StudioProjectionActorCommand command, CommandContext context)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        return new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(command.Payload),
             Route = EnvelopeRouteSemantics.CreateDirect(command.PublisherId, context.TargetId),
         };
+        if (context.Headers.TryGetValue(DeduplicationOperationIdHeader, out var deduplicationOperationId) &&
+            !string.IsNullOrWhiteSpace(deduplicationOperationId))
+        {
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = deduplicationOperationId;
+        }
+
+        return envelope;
     }
 }
 
@@ -108,10 +117,21 @@ internal sealed class StudioProjectionActorCommandDispatch
         IActor actor,
         IMessage payload,
         string publisherId,
+        string? commandId = null,
+        string? correlationId = null,
+        string? deduplicationOperationId = null,
         CancellationToken ct = default)
     {
+        var headers = string.IsNullOrWhiteSpace(deduplicationOperationId)
+            ? null
+            : new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [StudioProjectionActorCommandEnvelopeFactory.DeduplicationOperationIdHeader] =
+                    deduplicationOperationId,
+            };
+
         var result = await _dispatchService.DispatchAsync(
-            new StudioProjectionActorCommand(actor, payload, publisherId),
+            new StudioProjectionActorCommand(actor, payload, publisherId, commandId, correlationId, headers),
             ct);
         if (!result.Succeeded || result.Receipt is null)
         {

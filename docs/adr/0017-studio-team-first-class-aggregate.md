@@ -121,8 +121,10 @@ Rationale:
   (e.g. team-scoped permissions) and avoids re-litigating the count protocol
   later.
 - For reassignment, `StudioMemberGAgent` emits a single
-  `StudioMemberReassignedEvent { from_team_id, to_team_id }`. Both source and
-  destination TeamGAgents subscribe to member events and apply set operations:
+  `StudioMemberReassignedEvent { from_team_id, to_team_id }`. The durable
+  Studio materialization projection consumes the committed member event and
+  dispatches it into the affected TeamGAgent inboxes, where they apply set
+  operations:
   - `from = "T1"` matches → T1 removes the member_id (idempotent: no-op if absent)
   - `to = "T2"` matches → T2 adds the member_id (idempotent: no-op if present)
   - Pure assignment (`from_team_id` absent) is the same protocol with `from` absent.
@@ -330,10 +332,12 @@ Concretely:
 - "Member create with initial team": when `POST /api/scopes/{scopeId}/members`
   carries a non-empty `teamId`, the application service validates that the team
   exists (read-model check), then the command port dispatches two events
-  sequentially — `StudioMemberCreatedEvent` first (no team field), then
+  sequentially to `StudioMemberGAgent` only — `StudioMemberCreatedEvent` first
+  (no team field), then
   `StudioMemberReassignedEvent { from_team_id absent, to_team_id = T }`.
-  Member-side event ordering is guaranteed; TeamGAgent observes the
-  reassignment asynchronously (eventually consistent).
+  Member-side event ordering is guaranteed; Team roster fanout happens
+  asynchronously from the committed reassignment fact through the durable
+  projection materializer.
   `StudioMemberCreatedEvent` is **not** extended with a `team_id` field.
 - The Team read model has no fact that is not authoritative in `StudioTeamGAgent`.
 
@@ -489,8 +493,9 @@ existing):
 // string is rejected at the application layer (see ADR-0017 §Q6).
 optional string team_id = 50;
 
-// Single reassignment event covers assign / unassign / move. Both source and
-// destination TeamGAgents subscribe and apply idempotent set operations.
+// Single reassignment event covers assign / unassign / move. The durable
+// materializer dispatches committed events to source and destination
+// TeamGAgents, which apply idempotent set operations.
 // from_team_id and to_team_id are `optional` so "unassigned" is presence=false
 // rather than empty-string sentinel — proto3 cannot distinguish unset string
 // from "" otherwise (see ADR-0017 §Q6 layered handling).
@@ -518,7 +523,7 @@ message StudioMemberReassignedEvent {
 
 > **Note on first-time assignment via member create.** When `POST /api/scopes/{scopeId}/members`
 > is invoked with a non-empty `teamId`, the application command port dispatches
-> two events sequentially to `StudioMemberGAgent`:
+> two events sequentially to `StudioMemberGAgent` only:
 >
 > 1. `StudioMemberCreatedEvent` (no `team_id` field — created event keeps a
 >    single responsibility), then
@@ -526,13 +531,13 @@ message StudioMemberReassignedEvent {
 >
 > The two events are dispatched sequentially by the application command port.
 > Member-side event ordering is guaranteed (Created lands before Reassigned),
-> but TeamGAgent observes the reassignment asynchronously — there is a brief
-> eventually-consistent window where the member exists but the Team's roster
-> has not yet materialized the addition. This is normal projection lag.
-> TeamGAgent only
-> subscribes to `StudioMemberReassignedEvent`; `StudioMemberCreatedEvent`
-> never feeds the team pipeline. This keeps the event vocabulary minimal and
-> avoids extending `StudioMemberCreatedEvent` with a `team_id` field. See
+> but Team roster fanout is driven later by the durable Studio materialization
+> projection after it observes the committed reassignment fact. The materializer
+> sends the same typed event into the affected TeamGAgent inboxes with stable
+> command and deduplication IDs, so committed-event replay retries failed
+> fanout instead of silently dropping it. `StudioMemberCreatedEvent` never
+> feeds the team pipeline. This keeps the event vocabulary minimal and avoids
+> extending `StudioMemberCreatedEvent` with a `team_id` field. See
 > §Locked Rule 4 and §Cutover Order step 3.
 
 ### Read model
@@ -627,9 +632,10 @@ would otherwise need its own consistency contract.
 - Frontend no longer infers teams from unrelated scope assets.
 - Member contract remains the primary object per ADR-0016; team is an
   optional grouping that composes on top.
-- A small amount of cross-actor projection work is added: TeamGAgent must
-  subscribe to committed member events. This is the standard projection
-  pipeline pattern, not a new mechanism.
+- A small amount of cross-actor projection work is added: the Studio
+  materialization projection consumes committed member reassignment events and
+  dispatches them into affected TeamGAgent inboxes. This is the standard
+  projection pipeline pattern, not a new mechanism.
 - TeamGAgent state grows linearly with team size because the full `member_ids`
   roster is persisted (required for idempotent event processing). v1 caps
   expected size at < 10,000 members per team; very large groupings need a
@@ -652,14 +658,16 @@ would otherwise need its own consistency contract.
    `to_team_id`). Reject empty-string `team_id` at the application layer.
    `StudioMemberCreatedEvent` is **not** extended with a `team_id` field.
 4. Wire the application command port so that `POST /members` with a non-empty
-   `teamId` dispatches two events sequentially — first
-   `StudioMemberCreatedEvent`, then `StudioMemberReassignedEvent
+   `teamId` dispatches two events sequentially to `StudioMemberGAgent` only —
+   first `StudioMemberCreatedEvent`, then `StudioMemberReassignedEvent
    { from_team_id absent, to_team_id = T }`. Member-side ordering is
    guaranteed; team roster update is eventually consistent.
-5. Wire `StudioTeamGAgent` to subscribe to committed
-   `StudioMemberReassignedEvent` and apply idempotent set operations to
-   `member_ids`, emitting `StudioTeamMemberRosterChangedEvent` with the
-   correct `effect` (ADDED / REMOVED / NOOP).
+5. Wire the Studio materialization projection to consume committed
+   `StudioMemberReassignedEvent` facts and dispatch them into affected
+   `StudioTeamGAgent` inboxes with stable command / deduplication IDs. Each
+   TeamGAgent applies idempotent set operations to `member_ids`, emitting
+   `StudioTeamMemberRosterChangedEvent` with the correct `effect`
+   (ADDED / REMOVED / NOOP).
 6. Add `StudioTeamCurrentStateDocument` read model and the standard projector.
 7. Extend member endpoints (`POST` / `PATCH`) to accept `teamId` per the Merge
    Patch table in §HTTP endpoints. The application DTO must carry a

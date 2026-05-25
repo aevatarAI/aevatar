@@ -19,7 +19,6 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
 {
     private const string MemberPublisherId = "aevatar.studio.projection.studio-member";
-    private const string TeamPublisherId = "aevatar.studio.projection.studio-team";
     private const string BindingRunPublisherId = "aevatar.studio.projection.studio-member-binding-run";
 
     private readonly IStudioActorBootstrap _bootstrap;
@@ -73,11 +72,11 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
 
         // Two-event create-with-team protocol (ADR-0017 §Locked Rule 3).
         // When the request carries a non-empty teamId, dispatch a
-        // Reassigned event after the Created event. The two dispatches
-        // are sequential — not atomic within one actor turn — so there
-        // is a brief window where the member exists without a team
-        // assignment. The team's roster update is eventually consistent:
-        // idempotent set ops ensure duplicates/retries collapse to NOOP.
+        // Reassigned event after the Created event to the member actor only.
+        // The durable projection materializer later fans the committed
+        // reassignment fact out to the Team actor inbox. That keeps command
+        // ACK semantics honest and lets projection replay recover roster
+        // fanout without this command service driving team roster updates.
         if (!string.IsNullOrEmpty(request.TeamId))
         {
             var initialTeamId = StudioTeamConventions.NormalizeTeamId(request.TeamId);
@@ -165,37 +164,13 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         if (toTeamIdNormalized != null)
             evt.ToTeamId = toTeamIdNormalized;
 
-        // Step 1: dispatch the authority change to the member actor.
-        // MemberGAgent owns the team_id fact and rejects events whose
-        // from_team_id disagrees with the member's current state.
+        // Dispatch only the authority change to the member actor. Durable
+        // Team roster fanout is driven from the committed member event by
+        // the Studio materialization projection scope, not by this command
+        // service. That keeps the command ACK honest: member reassignment was
+        // accepted for dispatch, while Team roster visibility is recovered
+        // from committed facts and projection watermarks.
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
-
-        // Step 2: fan out the same event to the affected TeamGAgents.
-        // Each team applies an idempotent set operation to its roster —
-        // duplicate deliveries collapse to NOOP by construction. Cross-
-        // actor consistency relies on the idempotency, not on transactional
-        // delivery: a re-run of this method (e.g. retry after a transient
-        // failure) lands on a NOOP for already-applied sides.
-        if (fromTeamIdNormalized != null)
-        {
-            await DispatchToTeamAsync(normalizedScopeId, fromTeamIdNormalized, evt, ct);
-        }
-        if (toTeamIdNormalized != null)
-        {
-            await DispatchToTeamAsync(normalizedScopeId, toTeamIdNormalized, evt, ct);
-        }
-    }
-
-    private async Task DispatchToTeamAsync(
-        string scopeId, string teamId, IMessage payload, CancellationToken ct)
-    {
-        var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
-        // Refactor (iter56/cluster-910-projection-activation-cleanup):
-        //   old=command-path pre-dispatch activation
-        //   new=committed-state plan provider
-        //   team fanout provisions only the receiving actor.
-        var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
-        await _commandDispatch.DispatchAsync(actor, payload, TeamPublisherId, ct);
     }
 
     public async Task UpdateImplementationAsync(
@@ -250,7 +225,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        await _commandDispatch.DispatchAsync(actor, payload, BindingRunPublisherId, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, BindingRunPublisherId, ct: ct);
     }
 
     private static StudioMemberImplementationRef BuildImplementationRefMessage(
@@ -368,7 +343,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         //   new=committed-state plan provider
         //   member commands only provision actor and dispatch accepted work.
         var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(actorId, ct);
-        await _commandDispatch.DispatchAsync(actor, payload, MemberPublisherId, ct);
+        await _commandDispatch.DispatchAsync(actor, payload, MemberPublisherId, ct: ct);
     }
 
     private static string GenerateMemberId()

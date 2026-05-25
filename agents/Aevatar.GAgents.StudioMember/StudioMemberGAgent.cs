@@ -239,9 +239,8 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     ///
     /// from_team_id must agree with the current state.team_id — this guards
     /// against stale or hand-crafted events committing against a roster the
-    /// member no longer claims to be on. The destination TeamGAgents are
-    /// dispatched the same event by the application command port and apply
-    /// idempotent set operations to their own roster.
+    /// member no longer claims to be on. Durable TeamGAgent fanout is driven
+    /// by this committed event through the projection materialization actor.
     /// </summary>
     [EventHandler(EndpointName = "reassignTeam")]
     public async Task HandleReassigned(StudioMemberReassignedEvent evt)
