@@ -78,13 +78,23 @@ public sealed class ResponsesForwardedCompletionRecorder
             CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
         };
         var toolStarts = new List<(string ToolCallId, string ToolName)>();
+        var observedLiveTextDelta = false;
+        string? runFinishedOutput = null;
 
         foreach (var evt in events)
         {
             switch (evt.EventCase)
             {
                 case AGUIEvent.EventOneofCase.TextMessageContent:
-                    completion.OutputText += evt.TextMessageContent?.Delta ?? string.Empty;
+                    var delta = evt.TextMessageContent?.Delta ?? string.Empty;
+                    if (delta.Length > 0)
+                    {
+                        observedLiveTextDelta = true;
+                        completion.OutputText += delta;
+                    }
+                    break;
+                case AGUIEvent.EventOneofCase.RunFinished:
+                    runFinishedOutput = ResolveGAgentDraftRunOutput(evt.RunFinished?.Result) ?? runFinishedOutput;
                     break;
                 case AGUIEvent.EventOneofCase.ToolCallStart:
                     if (!string.IsNullOrWhiteSpace(evt.ToolCallStart?.ToolCallId))
@@ -119,7 +129,20 @@ public sealed class ResponsesForwardedCompletionRecorder
             }
         }
 
+        // Refactor (iter98/cluster-790): Old: backend could synthesize missed-live TextMessageContent, duplicating output for clients that did observe deltas. New: consumers fallback to typed RunFinished.result.output only when no live delta was observed.
+        if (!observedLiveTextDelta && !string.IsNullOrEmpty(runFinishedOutput))
+            completion.OutputText = runFinishedOutput;
+
         return completion;
+    }
+
+    private static string? ResolveGAgentDraftRunOutput(Any? result)
+    {
+        if (result?.Is(GAgentDraftRunResultPayload.Descriptor) != true)
+            return null;
+
+        var payload = result.Unpack<GAgentDraftRunResultPayload>();
+        return payload.Output ?? string.Empty;
     }
 
     public static LlmSessionCompletion BuildFailureCompletion(

@@ -21,6 +21,7 @@ public sealed class AGUISseWriter : IAsyncDisposable
     // Refactor (iter57/cluster-067-942): old per-request channel/sink removed; new active path writes CQRS/projection AGUI events to SSE.
     private static readonly TypeRegistry DefaultTypeRegistry = TypeRegistry.FromFiles(
         AGUIEvent.Descriptor.File,
+        GAgentDraftRunResultPayload.Descriptor.File,
         AnyReflection.Descriptor,
         StructReflection.Descriptor,
         WrappersReflection.Descriptor);

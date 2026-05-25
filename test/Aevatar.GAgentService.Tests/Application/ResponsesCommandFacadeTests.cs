@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -350,6 +351,64 @@ public sealed class ResponsesCommandFacadeTests
             "Request timed out."));
         sessions.RecordedCompletions.Should().ContainSingle()
             .Which.FailureCode.Should().Be("request_timeout");
+    }
+
+    [Fact]
+    public void BuildCompletion_ShouldReadTypedRunFinishedOutput_WhenNoLiveDeltaWasObserved()
+    {
+        var completion = ResponsesForwardedCompletionRecorder.BuildCompletion(
+            [
+                new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        Result = Any.Pack(new GAgentDraftRunResultPayload
+                        {
+                            Output = "final from typed payload",
+                        }),
+                    },
+                },
+            ],
+            DateTimeOffset.UtcNow);
+
+        completion.OutputText.Should().Be("final from typed payload");
+    }
+
+    [Fact]
+    public void BuildCompletion_ShouldPreferLiveDeltaOverTypedRunFinishedOutput()
+    {
+        var completion = ResponsesForwardedCompletionRecorder.BuildCompletion(
+            [
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "live ",
+                    },
+                },
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "delta",
+                    },
+                },
+                new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        Result = Any.Pack(new GAgentDraftRunResultPayload
+                        {
+                            Output = "duplicate final",
+                        }),
+                    },
+                },
+            ],
+            DateTimeOffset.UtcNow);
+
+        completion.OutputText.Should().Be("live delta");
     }
 
     private static ResponsesCommandFacade CreateFacade(

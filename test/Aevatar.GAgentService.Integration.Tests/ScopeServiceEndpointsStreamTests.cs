@@ -678,6 +678,37 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishTypedRunFinishedResultWithoutSyntheticTextContent_WhenCompletionWasAlreadyEmitted()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "committed final",
+                    ContentEmitted = true,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageContent);
+        var runFinished = sessionHub.Published[1].Event.RunFinished;
+        runFinished.Should().NotBeNull();
+        runFinished!.Result.Unpack<GAgentDraftRunResultPayload>().Output.Should().Be("committed final");
+    }
+
+    [Fact]
     public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunError_FromCommittedLlmRequestFailure()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
