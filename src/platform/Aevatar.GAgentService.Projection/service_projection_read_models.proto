@@ -79,6 +79,7 @@ message ServiceRevisionEntryReadModel {
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 10;
   string static_actor_type_name = 11;
   string static_preferred_actor_id = 12;
+  string static_agent_kind = 20;
   string scripting_script_id = 13;
   string scripting_revision = 14;
   string scripting_definition_actor_id = 15;

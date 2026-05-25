@@ -213,17 +213,20 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
     private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
     private readonly IAgentTypeVerifier? _agentTypeVerifier;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
 
     public GAgentDraftRunCommandTargetResolver(
         IActorRuntime actorRuntime,
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort,
-        IAgentTypeVerifier? agentTypeVerifier = null)
+        IAgentTypeVerifier? agentTypeVerifier = null,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
         _agentTypeVerifier = agentTypeVerifier;
+        _agentKindRegistry = agentKindRegistry;
     }
 
     public async Task<CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>> ResolveAsync(
@@ -232,7 +235,9 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var agentType = ScopeGAgentActorTypeResolver.Resolve(command.ActorTypeName);
+        var agentKind = NormalizeOptional(command.AgentKind);
+        var legacyActorTypeName = NormalizeOptional(command.ActorTypeName);
+        var agentType = ResolveExpectedType(agentKind, legacyActorTypeName);
         if (agentType is null)
         {
             return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
@@ -259,16 +264,49 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             }
             else
             {
-                actor = await _actorRuntime.CreateAsync(agentType, preferredActorId, ct);
+                actor = string.IsNullOrWhiteSpace(agentKind)
+                    ? await _actorRuntime.CreateAsync(agentType!, preferredActorId, ct)
+                    : await _actorRuntime.CreateByKindAsync(agentKind, preferredActorId, ct);
             }
         }
         else
         {
-            actor = await _actorRuntime.CreateAsync(agentType, null, ct);
+            actor = string.IsNullOrWhiteSpace(agentKind)
+                ? await _actorRuntime.CreateAsync(agentType!, null, ct)
+                : await _actorRuntime.CreateByKindAsync(agentKind, null, ct);
         }
 
         return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Success(
-            new GAgentDraftRunCommandTarget(actor, command.ActorTypeName, _projectionPort, _terminalProjectionPort));
+            new GAgentDraftRunCommandTarget(
+                actor,
+                legacyActorTypeName ?? agentKind!,
+                _projectionPort,
+                _terminalProjectionPort));
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private System.Type? ResolveExpectedType(string? agentKind, string? legacyActorTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(agentKind))
+        {
+            try
+            {
+                var implementation = _agentKindRegistry?.Resolve(agentKind);
+                if (implementation != null)
+                    return ScopeGAgentActorTypeResolver.Resolve(implementation.Metadata.ImplementationClrTypeName);
+            }
+            catch (UnknownAgentKindException)
+            {
+                return null;
+            }
+        }
+
+        return ScopeGAgentActorTypeResolver.Resolve(legacyActorTypeName ?? string.Empty);
     }
 
     private async Task<bool> MatchesExpectedTypeAsync(
