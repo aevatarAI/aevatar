@@ -1614,6 +1614,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var ready = new LlmReplyReadyEvent
             {
                 CorrelationId = correlationId,
+                RunId = ResolvePendingLlmReplyRunId(correlationId) ?? string.Empty,
                 RegistrationId = sourceChunk?.RegistrationId ?? string.Empty,
                 Activity = sourceChunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = state.PendingFinalizeText },
@@ -1649,6 +1650,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             new LlmReplyReadyEvent
             {
                 CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
                 RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
                 Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = outboundText },
@@ -1671,6 +1673,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             new LlmReplyReadyEvent
             {
                 CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
                 RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
                 Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = outboundText },
@@ -2484,6 +2487,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return State.PendingLlmReplyRequests.FirstOrDefault(request =>
             string.Equals(request.CorrelationId, normalizedCorrelationId, StringComparison.Ordinal));
     }
+
+    private string? ResolvePendingLlmReplyRunId(string? correlationId) =>
+        NormalizeOptional(FindPendingLlmReplyRequest(correlationId)?.RunId);
 
     private static void UpsertPendingLlmReplyRequest(
         Google.Protobuf.Collections.RepeatedField<NeedsLlmReplyEvent> field,
