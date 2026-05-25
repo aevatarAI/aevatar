@@ -334,6 +334,66 @@ describe('StudioMemberBindPanel', () => {
     });
   });
 
+  it('offers post-bind Team entry actions when provided', async () => {
+    const handleSetEntry = jest.fn();
+    const handleSetEntryAndTest = jest.fn();
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        postBindEntryActions: {
+          memberId: 'default',
+          onSetEntry: handleSetEntry,
+          onSetEntryAndTest: handleSetEntryAndTest,
+        },
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the published workflow.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText('This member can be the Team entry.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Set as Team entry' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Set as Team entry and Test Team' }),
+    );
+
+    expect(handleSetEntry).toHaveBeenCalledTimes(1);
+    expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
+  });
+
   it('runs a chat smoke test and offers a continue-to-invoke action', async () => {
     const handleContinueToInvoke = jest.fn();
     const buildWorkflowYamls = jest.fn().mockResolvedValue([

@@ -226,13 +226,13 @@ function isGatewayProviderSource(source?: string): boolean {
 function resolveRouteScopedProviders(
   route: string,
   readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
-  readyServiceProviders: readonly StudioUserConfigProviderStatus[],
+  readyRouteProviders: readonly StudioUserConfigProviderStatus[],
 ): StudioUserConfigProviderStatus[] {
   if (route === "") {
     return [...readyGatewayProviders];
   }
 
-  return readyServiceProviders.filter(
+  return readyRouteProviders.filter(
     (provider) => routePathFromProviderSlug(provider.providerSlug) === route,
   );
 }
@@ -240,13 +240,13 @@ function resolveRouteScopedProviders(
 function isRouteAvailable(
   route: string,
   readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
-  readyServiceProviders: readonly StudioUserConfigProviderStatus[],
+  readyRouteProviders: readonly StudioUserConfigProviderStatus[],
 ): boolean {
   if (route === "") {
     return readyGatewayProviders.length > 0;
   }
 
-  return readyServiceProviders.some(
+  return readyRouteProviders.some(
     (provider) => routePathFromProviderSlug(provider.providerSlug) === route,
   );
 }
@@ -468,6 +468,74 @@ const ConnectedProviderChip: React.FC<{
   );
 };
 
+export function buildSettingsRouteSelectOptions(input: {
+  readonly preferredRoute: string;
+  readonly preferredRouteAvailable: boolean;
+  readonly preferredRouteLabel: string;
+  readonly readyGatewayProviderCount: number;
+  readonly routeProviders: readonly StudioUserConfigProviderStatus[];
+}): SelectProps["options"] {
+  const gatewayLabel = input.readyGatewayProviderCount > 0
+    ? "NyxID Gateway"
+    : "NyxID Gateway (fallback unavailable)";
+  const routeOptionValues = new Set<string>();
+  const providerRouteOptions = input.routeProviders.flatMap((provider) => {
+    const route = routePathFromProviderSlug(provider.providerSlug);
+    const value = encodeConversationRouteSelectValue(route);
+    if (!provider.providerSlug || routeOptionValues.has(value)) {
+      return [];
+    }
+
+    routeOptionValues.add(value);
+    return [
+      {
+        label: formatConversationProviderLabel(provider),
+        value,
+      },
+    ];
+  });
+  const selectedRouteValue = encodeConversationRouteSelectValue(
+    input.preferredRoute,
+  );
+  const staleGroup =
+    input.preferredRoute &&
+    !input.preferredRouteAvailable &&
+    !routeOptionValues.has(selectedRouteValue)
+      ? [
+          {
+            label: "Current saved route",
+            options: [
+              {
+                label: `${input.preferredRouteLabel} (unavailable)`,
+                value: selectedRouteValue,
+              },
+            ],
+          },
+        ]
+      : [];
+
+  return [
+    {
+      label: "Gateway",
+      options: [
+        {
+          label: gatewayLabel,
+          value: encodeConversationRouteSelectValue(""),
+        },
+      ],
+    },
+    ...(providerRouteOptions.length > 0
+      ? [
+          {
+            label: "Providers",
+            options: providerRouteOptions,
+          },
+        ]
+      : []),
+    ...staleGroup,
+  ];
+}
+
 const SettingsPage: React.FC = () => {
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
@@ -556,9 +624,14 @@ const SettingsPage: React.FC = () => {
       readyProviders.filter((provider) => isGatewayProviderSource(provider.source)),
     [readyProviders],
   );
-  const readyServiceProviders = React.useMemo(
+  const routeProviders = React.useMemo(
     () =>
-      readyProviders.filter((provider) => isServiceProviderSource(provider.source)),
+      providers.filter((provider) => Boolean(provider.providerSlug.trim())),
+    [providers],
+  );
+  const readyRouteProviders = React.useMemo(
+    () =>
+      readyProviders.filter((provider) => Boolean(provider.providerSlug.trim())),
     [readyProviders],
   );
   const routeOptions = React.useMemo(
@@ -579,18 +652,18 @@ const SettingsPage: React.FC = () => {
       isRouteAvailable(
         draft.preferredLlmRoute,
         readyGatewayProviders,
-        readyServiceProviders,
+        readyRouteProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyRouteProviders],
   );
   const effectiveRoute = React.useMemo(
     () =>
       resolveReadyConversationRoute(
         draft.preferredLlmRoute,
         readyGatewayProviders[0] ?? null,
-        readyServiceProviders,
+        readyRouteProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyRouteProviders],
   );
   const routeFallbackActive = effectiveRoute !== draft.preferredLlmRoute;
   const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
@@ -603,9 +676,9 @@ const SettingsPage: React.FC = () => {
       resolveRouteScopedProviders(
         draft.preferredLlmRoute,
         readyGatewayProviders,
-        readyServiceProviders,
+        readyRouteProviders,
       ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
+    [draft.preferredLlmRoute, readyGatewayProviders, readyRouteProviders],
   );
   const modelGroups = React.useMemo(
     () =>
@@ -717,58 +790,19 @@ const SettingsPage: React.FC = () => {
   );
 
   const routeSelectOptions = React.useMemo<SelectProps["options"]>(() => {
-    const gatewayLabel = readyGatewayProviders.length > 0
-      ? "NyxID Gateway"
-      : "NyxID Gateway (fallback unavailable)";
-    const serviceOptions = readyServiceProviders.map((provider) => ({
-      label: formatConversationProviderLabel(provider),
-      value: encodeConversationRouteSelectValue(
-        routePathFromProviderSlug(provider.providerSlug),
-      ),
-    }));
-    const staleGroup =
-      draft.preferredLlmRoute && !preferredRouteAvailable
-        ? [
-            {
-              label: "Current saved route",
-              options: [
-                {
-                  label: `${preferredRouteLabel} (unavailable)`,
-                  value: encodeConversationRouteSelectValue(
-                    draft.preferredLlmRoute,
-                  ),
-                },
-              ],
-            },
-          ]
-        : [];
-
-    return [
-      {
-        label: "Gateway",
-        options: [
-          {
-            label: gatewayLabel,
-            value: encodeConversationRouteSelectValue(""),
-          },
-        ],
-      },
-      ...(serviceOptions.length > 0
-        ? [
-            {
-              label: "User services",
-              options: serviceOptions,
-            },
-          ]
-        : []),
-      ...staleGroup,
-    ];
+    return buildSettingsRouteSelectOptions({
+      preferredRoute: draft.preferredLlmRoute,
+      preferredRouteAvailable,
+      preferredRouteLabel,
+      readyGatewayProviderCount: readyGatewayProviders.length,
+      routeProviders,
+    });
   }, [
     draft.preferredLlmRoute,
     preferredRouteAvailable,
     preferredRouteLabel,
     readyGatewayProviders.length,
-    readyServiceProviders,
+    routeProviders,
   ]);
 
   const advancedItems = React.useMemo<CollapseProps["items"]>(
@@ -858,7 +892,7 @@ const SettingsPage: React.FC = () => {
       const nextRouteProviders = resolveRouteScopedProviders(
         nextRoute,
         readyGatewayProviders,
-        readyServiceProviders,
+        readyRouteProviders,
       );
       const nextRouteGroups = buildConversationModelGroups({
         conversationModel: draft.defaultModel,
@@ -875,9 +909,9 @@ const SettingsPage: React.FC = () => {
         (group) => group.id !== "__current__",
       );
       const shouldClearModel =
-        Boolean(currentModel) &&
+        currentModel !== undefined &&
         nextLiveRouteGroups.length > 0 &&
-        !nextLiveRouteGroups.some((group) => group.models.includes(currentModel!));
+        !nextLiveRouteGroups.some((group) => group.models.includes(currentModel));
 
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -888,7 +922,7 @@ const SettingsPage: React.FC = () => {
     [
       draft.defaultModel,
       readyGatewayProviders,
-      readyServiceProviders,
+      readyRouteProviders,
       userConfigModelsQuery.data,
     ],
   );
