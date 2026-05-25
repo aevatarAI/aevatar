@@ -20,7 +20,7 @@ public sealed class HealthProbeStartupServiceTests
         await service.StartAsync(CancellationToken.None);
 
         var actorId = HealthProbeStoreCommands.BuildActorId("self-liveness");
-        runtime.GetCalls.Should().ContainSingle().Which.Should().Be(actorId);
+        runtime.GetCalls.Should().Equal(ExpectedGetCalls(actorId));
         runtime.CreateCalls.Should().ContainSingle().Which.Should().Be(actorId);
         dispatchPort.Dispatches.Should().ContainSingle();
         dispatchPort.Dispatches[0].ActorId.Should().Be(actorId);
@@ -41,7 +41,7 @@ public sealed class HealthProbeStartupServiceTests
         await service.StartAsync(CancellationToken.None);
         await service.StopAsync(CancellationToken.None);
 
-        runtime.GetCalls.Should().BeEmpty();
+        runtime.GetCalls.Should().Equal(RetiredActorIds());
         runtime.CreateCalls.Should().BeEmpty();
         dispatchPort.Dispatches.Should().BeEmpty();
     }
@@ -58,9 +58,32 @@ public sealed class HealthProbeStartupServiceTests
 
         await service.StartAsync(CancellationToken.None);
 
-        runtime.GetCalls.Should().BeEmpty();
+        runtime.GetCalls.Should().Equal(RetiredActorIds());
         runtime.CreateCalls.Should().BeEmpty();
         dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldDisableExistingRetiredProbeActor()
+    {
+        var retiredSlug = RetiredStatusProbeTargets.Slugs[0];
+        var retiredActorId = HealthProbeStoreCommands.BuildActorId(retiredSlug);
+        var runtime = new RecordingActorRuntime();
+        runtime.SeedActor(retiredActorId);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(
+            runtime,
+            dispatchPort,
+            new StatusDashboardOptions { UseBuiltInTargets = false });
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.CreateCalls.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        dispatchPort.Dispatches[0].ActorId.Should().Be(retiredActorId);
+        var command = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<HealthProbeConfigureCommand>();
+        command.Spec.Slug.Should().Be(retiredSlug);
+        command.Spec.Enabled.Should().BeFalse();
     }
 
     [Fact]
@@ -72,7 +95,7 @@ public sealed class HealthProbeStartupServiceTests
 
         await service.StartAsync(CancellationToken.None);
 
-        runtime.GetCalls.Should().ContainSingle();
+        runtime.GetCalls.Should().Equal(ExpectedGetCalls(HealthProbeStoreCommands.BuildActorId("self-liveness")));
         runtime.CreateCalls.Should().ContainSingle();
         dispatchPort.Attempts.Should().Be(1);
     }
@@ -88,7 +111,7 @@ public sealed class HealthProbeStartupServiceTests
 
         await service.StartAsync(cancellation.Token);
 
-        runtime.GetCalls.Should().ContainSingle();
+        runtime.GetCalls.Should().Equal(ExpectedGetCalls(HealthProbeStoreCommands.BuildActorId("self-liveness")));
         runtime.CreateCalls.Should().ContainSingle();
         dispatchPort.Attempts.Should().Be(1);
     }
@@ -153,6 +176,14 @@ public sealed class HealthProbeStartupServiceTests
             ],
         };
 
+    private static IReadOnlyList<string> RetiredActorIds() =>
+        RetiredStatusProbeTargets.Slugs
+            .Select(HealthProbeStoreCommands.BuildActorId)
+            .ToArray();
+
+    private static IReadOnlyList<string> ExpectedGetCalls(string currentActorId) =>
+        [currentActorId, .. RetiredActorIds()];
+
     private sealed class TestHealthProbeExecutor : IHealthProbeExecutor
     {
         public string Kind => "test";
@@ -170,6 +201,9 @@ public sealed class HealthProbeStartupServiceTests
         public List<string> GetCalls { get; } = [];
 
         public List<string> CreateCalls { get; } = [];
+
+        public void SeedActor(string actorId) =>
+            _actors[actorId] = new RecordingActor(actorId);
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
