@@ -1,4 +1,4 @@
-import { Space, Typography, theme } from "antd";
+import { Button, Space, Typography, theme } from "antd";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
@@ -38,8 +38,12 @@ type TeamOverviewTabProps = {
   readonly currentServiceFriendly: string;
   readonly currentServicePillStyle: React.CSSProperties;
   readonly currentServicePillText: string;
+  readonly entryMemberId?: string | null;
+  readonly entryMemberLabel?: string;
+  readonly entryMemberUpdating?: boolean;
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
+  readonly onClearEntryMember?: () => void;
 };
 
 const surfaceStyle = (
@@ -72,10 +76,15 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentServiceFriendly,
   currentServicePillStyle,
   currentServicePillText,
+  entryMemberId,
+  entryMemberLabel,
+  entryMemberUpdating = false,
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
+  onClearEntryMember,
 }) => {
   const { token } = theme.useToken();
+  const hasEntryMember = Boolean(entryMemberId?.trim());
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -136,7 +145,27 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             value={latestVisibleUpdateLabel}
             caption={latestVisibleUpdateNote}
           />
+          <SignalCard
+            label="入口成员"
+            value={entryMemberLabel || entryMemberId || "未配置"}
+            caption={
+              hasEntryMember
+                ? "Team invoke routes through this member."
+                : "Set an entry member before invoking this team."
+            }
+          />
         </div>
+        {hasEntryMember && onClearEntryMember ? (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button
+              loading={entryMemberUpdating}
+              onClick={onClearEntryMember}
+              size="small"
+            >
+              Clear entry
+            </Button>
+          </div>
+        ) : null}
       </section>
 
       <div

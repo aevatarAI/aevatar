@@ -16,10 +16,11 @@ describe("teamRoutes", () => {
         workflowId: "workflow-1",
         serviceId: "service-1",
         runId: "run-1",
+        testTeam: true,
         tab: "members",
       }),
     ).toBe(
-      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1",
+      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
     );
   });
 
@@ -93,7 +94,22 @@ describe("teamRoutes", () => {
       serviceId: "service-1",
       tab: "members",
       teamId: "t-alpha",
+      testTeam: false,
       workflowId: "wf-1",
+    });
+  });
+
+  it("reads Team Test auto-open intent from the team detail query", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?memberId=member-alpha&testTeam=1",
+        "/teams/scope-alpha/t-alpha",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      scopeId: "scope-alpha",
+      teamId: "t-alpha",
+      testTeam: true,
     });
   });
 
@@ -125,6 +141,7 @@ describe("teamRoutes", () => {
         serviceId: "",
         tab: "overview",
         teamId: "",
+        testTeam: false,
         workflowId: "wf-1",
       });
     },
@@ -143,6 +160,7 @@ describe("teamRoutes", () => {
       serviceId: "",
       tab: "overview",
       teamId: "",
+      testTeam: false,
       workflowId: "wf-2",
     });
   });
@@ -160,6 +178,7 @@ describe("teamRoutes", () => {
       serviceId: "",
       tab: "overview",
       teamId: "",
+      testTeam: false,
       workflowId: "wf-2",
     });
   });
