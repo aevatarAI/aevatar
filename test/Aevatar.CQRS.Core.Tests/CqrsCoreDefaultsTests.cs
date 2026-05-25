@@ -174,6 +174,8 @@ public class CommandDispatchPipelineTests
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be("receipt-1");
+        result.Admission.Should().NotBeNull();
+        result.Admission!.CommandId.Should().Be("evt-1");
     }
 
     [Fact]
