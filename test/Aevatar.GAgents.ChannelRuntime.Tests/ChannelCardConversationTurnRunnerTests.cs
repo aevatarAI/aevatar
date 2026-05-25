@@ -11,6 +11,22 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelCardConversationTurnRunnerTests
 {
     [Fact]
+    public async Task Source_ShouldUseLarkStreamingCardShellHelper_ForCloseStreamingSettings()
+    {
+        var sourcePath = Path.Combine(
+            GetRepositoryRoot(),
+            "agents",
+            "Aevatar.GAgents.NyxidChat",
+            "ChannelCardConversationTurnRunner.cs");
+        var source = await File.ReadAllTextAsync(sourcePath);
+
+        Assert.Contains("LarkStreamingCardShell.BuildCloseStreamingSettingsJson()", source);
+        Assert.DoesNotContain("""{"streaming_mode": false}""", source);
+        Assert.DoesNotContain("""{"streaming_mode":false}""", source);
+        Assert.DoesNotContain("""{"config":{"streaming_mode":false}}""", source);
+    }
+
+    [Fact]
     public async Task RunCardCreateAsync_ShouldUseRuntimeToken_WhenActivityIsSanitized()
     {
         var cardKit = new RecordingCardKitClient();
@@ -76,6 +92,23 @@ public sealed class ChannelCardConversationTurnRunnerTests
 
     private static ConversationTurnRuntimeContext RuntimeContext(string token) =>
         new(NyxRelayReplyToken: null, NyxUserAccessToken: token);
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
+    }
 
     private static LlmReplyCardStreamChunkEvent BuildChunk(string correlationId) =>
         new()
