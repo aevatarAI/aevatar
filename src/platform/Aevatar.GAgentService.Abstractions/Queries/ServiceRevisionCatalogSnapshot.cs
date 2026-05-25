@@ -27,7 +27,8 @@ public sealed record ServiceRevisionImplementationSnapshot(
 
 public sealed record ServiceRevisionStaticSnapshot(
     string ActorTypeName,
-    string PreferredActorId);
+    string PreferredActorId,
+    string AgentKind = "");
 
 public sealed record ServiceRevisionScriptingSnapshot(
     string ScriptId,

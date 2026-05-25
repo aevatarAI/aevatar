@@ -78,6 +78,7 @@ public sealed class ServiceRevisionCatalogProjector
                 .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
                 .ToList(),
             StaticActorTypeName = state.Spec?.StaticSpec?.ActorTypeName ?? string.Empty,
+            StaticAgentKind = state.Spec?.StaticSpec?.AgentKind ?? string.Empty,
             StaticPreferredActorId = state.Spec?.StaticSpec?.PreferredActorId ?? string.Empty,
             ScriptingScriptId = state.Spec?.ScriptingSpec?.ScriptId ?? string.Empty,
             ScriptingRevision = state.Spec?.ScriptingSpec?.Revision ?? string.Empty,

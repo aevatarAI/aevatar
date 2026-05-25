@@ -25,7 +25,8 @@ public sealed record ScopeBindingGAgentEndpoint(
 
 public sealed record ScopeBindingGAgentSpec(
     string ActorTypeName,
-    IReadOnlyList<ScopeBindingGAgentEndpoint> Endpoints);
+    IReadOnlyList<ScopeBindingGAgentEndpoint> Endpoints,
+    string? AgentKind = null);
 
 public sealed record ScopeBindingUpsertRequest(
     string ScopeId,

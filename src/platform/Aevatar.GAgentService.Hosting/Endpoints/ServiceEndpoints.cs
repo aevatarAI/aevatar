@@ -103,6 +103,7 @@ public static partial class ServiceEndpoints
                 spec.StaticSpec = new StaticServiceRevisionSpec
                 {
                     ActorTypeName = request.Static?.ActorTypeName ?? string.Empty,
+                    AgentKind = request.Static?.AgentKind ?? string.Empty,
                     PreferredActorId = request.Static?.PreferredActorId ?? string.Empty,
                     Endpoints = { (request.Static?.Endpoints ?? []).Select(ToEndpointDescriptor) },
                 };
@@ -574,7 +575,8 @@ public static partial class ServiceEndpoints
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,
         string? PreferredActorId,
-        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints);
+        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
+        string? AgentKind = null);
 
     public sealed record ScriptingRevisionHttpRequest(
         string ScriptId,

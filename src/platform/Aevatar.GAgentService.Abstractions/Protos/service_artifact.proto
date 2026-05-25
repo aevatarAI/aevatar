@@ -8,8 +8,9 @@ import "service_endpoint.proto";
 import "service_revision.proto";
 
 message StaticServiceDeploymentPlan {
-  string actor_type_name = 1;
+  string actor_type_name = 1 [deprecated = true];
   string preferred_actor_id = 2;
+  string agent_kind = 3;
 }
 
 message ScriptingServiceDeploymentPlan {

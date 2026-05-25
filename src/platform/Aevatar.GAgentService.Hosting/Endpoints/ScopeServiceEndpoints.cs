@@ -202,7 +202,8 @@ public static class ScopeServiceEndpoints
                                 endpoint.RequestTypeUrl,
                                 endpoint.ResponseTypeUrl,
                                 endpoint.Description))
-                            .ToArray()),
+                            .ToArray(),
+                            request.GAgent.AgentKind),
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,
@@ -3256,7 +3257,8 @@ const response = await fetch("{{invokePath}}", {
 
     public sealed record ScopeBindingGAgentHttpRequest(
         string ActorTypeName,
-        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
+        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints,
+        string? AgentKind = null);
 
     public sealed record StreamScopeServiceHttpRequest(
         string? Prompt,

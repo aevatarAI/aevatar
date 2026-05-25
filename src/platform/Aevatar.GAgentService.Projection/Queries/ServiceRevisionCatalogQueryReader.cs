@@ -67,10 +67,12 @@ public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQ
     {
         var staticSnapshot =
             !string.IsNullOrWhiteSpace(revision.StaticActorTypeName) ||
-            !string.IsNullOrWhiteSpace(revision.StaticPreferredActorId)
+            !string.IsNullOrWhiteSpace(revision.StaticPreferredActorId) ||
+            !string.IsNullOrWhiteSpace(revision.StaticAgentKind)
                 ? new ServiceRevisionStaticSnapshot(
                     revision.StaticActorTypeName ?? string.Empty,
-                    revision.StaticPreferredActorId ?? string.Empty)
+                    revision.StaticPreferredActorId ?? string.Empty,
+                    revision.StaticAgentKind ?? string.Empty)
                 : null;
 
         var scriptingSnapshot =

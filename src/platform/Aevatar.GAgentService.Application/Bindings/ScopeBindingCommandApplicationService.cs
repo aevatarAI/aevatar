@@ -287,6 +287,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     ActorTypeName = staticSpec.ActorTypeName,
+                    AgentKind = staticSpec.AgentKind,
                     PreferredActorId = staticSpec.PreferredActorId ?? string.Empty,
                 },
             },
@@ -478,6 +479,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     StaticSpec = new StaticServiceRevisionSpec
                     {
                         ActorTypeName = actorTypeName,
+                        AgentKind = gagent.AgentKind ?? string.Empty,
                     },
                 };
                 revisionSpec.StaticSpec.Endpoints.Add(endpointSpecs.Select(ToEndpointDescriptor));
