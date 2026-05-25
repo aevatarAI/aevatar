@@ -316,11 +316,30 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             request.TargetActorId = command.TargetActorId;
 
-        await PersistFailedAsync(
-            request,
-            command.RunId,
-            NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed",
-            command.ErrorSummary ?? string.Empty);
+        var errorCode = NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed";
+        var errorSummary = command.ErrorSummary ?? string.Empty;
+        try
+        {
+            await ProduceAndDispatchAsync(
+                request,
+                command.RunId,
+                "Sorry, I wasn't able to generate a response. Please try again.",
+                null,
+                LlmReplyTerminalState.Failed,
+                errorCode,
+                errorSummary);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                return;
+
+            await PersistFailedAsync(request, command.RunId, errorCode, errorSummary);
+        }
+        catch (Exception ex)
+        {
+            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
+        }
     }
 
     [EventHandler]
@@ -444,19 +463,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         });
 
         await ScheduleGenerationTimeoutAsync(request, runId, attempt);
-        if (_generationExecutor is AgentRunReplyGenerationExecutor)
-        {
-            await StartPerStepReplyGenerationAsync(request, runId, attempt);
-            return;
-        }
-
-        await _generationExecutor.StartAsync(
-            new AgentRunReplyGenerationExecutionRequest(
-                runId,
-                Id,
-                attempt,
-                request.Clone()),
-            CancellationToken.None);
+        await StartPerStepReplyGenerationAsync(request, runId, attempt);
     }
 
     private async Task StartPerStepReplyGenerationAsync(NeedsLlmReplyEvent request, string runId, int attempt)
@@ -480,7 +487,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         string runId,
         int attempt)
     {
-        // Refactor (issue1046): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
         // New principle: AgentRunGAgent persists the per-step waterline and advances through typed self-messages.
         return await _generationExecutor.BuildInitialStepStateAsync(
                 new AgentRunReplyGenerationExecutionRequest(runId, Id, attempt, request.Clone()),
@@ -528,26 +535,28 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
+        var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
         await ProduceAndDispatchAsync(
             request,
             stepState.RunId,
-            stepState.AccumulatedText ?? string.Empty,
-            null,
-            string.IsNullOrWhiteSpace(stepState.AccumulatedText)
-                ? LlmReplyTerminalState.Failed
-                : LlmReplyTerminalState.Completed,
-            string.IsNullOrWhiteSpace(stepState.AccumulatedText) ? "empty_reply" : string.Empty,
-            string.IsNullOrWhiteSpace(stepState.AccumulatedText)
-                ? "Reply generator returned an empty response."
-                : string.Empty);
+            hasReplyText
+                ? stepState.AccumulatedText
+                : "Sorry, I wasn't able to generate a response. Please try again.",
+            stepState.OutboundIntent?.Clone(),
+            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            hasReplyText ? string.Empty : "empty_reply",
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
     }
 
-    private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState)
+    private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
     {
         if (stepState.PendingToolCalls.Count > 0)
             return false;
 
         if (stepState.FinalNoToolsStep)
+            return true;
+
+        if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
             return true;
 
         if (stepState.Round >= stepState.MaxToolRounds)
@@ -600,6 +609,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
             return;
 
+        var isCompletedLlmStep = State.GenerationStep is not null &&
+                                 command.StepState is not null &&
+                                 command.StepIndex == State.GenerationStep.NextStepIndex + 1;
+
         if (command.StepState is not null)
             await PersistStepStateAsync(command.StepState);
 
@@ -610,7 +623,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (stepState is null)
             return;
 
-        if (ShouldCompleteAfterLlmStep(stepState))
+        if (ShouldCompleteAfterLlmStep(stepState, isCompletedLlmStep))
         {
             await CompletePerStepReplyAsync(request, stepState);
             return;
@@ -643,6 +656,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var stepState = command.StepState ?? State.GenerationStep;
         if (stepState is null)
             return;
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
 
         await DispatchLlmStepExecutorAsync(request, stepState);
     }

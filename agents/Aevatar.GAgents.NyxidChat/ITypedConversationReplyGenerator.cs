@@ -25,6 +25,8 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
         CancellationToken ct);
+
+    MessageContent? TryTakeOutboundIntent() => null;
 }
 
 public sealed record AgentRunReplyStepPlan(

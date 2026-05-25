@@ -124,6 +124,7 @@ message AgentRunReplyStepState {
   aevatar.ai.LLMControlContextPayload llm_control = 17;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 18;
   map<string, string> external_metadata = 19;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry

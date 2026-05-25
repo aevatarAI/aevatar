@@ -4,13 +4,19 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public interface IAgentRunReplyGenerationExecutorPort
 {
-    Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct);
-
     Task<AgentRunReplyStepState> BuildInitialStepStateAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct);
 
     Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct);
 
     Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct);
+
+    Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest request,
+        CancellationToken ct);
+
+    Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest request,
+        CancellationToken ct);
 }
 
 public sealed record AgentRunReplyGenerationExecutionRequest(
