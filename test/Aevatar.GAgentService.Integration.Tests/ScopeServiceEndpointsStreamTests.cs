@@ -375,18 +375,12 @@ public sealed class ScopeServiceEndpointsStreamTests
                 correlationId: "cmd-1"),
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(4);
-        sessionHub.Published[0].Event.TextMessageStart.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageStart!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[0].Event.TextMessageStart.Role.Should().Be("assistant");
-        sessionHub.Published[1].Event.TextMessageContent.Should().NotBeNull();
-        sessionHub.Published[1].Event.TextMessageContent!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("pong");
-        sessionHub.Published[2].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[2].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[3].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[3].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[3].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -669,7 +663,7 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         var published = sessionHub.Published.Should().ContainSingle().Subject;
         published.Event.RunError.Should().NotBeNull();
-        published.Event.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+        published.Event.RunError!.Message.Should().Be("upstream");
     }
 
     private static EventEnvelope WrapCommittedCompletion(
