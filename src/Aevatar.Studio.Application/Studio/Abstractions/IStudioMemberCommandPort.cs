@@ -49,6 +49,9 @@ public interface IStudioMemberCommandPort
     /// the current-team lookup, no-op decision, and committed reassignment
     /// event construction.
     /// </summary>
+    // Refactor (iter96/cluster-545):
+    //   Old pattern: ReassignTeamAsync(fromTeamId, toTeamId) — application service constructed reassignment event with both team ids
+    //   New principle: PatchTeamAssignmentAsync(targetTeamId) — forwards PATCH intent to StudioMemberGAgent which evaluates current vs target from authoritative actor state
     Task PatchTeamAssignmentAsync(
         string scopeId,
         string memberId,
