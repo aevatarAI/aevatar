@@ -219,11 +219,22 @@ public sealed class NyxIdRelayTransport
         if (TryBuildWorkflowResumePayload(submission, out var workflowResume))
         {
             submission.WorkflowResume = workflowResume;
+            RemoveKeys(
+                submission.Arguments,
+                "actor_id",
+                "run_id",
+                "step_id",
+                "approved");
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
         {
             submission.LlmSelection = llmSelection;
+            RemoveKeys(
+                submission.Arguments,
+                "llm_action",
+                "service_id",
+                "preset_id");
         }
     }
 
@@ -313,6 +324,14 @@ public sealed class NyxIdRelayTransport
 
         value = (raw ?? string.Empty).Trim();
         return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static void RemoveKeys(
+        Google.Protobuf.Collections.MapField<string, string> values,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+            values.Remove(key);
     }
 
     private static void CopyScalarMap(JsonElement element, Google.Protobuf.Collections.MapField<string, string> target)
