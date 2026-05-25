@@ -48,6 +48,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton(scheduler)
             .AddSingleton<IConversationTurnRunner, SucceedingTurnRunner>()
+            .AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -283,5 +284,11 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             stream.RemoveAll(x => x.Version <= toVersion);
             return Task.FromResult((long)(before - stream.Count));
         }
+    }
+
+    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
+    {
+        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
+            workItem.ExecuteAsync(ct);
     }
 }
