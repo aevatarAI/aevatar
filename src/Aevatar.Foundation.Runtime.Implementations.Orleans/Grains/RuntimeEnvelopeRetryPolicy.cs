@@ -34,6 +34,9 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     internal static RuntimeEnvelopeRetryPolicy FromValues(string? maxAttemptsRaw, string? retryDelayRaw)
     {
+        // Refactor (iter96/cluster-529):
+        //   Old pattern: AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS 未配置 → 默认关闭重试;显式配置后重试所有异常
+        //   New principle: 默认开启 OCC-classified retry(仅重试 EventStoreOptimisticConcurrencyException);显式配置 max attempts 仍保留通用重试语义
         var maxAttemptsConfigured = int.TryParse(maxAttemptsRaw, out var configuredMaxAttempts);
         var maxAttempts = maxAttemptsConfigured ? configuredMaxAttempts : DefaultMaxAttempts;
         var retryDelayMs = ParseOrDefault(retryDelayRaw, defaultValue: DefaultRetryDelayMs);

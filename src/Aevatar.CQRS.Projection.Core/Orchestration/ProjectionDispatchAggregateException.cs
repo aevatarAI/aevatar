@@ -5,6 +5,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public sealed class ProjectionDispatchAggregateException : Exception
 {
+    // Refactor (iter96/cluster-529):
+    //   Old pattern: aggregate exception 只保留首个 inner exception,非首个 OCC 失败不被 classifier 识别
+    //   New principle: aggregate failure 中所有 inner exceptions 都参与 classification,non-first OCC 也能被识别并重试
     public ProjectionDispatchAggregateException(
         IReadOnlyList<ProjectionDispatchFailure> failures)
         : base(BuildMessage(failures), BuildInnerException(failures))
