@@ -9,9 +9,10 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// index mappings declared by code. Two metadata instances yield the same
 /// fingerprint iff their canonicalized <c>Mappings</c> dictionaries are equal
 /// (key-order independent, recursive). The fingerprint is the version suffix
-/// on physical Elasticsearch index names — when proto/descriptor changes shift
-/// the augmented mappings, the fingerprint shifts, the lifecycle manager
-/// migrates to a new physical index, and the alias is swapped atomically.
+/// on physical Elasticsearch index names. When proto/descriptor changes shift
+/// the augmented mappings, the fingerprint shifts; a mismatched alias is
+/// schema drift and the lifecycle manager fails loud instead of reading live
+/// mappings or repairing from the query/projection path.
 /// </summary>
 internal static class ElasticsearchProjectionSchemaFingerprint
 {
