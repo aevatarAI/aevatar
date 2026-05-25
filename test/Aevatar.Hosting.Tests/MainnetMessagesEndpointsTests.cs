@@ -267,6 +267,46 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
+    public async Task PostMessages_WithInvalidToolResultLocation_ShouldReturnStructuredErrorWithoutRegisteringSession()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [
+                {"role": "assistant", "content": [
+                  {"type": "tool_result", "tool_use_id": "toolu_secret", "content": "secret-output"}
+                ]}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "messages-secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("type").GetString().Should().Be("error");
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("invalid_messages");
+        body.Should().NotContain("messages-secret-token");
+        body.Should().NotContain("secret-output");
+        sessions.Registered.Should().BeEmpty();
+        sessions.StatusUpdates.Should().BeEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostMessages_WithToolResultBlockInUserContent_ShouldFlattenIntoToolRoleMessage()
     {
         // Anthropic Messages multi-turn tool flow: the *next* user message carries a
@@ -316,6 +356,10 @@ public sealed class MainnetMessagesEndpointsTests
         messages[2].Role.Should().Be("tool");
         messages[2].ToolCallId.Should().Be("toolu_x");
         messages[2].Content.Should().Be("sunny");
+        sessions.Registered.Should().ContainSingle();
+        sessions.Registered[0].PreviousResponseId.Should().BeNullOrEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
     }
 
     [Fact]
@@ -823,6 +867,8 @@ public sealed class MainnetMessagesEndpointsTests
         public List<LlmSessionRecord> Registered { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
+        public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
+        public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(
             LlmSessionRecord record,
@@ -909,13 +955,21 @@ public sealed class MainnetMessagesEndpointsTests
             string callId,
             string schemaHash,
             string resultJson,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ToolResults.Add((sessionActorId, responseId, callId, schemaHash, resultJson));
+            return Task.CompletedTask;
+        }
 
         public Task ResolveForwardedToolResultAsync(
             string sessionActorId,
             string responseId,
             string callId,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ResolvedToolResults.Add((sessionActorId, responseId, callId));
+            return Task.CompletedTask;
+        }
 
         public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
             string responseId,

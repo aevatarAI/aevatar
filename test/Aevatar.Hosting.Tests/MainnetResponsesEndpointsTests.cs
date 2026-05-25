@@ -851,6 +851,73 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithFunctionCallOutputForUnknownCall_ShouldReturnStructuredNotFoundWithoutPersistingResult()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:tool:call_1:emitted",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Pending,
+                    DateTimeOffset.UtcNow.AddHours(1),
+                    null,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null,
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_missing",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"secret": "request-secret"}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetResponseErrorCode(body).Should().Be("tool_call_not_found");
+        body.Should().NotContain("secret-token");
+        body.Should().NotContain("request-secret");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithPreviousResponseId_ShouldRegisterLinkedSession()
     {
         var provider = new RecordingLLMProvider
@@ -930,7 +997,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        body.Should().Contain("previous_response_expired");
+        GetResponseErrorCode(body).Should().Be("previous_response_expired");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -966,7 +1033,57 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_scope_mismatch");
+        GetResponseErrorCode(body).Should().Be("response_scope_mismatch");
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithPreviousResponseAfterOwnerSubjectChanges_ShouldReturnStructuredForbiddenWithoutRegisteringSession()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "scope-1",
+            "owner-before",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            1,
+            "resp_previous:registered"));
+        await using var app = await CreateAppAsync(
+            provider,
+            sessions,
+            callerScopeResolver: new StubResponsesCallerScopeResolver(
+                scopeId: "scope-1",
+                ownerSubject: "owner-after",
+                originKind: LlmSessionOriginKind.ApiKey));
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-5.4",
+              "input": "continue with caller-scope-secret",
+              "previous_response_id": "resp_previous"
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        GetResponseErrorCode(body).Should().Be("response_scope_mismatch");
+        body.Should().NotContain("secret-token");
+        body.Should().NotContain("caller-scope-secret");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -1002,8 +1119,76 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_origin_mismatch");
+        GetResponseErrorCode(body).Should().Be("response_origin_mismatch");
         sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponsesCancel_WithResponseFromDifferentScope_ShouldReturnStructuredForbiddenWithoutStatusUpdate()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_foreign",
+            "other-user",
+            "other-user",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_foreign",
+            1,
+            "resp_foreign:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_foreign/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        GetResponseErrorCode(body).Should().Be("response_scope_mismatch");
+        body.Should().NotContain("secret-token");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponsesCancel_WithResponseFromDifferentOrigin_ShouldReturnStructuredForbiddenWithoutStatusUpdate()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_channel",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.Channel,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_channel",
+            1,
+            "resp_channel:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_channel/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        GetResponseErrorCode(body).Should().Be("response_origin_mismatch");
+        body.Should().NotContain("secret-token");
+        sessions.StatusUpdates.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
 
@@ -2282,6 +2467,12 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static string? GetResponseErrorCode(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
 
     private sealed class RecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
