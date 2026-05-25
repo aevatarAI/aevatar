@@ -114,6 +114,7 @@ import type {
   StudioMemberRoster,
   StudioMemberBindingRevision,
   StudioMemberSummary,
+  StudioTeamSummary,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
@@ -212,6 +213,15 @@ type StudioNotice = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
   readonly message: string;
 };
+
+type StudioTeamEntryCandidate = {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly teamId: string;
+};
+
+const studioTeamEntryVisibilityAttempts = 5;
+const studioTeamEntryVisibilityRetryDelayMs = 100;
 
 type StudioBindingRunOutcome =
   | {
@@ -547,8 +557,21 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+function hasTeamEntryMember(
+  summary: StudioTeamSummary | null | undefined,
+  memberId: string,
+): boolean {
+  return trimOptional(summary?.entryMemberId) === trimOptional(memberId);
 }
 
 function findWorkflowSummaryByLookupValue(
@@ -2675,6 +2698,9 @@ const StudioPage: React.FC = () => {
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
   const [recentlyBoundMemberKey, setRecentlyBoundMemberKey] = useState('');
   const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
+  const [teamEntryActionBusy, setTeamEntryActionBusy] = useState(false);
+  const [teamEntryCandidate, setTeamEntryCandidate] =
+    useState<StudioTeamEntryCandidate | null>(null);
   const recentlyBoundServiceRef = useRef<ServiceCatalogSnapshot | null>(null);
   const legacyRouteServiceIdRef = useRef(
     trimOptional(initialRouteState.legacyServiceId),
@@ -4829,6 +4855,17 @@ const StudioPage: React.FC = () => {
           studioScopeMembers,
         ) ||
         trimOptional(routeMemberSummary?.memberId);
+      if (
+        resolvedStudioTeamId &&
+        resolvedBoundMemberId &&
+        resolvedStudioScopeId
+      ) {
+        setTeamEntryCandidate({
+          memberId: resolvedBoundMemberId,
+          scopeId: resolvedStudioScopeId,
+          teamId: resolvedStudioTeamId,
+        });
+      }
       const routedBoundMemberKey =
         buildBackendMemberKey(resolvedBoundMemberId) || boundMemberKey;
       setRecentlyBoundMemberKey(routedBoundMemberKey);
@@ -4868,6 +4905,7 @@ const StudioPage: React.FC = () => {
     queryClient,
     publishedScopeMembers,
     resolvedStudioScopeId,
+    resolvedStudioTeamId,
     routeSelectedBackendMemberKey,
     routeState.memberKey,
     routeState.teamId,
@@ -7097,6 +7135,124 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
+  const resolveTeamEntryCandidate = useCallback((): StudioTeamEntryCandidate | null => {
+    const memberId =
+      trimOptional(teamEntryCandidate?.memberId) ||
+      trimOptional(workbenchStudioMemberId) ||
+      trimOptional(workbenchStudioMember?.memberId) ||
+      trimOptional(workbenchStudioMemberSummary?.memberId) ||
+      trimOptional(routeSelectedBackendMemberId);
+    const scope = trimOptional(teamEntryCandidate?.scopeId) || resolvedStudioScopeId;
+    const team = trimOptional(teamEntryCandidate?.teamId) || resolvedStudioTeamId;
+
+    if (!memberId || !scope || !team) {
+      return null;
+    }
+
+    return {
+      memberId,
+      scopeId: scope,
+      teamId: team,
+    };
+  }, [
+    resolvedStudioScopeId,
+    resolvedStudioTeamId,
+    routeSelectedBackendMemberId,
+    teamEntryCandidate,
+    workbenchStudioMember?.memberId,
+    workbenchStudioMemberId,
+    workbenchStudioMemberSummary?.memberId,
+  ]);
+  const waitForTeamEntryVisibility = useCallback(
+    async (candidate: StudioTeamEntryCandidate) => {
+      for (
+        let attempt = 0;
+        attempt < studioTeamEntryVisibilityAttempts;
+        attempt += 1
+      ) {
+        const summary = await queryClient.fetchQuery({
+          queryFn: () => studioApi.getTeam(candidate.scopeId, candidate.teamId),
+          queryKey: [
+            'teams',
+            'team-summary',
+            candidate.scopeId,
+            candidate.teamId,
+          ],
+          staleTime: 0,
+        });
+        if (hasTeamEntryMember(summary, candidate.memberId)) {
+          return true;
+        }
+        if (attempt < studioTeamEntryVisibilityAttempts - 1) {
+          await delay(studioTeamEntryVisibilityRetryDelayMs);
+        }
+      }
+
+      return false;
+    },
+    [queryClient],
+  );
+  const handleSetTeamEntryFromStudio = useCallback(
+    async (options?: { test?: boolean }) => {
+      const candidate = resolveTeamEntryCandidate();
+      if (!candidate) {
+        void message.warning('Resolve a Team member before setting Team entry.');
+        return;
+      }
+
+      setTeamEntryActionBusy(true);
+      try {
+        const updatedTeam = await studioApi.setTeamEntryMember(
+          candidate.scopeId,
+          candidate.teamId,
+          candidate.memberId,
+        );
+        if (updatedTeam) {
+          queryClient.setQueryData(
+            ['teams', 'team-summary', candidate.scopeId, candidate.teamId],
+            updatedTeam,
+          );
+        }
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: ['teams', 'team-summary', candidate.scopeId, candidate.teamId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ['teams', 'team-members', candidate.scopeId, candidate.teamId],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ['teams', 'roster', candidate.scopeId],
+          }),
+        ]);
+        const entryVisible = options?.test
+          ? await waitForTeamEntryVisibility(candidate)
+          : false;
+        const targetHref = buildTeamDetailHref({
+          memberId: candidate.memberId,
+          scopeId: candidate.scopeId,
+          tab: 'overview',
+          testTeam: options?.test && entryVisible,
+          teamId: candidate.teamId,
+        });
+        void message.success('Team entry member update accepted.');
+        if (options?.test) {
+          if (!entryVisible) {
+            void message.warning(
+              'Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。',
+            );
+          }
+          history.push(targetHref);
+        }
+      } catch (error) {
+        void message.error(
+          error instanceof Error ? error.message : String(error),
+        );
+      } finally {
+        setTeamEntryActionBusy(false);
+      }
+    },
+    [queryClient, resolveTeamEntryCandidate, waitForTeamEntryVisibility],
+  );
   useEffect(() => {
     if (studioSurface !== 'build' || buildSurface !== 'editor') {
       return;
@@ -9558,6 +9714,17 @@ const StudioPage: React.FC = () => {
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}
         onSelectionChange={handleBindingSelectionChange}
+        postBindEntryActions={
+          resolvedStudioTeamId && workbenchStudioMemberId
+            ? {
+                busy: teamEntryActionBusy,
+                memberId: workbenchStudioMemberId,
+                onSetEntry: () => void handleSetTeamEntryFromStudio(),
+                onSetEntryAndTest: () =>
+                  void handleSetTeamEntryFromStudio({ test: true }),
+              }
+            : null
+        }
         pendingBindingCandidate={bindPendingCandidate}
         preferredServiceId={bindPendingCandidate ? '' : bindSelectedMemberServiceId}
         scopeId={resolvedStudioScopeId}

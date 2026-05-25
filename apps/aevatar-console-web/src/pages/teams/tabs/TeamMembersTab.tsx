@@ -1,5 +1,5 @@
-import { EditOutlined, ToolOutlined } from "@ant-design/icons";
-import { Button, Space, Tooltip, Typography } from "antd";
+import { CheckCircleOutlined, EditOutlined, ToolOutlined } from "@ant-design/icons";
+import { Button, Space, Tooltip, Typography, theme } from "antd";
 import React from "react";
 import {
   AevatarInspectorEmpty,
@@ -13,14 +13,15 @@ import {
 } from "../components/TeamDetailPrimitives";
 
 type TeamRosterMemberRow = {
+  readonly canInvokeAsEntry: boolean;
   readonly description: string;
   readonly implementationKind: string;
+  readonly isEntryMember?: boolean;
   readonly key: string;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
   readonly buildStudioHref: string;
   readonly editStudioHref: string;
-  readonly isEntryMember?: boolean;
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
@@ -33,9 +34,10 @@ type TeamMembersTabProps = {
   readonly rosterSyncing?: boolean;
   readonly rosterTeamId?: string;
   readonly createMemberHref?: string;
-  readonly entryMemberUpdatingId?: string;
-  readonly onSetEntryMember?: (memberId: string) => void;
+  readonly entryActionBusyMemberId?: string;
+  readonly onClearEntry?: () => void;
   readonly onNavigate?: (href: string) => void;
+  readonly onSetEntry?: (memberId: string) => void;
 };
 
 const ellipsisTextStyle: React.CSSProperties = {
@@ -71,15 +73,18 @@ const EllipsisText: React.FC<{
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   createMemberHref = "",
-  entryMemberUpdatingId = "",
+  entryActionBusyMemberId = "",
+  onClearEntry,
   onNavigate,
-  onSetEntryMember,
+  onSetEntry,
   rosterError = false,
   rosterLoading = false,
   rosterRows = [],
   rosterSyncing = false,
   rosterTeamId = "",
 }) => {
+  const { token } = theme.useToken();
+  const isEntryActionBusy = entryActionBusyMemberId.trim().length > 0;
   const handleNavigate = React.useCallback(
     (href: string) => (event: React.MouseEvent<HTMLElement>) => {
       if (!href || !onNavigate) {
@@ -140,7 +145,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     fontWeight: 600,
                     gap: 16,
                     gridTemplateColumns:
-                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(190px, max-content)",
+                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
                     padding: "12px 16px",
                   }}
                 >
@@ -166,7 +171,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       display: "grid",
                       gap: 16,
                       gridTemplateColumns:
-                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(190px, max-content)",
+                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
                       padding: "14px 16px",
                     }}
                   >
@@ -184,16 +189,11 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           <DetailPill
                             compact
                             style={{
-                              alignItems: "center",
-                              background: "var(--ant-colorPrimary)",
-                              border: "1px solid var(--ant-colorPrimary)",
-                              color: "var(--ant-colorWhite)",
-                              display: "inline-flex",
-                              flex: "0 0 auto",
-                              gap: 5,
-                              padding: "6px 10px",
+                              background: token.colorSuccessBg,
+                              border: `1px solid ${token.colorSuccessBorder}`,
+                              color: token.colorSuccess,
                             }}
-                            text="★ 入口成员"
+                            text="Entry member"
                           />
                         ) : null}
                       </div>
@@ -222,6 +222,30 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       value={row.serviceId}
                     />
                     <Space wrap size={8}>
+                      {row.isEntryMember ? (
+                        <Button
+                          icon={<CheckCircleOutlined />}
+                          disabled={
+                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                          }
+                          loading={entryActionBusyMemberId === row.memberId}
+                          onClick={onClearEntry}
+                          size="small"
+                        >
+                          Clear entry
+                        </Button>
+                      ) : row.canInvokeAsEntry && onSetEntry ? (
+                        <Button
+                          disabled={
+                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                          }
+                          loading={entryActionBusyMemberId === row.memberId}
+                          onClick={() => onSetEntry(row.memberId)}
+                          size="small"
+                        >
+                          Set entry
+                        </Button>
+                      ) : null}
                       <Button
                         href={row.editStudioHref}
                         icon={<EditOutlined />}
@@ -239,15 +263,6 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       >
                         Build
                       </Button>
-                      {!row.isEntryMember && onSetEntryMember ? (
-                        <Button
-                          loading={entryMemberUpdatingId === row.memberId}
-                          onClick={() => onSetEntryMember(row.memberId)}
-                          size="small"
-                        >
-                          Set as entry
-                        </Button>
-                      ) : null}
                     </Space>
                   </div>
                 ))}

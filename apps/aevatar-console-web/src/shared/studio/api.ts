@@ -74,7 +74,7 @@ import {
   readNumber,
   readString,
 } from "@/shared/api/http/decoders";
-import { readResponseError } from "@/shared/api/http/error";
+import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
@@ -115,11 +115,13 @@ async function externalFetch(
 }
 
 export class StudioApiError extends Error {
+  readonly code?: string;
   readonly status: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "StudioApiError";
+    this.code = code;
     this.status = status;
   }
 }
@@ -129,7 +131,8 @@ export function isStudioApiStatus(error: unknown, status: number): boolean {
 }
 
 async function createStudioApiError(response: Response): Promise<StudioApiError> {
-  return new StudioApiError(await readResponseError(response), response.status);
+  const details = await readResponseErrorDetails(response);
+  return new StudioApiError(details.message, response.status, details.code);
 }
 
 function isJsonContentType(contentType: string | null): boolean {
@@ -424,6 +427,23 @@ async function requestDecodedJson<T>(
 
   if (response.status === 204) {
     return undefined as T;
+  }
+
+  return decoder(await response.json());
+}
+
+async function requestDecodedJsonOrAccepted<T>(
+  input: string,
+  decoder: (value: unknown) => T,
+  init?: RequestInit
+): Promise<T | undefined> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+
+  if (response.status === 202 || response.status === 204) {
+    return undefined;
   }
 
   return decoder(await response.json());
@@ -1082,6 +1102,12 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
         ["description", "Description"],
         "StudioTeamSummary.description"
       ) ?? "",
+    entryMemberId:
+      readNullableString(
+        record,
+        ["entryMemberId", "EntryMemberId"],
+        "StudioTeamSummary.entryMemberId"
+      ) ?? null,
     lifecycleStage: readStudioTeamLifecycle(record, [
       "lifecycleStage",
       "LifecycleStage",
@@ -1473,13 +1499,14 @@ export const studioApi = {
     );
   },
 
-  async setTeamEntryMember(
+  setTeamEntryMember(
     scopeId: string,
     teamId: string,
     memberId: string
-  ): Promise<void> {
-    await requestAccepted(
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1490,9 +1517,13 @@ export const studioApi = {
     );
   },
 
-  async clearTeamEntryMember(scopeId: string, teamId: string): Promise<void> {
-    await requestAccepted(
+  clearTeamEntryMember(
+    scopeId: string,
+    teamId: string
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
       {
         method: "DELETE",
         headers: JSON_HEADERS,
