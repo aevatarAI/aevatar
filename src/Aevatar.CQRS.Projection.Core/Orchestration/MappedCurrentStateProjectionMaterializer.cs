@@ -17,6 +17,9 @@ public sealed record MappedCurrentStateProjectionInput<TContext, TState>(
 /// Helper for simple actor-owned current-state projectors that map one committed state root to one read model.
 /// Complex projectors can keep implementing ICurrentStateProjectionMaterializer directly.
 /// </summary>
+// Refactor (iter97/cluster-591):
+//   Old pattern: each current-state projector hand-wrote committed-state unpack + timestamp resolution + upsert shell
+//   New principle: this helper centralizes the projection shell; subclasses only map TState -> TReadModel
 public abstract class MappedCurrentStateProjectionMaterializer<TContext, TState, TReadModel>
     : ICurrentStateProjectionMaterializer<TContext>
     where TContext : IProjectionMaterializationContext
