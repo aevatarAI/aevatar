@@ -1127,11 +1127,6 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
       ["updatedAt", "UpdatedAt"],
       "StudioTeamSummary.updatedAt"
     ),
-    entryMemberId: readNullableString(
-      record,
-      ["entryMemberId", "EntryMemberId"],
-      "StudioTeamSummary.entryMemberId"
-    ),
   };
 }
 
