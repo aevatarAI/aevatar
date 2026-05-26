@@ -146,6 +146,7 @@ public sealed partial class ConversationGAgent
         {
             (LarkCardStreamingPhase.Idle, LarkCardStreamingPhase.Creating) => true,
 
+            (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Creating) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Streaming) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.CreationFailed) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Terminated) => true,

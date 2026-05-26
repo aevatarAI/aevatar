@@ -239,6 +239,89 @@ public sealed class LarkCardOperationSignalTests
         });
     }
 
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenCardCreateInFlight_QueuesFailureTextAndFinalizesAfterCreate()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent(
+            "conv-lark-card-create-inflight-failure-finalize",
+            runner,
+            new RecordingActorDispatchPort(),
+            new InMemoryEventStore(),
+            scheduler);
+        var chunk = CreateCardStreamChunk("corr-card-create-inflight-failure", "relay-msg-1", "...");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, chunk));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = chunk.CorrelationId,
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = chunk.Activity.Clone(),
+            Outbound = new MessageContent { Text = "Sorry, I couldn't complete this reply. Please try again." },
+            TerminalState = LlmReplyTerminalState.Failed,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = "provider failed",
+            ReplyToken = "runtime-ready-token-" + chunk.CorrelationId,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReadyAtUnixMs = 100,
+        });
+
+        var queued = agent.State.ActiveReplyLifecycles.Single();
+        queued.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardCreating);
+        queued.PendingFinalizeText.Should().Be("Sorry, I couldn't complete this reply. Please try again.");
+        queued.PendingFinalizeCommandId.Should().Be("llm:corr-card-create-inflight-failure");
+
+        await agent.HandleEventAsync(Envelope(agent.Id,
+            new LarkCardOperationCompletedEvent
+            {
+                OperationId = "corr-card-create-inflight-failure:create:1:1",
+                CorrelationId = chunk.CorrelationId,
+                Operation = LarkCardOperationPhase.Create,
+                Sequence = lifecycle.LarkCardInFlightSequence,
+                OperationGeneration = lifecycle.LarkCardOperationGeneration,
+                State = LarkCardOperationResultState.Succeeded,
+                Chunk = chunk.Clone(),
+                RawResult = new LarkCardOperationRawResult
+                {
+                    CardId = "card_ok",
+                    CardMessageId = "om_card_msg",
+                },
+            }));
+
+        runner.FinalizeCalls.Should().ContainSingle();
+        runner.FinalizeCalls[0].FinalText.Should().Be("Sorry, I couldn't complete this reply. Please try again.");
+        runner.FinalizeCalls[0].FinalTextDiffersFromLastFlushed.Should().BeTrue();
+
+        var finalizing = agent.State.ActiveReplyLifecycles.Single();
+        finalizing.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardStreaming);
+        finalizing.LarkCardInFlightOperation.Should().Be(LarkCardOperationPhase.Finalize);
+
+        await agent.HandleEventAsync(Envelope(agent.Id,
+            new LarkCardOperationCompletedEvent
+            {
+                OperationId = "corr-card-create-inflight-failure:finalize:2:2",
+                CorrelationId = chunk.CorrelationId,
+                Operation = LarkCardOperationPhase.Finalize,
+                Sequence = finalizing.LarkCardInFlightSequence,
+                OperationGeneration = finalizing.LarkCardOperationGeneration,
+                State = LarkCardOperationResultState.Succeeded,
+                CardId = "card_ok",
+                CardMessageId = "om_card_msg",
+                CommandId = "llm:corr-card-create-inflight-failure",
+                Activity = chunk.Activity.Clone(),
+                FinalText = "Sorry, I couldn't complete this reply. Please try again.",
+                LastFlushedText = "...",
+                RawResult = new LarkCardOperationRawResult { FinalTextWritten = true },
+            }));
+
+        agent.State.ActiveReplyLifecycles.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("llm:corr-card-create-inflight-failure");
+    }
+
     private static ConversationGAgent CreateAgent(
         string id,
         IConversationCardTurnRunner cardRunner,
@@ -356,6 +439,8 @@ public sealed class LarkCardOperationSignalTests
         public ConversationCardCreateResult CreateResult { get; init; } =
             ConversationCardCreateResult.Succeeded("card_ok", "om_card_msg");
 
+        public List<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> FinalizeCalls { get; } = [];
+
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
             string streamingElementId,
@@ -380,8 +465,11 @@ public sealed class LarkCardOperationSignalTests
             bool finalTextDiffersFromLastFlushed,
             long sequence,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationCardFinalizeResult.Succeeded());
+            CancellationToken ct)
+        {
+            FinalizeCalls.Add((finalText, finalTextDiffersFromLastFlushed, sequence));
+            return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
+        }
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
