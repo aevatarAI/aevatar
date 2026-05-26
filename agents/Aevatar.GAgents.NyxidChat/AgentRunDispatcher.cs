@@ -41,6 +41,7 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
         var command = new AgentRunStartRequested
         {
             Request = request.Clone(),
+            RunId = runId.Value,
         };
         command.Request.RunId = runId.Value;
         var envelope = new EventEnvelope

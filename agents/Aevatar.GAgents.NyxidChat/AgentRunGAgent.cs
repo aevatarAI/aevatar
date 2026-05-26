@@ -107,8 +107,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
+        // Refactor (iter101/cluster-105): Old=run_id could be recovered by parsing the run actor id; New=run_id is command data.
+        if (!AgentRunId.TryParse(command.RunId, out var typedCommandRunId))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without typed run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                command.Request.CorrelationId);
+            return;
+        }
+
+        var commandRunId = typedCommandRunId.Value;
         var request = command.Request.Clone();
         ApplyTargetRefOverrides(request);
+        if (!string.IsNullOrWhiteSpace(request.RunId) &&
+            !string.Equals(request.RunId.Trim(), commandRunId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command with mismatched run_id: commandRunId={CommandRunId} requestRunId={RequestRunId} runActor={RunActorId}",
+                commandRunId,
+                request.RunId,
+                Id);
+            return;
+        }
+
+        request.RunId = commandRunId;
         if (!AgentRunId.TryParse(request.RunId, out _))
         {
             // Refactor (iter98/cluster-002): Old=missing run_id fell back to correlation/actor id; New=start commands without explicit run_id are malformed.

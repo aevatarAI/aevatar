@@ -53,18 +53,8 @@ internal static class AgentRunActorIds
 {
     private const string ActorIdPrefix = "channel-agent-run:";
 
+    // Refactor (iter101/cluster-105):
+    //   Old pattern: callers parsed this actor id prefix to recover run_id.
+    //   New principle: actor id remains an opaque address; run_id travels in typed command/state fields.
     public static string ForRun(AgentRunId runId) => ActorIdPrefix + runId.Value;
-
-    internal static bool TryGetRunId(string? actorId, out AgentRunId runId)
-    {
-        if (!string.IsNullOrWhiteSpace(actorId) &&
-            actorId.StartsWith(ActorIdPrefix, StringComparison.Ordinal) &&
-            AgentRunId.TryParse(actorId[ActorIdPrefix.Length..], out runId))
-        {
-            return true;
-        }
-
-        runId = default;
-        return false;
-    }
 }

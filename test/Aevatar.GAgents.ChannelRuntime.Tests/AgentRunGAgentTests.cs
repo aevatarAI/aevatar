@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.CompilerServices;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -54,6 +55,7 @@ public sealed class AgentRunGAgentTests
         envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
+        command.RunId.Should().Be("run-dispatch");
         command.Request.RunId.Should().Be("run-dispatch");
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
@@ -82,6 +84,62 @@ public sealed class AgentRunGAgentTests
             .WithMessage("*run_id*");
         dispatchPort.Dispatches.Should().BeEmpty();
         actorRuntime.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenCommandRunIdDiffersFromRequestRunId_ShouldReject()
+    {
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false) { ReplyText = "ignored" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        await runtime.HandleStartAsync(new AgentRunStartRequested
+        {
+            RunId = "run-command",
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-mismatch",
+                RunId = "run-request",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+                ReplyToken = "relay-token-mismatch",
+            },
+        });
+
+        runtime.State.RunId.Should().BeEmpty();
+        runtime.State.Status.Should().Be(AgentRunStatus.Unspecified);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenCommandRunIdMissing_ShouldRejectEvenWhenRequestRunIdExists()
+    {
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ignored" };
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var initialState = runtime.State.Clone();
+
+        await runtime.HandleStartAsync(new AgentRunStartRequested
+        {
+            RunId = string.Empty,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-missing-command-run-id",
+                RunId = "run-request",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+                ReplyToken = "relay-token-missing-command-run-id",
+            },
+        });
+
+        runtime.State.Should().BeEquivalentTo(initialState);
+        replyGenerator.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -2472,6 +2530,7 @@ public sealed class AgentRunGAgentTests
         IEventPublisher? eventPublisher = null,
         IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
+        var runId = AgentRunId.New();
         var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
         var generationExecutor = new RecordingReplyGenerationExecutor(
             dispatchPort,
@@ -2486,9 +2545,10 @@ public sealed class AgentRunGAgentTests
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
-        SetId(agent, AgentRunActorIds.ForRun(AgentRunId.New()));
+        SetId(agent, AgentRunActorIds.ForRun(runId));
         if (actorRuntime is DispatchingActorRuntime dispatchingActorRuntime)
             dispatchingActorRuntime.Register(agent.Id, new AgentActorAdapter(agent));
+        AgentRunTestRunIds.Bind(agent, runId.Value);
         generationExecutor.Bind(agent);
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));
@@ -2503,15 +2563,17 @@ public sealed class AgentRunGAgentTests
         IEventPublisher? eventPublisher = null,
         IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
+        var runId = AgentRunId.New();
         var agent = new AgentRunGAgent(
             actorRuntime,
             generationExecutor,
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             callbackScheduler);
-        SetId(agent, AgentRunActorIds.ForRun(AgentRunId.New()));
+        SetId(agent, AgentRunActorIds.ForRun(runId));
         if (actorRuntime is DispatchingActorRuntime dispatchingActorRuntime)
             dispatchingActorRuntime.Register(agent.Id, new AgentActorAdapter(agent));
+        AgentRunTestRunIds.Bind(agent, runId.Value);
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));
         agent.EventPublisher = eventPublisher ?? new DispatchingEventPublisher(actorRuntime);
@@ -3661,24 +3723,50 @@ public sealed class AgentRunGAgentTests
 
 internal static class AgentRunGAgentTestExtensions
 {
-    public static Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request) =>
-        agent.HandleStartAsync(new AgentRunStartRequested
+    public static Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request)
+    {
+        var normalized = WithRunId(agent, request);
+        return agent.HandleStartAsync(new AgentRunStartRequested
         {
-            Request = WithRunId(agent, request),
+            RunId = normalized.RunId,
+            Request = normalized,
         });
+    }
 
     private static NeedsLlmReplyEvent WithRunId(AgentRunGAgent agent, NeedsLlmReplyEvent request)
     {
         var clone = request.Clone();
         if (string.IsNullOrWhiteSpace(clone.RunId))
         {
-            clone.RunId = AgentRunActorIds.TryGetRunId(agent.Id, out var runId)
-                ? runId.Value
-                : "run-" + (string.IsNullOrWhiteSpace(clone.CorrelationId)
-                    ? Guid.NewGuid().ToString("N")
-                    : clone.CorrelationId.Trim());
+            // Refactor (iter101/cluster-105):
+            //   Old pattern: tests parsed AgentRun actor id prefix to recover run_id.
+            //   New principle: tests carry run_id as typed command data, matching production.
+            clone.RunId = AgentRunTestRunIds.GetOrCreate(agent);
         }
 
         return clone;
     }
+}
+
+internal static class AgentRunTestRunIds
+{
+    private static readonly ConditionalWeakTable<AgentRunGAgent, RunIdBox> RunIds = new();
+
+    public static void Bind(AgentRunGAgent agent, string runId)
+    {
+        RunIds.Remove(agent);
+        RunIds.Add(agent, new RunIdBox(runId));
+    }
+
+    public static string GetOrCreate(AgentRunGAgent agent)
+    {
+        if (RunIds.TryGetValue(agent, out var box))
+            return box.RunId;
+
+        var runId = AgentRunId.New().Value;
+        Bind(agent, runId);
+        return runId;
+    }
+
+    private sealed record RunIdBox(string RunId);
 }
