@@ -917,6 +917,12 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("goal");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship daily command fix");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/goal ship daily command fix");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.OriginalCommand.Should().Be("/goal ship daily command fix");
+        recovery.MaxOrnnSearchAttempts.Should().Be(2);
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
     }
@@ -957,9 +963,17 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-daily-1");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("chrono-ai-daily");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("alice");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/daily alice");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("daily");
+        recovery.OriginalCommand.Should().Be("/daily alice");
+        recovery.PrimarySkillName.Should().Be("chrono-ai-daily");
+        recovery.MaxOrnnSearchAttempts.Should().Be(2);
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
     }
@@ -1216,6 +1230,10 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("foobar");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("foobar");
         adapter.Replies.Should().BeEmpty();
     }
 

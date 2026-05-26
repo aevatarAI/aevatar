@@ -1542,6 +1542,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
+        if (TryBuildSkillRecoveryContext(inboundEvent.Text, out var skillRecovery))
+        {
+            request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+            {
+                SkillRecovery = skillRecovery,
+            }).ToPayload();
+        }
+
         request.LlmControl = (await BuildOwnerLlmControlAsync(
                 inboundEvent,
                 LLMControlContextMapper.FromPayload(request.LlmControl),
@@ -1574,6 +1582,42 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return request;
+    }
+
+    private static bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
+    {
+        context = AgentSkillRecoveryContext.Empty;
+        if (!TryParseSlashCommand(text, out var commandName, out _))
+            return false;
+
+        var normalizedCommand = commandName.Trim().TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalizedCommand))
+            return false;
+
+        var originalCommand = (text ?? string.Empty).Trim();
+        if (string.Equals(normalizedCommand, "daily", StringComparison.OrdinalIgnoreCase))
+        {
+            context = new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "daily",
+                OriginalCommand: originalCommand,
+                PrimarySkillName: DailySkillName,
+                MaxOrnnSearchAttempts: 2);
+            return true;
+        }
+
+        if (LocalSlashCommands.Contains(normalizedCommand))
+            return false;
+
+        context = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: normalizedCommand,
+            OriginalCommand: originalCommand,
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2);
+        return true;
     }
 
     private async Task<LLMControlContext> BuildOwnerLlmControlAsync(
@@ -1628,7 +1672,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             "The user invoked the Lark `/daily` shortcut.\n" +
             $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}. Do not search for this skill first.\n" +
+            $"First call `ornn_search_skills` with `query` = `{DailySkillName}` and `scope` = `mixed`, then call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}.\n" +
             "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
             "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
             "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +

@@ -325,6 +325,154 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WhenDailySkipsOrnnDiscovery_ForcesSearchThenUseSkillBeforeFinal()
+    {
+        var providerFactory = new DailyPrimarySkillRecoveryProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nBuild the daily report.")),
+            ]);
+        var skillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "daily",
+            OriginalCommand: "/daily",
+            PrimarySkillName: "chrono-ai-daily",
+            MaxOrnnSearchAttempts: 2);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-daily-primary-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-primary-skill" },
+                Content = new MessageContent { Text = "/daily" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with { SkillRecovery = skillRecovery },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("daily report from loaded skill");
+        providerFactory.ObservedToolCalls.Should().Contain("ornn_search_skills");
+        providerFactory.ObservedToolCalls.Should().Contain("use_skill");
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call =>
+                    call.Name == "ornn_search_skills" &&
+                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call =>
+                    call.Name == "use_skill" &&
+                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
+        reply.Text.Should().NotContain("generic daily answer");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenDailySkillHitsToolBlocker_ForcesOrnnRecoveryBeforeFinalFailure()
+    {
+        var providerFactory = new DailyBlockerRecoveryProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nFetch chrono storage data.")),
+                new SingleToolSource(new FixedResultTool("chrono_storage_query", "Error: Invalid URI: The hostname could not be parsed.")),
+            ]);
+        var skillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "daily",
+            OriginalCommand: "/daily",
+            PrimarySkillName: "chrono-ai-daily",
+            MaxOrnnSearchAttempts: 2);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-daily-recovery",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-recovery" },
+                Content = new MessageContent { Text = "/daily" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with { SkillRecovery = skillRecovery },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("recovered daily report");
+        providerFactory.Requests.Should().HaveCountGreaterThanOrEqualTo(4);
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call =>
+                    call.Name == "ornn_search_skills" &&
+                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call =>
+                    call.Name == "ornn_search_skills" &&
+                    call.ArgumentsJson.Contains("Invalid URI", StringComparison.Ordinal)) == true)).Should().BeTrue();
+        providerFactory.ObservedToolCalls.Count(call => call == "ornn_search_skills").Should().BeGreaterThanOrEqualTo(2);
+        reply.Text.Contains("chrono storage backend unavailable", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenUnknownSlashSkipsInitialOrnnSearch_ForcesSearchBeforeFinal()
+    {
+        var providerFactory = new SlashInitialSearchRecoveryProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **goal**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# goal\n## Instructions\nExecute the goal command.")),
+            ]);
+        var skillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "goal",
+            OriginalCommand: "/goal ship daily command fix",
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-goal-recovery",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-goal-recovery" },
+                Content = new MessageContent { Text = "/goal ship daily command fix" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with { SkillRecovery = skillRecovery },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("goal command from loaded skill");
+        providerFactory.ObservedToolCalls.Should().Contain("ornn_search_skills");
+        providerFactory.ObservedToolCalls.Should().Contain("use_skill");
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call => call.Name == "ornn_search_skills") == true)).Should().BeTrue();
+        providerFactory.Requests.Any(request =>
+            request.Messages.Any(message =>
+                message.Role == "assistant" &&
+                message.ToolCalls?.Any(call =>
+                    call.Name == "use_skill" &&
+                    call.ArgumentsJson.Contains("goal", StringComparison.Ordinal)) == true)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
@@ -812,10 +960,140 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    private sealed class DailyPrimarySkillRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "daily-primary-skill-recovery";
+
+        public List<LLMRequest> Requests { get; } = [];
+        public List<string> ObservedToolCalls { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            foreach (var call in request.Messages.SelectMany(static message => message.ToolCalls ?? []))
+                ObservedToolCalls.Add(call.Name);
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = HasToolCall(request, "use_skill")
+                    ? "daily report from loaded skill"
+                    : "generic daily answer",
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class DailyBlockerRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "daily-blocker-recovery";
+
+        public List<LLMRequest> Requests { get; } = [];
+        public List<string> ObservedToolCalls { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            foreach (var call in request.Messages.SelectMany(static message => message.ToolCalls ?? []))
+                ObservedToolCalls.Add(call.Name);
+
+            if (!HasToolCall(request, "use_skill"))
+            {
+                yield return ToolChunk("call-use-daily", "use_skill", """{"skill":"chrono-ai-daily","args":""}""");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            if (!HasToolCall(request, "chrono_storage_query"))
+            {
+                yield return ToolChunk("call-storage", "chrono_storage_query", "{}");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            var ornnSearchCount = CountToolCalls(request, "ornn_search_skills");
+            if (ornnSearchCount < 2)
+            {
+                yield return new LLMStreamChunk { DeltaContent = "chrono storage backend unavailable: Invalid URI." };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "recovered daily report" };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class SlashInitialSearchRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "slash-initial-search-recovery";
+
+        public List<LLMRequest> Requests { get; } = [];
+        public List<string> ObservedToolCalls { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            foreach (var call in request.Messages.SelectMany(static message => message.ToolCalls ?? []))
+                ObservedToolCalls.Add(call.Name);
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = HasToolCall(request, "use_skill")
+                    ? "goal command from loaded skill"
+                    : HasToolCall(request, "ornn_search_skills")
+                        ? "goal skill selected without loading"
+                        : "generic answer",
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class FixedResultTool(string name, string result) : IAgentTool
+    {
+        public string Name => name;
+
+        public string Description => "Returns a fixed test result.";
+
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(result);
     }
 
     private sealed class ApprovalRequiredTool : IAgentTool
@@ -844,6 +1122,25 @@ public sealed class ConversationReplyGeneratorTests
             return Task.FromResult(ToolApprovalResult.Denied("test denial"));
         }
     }
+
+    private static bool HasToolCall(LLMRequest request, string toolName) =>
+        request.Messages.Any(message =>
+            message.ToolCalls?.Any(call => string.Equals(call.Name, toolName, StringComparison.OrdinalIgnoreCase)) == true);
+
+    private static int CountToolCalls(LLMRequest request, string toolName) =>
+        request.Messages.Sum(message =>
+            message.ToolCalls?.Count(call => string.Equals(call.Name, toolName, StringComparison.OrdinalIgnoreCase)) ?? 0);
+
+    private static LLMStreamChunk ToolChunk(string id, string name, string argumentsJson) =>
+        new()
+        {
+            DeltaToolCall = new ToolCall
+            {
+                Id = id,
+                Name = name,
+                ArgumentsJson = argumentsJson,
+            },
+        };
 
     private sealed class ListLogger<T> : ILogger<T>
     {

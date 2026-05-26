@@ -60,6 +60,7 @@ public class LarkToolsTests
             AgentToolSenderBindingContext.Empty,
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)));
 
         var result = await tool.ExecuteAsync(
@@ -88,6 +89,7 @@ public class LarkToolsTests
             AgentToolSenderBindingContext.Empty,
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "external-metadata-token",

@@ -103,6 +103,13 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolSenderBindingContext(" binding-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+            new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: " goal ",
+                OriginalCommand: " /goal ship ",
+                PrimarySkillName: " goal-skill ",
+                MaxOrnnSearchAttempts: 2),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -133,6 +140,12 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Routing.MaxToolRoundsOverride.Should().Be(7);
         copy.Routing.UserMemoryPrompt.Should().Be("memory-1");
         copy.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        copy.SkillRecovery.RequireInitialOrnnSearch.Should().BeTrue();
+        copy.SkillRecovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        copy.SkillRecovery.CommandName.Should().Be("goal");
+        copy.SkillRecovery.OriginalCommand.Should().Be("/goal ship");
+        copy.SkillRecovery.PrimarySkillName.Should().Be("goal-skill");
+        copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
     }
 

@@ -637,6 +637,7 @@ public sealed class AevatarInvocationToolSourceTests
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external"] = "value",

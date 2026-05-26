@@ -299,7 +299,31 @@ public sealed class ChatRuntime
         var messages = BuildMessagesWithPending(baseRequest, userMsg);
         string? finalContent = null;
         var lengthRecoveryCount = 0;
+        var skillRecoveryCount = 0;
         var hasStreamedTextContent = false;
+        var skillRecovery = baseRequest.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty;
+        if (skillRecovery.RequireInitialOrnnSearch &&
+            SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
+                skillRecovery,
+                pendingHistoryMessages,
+                finalContent: null,
+                skillRecoveryCount,
+                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
+                out var initialRecoveryDirective))
+        {
+            var recoveryExecutor = new StreamingToolExecutor(
+                _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                requestMetadata: baseRequest.Metadata,
+                toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
+            await ApplySkillRecoveryDirectiveAsync(
+                initialRecoveryDirective,
+                recoveryExecutor,
+                messages,
+                pendingHistoryMessages,
+                runToken);
+            if (initialRecoveryDirective.ConsumesOrnnSearchAttempt)
+                skillRecoveryCount++;
+        }
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
         {
@@ -363,6 +387,29 @@ public sealed class ChatRuntime
                 var roundCallsTools = !roundResult.Terminated &&
                                       (roundResult.ToolCalls is { Count: > 0 } ||
                                        parsedTextToolCall?.ToolCalls.Count > 0);
+
+                if (!roundCallsTools &&
+                    SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
+                        skillRecovery,
+                        pendingHistoryMessages,
+                        roundResult.Content,
+                        skillRecoveryCount,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
+                        out var recoveryDirective))
+                {
+                    streamingExecutor.Discard(streamingToolState);
+                    await ApplySkillRecoveryDirectiveAsync(
+                        recoveryDirective,
+                        streamingExecutor,
+                        messages,
+                        pendingHistoryMessages,
+                        runToken);
+                    if (recoveryDirective.ConsumesOrnnSearchAttempt)
+                        skillRecoveryCount++;
+                    hasStreamedTextContent = false;
+                    continue;
+                }
+
                 foreach (var chunk in roundChunks)
                 {
                     var visibleChunk = roundCallsTools ? SuppressVisibleToolCallRoundText(chunk) : chunk;
@@ -474,6 +521,30 @@ public sealed class ChatRuntime
                     messages.Add(nudge);
                     pendingHistoryMessages.Add(nudge);
                     lengthRecoveryCount++;
+                    continue;
+                }
+
+                if (SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
+                        skillRecovery,
+                        pendingHistoryMessages,
+                        roundResult.Content,
+                        skillRecoveryCount,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
+                        out var recoveryDirective))
+                {
+                    var recoveryExecutor = new StreamingToolExecutor(
+                        _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                        requestMetadata: baseRequest.Metadata,
+                        toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
+                    await ApplySkillRecoveryDirectiveAsync(
+                        recoveryDirective,
+                        recoveryExecutor,
+                        messages,
+                        pendingHistoryMessages,
+                        runToken);
+                    if (recoveryDirective.ConsumesOrnnSearchAttempt)
+                        skillRecoveryCount++;
+                    hasStreamedTextContent = false;
                     continue;
                 }
 
@@ -628,6 +699,44 @@ public sealed class ChatRuntime
 
         if (runContext.Terminate && runContext.Result != null && !wroteOutput)
             yield return new LLMStreamChunk { DeltaContent = runContext.Result };
+    }
+
+    private static async Task ApplySkillRecoveryDirectiveAsync(
+        SkillRecoveryFinalAnswerGuard.RecoveryDirective directive,
+        StreamingToolExecutor executor,
+        List<ChatMessage> messages,
+        List<ChatMessage> pendingHistoryMessages,
+        CancellationToken ct)
+    {
+        if (directive.ToolCall is { } toolCall)
+        {
+            var assistantToolCallMessage = new ChatMessage
+            {
+                Role = "assistant",
+                Content = null,
+                ToolCalls = [toolCall],
+            };
+            messages.Add(assistantToolCallMessage);
+            pendingHistoryMessages.Add(assistantToolCallMessage);
+
+            using var state = executor.CreateExecutionState();
+            executor.AddTool(state, toolCall);
+            await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
+            {
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                messages.Add(toolMsg);
+                pendingHistoryMessages.Add(toolMsg);
+            }
+
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(directive.Nudge))
+        {
+            var nudge = ChatMessage.User(directive.Nudge);
+            messages.Add(nudge);
+            pendingHistoryMessages.Add(nudge);
+        }
     }
 
     private async Task RunStopHookAsync(

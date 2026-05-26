@@ -275,6 +275,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
             persistedCopy.TargetRef = null;
             persistedCopy.LlmControl = null;
+            persistedCopy.ToolContext = null;
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
             await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
