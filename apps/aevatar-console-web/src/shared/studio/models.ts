@@ -845,6 +845,15 @@ export interface StudioUserLlmSettings {
   readonly setupHint?: unknown;
 }
 
+export interface StudioUserConfigSaveReceipt {
+  readonly accepted: boolean;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly ackedAtUtc: string;
+}
+
 export interface StudioUserConfigRuntimeDefaults {
   readonly localRuntimeBaseUrl: string;
   readonly remoteRuntimeBaseUrl: string;

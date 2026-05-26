@@ -49,6 +49,7 @@ import type {
   StudioTeamSummary,
   StudioTeamUpdateInput,
   StudioUserConfig,
+  StudioUserConfigSaveReceipt,
   StudioUserConfigRuntime,
   StudioUserLlmSettings,
   StudioWorkflowDraft,
@@ -406,6 +407,21 @@ function decodeStudioUserConfigRuntime(
       localMode: readString(runtimeDefaults, "localMode", `${label}.runtimeDefaults.localMode`),
       remoteMode: readString(runtimeDefaults, "remoteMode", `${label}.runtimeDefaults.remoteMode`),
     },
+  };
+}
+
+function decodeStudioUserConfigSaveReceipt(
+  value: unknown,
+  label = "StudioUserConfigSaveReceipt"
+): StudioUserConfigSaveReceipt {
+  const record = expectRecord(value, label);
+  return {
+    accepted: readBoolean(record, "accepted", `${label}.accepted`),
+    commandId: readString(record, "commandId", `${label}.commandId`),
+    ackStage: readString(record, "ackStage", `${label}.ackStage`),
+    actorId: readString(record, "actorId", `${label}.actorId`),
+    correlationId: readString(record, "correlationId", `${label}.correlationId`),
+    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
   };
 }
 
@@ -2296,22 +2312,26 @@ export const studioApi = {
     return requestJson("/api/user-config");
   },
 
-  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfig> {
-    return requestJson("/api/user-config", {
-      method: "PUT",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        defaultModel: input.defaultModel.trim(),
-        preferredLlmRoute:
-          input.preferredLlmRoute === undefined || input.preferredLlmRoute === null
-            ? undefined
-            : input.preferredLlmRoute.trim(),
-        runtimeMode: trimOptional(input.runtimeMode),
-        localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
-        remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
-        maxToolRounds: input.maxToolRounds ?? null,
-      }),
-    });
+  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfigSaveReceipt> {
+    return requestDecodedJson(
+      "/api/user-config",
+      decodeStudioUserConfigSaveReceipt,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          defaultModel: input.defaultModel.trim(),
+          preferredLlmRoute:
+            input.preferredLlmRoute === undefined || input.preferredLlmRoute === null
+              ? undefined
+              : input.preferredLlmRoute.trim(),
+          runtimeMode: trimOptional(input.runtimeMode),
+          localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
+          remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
+          maxToolRounds: input.maxToolRounds ?? null,
+        }),
+      }
+    );
   },
 
   getUserLlmSettings(): Promise<StudioUserLlmSettings> {
@@ -2324,10 +2344,10 @@ export const studioApi = {
   saveUserLlmSettings(input: {
     routeValue: string;
     model?: string | null;
-  }): Promise<StudioUserLlmSettings> {
+  }): Promise<StudioUserConfigSaveReceipt> {
     return requestDecodedJson(
       "/api/user-config/llm",
-      decodeStudioUserLlmSettings,
+      decodeStudioUserConfigSaveReceipt,
       {
         method: "PUT",
         headers: JSON_HEADERS,

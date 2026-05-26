@@ -30,10 +30,10 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
     }
 
-    public Task SaveAsync(UserConfig config, CancellationToken ct = default) =>
+    public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default) =>
         SaveAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", config, ct);
 
-    public async Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
+    public async Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
     {
         var evt = new UserConfigUpdatedEvent
         {
@@ -50,10 +50,10 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             MaxToolRounds = config.MaxToolRounds,
         };
 
-        await DispatchAsync(scopeId, evt, ct);
+        return await DispatchAsync(scopeId, evt, ct).ConfigureAwait(false);
     }
 
-    public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+    public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
         DispatchAsync(
             scopeId,
             new UserConfigGithubUsernameUpdatedEvent
@@ -71,7 +71,7 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private async Task DispatchAsync(string scopeId, IMessage payload, CancellationToken ct)
+    private async Task<UserConfigSaveReceipt> DispatchAsync(string scopeId, IMessage payload, CancellationToken ct)
     {
         var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
         // Refactor (iter56/cluster-910-projection-activation-cleanup):
@@ -88,6 +88,13 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
             Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
         };
 
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        var admission = await _dispatchPort.DispatchAsync(actor.Id, envelope, ct).ConfigureAwait(false);
+        return new UserConfigSaveReceipt(
+            Accepted: admission.Accepted,
+            CommandId: admission.CommandId,
+            AckStage: UserConfigCommandAckStage.Accepted,
+            ActorId: admission.ActorId,
+            CorrelationId: admission.CorrelationId,
+            AckedAtUtc: admission.AckedAt);
     }
 }

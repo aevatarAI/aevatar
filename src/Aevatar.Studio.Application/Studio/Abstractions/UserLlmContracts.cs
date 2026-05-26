@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public sealed record SaveUserLlmSettingsCommand(
-    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("routeValue")] string? RouteValue,
     [property: JsonPropertyName("model")] string? Model = null);
 
 public sealed record SaveUserLlmPreferenceCommand(
@@ -62,6 +62,10 @@ public static class UserLlmCatalogStatus
     public const string Unavailable = "unavailable";
 }
 
+/// <summary>
+/// Channel interaction contract for NyxID /model selection. Console Settings uses
+/// <see cref="UserLlmSettingsView"/> as its only public settings view.
+/// </summary>
 public sealed record UserLlmOptionsView(
     [property: JsonPropertyName("current")] UserLlmOption? Current,
     [property: JsonPropertyName("available")] IReadOnlyList<UserLlmOption> Available,
@@ -70,6 +74,10 @@ public sealed record UserLlmOptionsView(
     public static readonly UserLlmOptionsView Empty = new(null, [], null);
 }
 
+/// <summary>
+/// Routable LLM option used by channel selection flows and internal preference resolution,
+/// not by the Console Settings endpoint contract.
+/// </summary>
 public sealed record UserLlmOption(
     [property: JsonPropertyName("serviceId")] string ServiceId,
     [property: JsonPropertyName("serviceSlug")] string ServiceSlug,
@@ -140,9 +148,4 @@ public interface IUserLlmCatalogPort
 public interface IUserLlmPreferenceService
 {
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
-
-    Task<UserLlmSettingsView> BuildSettingsViewAsync(
-        UserConfig config,
-        string? bearerToken,
-        CancellationToken ct);
 }

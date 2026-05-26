@@ -114,16 +114,30 @@ public sealed class UserConfigControllerSettingsTests
             new SaveUserLlmSettingsCommand(RouteValue: string.Empty, Model: " gpt-5.4 "),
             CancellationToken.None);
 
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
-        payload.SavedRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        payload.DefaultModel.Should().Be("gpt-5.4");
+        var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
+        var payload = accepted.Value.Should().BeOfType<UserConfigSaveReceipt>().Subject;
+        payload.Accepted.Should().BeTrue();
+        payload.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
         commandService.Saved.Should().ContainSingle()
             .Which.Should().Match<UserConfig>(config =>
                 config.PreferredLlmRoute == UserConfigLlmRouteDefaults.Gateway &&
                 config.DefaultModel == "gpt-5.4");
         queryPort.ReadCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SaveLlmSettings_WhenRouteValueIsMissing_ShouldReturnBadRequest()
+    {
+        var controller = CreateController(
+            current: new UserConfig(string.Empty),
+            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            bearerToken: "user-token-1");
+
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsCommand(RouteValue: null, Model: "gpt-5.4"),
+            CancellationToken.None);
+
+        response.Result.Should().BeOfType<BadRequestObjectResult>();
     }
 
     [Fact]
@@ -246,17 +260,29 @@ public sealed class UserConfigControllerSettingsTests
     {
         public List<UserConfig> Saved { get; } = [];
 
-        public Task SaveAsync(UserConfig config, CancellationToken ct = default)
+        public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default)
         {
             Saved.Add(config);
-            return Task.CompletedTask;
+            return Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-1",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-1",
+                AckedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
+        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
             SaveAsync(config, ct);
 
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+            Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-github",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-github",
+                AckedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

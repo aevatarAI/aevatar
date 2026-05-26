@@ -80,6 +80,22 @@ public static class UserConfigRuntime
             ? UserConfigRuntimeDefaults.RemoteMode
             : UserConfigRuntimeDefaults.LocalMode;
 
+    public static string NormalizeConfiguredMode(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException(
+                $"Runtime mode must be '{UserConfigRuntimeDefaults.LocalMode}' or '{UserConfigRuntimeDefaults.RemoteMode}'.");
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            UserConfigRuntimeDefaults.LocalMode => UserConfigRuntimeDefaults.LocalMode,
+            UserConfigRuntimeDefaults.RemoteMode => UserConfigRuntimeDefaults.RemoteMode,
+            _ => throw new InvalidOperationException(
+                $"Runtime mode must be '{UserConfigRuntimeDefaults.LocalMode}' or '{UserConfigRuntimeDefaults.RemoteMode}'."),
+        };
+    }
+
     public static string NormalizeBaseUrl(string? value, string fallback)
     {
         var normalized = string.IsNullOrWhiteSpace(value)
@@ -87,6 +103,21 @@ public static class UserConfigRuntime
             : value.Trim();
 
         return normalized.TrimEnd('/');
+    }
+
+    public static string NormalizeConfiguredBaseUrl(string value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException($"{name} must be an absolute http(s) URL.");
+
+        var normalized = value.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException($"{name} must be an absolute http(s) URL.");
+        }
+
+        return normalized;
     }
 
     public static string ResolveActiveRuntimeBaseUrl(UserConfig config)
@@ -105,6 +136,26 @@ public static class UserConfigRuntime
         }
 
         return runtimeUri.IsLoopback;
+    }
+
+    public static UserConfigRuntimeView BuildView(UserConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return new UserConfigRuntimeView(
+            RuntimeMode: NormalizeMode(config.RuntimeMode),
+            ActiveRuntimeBaseUrl: ResolveActiveRuntimeBaseUrl(config),
+            LocalRuntimeBaseUrl: NormalizeBaseUrl(
+                config.LocalRuntimeBaseUrl,
+                UserConfigRuntimeDefaults.LocalRuntimeBaseUrl),
+            RemoteRuntimeBaseUrl: NormalizeBaseUrl(
+                config.RemoteRuntimeBaseUrl,
+                UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl),
+            RuntimeDefaults: new UserConfigRuntimeDefaultsView(
+                LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+                RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
+                LocalMode: UserConfigRuntimeDefaults.LocalMode,
+                RemoteMode: UserConfigRuntimeDefaults.RemoteMode));
     }
 }
 

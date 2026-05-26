@@ -439,13 +439,13 @@ const SettingsPage: React.FC = () => {
         routeValue: normalizeUserLlmRoute(nextDraft.preferredLlmRoute),
         model: trimConversationValue(nextDraft.defaultModel) ?? "",
       }),
-    onSuccess: (savedSettings) => {
-      const normalized = normalizeUserConfigDraft(savedSettings);
-      queryClient.setQueryData(["settings", "user-llm-settings"], savedSettings);
-      queryClient.setQueryData(["studio-user-llm-settings"], savedSettings);
-      queryClient.setQueryData(["chat", "user-llm-settings"], savedSettings);
-      setDraft(normalized);
+    onSuccess: async () => {
       setSaveError(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["settings", "user-llm-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["studio-user-llm-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["chat", "user-llm-settings"] }),
+      ]);
     },
     onError: (error) => {
       setSaveError(describeError(error, "Failed to save settings."));

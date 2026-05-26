@@ -5,10 +5,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
 {
-    private const string ReadyStatus = "ready";
     private const string DefaultGatewayRouteLabel = "NyxID Gateway";
-    private const string FallbackReasonCatalogUnavailable = "catalog_unavailable";
-    private const string FallbackReasonSavedRouteUnavailable = "saved_route_unavailable";
 
     private readonly IUserConfigQueryPort _queryPort;
     private readonly IUserLlmCatalogPort _catalogPort;
@@ -30,7 +27,7 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         return await BuildSettingsViewAsync(config, bearerToken, ct).ConfigureAwait(false);
     }
 
-    public async Task<UserLlmSettingsView> BuildSettingsViewAsync(
+    private async Task<UserLlmSettingsView> BuildSettingsViewAsync(
         UserConfig config,
         string? bearerToken,
         CancellationToken ct)
@@ -74,10 +71,12 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         var effectiveRouteLabel = ResolveRouteLabel(effectiveRoute, options);
         var savedRouteLabel = ResolveRouteLabel(savedRoute, options);
         var catalogStatus = result.Services.Count == 0
-            ? UserLlmCatalogStatus.Empty
-            : UserLlmCatalogStatus.Ready;
+            ? UserLlmCatalogStatusValue.Empty
+            : UserLlmCatalogStatusValue.Ready;
         var routeFallbackActive = !string.Equals(savedRoute, effectiveRoute, StringComparison.OrdinalIgnoreCase);
-        var fallbackReason = routeFallbackActive ? FallbackReasonSavedRouteUnavailable : null;
+        var fallbackReason = routeFallbackActive
+            ? UserLlmFallbackReasonValue.SavedRouteUnavailable.ToWireValue()
+            : null;
         var modelGroups = BuildModelGroups(result.Services, options, savedRoute, effectiveRoute);
         var canSave = readyRoutes.Contains(UserConfigLlmRouteDefaults.Gateway) || readyRoutes.Count > 0;
 
@@ -90,9 +89,9 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
             FallbackReason: fallbackReason,
             RouteOptions: options,
             ModelGroupsByRoute: modelGroups,
-            CatalogStatus: catalogStatus,
+            CatalogStatus: catalogStatus.ToWireValue(),
             Capabilities: new UserLlmSettingsCapabilities(
-                CanEditRoute: catalogStatus == UserLlmCatalogStatus.Ready && options.Count > 0,
+                CanEditRoute: catalogStatus == UserLlmCatalogStatusValue.Ready && options.Count > 0,
                 CanEditModel: true,
                 CanSave: canSave,
                 CanRetryCatalog: false),
@@ -114,16 +113,16 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
             EffectiveRoute: savedRoute,
             EffectiveRouteLabel: label,
             RouteFallbackActive: false,
-            FallbackReason: FallbackReasonCatalogUnavailable,
+            FallbackReason: UserLlmFallbackReasonValue.CatalogUnavailable.ToWireValue(),
             RouteOptions:
             [
                 new UserLlmRouteOption(
                     RouteValue: savedRoute,
                     Label: label,
                     Source: string.Equals(savedRoute, UserConfigLlmRouteDefaults.Gateway, StringComparison.OrdinalIgnoreCase)
-                        ? NyxIdLlmProviderSource.GatewayProvider
-                        : NyxIdLlmProviderSource.UserService,
-                    Status: UserLlmCatalogStatus.Unavailable,
+                        ? UserLlmRouteSourceValue.GatewayProvider.ToWireValue()
+                        : UserLlmRouteSourceValue.UserService.ToWireValue(),
+                    Status: UserLlmRouteStatusValue.Unavailable.ToWireValue(),
                     Allowed: false,
                     Ready: false,
                     ServiceId: null,
@@ -131,7 +130,7 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
                     Description: null),
             ],
             ModelGroupsByRoute: [],
-            CatalogStatus: UserLlmCatalogStatus.Unavailable,
+            CatalogStatus: UserLlmCatalogStatusValue.Unavailable.ToWireValue(),
             Capabilities: new UserLlmSettingsCapabilities(
                 CanEditRoute: false,
                 CanEditModel: false,
@@ -165,8 +164,8 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
             options.Add(new UserLlmRouteOption(
                 RouteValue: route,
                 Label: NormalizeDisplayName(service.DisplayName, service.ServiceSlug),
-                Source: NormalizeSource(service.Source),
-                Status: NormalizeStatus(service.Status),
+                Source: NormalizeSource(service.Source).ToWireValue(),
+                Status: NormalizeStatus(service.Status).ToWireValue(),
                 Allowed: service.Allowed,
                 Ready: IsReady(service),
                 ServiceId: service.UserServiceId,
@@ -184,16 +183,16 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         var ready = gatewayServices.Any(IsReady);
         var allowed = !hasAny || gatewayServices.Any(service => service.Allowed);
         var status = !hasAny
-            ? ReadyStatus
+            ? UserLlmRouteStatusValue.Ready
             : ready
-                ? ReadyStatus
+                ? UserLlmRouteStatusValue.Ready
                 : NormalizeStatus(gatewayServices[0].Status);
 
         return new UserLlmRouteOption(
             RouteValue: UserConfigLlmRouteDefaults.Gateway,
             Label: _gatewayRouteLabel,
-            Source: NyxIdLlmProviderSource.GatewayProvider,
-            Status: status,
+            Source: UserLlmRouteSourceValue.GatewayProvider.ToWireValue(),
+            Status: status.ToWireValue(),
             Allowed: allowed,
             Ready: !hasAny || ready,
             ServiceId: null,
@@ -277,12 +276,11 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     private static bool IsUserServiceRoute(NyxIdLlmService service)
     {
         var source = NormalizeSource(service.Source);
-        return source is NyxIdLlmProviderSource.UserService or NyxIdLlmProviderSource.ProxyService;
+        return source.IsUserServiceRoute;
     }
 
     private static bool IsReady(NyxIdLlmService service) =>
-        service.Allowed &&
-        string.Equals(NormalizeStatus(service.Status), ReadyStatus, StringComparison.OrdinalIgnoreCase);
+        service.Allowed && NormalizeStatus(service.Status).IsReady;
 
     private string ResolveRouteLabel(string route, IReadOnlyList<UserLlmRouteOption> routeOptions)
     {
@@ -299,24 +297,28 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         return normalized ?? fallback.Trim();
     }
 
-    private static string NormalizeStatus(string? status)
+    private static UserLlmRouteStatusValue NormalizeStatus(string? status)
     {
         var normalized = status?.Trim().ToLowerInvariant();
-        return string.IsNullOrWhiteSpace(normalized) ? "unknown" : normalized;
+        return string.IsNullOrWhiteSpace(normalized)
+            ? UserLlmRouteStatusValue.Unknown
+            : new UserLlmRouteStatusValue(normalized);
     }
 
-    private static string NormalizeSource(string? source)
+    private static UserLlmRouteSourceValue NormalizeSource(string? source)
     {
         var normalized = source?.Trim().ToLowerInvariant();
         return normalized switch
         {
-            "user" => NyxIdLlmProviderSource.UserService,
-            "user_service" => NyxIdLlmProviderSource.UserService,
-            "proxy_service" => NyxIdLlmProviderSource.ProxyService,
-            "proxy" => NyxIdLlmProviderSource.ProxyService,
-            "gateway" => NyxIdLlmProviderSource.GatewayProvider,
-            "gateway_provider" => NyxIdLlmProviderSource.GatewayProvider,
-            _ => string.IsNullOrWhiteSpace(normalized) ? NyxIdLlmProviderSource.UserService : normalized,
+            "user" => UserLlmRouteSourceValue.UserService,
+            "user_service" => UserLlmRouteSourceValue.UserService,
+            "proxy_service" => UserLlmRouteSourceValue.ProxyService,
+            "proxy" => UserLlmRouteSourceValue.ProxyService,
+            "gateway" => UserLlmRouteSourceValue.GatewayProvider,
+            "gateway_provider" => UserLlmRouteSourceValue.GatewayProvider,
+            _ => string.IsNullOrWhiteSpace(normalized)
+                ? UserLlmRouteSourceValue.UserService
+                : new UserLlmRouteSourceValue(normalized),
         };
     }
 
@@ -352,6 +354,47 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
+}
+
+internal readonly record struct UserLlmCatalogStatusValue(string Value)
+{
+    public static readonly UserLlmCatalogStatusValue Ready = new(UserLlmCatalogStatus.Ready);
+    public static readonly UserLlmCatalogStatusValue Empty = new(UserLlmCatalogStatus.Empty);
+    public static readonly UserLlmCatalogStatusValue Unavailable = new(UserLlmCatalogStatus.Unavailable);
+
+    public string ToWireValue() => Value;
+}
+
+internal readonly record struct UserLlmFallbackReasonValue(string Value)
+{
+    public static readonly UserLlmFallbackReasonValue CatalogUnavailable = new("catalog_unavailable");
+    public static readonly UserLlmFallbackReasonValue SavedRouteUnavailable = new("saved_route_unavailable");
+
+    public string ToWireValue() => Value;
+}
+
+internal readonly record struct UserLlmRouteStatusValue(string Value)
+{
+    public static readonly UserLlmRouteStatusValue Ready = new("ready");
+    public static readonly UserLlmRouteStatusValue Unavailable = new("unavailable");
+    public static readonly UserLlmRouteStatusValue Unknown = new("unknown");
+
+    public bool IsReady => string.Equals(Value, Ready.Value, StringComparison.OrdinalIgnoreCase);
+
+    public string ToWireValue() => Value;
+}
+
+internal readonly record struct UserLlmRouteSourceValue(string Value)
+{
+    public static readonly UserLlmRouteSourceValue GatewayProvider = new(NyxIdLlmProviderSource.GatewayProvider);
+    public static readonly UserLlmRouteSourceValue UserService = new(NyxIdLlmProviderSource.UserService);
+    public static readonly UserLlmRouteSourceValue ProxyService = new(NyxIdLlmProviderSource.ProxyService);
+
+    public bool IsUserServiceRoute =>
+        string.Equals(Value, UserService.Value, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Value, ProxyService.Value, StringComparison.OrdinalIgnoreCase);
+
+    public string ToWireValue() => Value;
 }
 
 public static class NyxIdLlmServiceMapping

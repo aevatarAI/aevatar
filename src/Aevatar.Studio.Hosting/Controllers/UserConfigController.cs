@@ -44,13 +44,13 @@ public sealed class UserConfigController : ControllerBase
     }
 
     [HttpPut]
-    public async Task<ActionResult<UserConfig>> Save(
+    public async Task<ActionResult<UserConfigSaveReceipt>> Save(
         [FromBody] SaveUserConfigRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var next = await _userConfigService.SaveAsync(
+            var receipt = await _userConfigService.SaveAsync(
                 ExtractBearerToken(),
                 new SaveUserConfigCommand(
                     request.DefaultModel,
@@ -61,7 +61,7 @@ public sealed class UserConfigController : ControllerBase
                     request.GithubUsername,
                     request.MaxToolRounds),
                 cancellationToken);
-            return Ok(next);
+            return Accepted(receipt);
         }
         catch (InvalidOperationException exception)
         {
@@ -104,21 +104,25 @@ public sealed class UserConfigController : ControllerBase
     }
 
     [HttpPut("llm")]
-    public async Task<ActionResult<UserLlmSettingsView>> SaveLlmSettings(
-        [FromBody] SaveUserLlmSettingsCommand request,
+    public async Task<ActionResult<UserConfigSaveReceipt>> SaveLlmSettings(
+        [FromBody] SaveUserLlmSettingsCommand? request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var next = await _userConfigService.SaveLlmPreferenceAsync(
+            if (request is null)
+                return BadRequest(new { message = "Request body is required." });
+
+            if (request.RouteValue is null)
+                return BadRequest(new { message = "routeValue is required; use an empty string for the gateway route." });
+
+            var receipt = await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
                 new SaveUserLlmPreferenceCommand(
                     RouteValue: request.RouteValue,
                     Model: request.Model),
                 cancellationToken).ConfigureAwait(false);
-            return Ok(await _llmPreferenceService
-                .BuildSettingsViewAsync(next, ExtractBearerToken(), cancellationToken)
-                .ConfigureAwait(false));
+            return Accepted(receipt);
         }
         catch (InvalidOperationException exception)
         {
@@ -136,21 +140,7 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            var config = await _userConfigService.GetAsync(cancellationToken);
-            return Ok(new UserConfigRuntimeView(
-                RuntimeMode: UserConfigRuntime.NormalizeMode(config.RuntimeMode),
-                ActiveRuntimeBaseUrl: UserConfigRuntime.ResolveActiveRuntimeBaseUrl(config),
-                LocalRuntimeBaseUrl: UserConfigRuntime.NormalizeBaseUrl(
-                    config.LocalRuntimeBaseUrl,
-                    UserConfigRuntimeDefaults.LocalRuntimeBaseUrl),
-                RemoteRuntimeBaseUrl: UserConfigRuntime.NormalizeBaseUrl(
-                    config.RemoteRuntimeBaseUrl,
-                    UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl),
-                RuntimeDefaults: new UserConfigRuntimeDefaultsView(
-                    LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-                    RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
-                    LocalMode: UserConfigRuntimeDefaults.LocalMode,
-                    RemoteMode: UserConfigRuntimeDefaults.RemoteMode)));
+            return Ok(await _userConfigService.GetRuntimeAsync(cancellationToken));
         }
         catch (InvalidOperationException exception)
         {

@@ -79,7 +79,7 @@ Console 的 Settings、Chat composer、Studio workflow dry-run 必须共用后�
 Canonical endpoints：
 
 - `GET /api/user-config/llm`：返回当前用户的 LLM settings view。
-- `PUT /api/user-config/llm`：投递保存 `routeValue` 与 `model` 的命令，并返回基于本次 accepted target config 构造的 settings view；该响应不承诺 actor 已 committed 或 read model 已 observed。
+- `PUT /api/user-config/llm`：投递保存 `routeValue` 与 `model` 的命令，返回 `202 Accepted` receipt（`accepted`、`commandId`、`ackStage = "accepted"`、`actorId`、`correlationId`、`ackedAtUtc`）；该响应只承诺命令已进入 dispatch/inbox 边界，不承诺 actor 已 handled、event 已 committed 或 read model 已 observed。前端保存成功后必须重新 `GET /api/user-config/llm` 读取 canonical settings view。
 - `GET /api/user-config/runtime`：返回 runtime mode、active runtime URL、local/remote URL 以及后端默认值。
 - `GET /api/auth/me`：返回最小 typed `profile` / `session`，不得回显 access token、refresh token、raw JWT 或 raw claims。
 

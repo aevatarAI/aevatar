@@ -18,7 +18,7 @@ public sealed class UserLlmPreferenceWriter
         _catalogPort = catalogPort ?? throw new ArgumentNullException(nameof(catalogPort));
     }
 
-    public async Task<UserConfig> SaveAsync(
+    public async Task<UserConfigSaveReceipt> SaveAsync(
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
         CancellationToken ct)
@@ -27,8 +27,7 @@ public sealed class UserLlmPreferenceWriter
 
         var current = await _queryPort.GetAsync(ct).ConfigureAwait(false);
         var next = await MergePreferenceCommandAsync(current, bearerToken, command, ct).ConfigureAwait(false);
-        await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
-        return next;
+        return await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
     }
 
     public async Task<UserConfig> MergeLegacyFieldsAsync(

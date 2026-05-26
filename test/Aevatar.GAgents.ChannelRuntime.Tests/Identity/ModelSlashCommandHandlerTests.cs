@@ -628,16 +628,28 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public List<(string ScopeId, StudioConfig Config)> SavedConfigs { get; } = new();
 
-        public Task SaveAsync(StudioConfig config, CancellationToken ct = default) =>
+        public Task<UserConfigSaveReceipt> SaveAsync(StudioConfig config, CancellationToken ct = default) =>
             SaveAsync(string.Empty, config, ct);
 
-        public Task SaveAsync(string scopeId, StudioConfig config, CancellationToken ct = default)
+        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, StudioConfig config, CancellationToken ct = default)
         {
             SavedConfigs.Add((scopeId, config));
-            return Task.CompletedTask;
+            return Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-1",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-1",
+                AckedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+            Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-github",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-github",
+                AckedAtUtc: DateTimeOffset.UtcNow));
     }
 }
