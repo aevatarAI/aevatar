@@ -11,7 +11,6 @@ using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
-using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -48,7 +47,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(
                 sp.GetRequiredService<IWorkflowActorBindingReader>(),
-                sp.GetRequiredService<IWorkflowRunActorPort>(),
+                sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
+                sp.GetRequiredService<IWorkflowDefinitionParser>(),
                 sp.GetRequiredService<IWorkflowDefinitionCatalog>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
@@ -86,7 +86,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
-        services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)

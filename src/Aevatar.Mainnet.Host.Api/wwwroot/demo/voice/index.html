@@ -122,9 +122,15 @@
   -H "content-type: application/json" \
   -d '{
     "default_target": {
-      "forward_to_gagent": {
-        "actor_id": "YOUR_AGENT_ACTOR_ID",
-        "voice_module_name": "voice_presence_openai"
+      "forward_to_model": {
+        "tool_set_ref": { "name": "voice.realtime" },
+        "tool_choice_hint": {
+          "tool_name": "aevatar_invoke_gagent",
+          "prefilled_arguments": {
+            "actor_id": "YOUR_AGENT_ACTOR_ID",
+            "voice_module_name": "voice_presence_openai"
+          }
+        }
       }
     },
     "rules": [
@@ -133,9 +139,15 @@
         "priority": 100,
         "match": { "source_kind": "CHAT_SOURCE_KIND_VOICE" },
         "action": {
-          "forward_to_gagent": {
-            "actor_id": "YOUR_AGENT_ACTOR_ID",
-            "voice_module_name": "voice_presence_openai"
+          "forward_to_model": {
+            "tool_set_ref": { "name": "voice.realtime" },
+            "tool_choice_hint": {
+              "tool_name": "aevatar_invoke_gagent",
+              "prefilled_arguments": {
+                "actor_id": "YOUR_AGENT_ACTOR_ID",
+                "voice_module_name": "voice_presence_openai"
+              }
+            }
           }
         },
         "description": "route browser voice demo to the mainnet agent"

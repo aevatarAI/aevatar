@@ -5,4 +5,11 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// </summary>
 public sealed record VoicePresenceSessionRequest(
     string ActorId,
-    string? ModuleName = null);
+    string? ModuleName = null,
+    VoicePresenceSessionRequestPurpose Purpose = VoicePresenceSessionRequestPurpose.Attach);
+
+public enum VoicePresenceSessionRequestPurpose
+{
+    Attach = 0,
+    Detach = 1,
+}

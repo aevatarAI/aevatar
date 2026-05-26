@@ -13,18 +13,17 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class UserAgentCatalogProjectorTests
 {
     private readonly RecordingWriteDispatcher _dispatcher = new();
-    private readonly RecordingDocumentReader _documentReader = new();
     private readonly FixedProjectionClock _clock = new(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero));
     private readonly UserAgentCatalogProjector _projector;
     private readonly UserAgentCatalogMaterializationContext _context;
 
     public UserAgentCatalogProjectorTests()
     {
-        _projector = new UserAgentCatalogProjector(_dispatcher, _documentReader, _clock);
+        _projector = new UserAgentCatalogProjector(_dispatcher, _clock);
         _context = new UserAgentCatalogMaterializationContext
         {
             RootActorId = UserAgentCatalogGAgent.WellKnownId,
-            ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+            ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
         };
     }
 
@@ -74,15 +73,8 @@ public sealed class UserAgentCatalogProjectorTests
         document.ApiKeyId.Should().Be("key-1");
         document.ScheduleCron.Should().Be("0 9 * * *");
         document.ScheduleTimezone.Should().Be("UTC");
-        document.Status.Should().BeEmpty("catalog membership projection must not synthesize runner-owned execution facts");
-        document.LastRunAtUtc.Should().BeNull();
-        document.NextRunAtUtc.Should().BeNull();
-        document.ErrorCount.Should().Be(0);
-        document.LastError.Should().BeEmpty();
         document.StateVersion.Should().Be(3);
         document.LastEventId.Should().Be("evt-agent-1");
-        document.CatalogSourceVersion.Should().Be(3);
-        document.CatalogLastEventId.Should().Be("evt-agent-1");
         document.ActorId.Should().Be("agent-registry-store");
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
@@ -100,27 +92,43 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithSkillRunnerCommittedState_UpsertsExecutionFields()
+    public async Task ProjectAsync_WithOwnerScope_LeavesDeprecatedOwnershipFieldsEmpty()
     {
-        // Refactor (iter1/cluster-001):
-        //   Old pattern: execution fields were projected only after UserAgentCatalogExecutionUpdatedEvent.
-        //   New principle: runner committed state updates LastRunAt/NextRunAt/Status by agent id.
-        var existing = new UserAgentCatalogDocument
+        var ownerScope = OwnerScope.ForNyxIdNative("user-1");
+        var state = new UserAgentCatalogState
         {
-            Id = "runner-1",
-            ActorId = UserAgentCatalogGAgent.WellKnownId,
-            AgentType = SkillRunnerDefaults.AgentType,
-            TemplateName = "daily",
-            ScopeId = "scope-1",
-            ScheduleCron = "0 9 * * *",
-            ScheduleTimezone = "UTC",
-            CatalogSourceVersion = 5,
-            CatalogLastEventId = "catalog-5",
-            StateVersion = 5,
-            LastEventId = "catalog-5",
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-scoped",
+                    ConversationId = "oc_chat_1",
+                    NyxProviderSlug = "api-lark-bot",
+                    AgentType = "skill_runner",
+                    OwnerScope = ownerScope,
+#pragma warning disable CS0612 // stale legacy values must not be copied when owner_scope exists
+                    Platform = "nyxid",
+                    OwnerNyxUserId = "user-1",
+#pragma warning restore CS0612
+                },
+            },
         };
-        _documentReader.Items["runner-1"] = existing;
 
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-scoped", 4, state), CancellationToken.None);
+
+        _dispatcher.Upserts.Should().ContainSingle();
+        var document = _dispatcher.Upserts[0];
+        document.OwnerScope.Should().NotBeNull();
+        document.OwnerScope!.MatchesStrictly(ownerScope).Should().BeTrue();
+#pragma warning disable CS0612
+        document.Platform.Should().BeEmpty();
+        document.OwnerNyxUserId.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithSkillRunnerCommittedState_DoesNotWriteCatalogDocument()
+    {
         var state = new SkillRunnerState
         {
             TemplateName = "daily",
@@ -137,28 +145,19 @@ public sealed class UserAgentCatalogProjectorTests
             new UserAgentCatalogMaterializationContext
             {
                 RootActorId = "runner-1",
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
             },
             BuildSkillRunnerCommittedEnvelope("runner-event-2", 2, state),
             CancellationToken.None);
 
-        _dispatcher.Upserts.Should().ContainSingle();
-        var document = _dispatcher.Upserts[0];
-        document.Id.Should().Be("runner-1");
-        document.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
-        document.LastRunAtUtc.Should().Be(state.LastRunAt);
-        document.NextRunAtUtc.Should().Be(state.NextRunAt);
-        document.ErrorCount.Should().Be(0);
-        document.RunnerSourceVersion.Should().Be(2);
-        document.RunnerLastEventId.Should().Be("runner-event-2");
-        document.CatalogSourceVersion.Should().Be(5);
-        document.StateVersion.Should().Be(7);
-        document.LastEventId.Should().Be("catalog-5:runner-event-2");
+        _dispatcher.Upserts.Should().BeEmpty("runner-owned execution state has a separate read model");
     }
 
     [Fact]
-    public async Task ProjectAsync_WithSkillRunnerFailedState_ProjectsErrorStatus()
+    public async Task SkillRunnerExecutionProjector_WithSkillRunnerFailedState_ProjectsErrorStatus()
     {
+        var dispatcher = new RecordingExecutionWriteDispatcher();
+        var projector = new SkillRunnerExecutionProjector(dispatcher, _clock);
         var state = new SkillRunnerState
         {
             Enabled = true,
@@ -167,20 +166,23 @@ public sealed class UserAgentCatalogProjectorTests
             LastError = "tool failed",
         };
 
-        await _projector.ProjectAsync(
+        await projector.ProjectAsync(
             new UserAgentCatalogMaterializationContext
             {
                 RootActorId = "runner-failed",
-                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
             },
             BuildSkillRunnerCommittedEnvelope("runner-event-4", 4, state),
             CancellationToken.None);
 
-        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Id.Should().Be("runner-failed");
+        document.ActorId.Should().Be("runner-failed");
         document.Status.Should().Be(SkillRunnerDefaults.StatusError);
         document.LastError.Should().Be("tool failed");
         document.ErrorCount.Should().Be(2);
-        document.RunnerSourceVersion.Should().Be(4);
+        document.StateVersion.Should().Be(4);
+        document.LastEventId.Should().Be("runner-event-4");
     }
 
     [Fact]
@@ -391,22 +393,6 @@ public sealed class UserAgentCatalogProjectorTests
         }
     }
 
-    private sealed class RecordingDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
-    {
-        public Dictionary<string, UserAgentCatalogDocument> Items { get; } = new(StringComparer.Ordinal);
-
-        public Task<UserAgentCatalogDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            Items.TryGetValue(key, out var document);
-            return Task.FromResult(document?.Clone());
-        }
-
-        public Task<ProjectionDocumentQueryResult<UserAgentCatalogDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>());
-    }
-
     private sealed class RecordingCredentialWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogNyxCredentialDocument>
     {
         public List<UserAgentCatalogNyxCredentialDocument> Upserts { get; } = [];
@@ -428,6 +414,23 @@ public sealed class UserAgentCatalogProjectorTests
             Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
+    }
+
+    private sealed class RecordingExecutionWriteDispatcher : IProjectionWriteDispatcher<SkillRunnerExecutionDocument>
+    {
+        public List<SkillRunnerExecutionDocument> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            SkillRunnerExecutionDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

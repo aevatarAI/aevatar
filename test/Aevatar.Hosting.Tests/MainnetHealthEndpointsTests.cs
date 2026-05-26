@@ -16,6 +16,7 @@ using System.Text.Json;
 
 namespace Aevatar.Hosting.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHealthEndpointsTests
 {
     [Fact]

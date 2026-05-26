@@ -14,6 +14,9 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class StudioTeamEndpointTests
 {
+    // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+    //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+    //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
     private const string ScopeId = "scope-1";
     private const string TeamId = "t-1";
 
@@ -381,7 +384,10 @@ public sealed class StudioTeamEndpointTests
     public async Task HandleListMembersAsync_ShouldReturn200_WithFilteredMembers()
     {
         var teamService = new InMemoryTeamService(NewSummary());
-        var memberService = new InMemoryMemberService(TeamId);
+        var memberService = new InMemoryMemberService(TeamId, [
+            NewMember("m-1", TeamId),
+            NewMember("m-2", "other-team"),
+        ]);
         var result = await InvokeTeamHandle(
             "HandleListMembersAsync",
             CreateAuthenticatedContext(ScopeId),
@@ -394,6 +400,43 @@ public sealed class StudioTeamEndpointTests
             CancellationToken.None);
 
         GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+    }
+
+    [Fact]
+    public async Task HandleListMembersAsync_ShouldDelegateTypedTeamFilter_WhenTeamMembersAreSparseAcrossScope()
+    {
+        var teamService = new InMemoryTeamService(NewSummary());
+        var memberService = new InMemoryMemberService(TeamId, [
+            NewMember("m-team-1", TeamId),
+            NewMember("m-team-2", TeamId),
+        ])
+        {
+            NextPageToken = "team-cursor-2",
+        };
+
+        var result = await InvokeTeamHandle(
+            "HandleListMembersAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            teamService,
+            memberService,
+            (int?)2,
+            "team-cursor-1",
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        teamService.GetCalls.Should().Be(1);
+        memberService.ListCalls.Should().Be(1);
+        memberService.LastPage.Should().Be(new StudioMemberRosterPageRequest(
+            PageSize: 2,
+            PageToken: "team-cursor-1",
+            TeamId: TeamId));
+
+        var ok = result.Should().BeOfType<Ok<StudioMemberRosterResponse>>().Subject;
+        ok.Value!.Members.Select(member => member.MemberId)
+            .Should().ContainInOrder("m-team-1", "m-team-2");
+        ok.Value.NextPageToken.Should().Be("team-cursor-2");
     }
 
     [Fact]
@@ -425,6 +468,22 @@ public sealed class StudioTeamEndpointTests
             MemberCount: 0,
             CreatedAt: DateTimeOffset.UtcNow.AddDays(-1),
             UpdatedAt: DateTimeOffset.UtcNow);
+
+    private static StudioMemberSummaryResponse NewMember(string memberId, string? teamId) =>
+        new(
+            MemberId: memberId,
+            ScopeId: ScopeId,
+            DisplayName: memberId,
+            Description: string.Empty,
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            LifecycleStage: MemberLifecycleStageNames.Created,
+            PublishedServiceId: $"member-{memberId}",
+            LastBoundRevisionId: null,
+            CreatedAt: DateTimeOffset.UtcNow,
+            UpdatedAt: DateTimeOffset.UtcNow)
+        {
+            TeamId = teamId,
+        };
 
     private static HttpContext CreateAuthenticatedContext(string scopeId)
     {
@@ -462,9 +521,13 @@ public sealed class StudioTeamEndpointTests
 
     private sealed class InMemoryTeamService : IStudioTeamService
     {
+        // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+        //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+        //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
         private readonly StudioTeamSummaryResponse _summary;
         public List<SetStudioTeamEntryMemberRequest> SetEntryRequests { get; } = [];
         public int ClearEntryCalls { get; private set; }
+        public int GetCalls { get; private set; }
 
         public InMemoryTeamService(StudioTeamSummaryResponse summary) => _summary = summary;
 
@@ -477,8 +540,11 @@ public sealed class StudioTeamEndpointTests
             Task.FromResult(new StudioTeamRosterResponse(scopeId, [_summary]));
 
         public Task<StudioTeamSummaryResponse> GetAsync(
-            string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+            string scopeId, string teamId, CancellationToken ct = default)
+        {
+            GetCalls++;
+            return Task.FromResult(_summary);
+        }
 
         public Task<StudioTeamSummaryResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) =>
@@ -536,8 +602,21 @@ public sealed class StudioTeamEndpointTests
 
     private sealed class InMemoryMemberService : IStudioMemberService
     {
+        // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+        //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+        //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
         private readonly string? _teamId;
-        public InMemoryMemberService(string? teamId) => _teamId = teamId;
+        private readonly IReadOnlyList<StudioMemberSummaryResponse>? _members;
+
+        public int ListCalls { get; private set; }
+        public StudioMemberRosterPageRequest? LastPage { get; private set; }
+        public string? NextPageToken { get; init; }
+
+        public InMemoryMemberService(string? teamId, IReadOnlyList<StudioMemberSummaryResponse>? members = null)
+        {
+            _teamId = teamId;
+            _members = members;
+        }
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default) =>
@@ -546,6 +625,12 @@ public sealed class StudioTeamEndpointTests
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId, StudioMemberRosterPageRequest? page = null, CancellationToken ct = default)
         {
+            ListCalls++;
+            LastPage = page;
+
+            if (_members != null)
+                return Task.FromResult(new StudioMemberRosterResponse(scopeId, _members, NextPageToken));
+
             var members = new List<StudioMemberSummaryResponse>
             {
                 new(MemberId: "m-1", ScopeId: scopeId, DisplayName: "M1", Description: "",
@@ -559,7 +644,7 @@ public sealed class StudioTeamEndpointTests
                     PublishedServiceId: "member-m-2", LastBoundRevisionId: null,
                     CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow) { TeamId = "other-team" },
             };
-            return Task.FromResult(new StudioMemberRosterResponse(scopeId, members));
+            return Task.FromResult(new StudioMemberRosterResponse(scopeId, members, NextPageToken));
         }
 
         public Task<StudioMemberDetailResponse> GetAsync(

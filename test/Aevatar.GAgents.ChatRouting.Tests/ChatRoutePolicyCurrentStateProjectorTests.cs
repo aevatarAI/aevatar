@@ -128,7 +128,7 @@ public sealed class ChatRoutePolicyCurrentStateProjectorTests
         var state = new ChatRoutePolicyState
         {
             PolicyId = RootActorId,
-            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTarget = ForwardToModelAction("chrono-llm/gpt-5.5"),
             Version = version,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),

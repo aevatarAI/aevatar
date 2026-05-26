@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Integration.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class ConfigurationCoverageTests
 {
     [Fact]

@@ -107,9 +107,16 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 state.Backpressure,
                 BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
-            var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
-            ctx.Logger.LogInformation("ParallelFanOut: step={StepId} fanout to {Count} workers, vote={VoteType}, input=({Len} chars) {Preview}",
-                evt.StepId, count, string.IsNullOrWhiteSpace(voteStepType) ? "(none)" : voteStepType, evt.Input.Length, inputPreview);
+            // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
+            //   Old pattern: Information log included raw value/prompt/input preview
+            //   New principle: only stable id + length + status + redaction marker
+            ctx.Logger.LogInformation(
+                "ParallelFanOut: run={RunId} step={StepId} status=fanout_dispatching workers={Count} vote={VoteType} input_len={InputLen} input_redacted=true",
+                runId,
+                evt.StepId,
+                count,
+                string.IsNullOrWhiteSpace(voteStepType) ? "(none)" : voteStepType,
+                evt.Input.Length);
 
             var bpApplied = false;
             for (var i = 0; i < count; i++)

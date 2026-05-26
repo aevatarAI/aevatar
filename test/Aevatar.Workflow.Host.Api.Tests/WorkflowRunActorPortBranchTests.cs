@@ -1,6 +1,13 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -9,21 +16,52 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowRunActorPortBranchTests
 {
     [Fact]
-    public async Task CreateDefinitionAsync_ShouldForwardPreferredActorId()
+    public async Task EnsureDefinitionAsync_WithRealPort_ShouldBindDefinitionOnce()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateWorkflowDefinitionAgent();
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-once", definitionAgent, forwardToAgent: true));
+        var port = CreatePort(runtime);
+
+        var receipt = await port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                "definition-once",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            "definition-once",
+            CancellationToken.None);
+
+        receipt.ActorId.Should().Be("definition-once");
+        definitionAgent.State.Version.Should().Be(1);
+        definitionAgent.State.WorkflowName.Should().Be("direct");
+        definitionAgent.State.WorkflowYaml.Should().Be("name: direct\nroles: []\nsteps: []\n");
+    }
+
+    [Fact]
+    public async Task EnsureDefinitionAsync_ShouldForwardPreferredActorId()
     {
         var runtime = new RecordingActorRuntime();
         runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-preferred", new WorkflowGAgent()));
         var port = CreatePort(runtime);
 
-        var actor = await port.CreateDefinitionAsync("definition-preferred", CancellationToken.None);
+        var receipt = await port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                "definition-preferred",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            "definition-preferred",
+            CancellationToken.None);
 
-        actor.Id.Should().Be("definition-preferred");
+        receipt.ActorId.Should().Be("definition-preferred");
         runtime.CreateRequests.Should().ContainSingle()
             .Which.Should().Be((typeof(WorkflowGAgent), "definition-preferred"));
     }
@@ -302,12 +340,12 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task BindWorkflowDefinitionAsync_ShouldValidateNullActorInput()
+    public async Task BindWorkflowDefinitionAsync_ShouldValidateMissingActorIdInput()
     {
         var port = CreatePort(new RecordingActorRuntime());
 
-        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(null!, "name: x", "x", null, ct: CancellationToken.None))
-            .Should().ThrowAsync<ArgumentNullException>();
+        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(" ", "name: x", "x", null, ct: CancellationToken.None))
+            .Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]
@@ -319,7 +357,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var port = CreatePort(runtime);
 
         await port.BindWorkflowDefinitionAsync(
-            actor,
+            actor.Id,
             "name: direct\nroles: []\nsteps: []\n",
             "direct",
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -533,6 +571,25 @@ public sealed class WorkflowRunActorPortBranchTests
             bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime),
             [new WorkflowCoreModulePack()]);
 
+    private static WorkflowGAgent CreateWorkflowDefinitionAgent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var services = new ServiceCollection()
+            .AddSingleton(eventStore)
+            .AddSingleton<IEventStore>(eventStore)
+            .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+            .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+                sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+        var agent = new WorkflowGAgent();
+        agent.Services = services;
+        agent.EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowState>>();
+        return agent;
+    }
+
     private static string ResolveRepositoryRoot()
     {
         var current = AppContext.BaseDirectory;
@@ -604,7 +661,7 @@ public sealed class WorkflowRunActorPortBranchTests
                         ? _lastCreatedActor
                         : null);
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var dispatchException = DispatchExceptionFactory?.Invoke(actorId, envelope);
@@ -613,6 +670,7 @@ public sealed class WorkflowRunActorPortBranchTests
 
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) =>
@@ -634,10 +692,13 @@ public sealed class WorkflowRunActorPortBranchTests
 
     private sealed class RecordingActor : IActor
     {
-        public RecordingActor(string id, IAgent agent)
+        private readonly bool _forwardToAgent;
+
+        public RecordingActor(string id, IAgent agent, bool forwardToAgent = false)
         {
             Id = id;
             Agent = agent;
+            _forwardToAgent = forwardToAgent;
         }
 
         public string Id { get; }
@@ -650,10 +711,11 @@ public sealed class WorkflowRunActorPortBranchTests
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
             LastHandledEnvelope = envelope;
-            return Task.CompletedTask;
+            if (_forwardToAgent)
+                await Agent.HandleEventAsync(envelope, ct);
         }
 
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);

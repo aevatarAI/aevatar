@@ -77,6 +77,23 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     }
 
     [Fact]
+    public async Task GetForScopeAsync_ShouldKeepPrefixedModel_WhenRouteIsGateway()
+    {
+        var config = new UserConfig(
+            DefaultModel: "chrono-llm/gpt-5.5",
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            MaxToolRounds: 7);
+
+        var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
+
+        var result = await source.GetForScopeAsync("scope-1");
+
+        result.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
+        result.PreferredLlmRoute.Should().BeNull();
+        result.MaxToolRounds.Should().Be(7);
+    }
+
+    [Fact]
     public async Task GetForScopeAsync_ShouldReturnEmpty_WhenQueryPortReturnsNull()
     {
         // Defensive — a future query-port impl might return null instead of a defaulted

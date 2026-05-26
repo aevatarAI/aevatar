@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Application.Responses;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
-internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
+internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAgentToolSource
 {
     private readonly IResponsesAgentToolStateCommandPort _commandPort;
     private readonly IResponsesAgentToolStateQueryPort _queryPort;
@@ -42,6 +42,28 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
             new WebSearchTool("WebSearch", _commandPort, _queryPort, _webClient, _webOptions),
             new WebSearchTool("web_search", _commandPort, _queryPort, _webClient, _webOptions),
         ]);
+
+    public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+        ResponsesToolProviderContext context,
+        CancellationToken ct = default) =>
+        ValueTask.FromResult<IReadOnlyList<IAgentTool>>([]);
+
+    public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        var context = new ResponsesToolProviderContext(
+            new ResponsesToolProviderCallerScope(
+                string.Empty,
+                string.Empty,
+                LlmSessionOriginKind.ApiKey.ToString()),
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        var tools = new List<IAgentTool>();
+        tools.AddRange(await GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+        tools.AddRange(await GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+        return tools
+            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+            .Select(static group => group.First())
+            .ToArray();
+    }
 
     private abstract class ResponsesStateTool : IAgentTool
     {

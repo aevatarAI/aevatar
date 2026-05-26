@@ -6,9 +6,9 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: workspace operations mutated local JSON files and returned those files as current state.
-//   New principle: workspace writes are actor commands and reads are projected current-state snapshots.
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class WorkspaceService
 {
     private static readonly Regex FileNameCleaner = new("[^a-zA-Z0-9._-]+", RegexOptions.Compiled);
@@ -104,25 +104,6 @@ public sealed class WorkspaceService
             .ToList();
     }
 
-    #pragma warning disable CS0618
-    [Obsolete("Use ListDraftsAsync.")]
-    public async Task<IReadOnlyList<WorkflowSummary>> ListWorkflowsAsync(CancellationToken cancellationToken = default)
-    {
-        return (await ListDraftsAsync(cancellationToken))
-            .Select(summary => new WorkflowSummary(
-                summary.WorkflowId,
-                summary.Name,
-                summary.Description,
-                summary.FileName,
-                summary.FilePath,
-                summary.DirectoryId,
-                summary.DirectoryLabel,
-                summary.StepCount,
-                summary.HasLayout,
-                summary.UpdatedAtUtc))
-            .ToList();
-    }
-
     public async Task<WorkflowDraftResponse?> GetDraftAsync(string workflowId, CancellationToken cancellationToken = default)
     {
         var workspace = await _queryPort.GetAsync(cancellationToken);
@@ -136,32 +117,6 @@ public sealed class WorkspaceService
         return ToWorkflowDraftResponse(file);
     }
 
-    [Obsolete("Use GetDraftAsync.")]
-    public async Task<WorkflowFileResponse?> GetWorkflowAsync(string workflowId, CancellationToken cancellationToken = default)
-    {
-        var workspace = await _queryPort.GetAsync(cancellationToken);
-        var file = workspace.Drafts.FirstOrDefault(item =>
-            string.Equals(item.WorkflowId, workflowId, StringComparison.Ordinal));
-        if (file is null)
-        {
-            return null;
-        }
-
-        var parse = _yamlDocumentService.Parse(file.Yaml);
-        return new WorkflowFileResponse(
-            file.WorkflowId,
-            file.Name,
-            file.FileName,
-            file.FilePath,
-            file.DirectoryId,
-            file.DirectoryLabel,
-            file.Yaml,
-            parse.Document,
-            file.Layout,
-            parse.Findings,
-            file.UpdatedAtUtc);
-    }
-
     public Task<WorkflowDraftResponse> CreateDraftAsync(
         SaveWorkflowDraftRequest request,
         CancellationToken cancellationToken = default)
@@ -172,25 +127,6 @@ public sealed class WorkspaceService
         SaveWorkflowDraftRequest request,
         CancellationToken cancellationToken = default)
         => SaveDraftAsyncCore(NormalizeRequired(workflowId, nameof(workflowId)), request, cancellationToken);
-
-    [Obsolete("Use CreateDraftAsync or UpdateDraftAsync.")]
-    public Task<WorkflowDraftResponse> SaveWorkflowAsync(
-        SaveWorkflowFileRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var nextRequest = new SaveWorkflowDraftRequest(
-            request.DirectoryId,
-            request.WorkflowName,
-            request.FileName,
-            request.Yaml,
-            request.Layout);
-        return string.IsNullOrWhiteSpace(request.WorkflowId)
-            ? CreateDraftAsync(nextRequest, cancellationToken)
-            : UpdateDraftAsync(request.WorkflowId, nextRequest, cancellationToken);
-    }
-    #pragma warning restore CS0618
 
     private async Task<WorkflowDraftResponse> SaveDraftAsyncCore(
         string? workflowId,
@@ -251,7 +187,7 @@ public sealed class WorkspaceService
             DirectoryId: directory.DirectoryId,
             DirectoryLabel: directory.Label,
             Yaml: normalizedYaml,
-            Layout: request.Layout,
+            Layout: null,
             UpdatedAtUtc: updatedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? updatedAtUtc,
             Version: existingDraft?.Version ?? 0);
@@ -301,7 +237,7 @@ public sealed class WorkspaceService
             file.DirectoryId,
             file.DirectoryLabel,
             file.Yaml,
-            file.Layout,
+            Layout: null,
             file.UpdatedAtUtc);
 
     private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings) =>
@@ -325,7 +261,7 @@ public sealed class WorkspaceService
             file.DirectoryId,
             file.DirectoryLabel,
             document?.Steps.Count ?? 0,
-            file.Layout is not null,
+            HasLayout: false,
             file.UpdatedAtUtc);
 
     private static string GenerateWorkflowId(string workflowName, IEnumerable<string> existingWorkflowIds)

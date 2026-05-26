@@ -44,6 +44,8 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
+Mainnet 仍保留旧 `/api/scopes/{scopeId}/streaming-proxy/...` route 以兼容既有客户端，但该 route 已软废弃并声明 `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`。新的直接模型 streaming / tool / continuation 接入请使用 `/v1/responses`；StreamingProxy 的 room/fan-out/participant 语义不等价于 `/v1/responses`，不要为新客户端继续接入旧 route。
+
 ### 3. 发一次 Chat 请求
 
 - 查看可用工作流：`GET http://localhost:5100/api/workflows`

@@ -1,28 +1,24 @@
-using System.Globalization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core.LLMProviders;
 
 /// <summary>
-/// Single source of truth for "given the bot owner's UserConfig, what should the outbound LLM
-/// metadata look like?". Scheduled agents (SkillRunnerGAgent, WorkflowAgentGAgent) and
-/// channel-bot turn runners (NyxidChat) all delegate here so the metadata-key list, scope-id
-/// guard, and swallow-and-log policy can never drift. Adding another agent or runner callsite
-/// is a one-line call.
+/// Single source of truth for applying the bot owner's UserConfig to outbound LLM control.
+/// Scheduled agents (SkillRunnerGAgent, WorkflowAgentGAgent) and channel-bot turn runners
+/// (NyxidChat) all delegate here so scope-id guard and swallow-and-log policy can never drift.
 /// </summary>
 public static class OwnerLlmConfigApplier
 {
     /// <summary>
     /// Reads the owner's <see cref="OwnerLlmConfig"/> for <paramref name="scopeId"/> via
-    /// <paramref name="source"/> and pins <c>ModelOverride</c> / <c>NyxIdRoutePreference</c> /
-    /// <c>MaxToolRoundsOverride</c> onto <paramref name="metadata"/>. No-ops when scope id is
-    /// blank, the source isn't wired, or the config fields are empty — provider defaults take
-    /// over in those cases. Transient lookup failures are logged at warning level and swallowed
-    /// so a flaky projection cannot fail the agent's execution turn.
+    /// <paramref name="source"/> and overlays model / route / max-tool-rounds onto typed
+    /// <see cref="LLMControlContext"/>. No-ops when scope id is blank, the source isn't wired,
+    /// or the config fields are empty. Transient lookup failures are logged at warning level and
+    /// swallowed so a flaky projection cannot fail the agent's execution turn.
     /// </summary>
-    public static async Task ApplyAsync(
-        IDictionary<string, string> metadata,
+    public static async Task<LLMControlContext> ApplyAsync(
+        LLMControlContext? control,
         string? scopeId,
         IOwnerLlmConfigSource? source,
         ILogger logger,
@@ -30,11 +26,10 @@ public static class OwnerLlmConfigApplier
         string actorId,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(metadata);
         ArgumentNullException.ThrowIfNull(logger);
 
         if (string.IsNullOrWhiteSpace(scopeId) || source is null)
-            return;
+            return control ?? LLMControlContext.Empty;
 
         OwnerLlmConfig config;
         try
@@ -53,15 +48,22 @@ public static class OwnerLlmConfigApplier
                 actorLabel,
                 actorId,
                 scopeId);
-            return;
+            return control ?? LLMControlContext.Empty;
         }
 
-        if (!string.IsNullOrWhiteSpace(config.DefaultModel))
-            metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
-        if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
-            metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
-        if (config.MaxToolRounds > 0)
-            metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
-                config.MaxToolRounds.ToString(CultureInfo.InvariantCulture);
+        var current = control ?? LLMControlContext.Empty;
+        return current with
+        {
+            ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
+                ? current.ModelOverride
+                : config.DefaultModel.Trim(),
+            NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
+                ? current.NyxIdRoutePreference
+                : config.PreferredLlmRoute.Trim(),
+            MaxToolRoundsOverride = config.MaxToolRounds > 0
+                ? config.MaxToolRounds
+                : current.MaxToolRoundsOverride,
+        };
     }
+
 }

@@ -1,21 +1,8 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Scheduled;
-using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
-
-internal sealed record ResponsesCallerScope(
-    string ScopeId,
-    string OwnerSubject,
-    LlmSessionOriginKind OriginKind);
-
-internal interface IResponsesCallerScopeResolver
-{
-    Task<ResponsesCallerScope> ResolveAsync(
-        string nyxIdAccessToken,
-        HttpContext http,
-        CancellationToken ct = default);
-}
 
 internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeResolver
 {
@@ -28,7 +15,6 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
 
     public async Task<ResponsesCallerScope> ResolveAsync(
         string nyxIdAccessToken,
-        HttpContext http,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
@@ -46,12 +32,5 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
             ScopeId: normalizedUserId,
             OwnerSubject: normalizedUserId,
             OriginKind: LlmSessionOriginKind.ApiKey);
-    }
-}
-
-internal sealed class ResponsesCallerScopeUnavailableException : Exception
-{
-    public ResponsesCallerScopeUnavailableException(string message) : base(message)
-    {
     }
 }

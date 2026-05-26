@@ -14,9 +14,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -41,9 +39,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -65,9 +61,7 @@ public sealed class WorkflowRunControlCommandTests
     public async Task ResumeResolver_ShouldRejectBlankStepId_BeforeRuntimeLookup()
     {
         var runtime = new FakeActorRuntime();
-        var resolver = new WorkflowResumeCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(null));
+        var resolver = new WorkflowResumeCommandTargetResolver(new FakeWorkflowActorBindingReader(null));
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
@@ -81,9 +75,7 @@ public sealed class WorkflowRunControlCommandTests
     public async Task SignalResolver_ShouldRejectBlankSignalName_BeforeRuntimeLookup()
     {
         var runtime = new FakeActorRuntime();
-        var resolver = new WorkflowSignalCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(null));
+        var resolver = new WorkflowSignalCommandTargetResolver(new FakeWorkflowActorBindingReader(null));
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
@@ -98,9 +90,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var resolver = new WorkflowStopCommandTargetResolver(
-            runtime,
-            new FakeWorkflowActorBindingReader(
+        var resolver = new WorkflowStopCommandTargetResolver(new FakeWorkflowActorBindingReader(
                 new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     "actor-1",
@@ -218,7 +208,7 @@ public sealed class WorkflowRunControlCommandTests
     {
         var factory = new WorkflowRunControlAcceptedReceiptFactory();
         var receipt = factory.Create(
-            new WorkflowRunControlCommandTarget(new FakeActor("actor-1"), "run-1"),
+            new WorkflowRunControlCommandTarget("actor-1", "run-1"),
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         receipt.ActorId.Should().Be("actor-1");

@@ -6,6 +6,8 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-05-25 update: `StreamingProxy` remains in this ADR only as a retained compatibility surface. The `/api/scopes/{scopeId}/streaming-proxy/...` Host route is deprecated and sends `Deprecation: true`, `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`, and a successor `Link` to `/v1/responses`. Direct model streaming should migrate to `/v1/responses`; room CRUD, participant management, and room fan-out are separate semantics and are not replaced one-for-one by `/v1/responses`.
+
 ## Context
 
 Issue #204 收敛的是同一类架构问题：多个用户可见 streaming 入口各自维护一套 host-owned orchestration。

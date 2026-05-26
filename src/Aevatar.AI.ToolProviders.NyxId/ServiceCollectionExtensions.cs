@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.AddHttpClient<NyxIdApiClient>();
+        services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.TryAddEnumerable(

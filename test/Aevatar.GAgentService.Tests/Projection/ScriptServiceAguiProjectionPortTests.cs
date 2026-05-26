@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
@@ -18,20 +19,26 @@ public sealed class ScriptServiceAguiProjectionPortTests
     private const string ScriptServiceAguiProjectionKind = "script-service-agui-session";
 
     [Fact]
-    public async Task EnsureAttachDetachRelease_ShouldUseSessionProjectionLease()
+    public async Task AttachExistingDetachRelease_ShouldUseSessionProjectionLease()
     {
         var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add(BuildScopeActorId(
+            "script-actor-1",
+            ScriptServiceAguiProjectionKind,
+            ProjectionRuntimeMode.SessionObservation,
+            "run-1"));
         var port = new ScriptServiceAguiProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
             activation,
             release,
-            hub);
+            hub,
+            CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
-        var lease = await port.EnsureRunProjectionAsync("script-actor-1", "run-1", CancellationToken.None);
-        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var attachment = await port.AttachExistingRunProjectionAsync("script-actor-1", "run-1", sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             RunFinished = new RunFinishedEvent
@@ -40,29 +47,23 @@ public sealed class ScriptServiceAguiProjectionPortTests
                 RunId = "run-1",
             },
         });
-        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
-        await port.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
+        await port.DetachLiveSinkAsync(attachment!.LiveSinkLease, CancellationToken.None);
+        await port.ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None);
 
-        var request = activation.Requests.Should().ContainSingle().Subject;
-        request.RootActorId.Should().Be("script-actor-1");
-        request.SessionId.Should().Be("run-1");
-        request.ProjectionKind.Should().Be(ScriptServiceAguiProjectionKind);
-        request.Mode.Should().Be(ProjectionRuntimeMode.SessionObservation);
-
-        var runtimeLease = lease.Should().BeOfType<ScriptServiceAguiRuntimeLease>().Subject;
+        activation.Requests.Should().BeEmpty();
+        var runtimeLease = attachment.ProjectionLease.Should().BeOfType<ScriptServiceAguiRuntimeLease>().Subject;
         runtimeLease.ActorId.Should().Be("script-actor-1");
         runtimeLease.RootEntityId.Should().Be("script-actor-1");
         runtimeLease.RunId.Should().Be("run-1");
         runtimeLease.SessionId.Should().Be("run-1");
         runtimeLease.ScopeId.Should().Be("script-actor-1");
-        runtimeLease.Context.Should().BeSameAs(activation.LeaseToReturn.Context);
 
         hub.SubscribeCalls.Should().Be(1);
         hub.LastScopeId.Should().Be("script-actor-1");
         hub.LastSessionId.Should().Be("run-1");
         sink.Events.Should().ContainSingle().Which.RunFinished.RunId.Should().Be("run-1");
         hub.DisposedSubscriptions.Should().Be(1);
-        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(attachment.ProjectionLease);
     }
 
     [Fact]
@@ -75,9 +76,14 @@ public sealed class ScriptServiceAguiProjectionPortTests
             new ServiceProjectionOptions { Enabled = false },
             activation,
             release,
-            hub);
+            hub,
+            CreateAttachExistingLookup(new RecordingActorRuntime()));
 
-        var lease = await port.EnsureRunProjectionAsync("script-actor-1", "run-1", CancellationToken.None);
+        var attachment = await port.AttachExistingRunProjectionAsync(
+            "script-actor-1",
+            "run-1",
+            new RecordingEventSink(),
+            CancellationToken.None);
         await port.AttachLiveSinkAsync(new ScriptServiceAguiRuntimeLease(new ScriptServiceAguiProjectionContext
         {
             RootActorId = "script-actor-1",
@@ -91,11 +97,146 @@ public sealed class ScriptServiceAguiProjectionPortTests
             ProjectionKind = ScriptServiceAguiProjectionKind,
         }), CancellationToken.None);
 
-        lease.Should().BeNull();
+        attachment.Should().BeNull();
         activation.Requests.Should().BeEmpty();
         hub.SubscribeCalls.Should().Be(0);
         release.Leases.Should().BeEmpty();
     }
+
+    [Fact]
+    public void ScriptServiceAguiProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
+    {
+        typeof(IScriptServiceAguiProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AttachExistingRunProjection_ShouldAttachSink_WhenProjectionScopeActorExists()
+    {
+        var activation = new RecordingActivationService();
+        var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add(BuildScopeActorId(
+            "script-actor-1",
+            ScriptServiceAguiProjectionKind,
+            ProjectionRuntimeMode.SessionObservation,
+            "run-1"));
+        var port = new ScriptServiceAguiProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+        var sink = new RecordingEventSink();
+
+        var attachment = await port.AttachExistingRunProjectionAsync(
+            "script-actor-1",
+            "run-1",
+            sink,
+            CancellationToken.None);
+
+        attachment.Should().NotBeNull();
+        activation.Requests.Should().BeEmpty();
+        var lease = attachment!.ProjectionLease.Should().BeOfType<ScriptServiceAguiRuntimeLease>().Subject;
+        lease.ActorId.Should().Be("script-actor-1");
+        lease.RunId.Should().Be("run-1");
+        hub.SubscribeCalls.Should().Be(1);
+        hub.LastScopeId.Should().Be("script-actor-1");
+        hub.LastSessionId.Should().Be("run-1");
+
+        await hub.Handler!(new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = "script-actor-1",
+                RunId = "run-1",
+            },
+        });
+        sink.Events.Should().ContainSingle().Which.RunFinished.RunId.Should().Be("run-1");
+        attachment.LiveSinkLease.Should().NotBeNull();
+        await attachment.LiveSinkLease!.DisposeAsync();
+        hub.DisposedSubscriptions.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AttachExistingRunProjection_ShouldReturnNull_WhenProjectionIsColdOrInvalid()
+    {
+        var activation = new RecordingActivationService();
+        var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add("different-scope");
+        var disabledPort = new ScriptServiceAguiProjectionPort(
+            new ServiceProjectionOptions { Enabled = false },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+        var enabledPort = new ScriptServiceAguiProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+
+        (await disabledPort.AttachExistingRunProjectionAsync(
+            "script-actor-1",
+            "run-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingRunProjectionAsync(
+            "script-actor-1",
+            "run-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingRunProjectionAsync(
+            "",
+            "run-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingRunProjectionAsync(
+            "script-actor-1",
+            " ",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+
+        activation.Requests.Should().BeEmpty();
+        hub.SubscribeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public void ScriptServiceAguiProjectionPort_ShouldValidateAttachExistingLookupDependency()
+    {
+        var create = () => new ScriptServiceAguiProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            new RecordingSessionEventHub(),
+            null!);
+
+        create.Should().Throw<ArgumentNullException>().WithParameterName("attachExistingLeaseLookup");
+    }
+
+    private static string BuildScopeActorId(
+        string actorId,
+        string projectionKind,
+        ProjectionRuntimeMode mode,
+        string sessionId) =>
+        ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(actorId, projectionKind, mode, sessionId));
+
+    private static IProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease, ScriptServiceAguiProjectionContext>(
+            runtime,
+            static request => new ScriptServiceAguiProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            static (_, context) => new ScriptServiceAguiRuntimeLease(context));
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease>
     {

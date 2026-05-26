@@ -332,13 +332,13 @@ public sealed class DefaultCommandInteractionServiceTests
             return Task.FromResult(result);
         }
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<TestTarget, TestReceipt> execution,
             CancellationToken ct = default)
         {
-            _ = execution;
+            ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
@@ -354,8 +354,9 @@ public sealed class DefaultCommandInteractionServiceTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
         }
     }
 
@@ -376,15 +377,15 @@ public sealed class DefaultCommandInteractionServiceTests
             return Task.FromResult(result);
         }
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<TestTarget, TestReceipt> execution,
             CancellationToken ct = default)
         {
-            _ = execution;
+            ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
             DispatchCalls++;
             order.Add("dispatch");
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
@@ -395,8 +396,9 @@ public sealed class DefaultCommandInteractionServiceTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                prepared.Target with { Admission = admission });
         }
     }
 

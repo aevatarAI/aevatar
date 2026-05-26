@@ -21,14 +21,19 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.MiniCPM;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.OpenAI;
+using Aevatar.Foundation.VoicePresence.Projection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -64,6 +69,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeTenantId { get; set; }
     public string? ServiceInvokeAppId { get; set; }
     public string? ServiceInvokeNamespace { get; set; }
+    public bool BypassServiceInvokeApproval { get; set; }
     public bool EnableWebTools { get; set; }
     public string? WebSearchNyxIdSlug { get; set; }
     public string? WebSearchApiBaseUrl { get; set; }
@@ -129,6 +135,9 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
+    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
+    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     private static void RegisterVoicePresenceModules(
         IServiceCollection services,
         IConfiguration configuration,
@@ -142,13 +151,53 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
-        services.TryAddSingleton<InProcessActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<RemoteActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<IVoicePresenceSessionResolver, CompositeVoicePresenceSessionResolver>();
+        // Refactor (iter51/issue-888-voice-presence-lease-ack-snapshot):
+        //   Old pattern: lease ACK returned VoicePresenceSession bound to pre-lease capability snapshot; endpoint accept/reject closed over stale transport facts.
+        //   New principle: lease ACK only signals inbox receipt; attach readiness is a separate signal; resolver preflights capability and returns typed sentinel (Unsupported/PreflightFailed/PendingAttach/Attached); endpoint maps typed sentinel, not boolean closure.
+        services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
+        services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
+        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton<IVoicePresenceSessionResolver, ActorOwnedVoicePresenceSessionResolver>();
+        services.AddVoicePresenceCapabilityProjection();
+        services.AddVoicePresenceCapabilityProjectionStore(configuration);
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "VoicePresence");
+
+        if (HasAnyVoicePresenceCapabilityReader(services))
+            return services;
+
+        if (documentProvider.ElasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<VoicePresenceCapabilityReadModel>>().Metadata,
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<VoicePresenceCapabilityReadModel, string>(
+                keySelector: static readModel => readModel.Id,
+                keyFormatter: static key => key,
+                defaultSortSelector: static readModel => readModel.UpdatedAt);
+        }
+
+        return services;
+    }
+
+    private static bool HasAnyVoicePresenceCapabilityReader(IServiceCollection services)
+    {
+        return services.Any(x =>
+            x.ServiceType == typeof(IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>));
     }
 
     private static List<VoicePresenceModuleRegistration> BuildVoicePresenceModuleRegistrations(
@@ -888,6 +937,7 @@ public static class ServiceCollectionExtensions
             o.TenantId = options.ServiceInvokeTenantId;
             o.AppId = options.ServiceInvokeAppId;
             o.Namespace = options.ServiceInvokeNamespace;
+            o.BypassInvokeApproval = options.BypassServiceInvokeApproval;
             o.EnableDynamicScopeResolution = true;
         });
     }

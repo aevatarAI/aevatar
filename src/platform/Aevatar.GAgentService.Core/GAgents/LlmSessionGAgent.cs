@@ -7,6 +7,12 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -79,6 +85,39 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             ResponseId = existing.ResponseId,
             Status = command.Status,
             UpdatedAt = command.UpdatedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+    }
+
+    // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+    //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+    //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+    [EventHandler]
+    public async Task HandleRecordCompletionAsync(RecordResponseSessionCompletionRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Completion);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var completion = NormalizeCompletion(command.Completion.Clone());
+        ValidateCompletion(completion);
+
+        if (State.Completion is { CompletedAt: not null } current)
+        {
+            EnsureExistingCompletionMatches(current, completion);
+            return;
+        }
+
+        if (IsTerminal(existing.Status) &&
+            existing.Status is not (LlmSessionStatus.Completed or LlmSessionStatus.Failed))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot record completion.");
+        }
+
+        await PersistDomainEventAsync(new LlmSessionCompletionRecordedEvent
+        {
+            ResponseId = existing.ResponseId,
+            Completion = completion,
         });
     }
 
@@ -225,6 +264,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .Match(current, evt)
             .On<LlmSessionRegisteredEvent>(ApplyRegistered)
             .On<LlmSessionStatusUpdatedEvent>(ApplyStatusUpdated)
+            .On<LlmSessionCompletionRecordedEvent>(ApplyCompletionRecorded)
             .On<LlmSessionForwardedToolCallEmittedEvent>(ApplyForwardedToolCallEmitted)
             .On<LlmSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
             .On<LlmSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
@@ -238,6 +278,24 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         next.Record = evt.Record?.Clone() ?? new LlmSessionRecord();
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record.ResponseId}:registered";
+        return next;
+    }
+
+    private static LlmSessionState ApplyCompletionRecorded(
+        LlmSessionState state,
+        LlmSessionCompletionRecordedEvent evt)
+    {
+        var next = state.Clone();
+        if (next.Record == null)
+            next.Record = new LlmSessionRecord();
+
+        next.Completion = evt.Completion?.Clone() ?? new LlmSessionCompletion();
+        next.Record.Status = string.IsNullOrWhiteSpace(next.Completion.FailureCode)
+            ? LlmSessionStatus.Completed
+            : LlmSessionStatus.Failed;
+        next.Record.UpdatedAt = next.Completion.CompletedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = $"{evt.ResponseId}:completion";
         return next;
     }
 
@@ -393,6 +451,48 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             throw new InvalidOperationException("expiry is required.");
     }
 
+    private static LlmSessionCompletion NormalizeCompletion(LlmSessionCompletion completion)
+    {
+        completion.OutputText ??= string.Empty;
+        completion.FailureCode = NormalizeOptional(completion.FailureCode) ?? string.Empty;
+        completion.FailureMessage = NormalizeOptional(completion.FailureMessage) ?? string.Empty;
+        if (completion.CompletedAt == null)
+            completion.CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+        if (completion.Usage is not null)
+        {
+            completion.Usage.PromptTokens = Math.Max(0, completion.Usage.PromptTokens);
+            completion.Usage.CompletionTokens = Math.Max(0, completion.Usage.CompletionTokens);
+            completion.Usage.TotalTokens = Math.Max(0, completion.Usage.TotalTokens);
+        }
+
+        foreach (var toolCall in completion.ToolCalls)
+        {
+            toolCall.CallId = NormalizeRequired(toolCall.CallId);
+            toolCall.ToolName = NormalizeRequired(toolCall.ToolName);
+        }
+
+        return completion;
+    }
+
+    private static void ValidateCompletion(LlmSessionCompletion completion)
+    {
+        if (completion.CompletedAt == null)
+            throw new InvalidOperationException("completed_at is required.");
+        if (!string.IsNullOrWhiteSpace(completion.FailureCode) &&
+            string.IsNullOrWhiteSpace(completion.FailureMessage))
+        {
+            throw new InvalidOperationException("failure_message is required when failure_code is present.");
+        }
+
+        foreach (var toolCall in completion.ToolCalls)
+        {
+            if (string.IsNullOrWhiteSpace(toolCall.CallId))
+                throw new InvalidOperationException("completion tool call_id is required.");
+            if (string.IsNullOrWhiteSpace(toolCall.ToolName))
+                throw new InvalidOperationException("completion tool tool_name is required.");
+        }
+    }
+
     private static void EnsureExistingMatches(
         LlmSessionRecord existing,
         LlmSessionRecord incoming)
@@ -439,6 +539,32 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         {
             throw new InvalidOperationException(
                 $"Forwarded tool call '{existing.CallId}' cannot be rebound to different tool call facts.");
+        }
+    }
+
+    private static void EnsureExistingCompletionMatches(
+        LlmSessionCompletion existing,
+        LlmSessionCompletion incoming)
+    {
+        if (!string.Equals(existing.OutputText, incoming.OutputText, StringComparison.Ordinal) ||
+            !string.Equals(existing.FailureCode, incoming.FailureCode, StringComparison.Ordinal) ||
+            !string.Equals(existing.FailureMessage, incoming.FailureMessage, StringComparison.Ordinal) ||
+            !UsageEquals(existing.Usage, incoming.Usage) ||
+            existing.ToolCalls.Count != incoming.ToolCalls.Count)
+        {
+            throw new InvalidOperationException("Response session completion cannot be rebound to different facts.");
+        }
+
+        for (var i = 0; i < existing.ToolCalls.Count; i++)
+        {
+            var existingTool = existing.ToolCalls[i];
+            var incomingTool = incoming.ToolCalls[i];
+            if (!string.Equals(existingTool.CallId, incomingTool.CallId, StringComparison.Ordinal) ||
+                !string.Equals(existingTool.ToolName, incomingTool.ToolName, StringComparison.Ordinal) ||
+                !Equals(existingTool.Result, incomingTool.Result))
+            {
+                throw new InvalidOperationException("Response session completion cannot be rebound to different tool call facts.");
+            }
         }
     }
 
@@ -500,6 +626,16 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
     private static bool DurationEquals(Duration? left, Duration? right) =>
         left?.ToTimeSpan() == right?.ToTimeSpan();
+
+    private static bool UsageEquals(LlmSessionTokenUsage? left, LlmSessionTokenUsage? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.PromptTokens == right.PromptTokens &&
+               left.CompletionTokens == right.CompletionTokens &&
+               left.TotalTokens == right.TotalTokens;
+    }
 
     private static string NormalizeRequired(string? value) =>
         NormalizeOptional(value) ?? string.Empty;

@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Compilation;
 
@@ -17,6 +15,9 @@ public sealed record AppScriptPackage(
 
 public static class AppScriptPackagePayloads
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Studio save serialized multi-file packages into sourceText JSON before passing them into scope/definition commands.
+    //   New principle: Studio save converts external payloads to ScriptPackageSpec at the adapter boundary; JSON serializer is presentation compatibility only.
     public static bool HasFiles(AppScriptPackage? package) =>
         (package?.CsharpSources?.Count ?? 0) > 0 ||
         (package?.ProtoFiles?.Count ?? 0) > 0;
@@ -26,15 +27,22 @@ public static class AppScriptPackagePayloads
         string? sourceText)
     {
         if (!HasFiles(package))
-            return ScriptPackageModel.ToPackageSpec(ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(sourceText ?? string.Empty));
+            return ScriptPackageSpecExtensions.CreateSingleSource(sourceText ?? string.Empty);
 
         return NormalizePackage(package!);
     }
+
+    public static string ResolvePrimarySourceText(
+        AppScriptPackage? package,
+        string? sourceText) =>
+        ResolvePackage(package, sourceText).GetPrimaryCSharpSource();
 
     public static string ResolvePersistedSource(
         AppScriptPackage? package,
         string? sourceText)
     {
+        // Presentation compatibility only: external clients that still persist a
+        // single source string can receive a derived source representation here.
         if (!HasFiles(package))
             return sourceText ?? string.Empty;
 
@@ -50,13 +58,7 @@ public static class AppScriptPackagePayloads
         AppScriptPackage? package,
         string? sourceText)
     {
-        if (!HasFiles(package))
-        {
-            var bytes = Encoding.UTF8.GetBytes(sourceText ?? string.Empty);
-            return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-        }
-
-        return ScriptPackageModel.ComputePackageHash(NormalizePackage(package!));
+        return ScriptPackageModel.ComputePackageHash(ResolvePackage(package, sourceText));
     }
 
     private static ScriptPackageSpec NormalizePackage(AppScriptPackage package)

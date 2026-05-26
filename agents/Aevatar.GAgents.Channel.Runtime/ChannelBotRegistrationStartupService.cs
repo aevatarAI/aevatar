@@ -7,30 +7,33 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <summary>
 /// Activates the projection scope for the channel bot registration store
 /// at application startup, then re-emits the authoritative state root so the
-/// query-side read model can be rebuilt after a restart.
+/// query-side read model can be refreshed after a restart.
 ///
 /// StartAsync awaits the activation with retries so the host does not
 /// accept HTTP requests until the registration projection binder is active and
 /// the refresh command has been accepted. Request paths must not activate or
 /// prime this projection themselves.
 /// </summary>
-public sealed class ChannelBotRegistrationStartupService : IHostedService
+internal sealed class ChannelBotRegistrationStartupService : IHostedService
 {
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh surface, new=startup-owned actor inbox dispatch
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=operator-triggered rebuild, new=host startup refresh after projection activation
     private const int MaxRetries = 5;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
 
-    private readonly ChannelBotRegistrationProjectionPort _projectionPort;
+    private readonly ChannelBotRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
 
     public ChannelBotRegistrationStartupService(
-        ChannelBotRegistrationProjectionPort projectionPort,
+        ChannelBotRegistrationProjectionBootstrapActivator projectionActivator,
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         ILogger<ChannelBotRegistrationStartupService> logger)
     {
-        _projectionPort = projectionPort;
+        _projectionActivator = projectionActivator;
         _actorRuntime = actorRuntime;
         _dispatchPort = dispatchPort;
         _logger = logger;
@@ -43,8 +46,7 @@ public sealed class ChannelBotRegistrationStartupService : IHostedService
         {
             try
             {
-                await _projectionPort.EnsureProjectionForActorAsync(
-                    ChannelBotRegistrationGAgent.WellKnownId, ct);
+                await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
                 await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
                     _actorRuntime,
                     _dispatchPort,

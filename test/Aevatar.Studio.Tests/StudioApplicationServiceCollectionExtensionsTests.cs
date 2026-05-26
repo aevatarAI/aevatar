@@ -10,10 +10,9 @@ namespace Aevatar.Studio.Tests;
 public sealed class StudioApplicationServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddStudioApplication_ShouldReplacePlatformTeamEntryMemberResolver()
+    public void AddStudioApplication_ShouldRegisterAuthoritativeTeamEntryMemberResolver()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ITeamEntryMemberResolver, PlaceholderTeamEntryMemberResolver>();
 
         services.AddStudioApplication();
 
@@ -21,14 +20,7 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             .Which.ImplementationType.Should().Be(typeof(StudioTeamEntryMemberResolver));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IStudioTeamGAgentStreamInvocationService))
             .Which.ImplementationType.Should().Be(typeof(StudioTeamGAgentStreamInvocationService));
-    }
-
-    private sealed class PlaceholderTeamEntryMemberResolver : ITeamEntryMemberResolver
-    {
-        public Task<TeamEntryMemberResolution> ResolveAsync(
-            string scopeId,
-            string teamId,
-            CancellationToken ct = default) =>
-            throw new NotImplementedException();
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
+            .Which.ImplementationType.Should().Be(typeof(UserConfigService));
     }
 }

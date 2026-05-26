@@ -189,6 +189,18 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
     }
 
     [Fact]
+    public async Task GetWorkflowCatalogAsync_WhenSendCanceled_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var client = CreateClient((_, ct) => Task.FromCanceled<HttpResponseMessage>(ct));
+
+        var act = () => client.GetWorkflowCatalogAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task GetCapabilitiesAsync_ShouldParseCapabilitiesPayload()
     {
         var client = CreateClient((request, _) =>
@@ -254,6 +266,79 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         detail.Should().NotBeNull();
         detail!.Value.GetProperty("catalog").GetProperty("name").GetString().Should().Be("workflow_install");
         detail.Value.GetProperty("definition").GetProperty("name").GetString().Should().Be("workflow_install");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_ShouldBuildUrlAndParseArray()
+    {
+        var client = CreateClient((request, _) =>
+        {
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri?.PathAndQuery.Should().Be("/api/workflow-runs/run%2042/timeline-export?take=12");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"stage":"completed","stepId":"step-1"}]""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        });
+
+        var timeline = await client.GetWorkflowRunTimelineExportAsync("run 42", 12, CancellationToken.None);
+
+        timeline.Should().HaveCount(1);
+        timeline[0].GetProperty("stage").GetString().Should().Be("completed");
+        timeline[0].GetProperty("stepId").GetString().Should().Be("step-1");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenTakeInvalid_ShouldThrowInvalidRequestWithoutCallingServer()
+    {
+        var called = false;
+        var client = CreateClient((_, _) =>
+        {
+            called = true;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 0, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.InvalidRequest);
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenPayloadIsNotArray_ShouldThrowStreamPayload()
+    {
+        var client = CreateClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"stage":"completed"}""", Encoding.UTF8, "application/json"),
+            }));
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 5, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.StreamPayload);
+        ex.Which.Message.Should().Contain("not a JSON array");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunTimelineExportAsync_WhenPayloadInvalidJson_ShouldThrowStreamPayload()
+    {
+        var client = CreateClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""[{"stage":""", Encoding.UTF8, "application/json"),
+            }));
+
+        var act = () => client.GetWorkflowRunTimelineExportAsync("run-1", 5, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
+        ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.StreamPayload);
+        ex.Which.Message.Should().Contain("Failed to parse workflow run timeline export response payload");
     }
 
     private static IAevatarWorkflowClient CreateClient(

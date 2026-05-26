@@ -577,6 +577,12 @@ public sealed class ServiceEndpointsTests
             payload));
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.ToString().Should().Be("/api/scopes/tenant/services/orders/runs/run-1");
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceInvocationAcceptedReceipt>();
+        receipt.Should().NotBeNull();
+        receipt!.RunId.Should().Be("run-1");
+        receipt.StatusUrl.Should().Be("/api/scopes/tenant/services/orders/runs/run-1");
         host.InvocationPort.LastRequest.Should().NotBeNull();
         host.InvocationPort.LastRequest!.EndpointId.Should().Be("chat");
         host.InvocationPort.LastRequest.Payload.TypeUrl.Should().Be("type.googleapis.com/demo.Request");
@@ -1502,6 +1508,7 @@ public sealed class ServiceEndpointsTests
                 EndpointId = request.EndpointId,
                 CommandId = request.CommandId,
                 CorrelationId = request.CorrelationId,
+                RunId = "run-1",
             });
         }
     }

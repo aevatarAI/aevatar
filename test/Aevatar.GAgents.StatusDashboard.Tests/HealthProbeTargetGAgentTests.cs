@@ -6,7 +6,10 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
 
@@ -17,10 +20,13 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     private FakeExecutor _executor = null!;
     private InMemoryEventStore _eventStore = null!;
     private TrackingCallbackScheduler _scheduler = null!;
+    private FakeTimeProvider _timeProvider = null!;
 
     public async Task InitializeAsync()
     {
         _executor = new FakeExecutor();
+        _timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T10:00:00Z"));
+        _executor.TimeProvider = _timeProvider;
         var registry = new HealthProbeExecutorRegistry(new IHealthProbeExecutor[] { _executor });
 
         var services = new ServiceCollection();
@@ -33,6 +39,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
             typeof(DefaultEventSourcingBehaviorFactory<>));
         services.AddSingleton<IActorRuntimeCallbackScheduler>(_scheduler);
         services.AddSingleton<IHealthProbeExecutorRegistry>(registry);
+        services.AddSingleton<TimeProvider>(_timeProvider);
         _serviceProvider = services.BuildServiceProvider();
 
         _agent = new HealthProbeTargetGAgent
@@ -67,6 +74,18 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         _agent.State.Spec.Should().NotBeNull();
         _agent.State.Spec.Slug.Should().Be("nyxid-auth");
         _agent.State.Spec.IntervalSeconds.Should().Be(30);
+    }
+
+    [Fact]
+    public async Task Configure_SchedulesInitialTickFromInjectedClock()
+    {
+        var configuredAt = _timeProvider.GetUtcNow();
+
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand { Spec = NewDescriptor("nyxid-auth") });
+
+        _scheduler.LastScheduledEvent.Should().NotBeNull();
+        var tick = _scheduler.LastScheduledEvent.Should().BeOfType<HealthProbeTickRequested>().Subject;
+        tick.ScheduledFor.ToDateTimeOffset().Should().Be(configuredAt.AddSeconds(1));
     }
 
     [Fact]
@@ -128,6 +147,59 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         _agent.State.LastOutcome.Should().NotBeNull();
         _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Ok);
         _agent.State.ConsecutiveFailures.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Tick_StampsObservedAtAndLatencyFromInjectedClock()
+    {
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth"),
+        });
+
+        _timeProvider.SetUtcNow(DateTimeOffset.Parse("2026-05-21T10:05:00Z"));
+        _executor.Delay = TimeSpan.FromMilliseconds(250);
+        _executor.NextOutcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Ok,
+            Detail = "http_200",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2001-01-01T00:00:00Z")),
+        };
+
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+
+        _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset()
+            .Should().Be(DateTimeOffset.Parse("2026-05-21T10:05:00.250Z"));
+        _agent.State.LastOutcome.LatencyMs.Should().Be(250);
+    }
+
+    [Fact]
+    public async Task Tick_WhenProbeExceedsTimeout_UsesInjectedClockForCancellationAndOutcome()
+    {
+        const int timeoutBudgetMs = 30_000;
+        const int timeoutAdvanceMs = timeoutBudgetMs + 1;
+        var startedAt = DateTimeOffset.Parse("2026-05-21T10:10:00Z");
+        _timeProvider.SetUtcNow(startedAt);
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth", timeoutMs: timeoutBudgetMs),
+        });
+
+        _executor.WaitForCancellation = true;
+        var tickTask = _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+        await _executor.ProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var timedOutAt = startedAt.AddMilliseconds(timeoutAdvanceMs);
+        _timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutAdvanceMs));
+
+        await tickTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        _executor.Invocations.Should().Be(1);
+        _agent.State.LastOutcome.Should().NotBeNull();
+        _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        _agent.State.LastOutcome.Detail.Should().Be("timeout");
+        _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset().Should().Be(timedOutAt);
+        _agent.State.LastOutcome.LatencyMs.Should().Be(timeoutAdvanceMs);
     }
 
     [Fact]
@@ -274,16 +346,32 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         public int Invocations { get; private set; }
         public HealthProbeOutcome NextOutcome { get; set; } = new() { Status = HealthOutcomeStatus.Unknown };
         public Exception? ThrowOnNextProbe { get; set; }
+        public FakeTimeProvider TimeProvider { get; set; } = null!;
+        public TimeSpan Delay { get; set; }
+        public bool WaitForCancellation { get; set; }
+        public TaskCompletionSource ProbeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
+        public async Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
         {
             Invocations++;
+            ProbeStarted.TrySetResult();
             if (ThrowOnNextProbe is { } ex)
             {
                 ThrowOnNextProbe = null;
                 throw ex;
             }
-            return Task.FromResult(NextOutcome);
+            if (WaitForCancellation)
+            {
+                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await using var registration = ct.Register(static state =>
+                    ((TaskCompletionSource)state!).TrySetCanceled(), cancelled);
+                await cancelled.Task;
+            }
+            if (Delay > TimeSpan.Zero)
+            {
+                TimeProvider.Advance(Delay);
+            }
+            return NextOutcome;
         }
     }
 
@@ -355,10 +443,12 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     private sealed class TrackingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public int ScheduledTimeouts { get; private set; }
+        public IMessage? LastScheduledEvent { get; private set; }
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
         {
             ScheduledTimeouts++;
+            LastScheduledEvent = request.TriggerEnvelope.Payload.Unpack<HealthProbeTickRequested>();
             return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,

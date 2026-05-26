@@ -129,16 +129,7 @@ public static class ServiceCollectionExtensions
             },
             static context => new ScriptServiceAguiRuntimeLease(context));
 
-        services.TryAddSingleton<IServiceCatalogProjectionPort, ServiceCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort, ServiceDeploymentCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceServingSetProjectionPort, ServiceServingSetProjectionPort>();
-        services.TryAddSingleton<IServiceRolloutProjectionPort, ServiceRolloutProjectionPort>();
-        services.TryAddSingleton<IServiceTrafficViewProjectionPort, ServiceTrafficViewProjectionPort>();
-        services.TryAddSingleton<IServiceRevisionCatalogProjectionPort, ServiceRevisionCatalogProjectionPort>();
-        services.TryAddSingleton<IServiceRunCurrentStateProjectionPort, ServiceRunCurrentStateProjectionPort>();
         services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
-        services.TryAddSingleton<ILlmSessionCurrentStateProjectionPort, LlmSessionCurrentStateProjectionPort>();
-        services.TryAddSingleton<IResponsesAgentToolStateCurrentStateProjectionPort, ResponsesAgentToolStateCurrentStateProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();

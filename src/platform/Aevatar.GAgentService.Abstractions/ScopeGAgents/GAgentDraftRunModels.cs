@@ -44,6 +44,7 @@ public enum GAgentDraftRunStartError
     None = 0,
     UnknownActorType = 1,
     ActorTypeMismatch = 2,
+    ProjectionUnavailable = 3,
 }
 
 public enum GAgentDraftRunCompletionStatus
@@ -78,6 +79,7 @@ public enum GAgentApprovalStartError
 {
     None = 0,
     ActorNotFound = 1,
+    ProjectionUnavailable = 2,
 }
 
 public enum GAgentApprovalCompletionStatus

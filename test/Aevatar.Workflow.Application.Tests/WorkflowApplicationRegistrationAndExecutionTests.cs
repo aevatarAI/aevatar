@@ -266,7 +266,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldMergeHeadersAndCommandMetadata()
+    public void EnvelopeFactory_ShouldKeepCommandMetadataOutOfHeaders()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -302,8 +302,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
-        request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
     }

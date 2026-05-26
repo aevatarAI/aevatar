@@ -491,10 +491,10 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatched { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatched.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -502,7 +502,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public int AttemptCount { get; private set; }
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             AttemptCount++;
             throw new InvalidOperationException("simulated dispatch failure");

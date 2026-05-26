@@ -20,7 +20,7 @@ public class VoicePresenceEventInjectionTests
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider, timeProvider: timeProvider);
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(
@@ -41,7 +41,7 @@ public class VoicePresenceEventInjectionTests
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider, timeProvider: timeProvider);
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateVoiceEnvelope(new VoiceProviderEvent
@@ -74,7 +74,7 @@ public class VoicePresenceEventInjectionTests
             provider,
             timeProvider: timeProvider,
             staleAfter: TimeSpan.FromSeconds(5));
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateVoiceEnvelope(new VoiceProviderEvent
@@ -103,7 +103,7 @@ public class VoicePresenceEventInjectionTests
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider, timeProvider: timeProvider);
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateVoiceEnvelope(new VoiceProviderEvent
@@ -140,7 +140,7 @@ public class VoicePresenceEventInjectionTests
             provider,
             timeProvider: timeProvider,
             pendingInjectionCapacity: 1);
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateVoiceEnvelope(new VoiceProviderEvent
@@ -286,7 +286,7 @@ public class VoicePresenceEventInjectionTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class StubEventHandlerContext : IEventHandlerContext
+    private sealed class StubEventHandlerContext(IAgent? agent = null) : IEventHandlerContext
     {
         public EventEnvelope InboundEnvelope { get; } = new();
 
@@ -296,7 +296,7 @@ public class VoicePresenceEventInjectionTests
 
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
 
-        public IAgent Agent { get; } = new StubAgent();
+        public IAgent Agent { get; } = agent ?? new StubAgent();
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -354,6 +354,46 @@ public class VoicePresenceEventInjectionTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("voice-agent");
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleAgent(string id) : IAgent, IVoicePresenceRuntimeStateOwner
+    {
+        public string Id => id;
+
+        public Dictionary<string, VoicePresenceRuntimeState> VoicePresence { get; } = [];
+
+        public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+        {
+            if (VoicePresence.TryGetValue(moduleName, out var stored))
+            {
+                runtimeState = stored.Clone();
+                return true;
+            }
+
+            runtimeState = new VoicePresenceRuntimeState();
+            return false;
+        }
+
+        public Task PersistVoicePresenceRuntimeStateAsync(
+            string moduleName,
+            VoicePresenceRuntimeState runtimeState,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            VoicePresence[moduleName] = runtimeState.Clone();
+            return Task.CompletedTask;
+        }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(id);
 
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
             Task.FromResult<IReadOnlyList<System.Type>>([]);

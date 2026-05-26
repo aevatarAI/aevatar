@@ -344,10 +344,10 @@ public sealed class ServiceCommandApplicationServiceTests
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -360,7 +360,7 @@ public sealed class ServiceCommandApplicationServiceTests
             _exception = exception;
         }
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.FromException(_exception);
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromException<DispatchAdmission>(_exception);
     }
 }

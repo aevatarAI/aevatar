@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Core.Primitives;
 
@@ -53,23 +54,7 @@ internal sealed class WorkflowExecutionRuntimeContext
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
 
-            if (string.Equals(key, LLMRequestMetadataKeys.NyxIdAccessToken, StringComparison.Ordinal))
-            {
-                LlmOverrides.NyxIdAccessToken = value;
-                continue;
-            }
-
-            if (string.Equals(key, LLMRequestMetadataKeys.ModelOverride, StringComparison.Ordinal))
-            {
-                LlmOverrides.ModelOverride = value;
-                continue;
-            }
-
-            if (string.Equals(key, LLMRequestMetadataKeys.NyxIdRoutePreference, StringComparison.Ordinal))
-            {
-                LlmOverrides.NyxIdRoutePreference = value;
-                continue;
-            }
+            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
 
             if (string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal))
             {
@@ -79,6 +64,18 @@ internal sealed class WorkflowExecutionRuntimeContext
 
             RequestPassthroughMetadata.Set(key, value);
         }
+    }
+
+    public void ApplyToolContext(AgentToolExecutionContext? context)
+    {
+        LlmOverrides.Clear();
+
+        if (context == null)
+            return;
+
+        LlmOverrides.NyxIdAccessToken = Normalize(context.Credentials.NyxIdAccessToken);
+        LlmOverrides.ModelOverride = Normalize(context.Routing.ModelOverride);
+        LlmOverrides.NyxIdRoutePreference = Normalize(context.Routing.NyxIdRoutePreference);
     }
 
     private static string Normalize(string? value) =>

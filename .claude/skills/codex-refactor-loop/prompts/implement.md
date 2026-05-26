@@ -51,7 +51,7 @@ ${SCOPE_PATHS}
 ## 红线
 
 - 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
-- 禁止 `git commit` / `git push` / `git checkout <branch>`。
+- 禁止 `git commit` / `git push` / `git checkout <branch>` / `git branch -c` / **`gh pr create`** / **`gh pr edit`**。controller 拥有 git topology + PR 生命周期。事故:#952 codex 自开 PR 默认 `base=repo-default-branch=dev`,违反"PR base = integration_branch = auto-refact-dev",CONFLICTING + 误发布。
 - 禁止安装新依赖。
 - 禁止跳过测试或加 `[Skip]`。
 - 测试禁止用 `Task.Delay` 做断言节奏。

@@ -1,8 +1,8 @@
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -21,7 +21,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "user-1"));
 
-        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "");
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>()
             .WithMessage("*access token is required*");
@@ -32,7 +32,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "user-1"));
 
-        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "   ", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "   ");
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
     }
@@ -42,7 +42,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: null));
 
-        var act = () => resolver.ResolveAsync("some-token", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync("some-token");
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>()
             .WithMessage("*Could not resolve current NyxID user id*");
@@ -53,7 +53,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "   "));
 
-        var act = () => resolver.ResolveAsync("some-token", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync("some-token");
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
     }
@@ -63,7 +63,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "  alice-1  "));
 
-        var scope = await resolver.ResolveAsync("token", new DefaultHttpContext());
+        var scope = await resolver.ResolveAsync("token");
 
         scope.ScopeId.Should().Be("alice-1");
         scope.OwnerSubject.Should().Be("alice-1");
@@ -77,7 +77,7 @@ public sealed class ResponsesCallerScopeResolverTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var act = () => resolver.ResolveAsync("token", new DefaultHttpContext(), cts.Token);
+        var act = () => resolver.ResolveAsync("token", cts.Token);
 
         // Stub honors cancellation token; ensures the resolver passes ct through.
         await act.Should().ThrowAsync<OperationCanceledException>();

@@ -172,7 +172,6 @@ public class WorkflowGAgentCoverageTests
         initializeEvent.MaxTokens.Should().Be(256);
         initializeEvent.MaxToolRounds.Should().Be(4);
         initializeEvent.MaxHistoryMessages.Should().Be(30);
-        initializeEvent.StreamBufferCapacity.Should().Be(64);
         initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
         initializeEvent.EventRoutes.Should().Contain("event.type");
     }
@@ -207,6 +206,108 @@ public class WorkflowGAgentCoverageTests
         roleAgent.LastInitializeEvent.Should().NotBeNull();
         roleAgent.LastInitializeEvent!.ProviderName.Should().BeEmpty();
         roleAgent.LastInitializeEvent.Model.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindConfigured_ShouldCreateRoleActorByKindAndInitializeIt()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-kind");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_kind
+            roles:
+              - id: assistant
+                name: Assistant
+                agent_kind: " workflow.assistant-role "
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: assistant
+            """,
+            "wf_kind",
+            runId: "run-kind");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateCalls.Should().Be(0);
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            "workflow.assistant-role",
+            "workflow-run-kind:assistant"));
+        runtime.Linked.Should().ContainSingle()
+            .Which.Should().Be(("workflow-run-kind", "workflow-run-kind:assistant"));
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        roleAgent.LastInitializeEvent!.RoleId.Should().Be("assistant");
+        roleAgent.LastInitializeEvent.RoleName.Should().Be("Assistant");
+
+        var persisted = await ((InMemoryEventStore)agent.Services.GetRequiredService<IEventStore>()).GetEventsAsync(agent.Id);
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(WorkflowRoleActorLinkedEvent), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindMissing_ShouldUseDefaultRoleAgentTypeResolver()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-default-role");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA", workflowName: "wf_default_role"),
+            "wf_default_role",
+            runId: "run-default-role");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateByKindCalls.Should().BeEmpty();
+        runtime.CreateCalls.Should().Be(1);
+        runtime.CreatedActors.Single().Id.Should().Be("workflow-run-default-role:role_a");
+        runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindCannotCreate_ShouldFailBeforeLinkingRole()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            CreateByKindException = new InvalidOperationException("unknown agent kind"),
+        };
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-invalid-kind");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_invalid_kind
+            roles:
+              - id: bridge
+                name: Bridge
+                agent_kind: workflow.missing-kind
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: bridge
+            """,
+            "wf_invalid_kind",
+            runId: "run-invalid-kind");
+
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*unknown agent kind*");
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            "workflow.missing-kind",
+            "workflow-run-invalid-kind:bridge"));
+        runtime.Linked.Should().BeEmpty();
+        runtime.CreatedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -473,6 +574,79 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_BindDefinition_ShouldCleanupPendingSubWorkflowChild()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-bind-reset");
+        var childActorId = $"{agent.Id}:workflow:sub_flow:parent-run:invoke-reset";
+        runtime.RegisterAgent(childActorId, new FakeWorkflowRunChildAgent(childActorId));
+        agent.State.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-reset",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reset",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-reset",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Bound,
+            DefinitionYaml = BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"),
+        });
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId["invoke-reset"] = 0;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-reset");
+
+        runtime.Unlinked.Should().Contain(childActorId);
+        runtime.Destroyed.Should().Contain(childActorId);
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_ReplaceDefinition_ShouldCleanupPendingSubWorkflowChild()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-replace-reset");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-reset");
+        var childActorId = $"{agent.Id}:workflow:sub_flow:parent-run:invoke-replace-reset";
+        runtime.RegisterAgent(childActorId, new FakeWorkflowRunChildAgent(childActorId));
+        agent.State.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-replace-reset",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reset",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-replace-reset",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Bound,
+            DefinitionYaml = BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"),
+        });
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId["invoke-replace-reset"] = 0;
+
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+            Input = "replace",
+        });
+
+        runtime.Unlinked.Should().Contain(childActorId);
+        runtime.Destroyed.Should().Contain(childActorId);
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_WhenSingletonSubWorkflowInvoked_ShouldPersistPendingAndReuseChildActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -538,7 +712,7 @@ public class WorkflowGAgentCoverageTests
         runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
 
         var childAgent = runtime.CreatedChildWorkflowAgents.Single();
-        childAgent.BindEvents.Should().ContainSingle();
+        childAgent.BindEvents.Select(x => x.RunId).Should().Equal("invoke-1", "invoke-2");
         childAgent.StartEvents.Should().BeEmpty();
     }
 
@@ -1451,7 +1625,6 @@ public class WorkflowGAgentCoverageTests
                    max_tokens: 256
                    max_tool_rounds: 4
                    max_history_messages: 30
-                   stream_buffer_capacity: 64
                    event_modules: "llm_handler,tool_handler"
                    event_routes: |
                      event.type == ChatRequestEvent -> llm_handler
@@ -1513,12 +1686,14 @@ public class WorkflowGAgentCoverageTests
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         public int CreateCalls { get; private set; }
+        public List<(string agentKind, string actorId)> CreateByKindCalls { get; } = [];
         public List<FakeActor> CreatedActors { get; } = [];
         public List<FakeWorkflowRunChildAgent> CreatedChildWorkflowAgents { get; } = [];
         public List<(string parent, string child)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
         public string? ThrowOnGetAsyncActorId { get; set; }
+        public Exception? CreateByKindException { get; set; }
 
         public void RegisterAgent(string actorId, IAgent agent)
         {
@@ -1552,6 +1727,22 @@ public class WorkflowGAgentCoverageTests
             return Task.FromResult<IActor>(actor);
         }
 
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? $"{agentKind}:actor-{CreateByKindCalls.Count + 1}";
+            CreateByKindCalls.Add((agentKind.Trim(), actorId));
+            if (CreateByKindException != null)
+                throw CreateByKindException;
+
+            var existing = CreatedActors.FirstOrDefault(x => x.Id == actorId);
+            if (existing != null)
+                return Task.FromResult<IActor>(existing);
+
+            var actor = new FakeActor(actorId, new FakeRoleAgent(actorId));
+            CreatedActors.Add(actor);
+            return Task.FromResult<IActor>(actor);
+        }
+
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             Destroyed.Add(id);
@@ -1564,12 +1755,13 @@ public class WorkflowGAgentCoverageTests
                 ? throw new InvalidOperationException($"Unexpected self GetAsync for actor '{id}'.")
                 : Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actor = CreatedActors.FirstOrDefault(x => x.Id == actorId)
                         ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) =>

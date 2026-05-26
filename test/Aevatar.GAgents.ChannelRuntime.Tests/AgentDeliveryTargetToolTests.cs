@@ -1,12 +1,8 @@
-using System.Net;
-using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
@@ -20,14 +16,14 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public void Name_Is_agent_delivery_targets()
     {
-        var tool = new AgentDeliveryTargetTool(new ServiceCollection().BuildServiceProvider());
+        var tool = CreateTool();
         tool.Name.Should().Be("agent_delivery_targets");
     }
 
     [Fact]
     public void ParametersSchema_Is_Valid_Json()
     {
-        var tool = new AgentDeliveryTargetTool(new ServiceCollection().BuildServiceProvider());
+        var tool = CreateTool();
         var act = () => JsonDocument.Parse(tool.ParametersSchema);
         act.Should().NotThrow();
     }
@@ -35,7 +31,7 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Returns_Error_When_No_Auth_Token()
     {
-        var tool = new AgentDeliveryTargetTool(new ServiceCollection().BuildServiceProvider());
+        var tool = CreateTool();
         var result = await tool.ExecuteAsync("""{"action":"list"}""");
 
         result.Should().Contain("error");
@@ -43,24 +39,19 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Returns_Error_When_Dependencies_Missing()
+    public void Constructor_Requires_Typed_Dependencies()
     {
-        var tool = new AgentDeliveryTargetTool(new ServiceCollection().BuildServiceProvider());
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var resolver = Substitute.For<ICallerScopeResolver>();
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"list"}""");
-            result.Should().Contain("error");
-            result.Should().Contain("not registered");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver);
+        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver);
+        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!);
+
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
+        missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
     }
 
     [Fact]
@@ -86,16 +77,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -130,7 +116,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
         services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(callerScopeResolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -176,18 +162,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
-
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -210,7 +189,7 @@ public sealed class AgentDeliveryTargetToolTests
                 .Should().Contain("accepted")
                 .And.Contain("propagating");
 
-#pragma warning disable CS0612 // legacy fields kept on the command for rollback safety
+#pragma warning disable CS0612 // assert deprecated ownership fields are no longer emitted
             await commandPort.Received(1).UpsertAsync(
                 Arg.Is<UserAgentCatalogUpsertCommand>(c =>
                     c.AgentId == "agent-1" &&
@@ -219,7 +198,10 @@ public sealed class AgentDeliveryTargetToolTests
                     // Tool no longer accepts NyxApiKey as an argument; the credential
                     // is preserved through the actor's MergeNonEmpty upsert policy.
                     c.NyxApiKey == string.Empty &&
-                    c.OwnerNyxUserId == "user-1"),
+                    c.OwnerScope != null &&
+                    c.OwnerScope.MatchesStrictly(caller) &&
+                    c.Platform == string.Empty &&
+                    c.OwnerNyxUserId == string.Empty),
                 Arg.Any<CancellationToken>());
 #pragma warning restore CS0612
         }
@@ -248,17 +230,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -294,18 +270,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
-
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -349,17 +318,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -407,17 +370,11 @@ public sealed class AgentDeliveryTargetToolTests
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var httpClient = new HttpClient(new StaticJsonHandler("""{"user":{"id":"user-1"}}"""))
-        {
-            BaseAddress = new Uri("https://nyx.example.com"),
-        };
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
-        services.AddSingleton(nyxClient);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -441,11 +398,38 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ToolSource_Always_Returns_Tool()
     {
-        var source = new AgentDeliveryTargetToolSource(new ServiceCollection().BuildServiceProvider());
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+
+        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
         tools[0].Name.Should().Be("agent_delivery_targets");
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        };
+        try
+        {
+            var result = await tools[0].ExecuteAsync("""{"action":"list"}""");
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
+
+            await queryPort.Received(1).QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
     }
 
     // ─── Patch coverage gap-fillers (issue #466 / codecov/patch) ───
@@ -464,7 +448,7 @@ public sealed class AgentDeliveryTargetToolTests
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(resolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -485,33 +469,19 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Returns_Error_When_CommandPort_Missing_For_Upsert()
+    public void ToolSource_Constructor_Requires_Typed_Dependencies()
     {
-        // Hits the IUserAgentCatalogCommandPort missing branch on the upsert/delete path.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
-        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
 
-        var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
-        services.AddSingleton(resolver);
-        // No IUserAgentCatalogCommandPort registered.
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver);
+        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver);
+        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"upsert","agent_id":"agent-1"}""");
-            result.Should().Contain("IUserAgentCatalogCommandPort");
-            result.Should().Contain("not registered");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
+        missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
+        missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
     }
 
     [Fact]
@@ -577,7 +547,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(resolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -638,7 +608,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(resolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -720,7 +690,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(resolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
+        var tool = CreateTool(services);
 
         AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
         {
@@ -744,6 +714,27 @@ public sealed class AgentDeliveryTargetToolTests
     /// branches (no real query/command response wiring). Returns a tool with a stub
     /// query port, a stub command port, and a deterministic caller-scope resolver.
     /// </summary>
+    private static AgentDeliveryTargetTool CreateTool(IServiceCollection? services = null)
+    {
+        var provider = (services ?? CreateDefaultServices()).BuildServiceProvider();
+        return new AgentDeliveryTargetTool(
+            provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
+            provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
+            provider.GetRequiredService<ICallerScopeResolver>());
+    }
+
+    private static IServiceCollection CreateDefaultServices()
+    {
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        return new ServiceCollection()
+            .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton(resolver);
+    }
+
     private static (AgentDeliveryTargetTool tool, IUserAgentCatalogQueryPort queryPort, IUserAgentCatalogCommandPort commandPort) BuildBasicHarness()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -756,18 +747,6 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(resolver);
-        return (new AgentDeliveryTargetTool(services.BuildServiceProvider()), queryPort, commandPort);
-    }
-
-    private sealed class StaticJsonHandler(string json) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            };
-            return Task.FromResult(response);
-        }
+        return (CreateTool(services), queryPort, commandPort);
     }
 }

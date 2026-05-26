@@ -76,7 +76,6 @@ public sealed class GAgentApprovalInteractionTests
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
         target.LiveSinkLease.Should().BeSameAs(projectionPort.LiveSinkLeaseToReturn);
         target.LiveSink.Should().NotBeNull();
-        projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "corr-1");
         projectionPort.AttachCalls.Should().ContainSingle();
         terminalPort.Calls.Should().ContainSingle(x =>
             x.actorId == "actor-1" &&
@@ -85,7 +84,7 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     [Fact]
-    public async Task ObservationLifecycle_ShouldThrow_WhenProjectionPipelineIsUnavailable()
+    public async Task ObservationLifecycle_ShouldReturnProjectionUnavailable_WhenProjectionPipelineIsUnavailable()
     {
         var projectionPort = new ApprovalProjectionPort
         {
@@ -99,13 +98,13 @@ public sealed class GAgentApprovalInteractionTests
             terminalPort);
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
-        var act = async () => await lifecycle.BindAsync(
+        var result = await lifecycle.BindAsync(
             new GAgentApprovalCommand("actor-1", "req-1"),
             CreateExecution(target, context),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("GAgent approval projection pipeline is unavailable.");
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentApprovalStartError.ProjectionUnavailable);
         projectionPort.AttachCalls.Should().BeEmpty();
         terminalPort.Calls.Should().ContainSingle(x =>
             x.actorId == "actor-1" &&
@@ -434,18 +433,21 @@ public sealed class GAgentApprovalInteractionTests
         public ApprovalProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
         public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
-        public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
         public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
 
-        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
+        public async Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
             string actorId,
             string commandId,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
-            EnsureCalls.Add((actorId, commandId));
-            return Task.FromResult<IGAgentDraftRunProjectionLease?>(LeaseToReturn);
+            if (LeaseToReturn == null)
+                return null;
+
+            var liveSinkLease = await AttachLiveSinkAsync(LeaseToReturn, sink, ct);
+            return new EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>(LeaseToReturn, liveSinkLease);
         }
 
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
@@ -497,7 +499,7 @@ public sealed class GAgentApprovalInteractionTests
         public List<(string actorId, string correlationId, GAgentRunTerminalInteractionKind interactionKind)> Calls { get; } = [];
         public List<IGAgentRunTerminalProjectionLease> ReleaseCalls { get; } = [];
 
-        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
             string actorId,
             string correlationId,
             GAgentRunTerminalInteractionKind interactionKind,

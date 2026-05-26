@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
@@ -290,8 +291,82 @@ public sealed class NyxIdRelayTransportTests
         cardAction.Should().NotBeNull();
         cardAction!.ActionId.Should().Be("llm_select_service");
         cardAction.SubmittedValue.Should().Be("chrono-llm-shared");
-        cardAction.Arguments.Should().ContainKey("service_id")
-            .WhoseValue.Should().Be("chrono-llm-shared");
+        cardAction.Arguments.Should().NotContainKey("service_id");
+        cardAction.LlmSelection.Action.Should().Be("select_service");
+        cardAction.LlmSelection.ServiceId.Should().Be("chrono-llm-shared");
+    }
+
+    [Theory]
+    [InlineData("lp")]
+    [InlineData("llm_apply_preset")]
+    public void Parse_ShouldMapCompactApplyPresetActionId_ToTypedLlmSelection(string actionId)
+    {
+        var cardActionText = JsonSerializer.Serialize(new
+        {
+            a = actionId,
+            s = "work-fast",
+            v = new
+            {
+                preset_id = "work-fast",
+            },
+        });
+        var body = $$"""
+            {
+              "message_id": "msg-card-compact-preset",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": {{JsonSerializer.Serialize(cardActionText)}}
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be(actionId);
+        cardAction.SubmittedValue.Should().Be("work-fast");
+        cardAction.Arguments.Should().NotContainKey("preset_id");
+        cardAction.LlmSelection.Action.Should().Be("apply_preset");
+        cardAction.LlmSelection.PresetId.Should().Be("work-fast");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapKnownWorkflowCallbackFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-workflow",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"actor_id\":\"actor-1\",\"run_id\":\"run-1\",\"step_id\":\"step-1\",\"approved\":false},\"form_value\":{\"user_input\":\"needs work\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.WorkflowResume.ActorId.Should().Be("actor-1");
+        cardAction.WorkflowResume.RunId.Should().Be("run-1");
+        cardAction.WorkflowResume.StepId.Should().Be("step-1");
+        cardAction.WorkflowResume.Approved.Should().BeFalse();
+        cardAction.WorkflowResume.UserInput.Should().Be("needs work");
+        cardAction.Arguments.Should().NotContainKey("actor_id");
+        cardAction.Arguments.Should().NotContainKey("run_id");
+        cardAction.Arguments.Should().NotContainKey("step_id");
+        cardAction.Arguments.Should().NotContainKey("approved");
     }
 
     [Fact]
@@ -341,9 +416,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity.Conversation.Scope.Should().Be(ConversationScope.Unspecified);
         var cardAction = parsed.Activity.Content.CardAction;
         cardAction.Should().NotBeNull();
-        cardAction!.Arguments.Should().ContainKey("actor_id").WhoseValue.Should().Be("actor-1");
-        cardAction.Arguments.Should().ContainKey("run_id").WhoseValue.Should().Be("run-1");
-        cardAction.Arguments.Should().ContainKey("step_id").WhoseValue.Should().Be("step-1");
+        cardAction!.WorkflowResume.ActorId.Should().Be("actor-1");
+        cardAction.WorkflowResume.RunId.Should().Be("run-1");
+        cardAction.WorkflowResume.StepId.Should().Be("step-1");
+        cardAction.Arguments.Should().BeEmpty();
     }
 
     [Fact]

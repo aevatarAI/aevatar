@@ -102,6 +102,9 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             .DeleteByActorAsync<UserAgentCatalogDocument>(services, actorId, ct)
             .ConfigureAwait(false);
         await RetiredActorReadModelHelpers
+            .DeleteByActorAsync<SkillRunnerExecutionDocument>(services, actorId, ct)
+            .ConfigureAwait(false);
+        await RetiredActorReadModelHelpers
             .DeleteByActorAsync<UserAgentCatalogNyxCredentialDocument>(services, actorId, ct)
             .ConfigureAwait(false);
     }

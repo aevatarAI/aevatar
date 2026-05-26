@@ -18,22 +18,23 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 {
     private const string WriteActorIdPrefix = "user-memory-";
+    private const string PublisherId = "aevatar.studio.infrastructure.user-memory";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
 
     public ActorBackedUserMemoryStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
         IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedUserMemoryStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -92,7 +93,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
                     UpdatedAt = entry.UpdatedAt,
                 },
             };
-            await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+            await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
         }
     }
 
@@ -112,7 +113,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         };
 
         var evt = new MemoryEntryAddedEvent { Entry = entry };
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
 
         return new UserMemoryEntry(
             Id: entry.Id,
@@ -132,7 +133,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
         var actor = await EnsureWriteActorAsync(actorId, ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, ct);
         return true;
     }
 

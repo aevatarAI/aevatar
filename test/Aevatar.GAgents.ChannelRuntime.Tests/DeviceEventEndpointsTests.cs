@@ -17,6 +17,22 @@ public class DeviceEventEndpointsTests
     // ─── Parse Callback Payload Tests ───
 
     [Fact]
+    public void DeviceEventEndpoints_ShouldNotOwnActorRuntimeDispatchOrEnvelopeConstruction()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../agents/Aevatar.GAgents.Device/DeviceEventEndpoints.cs"));
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("IActorRuntime");
+        source.Should().NotContain("IActorDispatchPort");
+        source.Should().NotContain("new EventEnvelope");
+        source.Should().NotContain("Any.Pack");
+        source.Should().NotContain("EnvelopeRouteSemantics");
+        source.Should().NotContain("CreateAsync<HouseholdEntity>");
+    }
+
+    [Fact]
     public void ParseCallbackPayload_nyxid_format_returns_device_inbound()
     {
         // NyxID's actual CallbackPayload format (sender.platform_id, nested conversation)

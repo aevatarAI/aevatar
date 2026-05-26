@@ -25,6 +25,7 @@ import {
   buildPlatformDeploymentsHref,
   buildPlatformGovernanceHref,
 } from "@/shared/navigation/platformRoutes";
+import { serviceResourceQueryKeys } from "@/shared/query/serviceResourceQueryKeys";
 import { buildRuntimeExplorerHref } from "@/shared/navigation/runtimeRoutes";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
@@ -488,27 +489,27 @@ const ServicesPage: React.FC = () => {
   }, [draft, resolvedScope?.scopeId]);
 
   const servicesQuery = useQuery({
-    queryKey: ["services", query],
+    queryKey: serviceResourceQueryKeys.list(query),
     queryFn: () => servicesApi.listServices(query),
   });
   const selectedServiceQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "detail", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.detail(query, selectedServiceId),
     queryFn: () => servicesApi.getService(selectedServiceId, query),
   });
   const revisionsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "revisions", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.revisions(query, selectedServiceId),
     queryFn: () => servicesApi.getRevisions(selectedServiceId, query),
   });
   const deploymentsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "deployments", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.deployments(query, selectedServiceId),
     queryFn: () => servicesApi.getDeployments(selectedServiceId, query),
   });
   const trafficQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
-    queryKey: ["services", "traffic", selectedServiceId, query],
+    queryKey: serviceResourceQueryKeys.traffic(query, selectedServiceId),
     queryFn: () => servicesApi.getTraffic(selectedServiceId, query),
   });
 

@@ -61,7 +61,7 @@ owner: eanzhao
    - 作为 definition/source actor 被解析与绑定
 2. `WorkflowRunGAgent`
    - 一次 run 一个 actor
-   - 按 `roles` 创建 run-scoped `RoleGAgent` 树
+   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
@@ -110,12 +110,13 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 
 ### Workflow Roles（正式 schema）
 
-`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
+`workflow yaml` 里的 `roles` 现在是 role actor 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
 
 ```yaml
 roles:
   - id: planner
     name: Planner
+    agent_kind: aevatar.role-agent
     system_prompt: "You are a planning assistant."
     provider: openai
     model: gpt-5.4
@@ -123,7 +124,6 @@ roles:
     max_tokens: 512
     max_tool_rounds: 4
     max_history_messages: 50
-    stream_buffer_capacity: 128
     event_modules: "llm_handler,tool_handler"
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
@@ -136,8 +136,12 @@ roles:
 语义规则：
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
+- `agent_kind` 是 role-level actor lifecycle 入口；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
+- Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 
 ---
 
@@ -202,7 +206,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
   │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
-  │     ├── WorkflowRunObservationLifecycle: 建立 projection lease + live sink；accepted receipt 由 receipt factory 生成
+  │     ├── WorkflowRunObservationLifecycle: attach 到既有 projection session + live sink，不做 pre-dispatch projection activation；accepted receipt 由 receipt factory 生成
   │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope

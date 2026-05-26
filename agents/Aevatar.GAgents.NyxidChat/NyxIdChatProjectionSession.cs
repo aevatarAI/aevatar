@@ -25,9 +25,13 @@ public interface INyxIdChatSessionProjectionLease
 public interface INyxIdChatSessionProjectionPort
     : IEventSinkProjectionLifecyclePort<INyxIdChatSessionProjectionLease, AGUIEvent>
 {
-    Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
+    Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
         string actorId,
         string sessionId,
+        IEventSink<AGUIEvent> sink,
         CancellationToken ct = default);
 }
 
@@ -69,31 +73,62 @@ public sealed class NyxIdChatSessionRuntimeLease
 /// Lifecycle adapter for NyxID chat Projection Pipeline sessions. It attaches
 /// typed AGUIEvent sinks to sessions whose projector input is EventEnvelope.
 /// </summary>
+// Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+//   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+//   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
 public sealed class NyxIdChatSessionProjectionPort
     : EventSinkProjectionLifecyclePortBase<INyxIdChatSessionProjectionLease, NyxIdChatSessionRuntimeLease, AGUIEvent>,
       INyxIdChatSessionProjectionPort
 {
+    private readonly IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> _attachExistingLeaseLookup;
+
     public NyxIdChatSessionProjectionPort(
         IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease> releaseService,
-        IProjectionSessionEventHub<AGUIEvent> sessionEventHub)
+        IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
+        IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> attachExistingLeaseLookup)
         : base(static () => true, activationService, releaseService, sessionEventHub)
     {
+        _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
 
-    public Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
+    // Refactor (iter51/issue-898-projection-attach-existing-side-read):
+    //   Old pattern: Feature projection ports duplicated IActorRuntime.ExistsAsync(ProjectionScopeActorId.Build()) for attach-existing checks (post-#884 #884 fixed 3 ports but more remained).
+    //   New principle: All attach-existing lease lookups go through typed IProjectionScopeAttachExistingLeaseLookup<TLease>; CI guard prevents recurrence.
+    // Refactor (iter45/issue-867-session-projection-ensure-surface):
+    //   Old pattern: Projection session ports exposed Ensure*ProjectionAsync activation surfaces next to attach-only observation APIs, allowing command/request paths to reactivate sessions.
+    //   New principle: Public observation ports expose attach-existing only; projection-owned lifecycle activates sessions through committed-state/startup/background binders.
+    public async Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
         string actorId,
         string sessionId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = actorId,
-                ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = sessionId,
-            },
-            ct);
+        IEventSink<AGUIEvent> sink,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var lease = await _attachExistingLeaseLookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = actorId,
+            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
+            Mode = ProjectionRuntimeMode.SessionObservation,
+            SessionId = sessionId,
+        }, ct).ConfigureAwait(false);
+        if (lease == null)
+            return null;
+
+        var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
+        return liveSinkLease == null
+            ? null
+            : new EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>(lease, liveSinkLease);
+    }
 }
 
 /// <summary>

@@ -9,9 +9,11 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -37,9 +39,9 @@ public sealed class RoleGAgentStateCoverageTests
         .GetMethod("ResolveRequestInputParts", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ResolveRequestInputParts not found.");
 
-    private static readonly MethodInfo BuildRequestPreviewMethod = typeof(RoleGAgent)
-        .GetMethod("BuildRequestPreview", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new InvalidOperationException("BuildRequestPreview not found.");
+    private static readonly MethodInfo BuildRequestLogSummaryMethod = typeof(RoleGAgent)
+        .GetMethod("BuildRequestLogSummary", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("BuildRequestLogSummary not found.");
 
     private static readonly MethodInfo DetectPendingApprovalFromHistoryMethod = typeof(RoleGAgent)
         .GetMethod("DetectPendingApprovalFromHistory", BindingFlags.NonPublic | BindingFlags.Instance)
@@ -56,6 +58,10 @@ public sealed class RoleGAgentStateCoverageTests
     private static readonly MethodInfo ApplyRemoteApprovalSubmittedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyRemoteApprovalSubmitted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyRemoteApprovalSubmitted not found.");
+
+    private static readonly MethodInfo ApplyVoicePresenceRuntimeStateChangedMethod = typeof(RoleGAgent)
+        .GetMethod("ApplyVoicePresenceRuntimeStateChanged", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ApplyVoicePresenceRuntimeStateChanged not found.");
 
     private static readonly MethodInfo SanitizeFailureMessageMethod = typeof(RoleGAgent)
         .GetMethod("SanitizeFailureMessage", BindingFlags.NonPublic | BindingFlags.Static)
@@ -122,6 +128,103 @@ public sealed class RoleGAgentStateCoverageTests
         next.PendingApproval.Should().NotBeNull();
         next.PendingApproval!.RequestId.Should().Be("req-1");
         next.PendingApproval.ToolName.Should().Be("dangerous_tool");
+    }
+
+    [Fact]
+    public void ApplyVoicePresenceRuntimeStateChanged_ShouldStoreClonedModuleState()
+    {
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.ResponseInProgress,
+            CurrentResponseId = 3,
+            NextResponseId = 4,
+            ActiveProviderResponseId = "provider-response-1",
+            Initialized = true,
+            TransportAttached = true,
+            PcmSampleRateHz = 24000,
+            ActiveSessionId = "lease-1",
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+        };
+
+        var next = InvokePrivateStatic<RoleGAgentState>(
+            ApplyVoicePresenceRuntimeStateChangedMethod,
+            new RoleGAgentState(),
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = "voice_presence",
+                State = runtimeState,
+            });
+        runtimeState.CurrentResponseId = 99;
+
+        next.VoicePresence.Should().ContainKey("voice_presence");
+        next.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(3);
+        next.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-1");
+        next.VoicePresence["voice_presence"].ActiveSessionId.Should().Be("lease-1");
+        next.VoicePresence["voice_presence"].Initialized.Should().BeTrue();
+        next.VoicePresence["voice_presence"].TransportAttached.Should().BeTrue();
+        next.VoicePresence["voice_presence"].PcmSampleRateHz.Should().Be(24000);
+        next.VoicePresence["voice_presence"].RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.LocalOnly);
+    }
+
+    [Fact]
+    public void ApplyVoicePresenceRuntimeStateChanged_ShouldIgnoreBlankModuleName()
+    {
+        var current = new RoleGAgentState();
+
+        var next = InvokePrivateStatic<RoleGAgentState>(
+            ApplyVoicePresenceRuntimeStateChangedMethod,
+            current,
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = " ",
+                State = new VoicePresenceRuntimeState
+                {
+                    Status = VoicePresenceRuntimeStatus.UserSpeaking,
+                },
+            });
+
+        next.Should().BeSameAs(current);
+        next.VoicePresence.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldPersistAndReturnClonedState()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-presence");
+        await agent.ActivateAsync();
+
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.AudioDraining,
+            CurrentResponseId = 5,
+            LastDrainAckResponseId = 4,
+            LastDrainAckPlayoutSequence = 1200,
+            NextResponseId = 6,
+        };
+
+        await agent.PersistVoicePresenceRuntimeStateAsync("voice_presence", runtimeState);
+        runtimeState.CurrentResponseId = 99;
+
+        agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
+        agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeTrue();
+        stored.CurrentResponseId.Should().Be(5);
+
+        stored.CurrentResponseId = 77;
+
+        agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task VoicePresenceRuntimeStateOwner_ShouldReturnFalseForMissingModule()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-voice-presence-missing");
+        await agent.ActivateAsync();
+
+        agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeFalse();
+        stored.Should().NotBeNull();
+        stored.Status.Should().Be(VoicePresenceRuntimeStatus.Unspecified);
     }
 
     [Fact]
@@ -910,11 +1013,12 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public void ResolveRequestInputParts_AndBuildRequestPreview_ShouldRespectPromptAndMediaBranches()
+    public void ResolveRequestInputParts_AndBuildRequestLogSummary_ShouldRespectPromptAndMediaBranches()
     {
+        const string sensitivePrompt = "secret prompt body";
         var multimodalRequest = new ChatRequestEvent
         {
-            Prompt = "describe this",
+            Prompt = sensitivePrompt,
         };
         multimodalRequest.InputParts.Add(new ChatContentPart
         {
@@ -929,9 +1033,10 @@ public sealed class RoleGAgentStateCoverageTests
         parts[0].Kind.Should().Be(ContentPartKind.Text);
         parts[1].Kind.Should().Be(ContentPartKind.Image);
 
-        InvokePrivateStatic<string>(BuildRequestPreviewMethod, multimodalRequest)
-            .Should()
-            .Be("describe this");
+        var multimodalSummary = InvokePrivateStatic<object>(BuildRequestLogSummaryMethod, multimodalRequest);
+        GetProperty<int>(multimodalSummary, "PromptLength").Should().Be(sensitivePrompt.Length);
+        GetProperty<int>(multimodalSummary, "InputPartCount").Should().Be(2);
+        multimodalSummary.ToString().Should().NotContain(sensitivePrompt);
 
         var promptlessRequest = new ChatRequestEvent();
         promptlessRequest.InputParts.Add(new ChatContentPart
@@ -940,15 +1045,49 @@ public sealed class RoleGAgentStateCoverageTests
             Name = "clip.mp4",
         });
 
-        InvokePrivateStatic<string>(BuildRequestPreviewMethod, promptlessRequest)
-            .Should()
-            .Be("video");
+        var promptlessSummary = InvokePrivateStatic<object>(BuildRequestLogSummaryMethod, promptlessRequest);
+        GetProperty<int>(promptlessSummary, "PromptLength").Should().Be(0);
+        GetProperty<int>(promptlessSummary, "InputPartCount").Should().Be(1);
+        promptlessSummary.ToString().Should().NotContain("video");
 
         InvokePrivateStatic<IReadOnlyList<ContentPart>>(
                 ResolveRequestInputPartsMethod,
                 new ChatRequestEvent())
             .Should()
             .ContainSingle(x => x.Kind == ContentPartKind.Text && x.Text == string.Empty);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_ShouldRedactPromptAndResponseContentInInformationLogs()
+    {
+        const string sensitivePrompt = "customer secret prompt";
+        const string sensitiveResponse = "customer secret response";
+        var logger = new RecordingLogger();
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(
+            provider,
+            "role-log-redaction",
+            llmProviderFactory: new StubChatProviderFactory((_, _) =>
+                Task.FromResult(new LLMResponse { Content = sensitiveResponse })));
+        agent.Logger = logger;
+        agent.EventPublisher = new TestRecordingEventPublisher();
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = sensitivePrompt,
+            SessionId = "session-log-redaction",
+        });
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("input_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitivePrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveResponse.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitivePrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveResponse, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1111,9 +1250,13 @@ public sealed class RoleGAgentStateCoverageTests
         IServiceProvider provider,
         string actorId,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        ILLMProviderFactory? llmProviderFactory = null)
     {
-        var agent = new TestRoleGAgent(remoteToolApprovalPort, toolSources ?? Enumerable.Empty<IAgentToolSource>())
+        var agent = new TestRoleGAgent(
+            llmProviderFactory,
+            remoteToolApprovalPort,
+            toolSources ?? Enumerable.Empty<IAgentToolSource>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1163,10 +1306,36 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     private sealed class TestRoleGAgent(
+        ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
         IEnumerable<IAgentToolSource> toolSources)
-        : RoleGAgent(toolSources: toolSources, remoteToolApprovalPort: remoteToolApprovalPort)
+        : RoleGAgent(
+            llmProviderFactory: llmProviderFactory,
+            toolSources: toolSources,
+            remoteToolApprovalPort: remoteToolApprovalPort)
     {
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Information)
+                Messages.Add(formatter(state, exception));
+        }
     }
 
     private sealed class StubRemoteApprovalPort(

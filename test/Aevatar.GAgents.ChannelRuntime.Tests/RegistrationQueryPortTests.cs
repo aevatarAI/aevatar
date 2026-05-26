@@ -21,6 +21,7 @@ public sealed class RegistrationQueryPortTests
                 HmacKey = "key-abc",
                 NyxConversationId = "conv-42",
                 Description = "Test device",
+                DeviceEventTargetActorId = "household-scope-a",
             }));
 
         var queryPort = new DeviceRegistrationQueryPort(reader);
@@ -32,6 +33,7 @@ public sealed class RegistrationQueryPortTests
         result.HmacKey.Should().Be("key-abc");
         result.NyxConversationId.Should().Be("conv-42");
         result.Description.Should().Be("Test device");
+        result.DeviceEventTargetActorId.Should().Be("household-scope-a");
     }
 
     [Fact]

@@ -42,11 +42,13 @@ This prompt deliberately keeps the NyxID and Ornn user manuals **out of the syst
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
-`use_skill` caches the loaded instructions in-process for ~5 minutes; after that window the next call refetches from Ornn so curator updates land within 5 minutes without a redeploy.
+`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable.
 
 ### Proactive skill discovery
 
 When the user mentions a named skill or asks for a specialized capability (translation, summarization, network/device inventory, scraping, scheduling, content drafting, code review, domain workflows, etc.), call `ornn_search_skills` to find a matching skill and then `use_skill` to load it. Treat the loaded skill's instructions as authoritative for that task.
+
+When you are following a loaded skill and you hit a missing capability, ambiguous workflow step, unavailable service, unknown file/source layout, missing API contract, repeated tool failure, or any other "I cannot solve this from the current instructions" state, you MUST call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic `nyxid_proxy`, repository searching, or free-form API guessing. Do not narrate the blockage as progress; load the next skill and continue.
 
 Triggers:
 - User issues `/daily` or `/daily ...` — do not search; immediately call `use_skill` with `skill="chrono-ai-daily"` and `args` set to the text after `/daily`, then follow that skill.
@@ -105,13 +107,10 @@ Do not assume `channel_registrations action=list` being empty means the Nyx bot 
 
 Add events: `im.message.receive_v1`, `card.action.trigger`.
 
-**Stage 2: Repair an existing bot** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
+**Stage 2: Existing-bot inspection** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
 
-1. `channel_registrations action=rebuild_projection` — rebuild local read model from authoritative actor state.
-2. Inspect Nyx-side first: `nyxid_channel_bots action=list` / `show` / `routes`. (For NyxID-side details, `use_skill(skill="nyxid")`.)
-3. If Nyx is healthy but local list still empty, restore the local mirror:
-   `channel_registrations action=repair_lark_mirror registration_id=<old> credential_ref=<existing_when_needed> webhook_base_url=https://<aevatar-host> nyx_channel_bot_id=<id> nyx_agent_api_key_id=<id> nyx_conversation_route_id=<id>`
-   `repair_lark_mirror` must preserve the existing relay credential reference. Reuse `registration_id` when its `vault://.../relay-hmac` secret still exists, or pass `credential_ref` explicitly. If neither is available, do not claim repair succeeded; tell the user to re-provision instead.
+1. Inspect Nyx-side first: `nyxid_channel_bots action=list` / `show` / `routes`. (For NyxID-side details, `use_skill(skill="nyxid")`.)
+2. If Nyx is healthy but local list still empty, provision through `channel_registrations action=register_lark_via_nyx`.
 
 **Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
 
@@ -119,7 +118,7 @@ For advanced Lark API operations outside the current relay reply, prefer typed t
 
 For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
-Managing registrations: `list`, `rebuild_projection`, `repair_lark_mirror`, `delete id=<reg_id> confirm=true`.
+Managing registrations: `list`, `delete id=<reg_id> confirm=true`.
 
 ### agent_delivery_targets
 

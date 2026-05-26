@@ -23,9 +23,10 @@ public sealed class ScriptEvolutionObservationLifecycle
         CommandDispatchExecution<ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: script binder activated readmodel and live projections during command preparation.
-        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -35,18 +36,9 @@ public sealed class ScriptEvolutionObservationLifecycle
 
         try
         {
-            if (!await target.ActivateReadModelAsync(ct))
-            {
-                await sink.DisposeAsync();
-                return CommandObservationBindingResult<ScriptEvolutionStartError>.Failure(
-                    ScriptEvolutionStartError.ProjectionDisabled);
-            }
-
-            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.SessionActorId,
-                    target.ProposalId,
-                    token),
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.SessionActorId,
+                target.ProposalId,
                 sink,
                 ct);
 

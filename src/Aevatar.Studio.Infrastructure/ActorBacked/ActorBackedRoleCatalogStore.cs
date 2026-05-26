@@ -9,20 +9,21 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
-/// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
+/// Actor-backed implementation of role catalog query and command ports.
 /// Reads from the projection document store (CQRS read model).
-/// Writes send commands to the Write GAgent.
+/// Writes send commands to the Write GAgent through CQRS Core dispatch.
 /// Local JSON is only an explicit import boundary, never a draft backup.
 /// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
 /// </summary>
-internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
+internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogQueryPort, IRoleCatalogCommandPort
 {
     private const string WriteActorIdPrefix = "role-catalog-";
     private const string ActorHomeDirectory = "actor://role-catalog";
     private const string ActorFilePath = "actor://role-catalog/roles";
+    private const string PublisherId = "aevatar.studio.infrastructure.role-catalog";
 
     private readonly IStudioActorBootstrap _bootstrap;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioLocalRoleCatalogImportReader _localImportReader;
     private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
@@ -30,14 +31,14 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     public ActorBackedRoleCatalogStore(
         IStudioActorBootstrap bootstrap,
-        IActorDispatchPort dispatchPort,
+        StudioActorCommandDispatch commandDispatch,
         IAppScopeResolver scopeResolver,
         IStudioLocalRoleCatalogImportReader localImportReader,
         IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
@@ -71,7 +72,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -92,7 +93,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         var importedCatalog = new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -142,7 +143,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         };
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
@@ -161,7 +162,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var evt = new RoleDraftDeletedEvent();
         if (expectedVersion is not null)
             evt.ExpectedVersion = expectedVersion.Value;
-        await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, cancellationToken);
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
 
     }
 

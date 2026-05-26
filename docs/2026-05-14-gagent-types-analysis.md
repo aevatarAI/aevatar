@@ -7,6 +7,11 @@
 
 ## 1. GAgent 继承体系
 
+> 2026-05-25 更新：本文件保留 2026-05-14 盘点背景，但 issue #643
+> 已删除 Foundation MultiAgent 实验 actor，并确认 Studio empty-state
+> generation 降级为 Application authoring preview helper，不再作为 GAgent
+> 类型列入当前清单。
+
 ### 1.1 基类层级
 
 ```
@@ -30,18 +35,18 @@ GAgentBase                              ← 无状态底座
 
 #### 1.2.1 Foundation / Core 层
 
-| GAgent | 基类 | 状态类型 | 职责 |
-|---|---|---|---|
-| `TaskBoardGAgent` | `GAgentBase<TaskBoardState>` | `TaskBoardState` | 多 Agent 任务板（claim/complete/fail） |
-| `TeamManagerGAgent` | `GAgentBase<TeamManagerState>` | `TeamManagerState` | 多 Agent 团队管理（register/unregister/broadcast） |
+Issue #643 已删除旧 Foundation MultiAgent 实验 actor；当前 Foundation/Core 层不保留
+`TaskBoardGAgent` / `TeamManagerGAgent` 生产 GAgent 表面。
 
 #### 1.2.2 AI 层
 
 | GAgent | 基类 | 状态类型 | 职责 |
 |---|---|---|---|
 | `RoleGAgent` | `AIGAgentBase<RoleGAgentState>` | `RoleGAgentState` | 通用对话角色（YAML 配置、LLM streaming、tool calling） |
-| `ScriptGenerateGAgent` | `AIGAgentBase<Empty>` | `Empty` | Studio 端点：脚本生成 |
-| `WorkflowGenerateGAgent` | `AIGAgentBase<Empty>` | `Empty` | Studio 端点：工作流生成 |
+
+Studio empty-state generation 已降级为
+`ScriptAuthoringPreviewGenerator` / `WorkflowAuthoringPreviewGenerator`
+Application helper，不再作为 AI 层 GAgent 类型。
 
 #### 1.2.3 Workflow 层
 
@@ -98,7 +103,6 @@ GAgentBase                              ← 无状态底座
 | `ConnectorCatalogGAgent` | `GAgentBase<ConnectorCatalogState>` | `ConnectorCatalogState` | Connector 目录 |
 | `DeviceRegistrationGAgent` | `GAgentBase<DeviceRegistrationState>` | `DeviceRegistrationState` | 设备注册 |
 | `StreamingProxyGAgent` | `GAgentBase<StreamingProxyGAgentState>` | `StreamingProxyGAgentState` | 流式代理房间 |
-| `StreamingProxyParticipantGAgent` | `GAgentBase<StreamingProxyParticipantGAgentState>` | `StreamingProxyParticipantGAgentState` | 流式代理参与者 |
 | `ConversationGAgent` | `GAgentBase<ConversationGAgentState>` | `ConversationGAgentState` | 渠道对话（Lark/Telegram） |
 | `ChannelBotRegistrationGAgent` | `GAgentBase<ChannelBotRegistrationStoreState>` | `ChannelBotRegistrationStoreState` | 渠道 Bot 注册 |
 | `ChannelUserBindingGAgent` | `GAgentBase<ChannelUserBindingState>` | `ChannelUserBindingState` | 渠道用户绑定 |
@@ -110,8 +114,6 @@ GAgentBase                              ← 无状态底座
 | `AgentRunGAgent` | `GAgentBase<AgentRunGAgentState>` | `AgentRunGAgentState` | NyxID 运行 Actor |
 | `SkillRunnerGAgent` | `AIGAgentBase<SkillRunnerState>` | `SkillRunnerState` | 定时技能运行 |
 | `UserAgentCatalogGAgent` | `GAgentBase<UserAgentCatalogState>` | `UserAgentCatalogState` | 用户 Agent 目录 |
-| `TelegramBridgeGAgent` | `GAgentBase` | _(无状态)_ | Telegram 桥接 |
-| `TelegramUserBridgeGAgent` | `TelegramBridgeGAgent` | _(无状态)_ | Telegram 用户桥接 |
 
 ---
 
@@ -131,7 +133,6 @@ GAgentBase                              ← 无状态底座
 | `RoleCatalogGAgent` | role_name → role spec |
 | `ConnectorCatalogGAgent` | connector_name → connector config |
 | `UserAgentCatalogGAgent` | user + agent_id → catalog entry |
-| `StreamingProxyParticipantGAgent` | room_id → participant set |
 | `ChatHistoryIndexGAgent` | user → conversation list |
 
 **共性模式**：`Upsert → Tombstone → Compact`，状态内维护 `last_applied_event_version`，projection 直出 current-state read model。
@@ -183,8 +184,6 @@ GAgentBase                              ← 无状态底座
 | `RoleGAgent` | 通用角色（YAML 配置） |
 | `NyxIdChatGAgent` | NyxID 对话（继承 RoleGAgent） |
 | `ChatbotClassifierGAgent` | 分类器（继承 RoleGAgent） |
-| `ScriptGenerateGAgent` | Studio 端点（AIGAgentBase<Empty>） |
-| `WorkflowGenerateGAgent` | Studio 端点（AIGAgentBase<Empty>） |
 | `HouseholdEntity` | IoT 家户实体（AIGAgentBase） |
 
 **共性模式**：`ChatRequestEvent → ChatStreamAsync → AG-UI event publishing → tool approval lifecycle → self continuation`。
@@ -200,8 +199,6 @@ GAgentBase                              ← 无状态底座
 | `ServiceRolloutManagerGAgent` | 服务灰度发布进度 |
 | `ScriptEvolutionManagerGAgent` | 脚本演化 session 调度 |
 | `ScriptEvolutionSessionGAgent` | 单次演化会话推进 |
-| `TaskBoardGAgent` | 任务板（claim/complete） |
-| `TeamManagerGAgent` | 团队成员注册与广播 |
 | `StreamingProxyGAgent` | 流式房间管理（topic broadcast） |
 | `ResponsesAgentToolStateGAgent` | Agent 工具状态追踪 |
 
@@ -213,8 +210,6 @@ GAgentBase                              ← 无状态底座
 
 | Agent | 桥接物 |
 |---|---|
-| `TelegramBridgeGAgent` | Telegram API ↔ Actor |
-| `TelegramUserBridgeGAgent` | Telegram user ↔ Agent user |
 | `UserMemoryGAgent` | User memory store |
 | `ChatConversationGAgent` | Chat conversation store |
 
@@ -314,7 +309,7 @@ abstract class RunGAgentBase<TState> : GAgentBase<TState>
 
 #### 4.1.2 `CatalogGAgentBase<TState, TKey, TEntry>` — 目录索引基类
 
-**适用对象**：`ScriptCatalogGAgent`、`GAgentRegistryGAgent`、`RoleCatalogGAgent`、`ConnectorCatalogGAgent`、`UserAgentCatalogGAgent`、`StreamingProxyParticipantGAgent`、`ChatHistoryIndexGAgent`
+**适用对象**：`ScriptCatalogGAgent`、`GAgentRegistryGAgent`、`RoleCatalogGAgent`、`ConnectorCatalogGAgent`、`UserAgentCatalogGAgent`、`ChatHistoryIndexGAgent`
 
 **可抽取的通用能力**：
 ```

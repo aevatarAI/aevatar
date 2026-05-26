@@ -9,10 +9,12 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Application.Runtime;
 
+// Refactor (iter27/cluster-029-scripting-runtime-raw-actor-lifecycle):
+//   Old pattern: Scripting behavior runtime exposes raw IActorRuntime lifecycle/topology by assembly-qualified type name and caller-supplied actor ids
+//   New principle: Delete raw script-facing actor lifecycle/topology API; keep existing typed scripting ports (provisioning/command/definition/catalog/evolution)
 public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRuntimeCapabilityFactory
 {
     private readonly IAICapability _aiCapability;
-    private readonly IActorRuntime _runtime;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
@@ -22,7 +24,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
 
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
-        IActorRuntime runtime,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
@@ -31,7 +32,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         IScriptCatalogCommandPort catalogCommandPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
@@ -60,7 +60,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             scheduleSelfSignalAsync,
             cancelCallbackAsync,
             _aiCapability,
-            _runtime,
             _definitionSnapshotPort,
             _proposalPort,
             _definitionCommandPort,
