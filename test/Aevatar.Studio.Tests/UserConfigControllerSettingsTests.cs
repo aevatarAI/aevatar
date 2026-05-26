@@ -252,6 +252,40 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
+    public async Task SaveLlmSettings_WhenAdmissionIsRejected_ShouldReturnReceiptWithTracingFields()
+    {
+        var ackedAt = new DateTimeOffset(2026, 5, 26, 12, 30, 0, TimeSpan.Zero);
+        var commandService = new RecordingUserConfigCommandService
+        {
+            NextReceipt = new UserConfigSaveReceipt(
+                Accepted: false,
+                CommandId: "rejected-command",
+                AckStage: UserConfigCommandAckStage.AdmissionRejected,
+                ActorId: "user-config-scope-1",
+                CorrelationId: "corr-1",
+                AckedAtUtc: ackedAt),
+        };
+        var controller = CreateController(
+            current: new UserConfig("old-model", "/api/v1/proxy/s/old"),
+            commandService: commandService,
+            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            bearerToken: "user-token-1");
+
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsRequest(RouteValue: string.Empty, Model: "gpt-5.4"),
+            CancellationToken.None);
+
+        var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
+        var payload = accepted.Value.Should().BeOfType<UserConfigSaveReceiptResponse>().Subject;
+        payload.Accepted.Should().BeFalse();
+        payload.CommandId.Should().Be("rejected-command");
+        payload.AckStage.Should().Be(UserConfigCommandAckStage.AdmissionRejected);
+        payload.ActorId.Should().Be("user-config-scope-1");
+        payload.CorrelationId.Should().Be("corr-1");
+        payload.AckedAtUtc.Should().Be(ackedAt);
+    }
+
+    [Fact]
     public async Task SaveLlmSettings_WhenRouteValueIsMissing_ShouldReturnBadRequest()
     {
         var controller = CreateController(
@@ -398,11 +432,12 @@ public sealed class UserConfigControllerSettingsTests
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
     {
         public List<UserConfig> Saved { get; } = [];
+        public UserConfigSaveReceipt? NextReceipt { get; init; }
 
         public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default)
         {
             Saved.Add(config);
-            return Task.FromResult(new UserConfigSaveReceipt(
+            return Task.FromResult(NextReceipt ?? new UserConfigSaveReceipt(
                 Accepted: true,
                 CommandId: "command-1",
                 AckStage: UserConfigCommandAckStage.Accepted,

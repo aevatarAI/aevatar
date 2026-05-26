@@ -60,22 +60,27 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     [Fact]
-    public async Task SaveAsync_WhenDispatchAdmissionIsNotAccepted_ShouldThrow()
+    public async Task SaveAsync_WhenDispatchAdmissionIsNotAccepted_ShouldReturnRejectedReceipt()
     {
+        var ackedAt = new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero);
         var service = new ActorDispatchUserConfigCommandService(
             new RecordingBootstrap(),
             new RecordingDispatchPort(new DispatchAdmission(
                 Accepted: false,
                 CommandId: "rejected-command",
-                AckedAt: DateTimeOffset.UtcNow,
+                AckedAt: ackedAt,
                 ActorId: "user-config-scope-1",
                 CorrelationId: "corr-1")),
             new StubScopeResolver("scope-1"));
 
-        var act = () => service.SaveAsync(new UserConfig(DefaultModel: "gpt-5.5"));
+        var receipt = await service.SaveAsync(new UserConfig(DefaultModel: "gpt-5.5"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("User config command was not accepted by the actor dispatch port.");
+        receipt.Accepted.Should().BeFalse();
+        receipt.CommandId.Should().Be("rejected-command");
+        receipt.AckStage.Should().Be(UserConfigCommandAckStage.AdmissionRejected);
+        receipt.ActorId.Should().Be("user-config-scope-1");
+        receipt.CorrelationId.Should().Be("corr-1");
+        receipt.AckedAtUtc.Should().Be(ackedAt);
     }
 
     private sealed class RecordingBootstrap : IStudioActorBootstrap

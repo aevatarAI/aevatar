@@ -6,6 +6,7 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -310,6 +311,59 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task Selection_WritesThroughChannelCatalog_WhenGlobalWriterIsRegistered()
+    {
+        var provisioned = ChronoLlm with { RouteValue = "/api/v1/proxy/s/chrono-provisioned" };
+        var catalog = new StubCatalogClient
+        {
+            ProvisionedService = provisioned,
+            SetupHint = new UserLlmSetupHint(
+                "https://nyxid.example/services",
+                [
+                    new UserLlmPreset(
+                        "chrono-provision",
+                        "Provision chrono",
+                        "Provision shared service",
+                        new ProvisionThenUse("chrono/shared")),
+                ]),
+        };
+        var globalCatalog = new ThrowingGlobalCatalogPort();
+        var commandService = new StubUserConfigCommandService();
+        var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort())
+            .AddSingleton<IUserConfigCommandService>(commandService)
+            .AddSingleton<IUserLlmCatalogPort>(globalCatalog)
+            .AddSingleton<UserLlmPreferenceWriter>()
+            .BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+        var context = BuildSelectionContext();
+
+        await selection.SetByServiceAsync(context, "openai-work", null, default);
+        await selection.ApplyPresetAsync(context, "chrono-provision", default);
+        await selection.SetModelOverrideAsync(context, "chrono-llm/gpt-5.5", default);
+
+        globalCatalog.GetServicesCount.Should().Be(0);
+        globalCatalog.ProvisionCount.Should().Be(0);
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "channel-context");
+        catalog.ProvisionCalls.Should().ContainSingle()
+            .Which.Should().Match<StubCatalogClient.ProvisionCall>(call =>
+                call.Context.BindingId.Value == "bnd_sender" &&
+                call.Context.RegistrationScopeId == "owner-scope" &&
+                call.AccessToken == "channel-context" &&
+                call.ProvisionEndpointId == "chrono/shared");
+        commandService.SavedConfigs.Should().HaveCount(3);
+        commandService.SavedConfigs[0].Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        commandService.SavedConfigs[1].Config.PreferredLlmRoute.Should().Be(provisioned.RouteValue);
+        commandService.SavedConfigs[2].Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        commandService.SavedConfigs[2].Config.DefaultModel.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task Use_ServiceNameAndModel_WritesRouteAndModelOverride()
     {
         var commandService = new StubUserConfigCommandService();
@@ -525,6 +579,8 @@ public sealed class ModelSlashCommandHandlerTests
         public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
         public NyxIdLlmService ProvisionedService { get; init; } = ChronoLlm;
         public Exception? GetServicesError { get; init; }
+        public List<GetServicesCall> GetServicesCalls { get; } = [];
+        public List<ProvisionCall> ProvisionCalls { get; } = [];
 
         public UserLlmSetupHint SetupHint { get; init; } = new(
             "https://nyxid.example/services",
@@ -541,6 +597,7 @@ public sealed class ModelSlashCommandHandlerTests
             string accessToken,
             CancellationToken ct)
         {
+            GetServicesCalls.Add(new GetServicesCall(query, accessToken));
             if (GetServicesError is not null)
                 return Task.FromException<NyxIdLlmServicesResult>(GetServicesError);
 
@@ -557,8 +614,35 @@ public sealed class ModelSlashCommandHandlerTests
             UserLlmSelectionContext context,
             string accessToken,
             string provisionEndpointId,
-            CancellationToken ct) =>
-            Task.FromResult(ProvisionedService);
+            CancellationToken ct)
+        {
+            ProvisionCalls.Add(new ProvisionCall(context, accessToken, provisionEndpointId));
+            return Task.FromResult(ProvisionedService);
+        }
+
+        public sealed record GetServicesCall(UserLlmOptionsQuery Query, string AccessToken);
+        public sealed record ProvisionCall(
+            UserLlmSelectionContext Context,
+            string AccessToken,
+            string ProvisionEndpointId);
+    }
+
+    private sealed class ThrowingGlobalCatalogPort : IUserLlmCatalogPort
+    {
+        public int GetServicesCount { get; private set; }
+        public int ProvisionCount { get; private set; }
+
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            GetServicesCount++;
+            throw new InvalidOperationException("Global catalog must not be used by channel LLM selection.");
+        }
+
+        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct)
+        {
+            ProvisionCount++;
+            throw new InvalidOperationException("Global catalog must not be used by channel LLM selection.");
+        }
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker

@@ -3,6 +3,7 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 public static class UserConfigCommandAckStage
 {
     public const string Accepted = "accepted";
+    public const string AdmissionRejected = "admission_rejected";
 }
 
 public sealed record UserConfigSaveReceipt(

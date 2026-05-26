@@ -114,22 +114,15 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
 
         using var scope = _scopeFactory.CreateScope();
-        var writer = scope.ServiceProvider.GetService<UserLlmPreferenceWriter>();
-        if (writer is null)
-        {
-            var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
-            var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
-            if (queryPort is null || commandService is null)
-                throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
-
-            writer = new UserLlmPreferenceWriter(
-                queryPort,
-                commandService,
-                new ChannelUserLlmCatalogPort(_catalogClient, ToQuery(context), context));
-        }
-
-        if (writer is null)
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
+        if (queryPort is null || commandService is null)
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        var writer = new UserLlmPreferenceWriter(
+            queryPort,
+            commandService,
+            new ChannelUserLlmCatalogPort(_catalogClient, ToQuery(context), context));
 
         try
         {
