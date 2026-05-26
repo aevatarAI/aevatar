@@ -25,16 +25,14 @@ steps:
     next: build_lark_approval_payload
 
   - id: build_lark_approval_payload
-    type: connector_call
+    type: tool_call
     parameters:
-      connector: aevatar_native_payload_builder
-      operation: lark_onboarding_email_approval_payload
-      method: POST
-      path: /workflow-payloads/lark-onboarding-email-approval/approval-instance
-      stdin_mode: input
-      content_type: application/json
-      timeout_ms: "30000"
+      tool: use_skill
       skill_binding: lark-onboarding-email-approval.payload-builder
+      binding_ref: lark-onboarding-email-approval/lark-approval-payload
+      input_contract: lark-onboarding-email-approval/lark-approval-payload.input.v1
+      output_contract: lark-onboarding-email-approval/lark-approval-payload.output.v1
+      required_for: payload_construction
     next: request_lark_email_approval
 
   - id: request_lark_email_approval

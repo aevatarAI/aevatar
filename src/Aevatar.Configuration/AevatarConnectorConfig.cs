@@ -84,7 +84,7 @@ public sealed class TelegramUserConnectorConfig
 }
 
 /// <summary>
-/// Loads connector settings from ~/.aevatar/connectors.json.
+/// Loads connector settings from ~/.aevatar/connectors.json and repository-bundled connector catalogs.
 /// Supported shapes:
 /// 1) { "connectors": [ { "name": "...", ... } ] }
 /// 2) { "connectors": { "my_name": { ... } } }
@@ -92,9 +92,38 @@ public sealed class TelegramUserConnectorConfig
 /// </summary>
 public static partial class AevatarConnectorConfig
 {
+    private static readonly string[] BundledConnectorCatalogs =
+    [
+        Path.Combine(
+            AevatarPaths.RepoRoot,
+            "workflows",
+            "aevatar-native",
+            "connectors",
+            "aevatar-native-s-workflows.connectors.json"),
+    ];
+
     public static IReadOnlyList<ConnectorConfigEntry> LoadConnectors(string? filePath = null)
     {
-        var path = filePath ?? AevatarPaths.ConnectorsJson;
+        var paths = filePath != null
+            ? [filePath]
+            : BundledConnectorCatalogs.Concat([AevatarPaths.ConnectorsJson]);
+
+        var entries = new List<ConnectorConfigEntry>();
+        foreach (var path in paths)
+        {
+            entries.AddRange(LoadConnectorsFromFile(path));
+        }
+
+        return entries
+            .Where(x => !string.IsNullOrWhiteSpace(x.Name) && !string.IsNullOrWhiteSpace(x.Type))
+            .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Last())
+            .Where(x => x.Enabled)
+            .ToList();
+    }
+
+    private static IReadOnlyList<ConnectorConfigEntry> LoadConnectorsFromFile(string path)
+    {
         if (!File.Exists(path)) return [];
 
         try
@@ -105,10 +134,7 @@ public static partial class AevatarConnectorConfig
                 ? configuredNode
                 : root;
 
-            var entries = ParseConnectorsNode(connectorsNode);
-            return entries
-                .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Name) && !string.IsNullOrWhiteSpace(x.Type))
-                .ToList();
+            return ParseConnectorsNode(connectorsNode);
         }
         catch
         {

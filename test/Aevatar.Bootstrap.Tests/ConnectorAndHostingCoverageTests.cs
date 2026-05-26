@@ -431,6 +431,30 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public void ConnectorRegistration_ShouldRegisterBundledAevatarNativeSWorkflowConnectors()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["NYXID_PROXY_BASE_URL"] = "https://nyxid.example.com",
+            ["NYXID_LARK_BITABLE_SERVICE_SLUG"] = "lark-bitable",
+            ["NYXID_LARK_APPROVAL_SERVICE_SLUG"] = "lark-approval",
+            ["NYXID_LARK_BOT_SERVICE_SLUG"] = "lark-bot",
+        });
+        var registry = new InMemoryConnectorRegistry();
+        var logger = NullLogger.Instance;
+        var builders = new IConnectorBuilder[] { new HttpConnectorBuilder() };
+
+        var added = ConnectorRegistration.RegisterConnectors(registry, builders, logger);
+
+        added.Should().BeGreaterThanOrEqualTo(3);
+        registry.ListNames().Should().Contain([
+            "nyxid_lark_bitable_proxy",
+            "nyxid_lark_approval_proxy",
+            "nyxid_lark_channel_bot",
+        ]);
+    }
+
+    [Fact]
     public async Task ConnectorBootstrapHostedService_ShouldSkipWithoutRegistryAndLoadWithRegistry()
     {
         var servicesWithoutRegistry = new ServiceCollection();
@@ -758,6 +782,26 @@ public class ConnectorAndHostingCoverageTests
         {
             RequestedNames.Add(name);
             return clientFactory(name);
+        }
+    }
+
+    private sealed class EnvironmentVariablesScope : IDisposable
+    {
+        private readonly Dictionary<string, string?> _previousValues = new(StringComparer.Ordinal);
+
+        public EnvironmentVariablesScope(IReadOnlyDictionary<string, string?> overrides)
+        {
+            foreach (var pair in overrides)
+            {
+                _previousValues[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var pair in _previousValues)
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         }
     }
 

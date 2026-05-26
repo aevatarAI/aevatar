@@ -180,6 +180,7 @@ def validate_registry_entry(
     }
 
     validate_aevatar_runtime_assertions(name, item, errors)
+    validate_payload_builder_binding(name, item, step_by_id, errors)
     validate_nyxid_binding(name, item, step_by_id, connectors, errors)
     validate_ornn_bindings(name, item, step_by_id, errors)
 
@@ -255,6 +256,52 @@ def validate_nyxid_binding(
     for connector_name in connector_names:
         if connector_name not in workflow_connector_refs:
             errors.append(f"{name}: connector '{connector_name}' is not referenced by workflow steps")
+
+
+def validate_payload_builder_binding(
+    name: str,
+    item: dict[str, Any],
+    step_by_id: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    payload_builder = item.get("payloadBuilder")
+    if not isinstance(payload_builder, dict):
+        errors.append(f"{name}: payloadBuilder is required")
+        return
+
+    if payload_builder.get("kind") != "ornn_skill_binding":
+        errors.append(f"{name}: payloadBuilder.kind must be ornn_skill_binding")
+    if payload_builder.get("tool") != "use_skill":
+        errors.append(f"{name}: payloadBuilder.tool must be use_skill")
+
+    skill = str(payload_builder.get("skill", "")).strip()
+    if not skill:
+        errors.append(f"{name}: payloadBuilder.skill is required")
+
+    contract = payload_builder.get("contract")
+    if not isinstance(contract, dict):
+        errors.append(f"{name}: payloadBuilder.contract is required")
+    else:
+        for key in ("inputRef", "outputRef"):
+            if not str(contract.get(key, "")).strip():
+                errors.append(f"{name}: payloadBuilder.contract.{key} is required")
+
+    matching_steps = []
+    for step in step_by_id.values():
+        parameters = step.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        if (
+            step.get("type") == "tool_call"
+            and parameters.get("tool") == "use_skill"
+            and parameters.get("skill_binding") == skill
+            and parameters.get("required_for") == "payload_construction"
+        ):
+            matching_steps.append(step)
+
+    if not matching_steps:
+        errors.append(
+            f"{name}: payloadBuilder.skill must be used by a tool_call/use_skill payload construction step"
+        )
 
 
 def validate_ornn_bindings(

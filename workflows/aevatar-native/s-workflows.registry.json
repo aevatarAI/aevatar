@@ -29,6 +29,15 @@
         "nyxid_lark_bitable_proxy",
         "nyxid_lark_channel_bot"
       ],
+      "payloadBuilder": {
+        "kind": "ornn_skill_binding",
+        "tool": "use_skill",
+        "skill": "budget-monitoring.variance-payload-builder",
+        "contract": {
+          "inputRef": "budget-monitoring/budget-variance-payload.input.v1",
+          "outputRef": "budget-monitoring/budget-variance-payload.output.v1"
+        }
+      },
       "ornnSkillBindings": [
         {
           "stepId": "load_budget_variance_skill",
@@ -66,6 +75,15 @@
       "nyxidConnectors": [
         "nyxid_lark_approval_proxy"
       ],
+      "payloadBuilder": {
+        "kind": "ornn_skill_binding",
+        "tool": "use_skill",
+        "skill": "lark-onboarding-email-approval.payload-builder",
+        "contract": {
+          "inputRef": "lark-onboarding-email-approval/lark-approval-payload.input.v1",
+          "outputRef": "lark-onboarding-email-approval/lark-approval-payload.output.v1"
+        }
+      },
       "ornnSkillBindings": [
         {
           "stepId": "load_onboarding_payload_skill",

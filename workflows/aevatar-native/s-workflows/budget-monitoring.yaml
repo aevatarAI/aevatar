@@ -81,16 +81,14 @@ steps:
     next: build_variance_payload
 
   - id: build_variance_payload
-    type: connector_call
+    type: tool_call
     parameters:
-      connector: aevatar_native_payload_builder
-      operation: budget_variance_payload
-      method: POST
-      path: /workflow-payloads/budget-monitoring/variance
-      stdin_mode: input
-      content_type: application/json
-      timeout_ms: "30000"
+      tool: use_skill
       skill_binding: budget-monitoring.variance-payload-builder
+      binding_ref: budget-monitoring/budget-variance-payload
+      input_contract: budget-monitoring/budget-variance-payload.input.v1
+      output_contract: budget-monitoring/budget-variance-payload.output.v1
+      required_for: payload_construction
     next: post_weekly_variance_alert
 
   - id: post_weekly_variance_alert

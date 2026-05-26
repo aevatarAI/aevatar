@@ -8,6 +8,7 @@ using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
@@ -105,6 +106,36 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public async Task AddAevatarAIFeatures_WithSkillsAndOrnn_ShouldExposeUseSkillAndRemoteFetcher()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.EnableSkills = true;
+            options.EnableOrnnSkills = true;
+            options.OrnnBaseUrl = "https://ornn.example.com";
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IRemoteSkillFetcher>().Should().BeOfType<OrnnRemoteSkillFetcher>();
+
+        var toolSources = provider.GetServices<IAgentToolSource>().ToList();
+        toolSources.Should().ContainSingle(x => x is SkillsAgentToolSource);
+        toolSources.Should().ContainSingle(x => x is OrnnAgentToolSource);
+
+        var discoveredTools = new List<IAgentTool>();
+        foreach (var toolSource in toolSources)
+            discoveredTools.AddRange(await toolSource.DiscoverToolsAsync());
+
+        discoveredTools.Should().ContainSingle(x => x.Name == "use_skill");
+        discoveredTools.Should().ContainSingle(x => x.Name == "ornn_search_skills");
     }
 
     [Fact]

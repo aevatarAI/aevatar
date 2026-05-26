@@ -54,32 +54,6 @@
           "Content-Type": "application/json"
         }
       }
-    },
-    "aevatar_native_payload_builder": {
-      "type": "http",
-      "enabled": true,
-      "timeoutMs": 30000,
-      "retry": 0,
-      "http": {
-        "baseUrl": "${AEVATAR_NATIVE_PAYLOAD_BUILDER_BASE_URL}",
-        "allowedMethods": [
-          "POST"
-        ],
-        "allowedPaths": [
-          "/workflow-payloads/budget-monitoring/variance",
-          "/workflow-payloads/lark-onboarding-email-approval/approval-instance"
-        ],
-        "allowedInputKeys": [
-          "workflow",
-          "run_id",
-          "ingress_event",
-          "records",
-          "skill_binding"
-        ],
-        "defaultHeaders": {
-          "Content-Type": "application/json"
-        }
-      }
     }
   }
 }

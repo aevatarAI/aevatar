@@ -48,6 +48,7 @@ jobs:
             core_code:
               - 'src/**'
               - 'test/**'
+              - 'workflows/**'
               - 'aevatar.slnx'
               - 'aevatar.*.slnf'
               - '.editorconfig'
@@ -113,6 +114,9 @@ jobs:
 
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
+
+      - name: Aevatar Native S Workflow Artifact Guard
+        run: bash tools/ci/aevatar_native_s_workflow_guard.sh
 
   console-web:
     if: |

@@ -28,6 +28,12 @@ public sealed class HttpConnectorBuilder : IConnectorBuilder
             return false;
         }
 
+        if (!Uri.TryCreate(entry.Http.BaseUrl, UriKind.Absolute, out _))
+        {
+            logger.LogWarning("Skip connector {Name}: http.baseUrl must be an absolute URL", entry.Name);
+            return false;
+        }
+
         var httpClientName = BuildHttpClientName(entry.Name);
         var authorizationProvider = ClientCredentialsConnectorAuthorizationProvider.IsConfigured(entry.Http.Auth)
             ? new ClientCredentialsConnectorAuthorizationProvider(entry.Http.Auth, _httpClientFactory, httpClientName)
