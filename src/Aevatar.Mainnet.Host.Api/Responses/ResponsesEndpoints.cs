@@ -99,6 +99,15 @@ internal static partial class ResponsesApiEndpoints
             return Results.Empty;
         }
 
+        if (result.Accepted is not null)
+        {
+            return Results.Json(
+                BuildAcceptedResponse(
+                    result.Accepted.Normalized,
+                    result.Accepted.CreatedAt),
+                statusCode: StatusCodes.Status200OK);
+        }
+
         if (result.Completed is not null)
         {
             return Results.Json(
@@ -223,6 +232,21 @@ internal static partial class ResponsesApiEndpoints
                 ++sequenceNumber,
                 completion.Error.Code,
                 completion.Error.Message,
+                CancellationToken.None);
+            return;
+        }
+
+        if (completion.Accepted is not null)
+        {
+            await WriteSseFrameAsync(
+                response,
+                "response.in_progress",
+                new
+                {
+                    type = "response.in_progress",
+                    response = BuildAcceptedResponse(normalized, createdAt),
+                    sequence_number = ++sequenceNumber,
+                },
                 CancellationToken.None);
             return;
         }
@@ -510,6 +534,32 @@ internal static partial class ResponsesApiEndpoints
             MaxOutputTokens = normalized.MaxOutputTokens,
             Model = normalized.Model,
             Output = [],
+            PreviousResponseId = normalized.PreviousResponseId,
+            ParallelToolCalls = true,
+            Reasoning = new ResponsesReasoningSettings(),
+            Store = false,
+            Temperature = normalized.Temperature,
+            ToolChoice = "auto",
+            Tools = [],
+            Truncation = "disabled",
+            Usage = null,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
+        };
+    }
+
+    private static ResponsesResponseSnapshot BuildAcceptedResponse(
+        NormalizedResponsesRequest normalized,
+        long createdAt)
+    {
+        return new ResponsesResponseSnapshot
+        {
+            Id = normalized.ResponseId,
+            CreatedAt = createdAt,
+            Status = "in_progress",
+            Input = [BuildInputMessage(normalized.Prompt)],
+            MaxOutputTokens = normalized.MaxOutputTokens,
+            Model = normalized.Model,
+            Output = [BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null)],
             PreviousResponseId = normalized.PreviousResponseId,
             ParallelToolCalls = true,
             Reasoning = new ResponsesReasoningSettings(),

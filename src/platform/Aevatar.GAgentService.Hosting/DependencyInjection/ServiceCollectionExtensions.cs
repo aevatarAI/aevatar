@@ -65,7 +65,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
-        services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
         services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
