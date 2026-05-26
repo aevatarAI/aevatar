@@ -50,7 +50,12 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             var timeoutMs = ResolveTimeoutMs(request.Parameters);
             var pendingKey = new PendingSignalKey(runId, signalName, stepId);
             var state = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
-            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Refactor (iter89/cluster-089-workflow-module-clock-state):
+            //   Old: wait_signal used process wall clock for buffered signal
+            //        eviction and received timestamps.
+            //   New: wait_signal uses the workflow execution context clock for
+            //        business-time buffer state.
+            var nowMs = ctx.UtcNow.ToUnixTimeMilliseconds();
             PruneExpiredBufferedSignals(state, nowMs);
 
             if (TryConsumeBufferedSignal(state, pendingKey, nowMs, out var buffered))
@@ -168,7 +173,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 
         var signal = payload.Unpack<SignalReceivedEvent>();
         var stateForSignal = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
-        var signalNowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var signalNowMs = ctx.UtcNow.ToUnixTimeMilliseconds();
         PruneExpiredBufferedSignals(stateForSignal, signalNowMs);
         if (!TryResolvePending(stateForSignal, signal, out var resolvedKey, out var pendingStateForSignal))
         {

@@ -52,6 +52,7 @@ import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 const teamProjectionRetryLimit = 5;
 const teamProjectionRetryBaseMs = 500;
 const teamProjectionRetryMaxMs = 3_000;
+const entryMemberClearingId = "__clear_entry_member__";
 const teamEntryVisibilityAttempts = 5;
 const teamEntryVisibilityRetryDelayMs = 100;
 
@@ -701,6 +702,18 @@ const TeamDetailPage: React.FC = () => {
       }),
     [scopeId, selectedTeamId],
   );
+  const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
+  const entryMemberSummary = React.useMemo(
+    () =>
+      entryMemberId
+        ? (teamMembersQuery.data?.members ?? []).find(
+            (member) => trimText(member.memberId) === entryMemberId,
+          ) ?? null
+        : null,
+    [entryMemberId, teamMembersQuery.data?.members],
+  );
+  const entryMemberLabel =
+    trimText(entryMemberSummary?.displayName) || entryMemberId;
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => ({
@@ -723,21 +736,20 @@ const TeamDetailPage: React.FC = () => {
           teamId: selectedTeamId,
         }),
         implementationKind: formatCompositionKind(member.implementationKind),
-        isEntryMember:
-          trimText(member.memberId) === trimText(teamSummaryQuery.data?.entryMemberId),
         key: member.memberId,
         lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+        isEntryMember: trimText(member.memberId) === entryMemberId,
         memberId: member.memberId,
         name: trimText(member.displayName) || member.memberId,
         serviceId: trimText(member.publishedServiceId) || "--",
       })),
     [
       buildTeamReturnHref,
+      entryMemberId,
       scopeId,
       selectedTeamId,
       teamMembersQuery.data?.members,
-      teamSummaryQuery.data?.entryMemberId,
       token,
     ],
   );
@@ -1277,7 +1289,7 @@ const TeamDetailPage: React.FC = () => {
       return;
     }
 
-    setEntryActionBusyMemberId(trimText(teamSummaryQuery.data?.entryMemberId));
+    setEntryActionBusyMemberId(entryMemberClearingId);
     setTeamTestError(null);
     try {
       const updatedTeam = await studioApi.clearTeamEntryMember(scopeId, selectedTeamId);
@@ -1303,10 +1315,11 @@ const TeamDetailPage: React.FC = () => {
     }
   }, [
     queryClient,
+    entryMemberId,
+    isTeamArchived,
     refreshTeamAuthority,
     scopeId,
     selectedTeamId,
-    teamSummaryQuery.data?.entryMemberId,
     teamSummaryQueryKey,
   ]);
   const teamTestPanel = (
@@ -1357,8 +1370,16 @@ const TeamDetailPage: React.FC = () => {
           color: token.colorInfo,
         }}
         currentServicePillText={currentServicePillText}
+        entryMemberId={entryMemberId || null}
+        entryMemberLabel={entryMemberLabel}
+        entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
+        onClearEntryMember={
+          teamSummaryQuery.data && !isTeamArchived && entryMemberId
+            ? () => void handleClearEntry()
+            : undefined
+        }
       />
     );
   };
@@ -1368,9 +1389,17 @@ const TeamDetailPage: React.FC = () => {
       <TeamMembersTab
         createMemberHref={createMemberHref}
         entryActionBusyMemberId={entryActionBusyMemberId}
-        onClearEntry={() => void handleClearEntry()}
+        onClearEntry={
+          teamSummaryQuery.data && !isTeamArchived && entryMemberId
+            ? () => void handleClearEntry()
+            : undefined
+        }
         onNavigate={(href) => history.push(href)}
-        onSetEntry={(memberId) => void handleSetEntry(memberId)}
+        onSetEntry={
+          teamSummaryQuery.data && !isTeamArchived
+            ? (memberId) => void handleSetEntry(memberId)
+            : undefined
+        }
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
         rosterSyncing={isTeamMembersProjectionSyncing}

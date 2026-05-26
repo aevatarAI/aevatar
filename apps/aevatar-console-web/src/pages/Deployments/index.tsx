@@ -38,6 +38,10 @@ import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import { buildPlatformDeploymentsHref } from "@/shared/navigation/platformRoutes";
+import {
+  invalidateServiceResourceQueries,
+  serviceResourceQueryKeys,
+} from "@/shared/query/serviceResourceQueryKeys";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
 import type {
@@ -885,38 +889,38 @@ const DeploymentsPage: React.FC = () => {
 
   const servicesQuery = useQuery({
     queryFn: () => servicesApi.listServices(query),
-    queryKey: ["deployments", "services", query],
+    queryKey: serviceResourceQueryKeys.list(query),
   });
 
   const serviceDetailQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getService(selectedServiceId, query),
-    queryKey: ["deployments", "service", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.detail(query, selectedServiceId),
   });
   const revisionsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRevisions(selectedServiceId, query),
-    queryKey: ["deployments", "revisions", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.revisions(query, selectedServiceId),
   });
   const deploymentsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getDeployments(selectedServiceId, query),
-    queryKey: ["deployments", "catalog", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.deployments(query, selectedServiceId),
   });
   const servingQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getServingSet(selectedServiceId, query),
-    queryKey: ["deployments", "serving", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.serving(query, selectedServiceId),
   });
   const rolloutQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRollout(selectedServiceId, query),
-    queryKey: ["deployments", "rollout", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.rollout(query, selectedServiceId),
   });
   const trafficQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getTraffic(selectedServiceId, query),
-    queryKey: ["deployments", "traffic", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.traffic(query, selectedServiceId),
   });
 
   const selectedService = useMemo(
@@ -1179,15 +1183,7 @@ const DeploymentsPage: React.FC = () => {
   );
 
   const invalidateDetailQueries = useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["deployments", "service"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "revisions"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "catalog"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "serving"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "rollout"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "traffic"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "services"] }),
-    ]);
+    await invalidateServiceResourceQueries(queryClient);
   }, [queryClient]);
 
   const openDrawer = useCallback((tab: DeploymentDrawerTab) => {

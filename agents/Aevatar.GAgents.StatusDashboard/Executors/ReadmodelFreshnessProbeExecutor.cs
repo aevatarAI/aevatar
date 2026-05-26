@@ -17,11 +17,15 @@ namespace Aevatar.GAgents.StatusDashboard.Executors;
 public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
 {
     private readonly Dictionary<string, IReadmodelFreshnessSource> _sources;
+    private readonly TimeProvider _timeProvider;
 
-    public ReadmodelFreshnessProbeExecutor(IEnumerable<IReadmodelFreshnessSource> sources)
+    public ReadmodelFreshnessProbeExecutor(
+        IEnumerable<IReadmodelFreshnessSource> sources,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(sources);
         _sources = sources.ToDictionary(s => s.Name, s => s, StringComparer.OrdinalIgnoreCase);
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public string Kind => "readmodel_freshness";
@@ -37,7 +41,7 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
                 Status = HealthOutcomeStatus.Down,
                 Detail = "missing_parameter",
                 ErrorMessage = "Parameter 'Source' is required.",
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ObservedAt = NowTimestamp(),
             };
         }
 
@@ -48,7 +52,7 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
                 Status = HealthOutcomeStatus.Down,
                 Detail = "unknown_source",
                 ErrorMessage = $"No IReadmodelFreshnessSource named '{sourceName}'. Known: {string.Join(",", _sources.Keys)}.",
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ObservedAt = NowTimestamp(),
             };
         }
 
@@ -67,7 +71,7 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
                 Status = HealthOutcomeStatus.Down,
                 Detail = "freshness_source_threw",
                 ErrorMessage = ex.Message,
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ObservedAt = NowTimestamp(),
             };
         }
 
@@ -78,13 +82,16 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
                 Status = HealthOutcomeStatus.Degraded,
                 Detail = $"count_{snapshot.Count}",
                 ErrorMessage = $"Read model has {snapshot.Count} entries; expected at least {minCount}.",
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ObservedAt = NowTimestamp(),
             };
         }
 
         if (staleAfter.HasValue && snapshot.LastUpdatedAt.HasValue)
         {
-            var age = DateTimeOffset.UtcNow - snapshot.LastUpdatedAt.Value;
+            // Refactor (iter89/cluster-089-status-dashboard-probe-clock):
+            // Old: freshness age compared the readmodel timestamp against DateTimeOffset.UtcNow.
+            // New: freshness age compares against the injected TimeProvider clock.
+            var age = _timeProvider.GetUtcNow() - snapshot.LastUpdatedAt.Value;
             if (age.TotalSeconds > staleAfter.Value)
             {
                 return new HealthProbeOutcome
@@ -92,7 +99,7 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
                     Status = HealthOutcomeStatus.Degraded,
                     Detail = $"stale_{(int)age.TotalSeconds}s",
                     ErrorMessage = $"Latest entry is {(int)age.TotalSeconds}s old; threshold {staleAfter}s.",
-                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ObservedAt = NowTimestamp(),
                 };
             }
         }
@@ -103,6 +110,9 @@ public sealed class ReadmodelFreshnessProbeExecutor : IHealthProbeExecutor
             Detail = $"count_{snapshot.Count}",
         };
     }
+
+    private Timestamp NowTimestamp() =>
+        Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
 
     private static string? ReadParam(HealthProbeTargetDescriptor descriptor, string key)
     {

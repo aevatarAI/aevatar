@@ -11,7 +11,13 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 /// <summary>
 /// Infrastructure adapter for workflow definition actor lifecycle and run actor creation.
 /// </summary>
-internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
+// Refactor (iter51/issue-900-workflow-actor-port-runtime-object):
+//   Old pattern: Application layer ports returned and passed IActor runtime objects directly; one port owned actor lifecycle + topology + dispatch + parse.
+//   New principle: Application layer exchanges typed actor-id receipts (ActorId, DefinitionActorId, CreatedActorIds); runtime IActor objects stay infrastructure-only; lifecycle/provisioning, dispatch, and YAML parsing are split into narrow ports.
+internal sealed class WorkflowRunActorPort :
+    IWorkflowDefinitionProvisioningPort,
+    IWorkflowRunProvisioningPort,
+    IWorkflowDefinitionParser
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
@@ -37,10 +43,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
     }
 
-    public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-        _runtime.CreateAsync<WorkflowGAgent>(actorId, ct: ct);
+    public async Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
+        WorkflowDefinitionBinding definition,
+        string? preferredActorId = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var requestedDefinitionActorId = NormalizeActorId(preferredActorId)
+                                         ?? NormalizeActorId(definition.DefinitionActorId);
+        var definitionResolution = requestedDefinitionActorId == null
+            ? await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct)
+            : await EnsureDefinitionActorAsync(definition, requestedDefinitionActorId, ct);
 
-    public async Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+        return new WorkflowDefinitionProvisioningReceipt(
+            definitionResolution.ActorId,
+            definitionResolution.CreatedNow);
+    }
+
+    public async Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
@@ -55,7 +75,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         var createdActorIds = new List<string>(2);
         try
         {
-            definitionResolution = await EnsureDefinitionActorAsync(definition, ct);
+            definitionResolution = await EnsureDefinitionActorAsync(definition, NormalizeActorId(definition.DefinitionActorId), ct);
             if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 createdActorIds.Add(definitionResolution.ActorId);
 
@@ -80,8 +100,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
                     definition.ScopeId),
                 ct);
 
-            return new WorkflowRunCreationResult(
-                runActor,
+            return new WorkflowRunCreationReceipt(
+                runActor.Id,
                 definitionResolution.ActorId,
                 createdActorIds);
         }
@@ -101,19 +121,21 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     }
 
     public async Task BindWorkflowDefinitionAsync(
-        IActor actor,
+        string actorId,
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new ArgumentException("Actor id is required.", nameof(actorId));
+
         // Refactor (iter18/cluster-006):
         //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
         //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
         var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls, scopeId);
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
     public Task MarkStoppedAsync(
@@ -167,9 +189,9 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 
     private async Task<DefinitionActorResolutionResult> EnsureDefinitionActorAsync(
         WorkflowDefinitionBinding definition,
+        string? requestedDefinitionActorId,
         CancellationToken ct)
     {
-        var requestedDefinitionActorId = NormalizeActorId(definition.DefinitionActorId);
         if (requestedDefinitionActorId != null)
         {
             var existingActor = await _runtime.GetAsync(requestedDefinitionActorId);
@@ -189,7 +211,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
             {
                 await BindWorkflowDefinitionAsync(
-                    existingActor,
+                    existingActor.Id,
                     definition.WorkflowYaml,
                     definition.WorkflowName,
                     definition.InlineWorkflowYamls,
@@ -211,7 +233,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         IActor definitionActor;
         try
         {
-            definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
+            definitionActor = await _runtime.CreateAsync<WorkflowGAgent>(preferredActorId, ct: ct);
         }
         catch (InvalidOperationException) when (!string.IsNullOrWhiteSpace(preferredActorId))
         {
@@ -225,7 +247,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         try
         {
             await BindWorkflowDefinitionAsync(
-                definitionActor,
+                definitionActor.Id,
                 definition.WorkflowYaml,
                 definition.WorkflowName,
                 definition.InlineWorkflowYamls,
@@ -258,7 +280,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
         {
             await BindWorkflowDefinitionAsync(
-                existingActor,
+                existingActor.Id,
                 definition.WorkflowYaml,
                 definition.WorkflowName,
                 definition.InlineWorkflowYamls,

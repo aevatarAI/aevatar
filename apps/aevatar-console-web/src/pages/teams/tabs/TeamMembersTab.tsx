@@ -1,5 +1,5 @@
 import { CheckCircleOutlined, EditOutlined, ToolOutlined } from "@ant-design/icons";
-import { Button, Space, Typography, theme } from "antd";
+import { Button, Space, Tooltip, Typography, theme } from "antd";
 import React from "react";
 import {
   AevatarInspectorEmpty,
@@ -39,6 +39,37 @@ type TeamMembersTabProps = {
   readonly onNavigate?: (href: string) => void;
   readonly onSetEntry?: (memberId: string) => void;
 };
+
+const ellipsisTextStyle: React.CSSProperties = {
+  display: "block",
+  maxWidth: "100%",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const EllipsisText: React.FC<{
+  readonly children: string;
+  readonly monospace?: boolean;
+  readonly strong?: boolean;
+  readonly style?: React.CSSProperties;
+  readonly type?: "secondary";
+}> = ({ children, monospace = false, strong = false, style, type }) => (
+  <Tooltip placement="topLeft" title={children}>
+    <Typography.Text
+      strong={strong}
+      style={{
+        ...ellipsisTextStyle,
+        fontFamily: monospace ? factValueFontFamily : undefined,
+        ...style,
+      }}
+      type={type}
+    >
+      {children}
+    </Typography.Text>
+  </Tooltip>
+);
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   createMemberHref = "",
@@ -129,8 +160,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     key={row.key}
                     style={{
                       alignItems: "center",
+                      background: row.isEntryMember
+                        ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
+                        : undefined,
                       borderTop:
                         index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
+                      boxShadow: row.isEntryMember
+                        ? "inset 4px 0 0 var(--ant-colorPrimary)"
+                        : undefined,
                       display: "grid",
                       gap: 16,
                       gridTemplateColumns:
@@ -139,8 +176,15 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     }}
                   >
                     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                      <Space size={6} wrap>
-                        <Typography.Text strong>{row.name}</Typography.Text>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          display: "flex",
+                          gap: 8,
+                          minWidth: 0,
+                        }}
+                      >
+                        <EllipsisText strong>{row.name}</EllipsisText>
                         {row.isEntryMember ? (
                           <DetailPill
                             compact
@@ -152,15 +196,20 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             text="Entry member"
                           />
                         ) : null}
-                      </Space>
-                      <Typography.Text
-                        style={{ fontFamily: factValueFontFamily, fontSize: 12 }}
+                      </div>
+                      <EllipsisText
+                        monospace
+                        style={{
+                          fontSize: 12,
+                        }}
                         type="secondary"
                       >
                         {row.memberId}
-                      </Typography.Text>
+                      </EllipsisText>
                     </div>
-                    <FactLine rows={2} text={row.description || `归属 Team ${rosterTeamId || "--"}`} />
+                    <div style={{ minWidth: 0 }}>
+                      <FactLine rows={1} text={row.description || `归属 Team ${rosterTeamId || "--"}`} />
+                    </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                       <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
                       <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>

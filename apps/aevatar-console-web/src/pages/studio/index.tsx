@@ -194,7 +194,7 @@ type DraftSaveNotice = {
   readonly message: string;
 };
 
-type InventoryBusyAction = '' | 'create' | 'rename' | 'delete';
+type InventoryBusyAction = '' | 'create' | 'rename' | 'delete' | 'entry';
 
 type DraftRunNotice = {
   readonly type: 'success' | 'error';
@@ -402,6 +402,20 @@ const inventoryActionDangerButtonStyle: React.CSSProperties = {
   background: 'rgba(255, 245, 245, 0.98)',
   border: '1px solid rgba(248, 113, 113, 0.24)',
   color: '#b91c1c',
+};
+
+const inventoryEntryButtonStyle: React.CSSProperties = {
+  ...inventoryActionButtonStyle,
+  background: '#eef4ff',
+  border: '1px solid #6b8cff',
+  color: '#2f54eb',
+};
+
+const inventoryEntryPillStyle: React.CSSProperties = {
+  ...inventorySelectionPillStyle,
+  background: '#ecfdf3',
+  border: '1px solid rgba(34, 197, 94, 0.34)',
+  color: '#166534',
 };
 
 const memberEmptyStatePanelStyle: React.CSSProperties = {
@@ -2946,6 +2960,25 @@ const StudioPage: React.FC = () => {
       resolvedStudioTeamId
         ? studioApi.listTeamMembers(resolvedStudioScopeId, resolvedStudioTeamId)
         : studioApi.listMembers(resolvedStudioScopeId),
+  });
+  const studioTeamSummaryQueryKey = useMemo(
+    () =>
+      [
+        'studio-team-summary',
+        resolvedStudioScopeId,
+        resolvedStudioTeamId,
+      ] as const,
+    [resolvedStudioScopeId, resolvedStudioTeamId],
+  );
+  const studioTeamSummaryQuery = useQuery({
+    queryKey: studioTeamSummaryQueryKey,
+    enabled:
+      studioHostReady &&
+      Boolean(resolvedStudioScopeId) &&
+      Boolean(resolvedStudioTeamId),
+    retry: false,
+    queryFn: () =>
+      studioApi.getTeam(resolvedStudioScopeId, resolvedStudioTeamId),
   });
   const selectedWorkflowQuery = useQuery({
     queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
@@ -8042,6 +8075,71 @@ const StudioPage: React.FC = () => {
         : '',
     [effectiveSelectedMemberKey],
   );
+  const selectedInventoryEntryMemberId = trimOptional(currentCanonicalMemberId);
+  const selectedInventoryEntryLabel =
+    trimOptional(currentMemberLabel) ||
+    selectedInventoryEntryMemberId ||
+    'current member';
+  const studioTeamEntryMemberId = trimOptional(
+    studioTeamSummaryQuery.data?.entryMemberId,
+  );
+  const selectedInventoryIsEntryMember =
+    Boolean(selectedInventoryEntryMemberId) &&
+    selectedInventoryEntryMemberId === studioTeamEntryMemberId;
+  const canSetSelectedInventoryEntryMember = Boolean(
+    resolvedStudioScopeId &&
+      resolvedStudioTeamId &&
+      selectedInventoryEntryMemberId,
+  );
+  const handleSetSelectedInventoryEntryMember = useCallback(async () => {
+    if (
+      !canSetSelectedInventoryEntryMember ||
+      selectedInventoryIsEntryMember ||
+      inventoryBusyAction === 'entry'
+    ) {
+      return;
+    }
+
+    setInventoryBusyKey(selectedInventoryEntryMemberId);
+    setInventoryBusyAction('entry');
+    try {
+      await studioApi.setTeamEntryMember(
+        resolvedStudioScopeId,
+        resolvedStudioTeamId,
+        selectedInventoryEntryMemberId,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: studioTeamSummaryQueryKey,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['teams', 'team-summary', resolvedStudioScopeId, resolvedStudioTeamId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['teams', 'roster', resolvedStudioScopeId],
+        }),
+      ]);
+      void message.success('Team entry member updated.');
+    } catch (error) {
+      void message.error(
+        error instanceof Error
+          ? `Entry member update failed: ${error.message}`
+          : 'Entry member update failed.',
+      );
+    } finally {
+      setInventoryBusyKey('');
+      setInventoryBusyAction('');
+    }
+  }, [
+    canSetSelectedInventoryEntryMember,
+    inventoryBusyAction,
+    queryClient,
+    resolvedStudioScopeId,
+    resolvedStudioTeamId,
+    selectedInventoryEntryMemberId,
+    selectedInventoryIsEntryMember,
+    studioTeamSummaryQueryKey,
+  ]);
   const selectedInventoryWorkflowId = useMemo(
     () =>
       resolveWorkflowIdFromRouteValue(
@@ -9191,6 +9289,29 @@ const StudioPage: React.FC = () => {
           Script / GAgent will move into the same flow next.
         </div>
       )}
+      {canSetSelectedInventoryEntryMember ? (
+        selectedInventoryIsEntryMember ? (
+          <div style={inventoryEntryPillStyle}>
+            <span style={inventorySelectionLabelStyle}>Team invoke</span>
+            <span style={inventorySelectionValueStyle}>
+              Entry member · {selectedInventoryEntryLabel}
+            </span>
+          </div>
+        ) : (
+          <Button
+            aria-label={`Set ${selectedInventoryEntryLabel} as Team entry member`}
+            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            loading={
+              inventoryBusyAction === 'entry' &&
+              inventoryBusyKey === selectedInventoryEntryMemberId
+            }
+            onClick={() => void handleSetSelectedInventoryEntryMember()}
+            style={inventoryEntryButtonStyle}
+          >
+            Set as entry
+          </Button>
+        )
+      ) : null}
     </div>
   );
   const buildEmptyStateContent = showWorkflowEntryEmptyState ? (
@@ -9589,7 +9710,7 @@ const StudioPage: React.FC = () => {
         ) : (
           <>
             <StudioShell
-              contentOverflow="auto"
+              contentScrollMode={isInvokeSurface ? 'page' : 'contained'}
               contextBar={studioContextBar}
               currentLifecycleStep={currentLifecycleStep}
               inventoryActions={inventoryActions}

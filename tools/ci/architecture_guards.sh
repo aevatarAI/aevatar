@@ -13,7 +13,9 @@ DIFF_RANGE_VALUE="${DIFF_RANGE:-}"
 if [[ -n "${DIFF_RANGE_VALUE}" ]]; then
   DIFF_MODE="range"
 elif [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" && -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+  if ! git rev-parse --verify "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+    git fetch --no-tags --depth=1 origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+  fi
   DIFF_RANGE_VALUE="origin/${GITHUB_BASE_REF}...HEAD"
   DIFF_MODE="range"
 elif [[ -n "${GITHUB_EVENT_BEFORE:-}" && "${GITHUB_EVENT_BEFORE}" != "${ZERO_SHA}" && -n "${GITHUB_SHA:-}" ]]; then
@@ -37,6 +39,31 @@ if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   exit 1
 fi
 
+set +e
+# Refactor (iter92/cluster-644):
+#   Old pattern: workflow-local Telegram bridge GAgents/proto owned Telegram send/wait-reply behavior inside workflow extensions.
+#   New principle: workflow must not reintroduce those bridge actors; Telegram traffic stays on the NyxID relay path.
+workflow_telegram_bridge_report="$(
+  rg -n "workflow\.telegram-(bridge|user-bridge|wait-reply)|TelegramBridgeGAgent|TelegramUserBridgeGAgent|TelegramWaitReplyGAgent|TelegramGetUpdatesExternalLinkTransport|telegram_wait_reply|AddWorkflowBridgeExtensions|Aevatar\.Workflow\.Extensions\.Bridge" \
+    src test tools docs .cursor/skills aevatar.slnx \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!tools/ci/architecture_guards.sh'
+)"
+workflow_telegram_bridge_status=$?
+set -e
+
+if [[ ${workflow_telegram_bridge_status} -ne 0 && ${workflow_telegram_bridge_status} -ne 1 ]]; then
+  echo "Workflow Telegram bridge retired-token guard execution failed."
+  exit "${workflow_telegram_bridge_status}"
+fi
+
+if [ -n "${workflow_telegram_bridge_report}" ]; then
+  echo "${workflow_telegram_bridge_report}"
+  echo "Workflow-local Telegram bridge is retired. Keep Telegram traffic on the NyxID relay path."
+  exit 1
+fi
+
 if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
   echo "Working audit documents must not be added to solution."
   exit 1
@@ -50,6 +77,54 @@ fi
 if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   echo "Found sync-over-async usage."
   exit 1
+fi
+
+# Refactor (iter56/cluster-920-workflow-catalog-async-query):
+#   Old pattern: production workflow query ports could hide async readmodel I/O behind sync .Result/.Wait calls.
+#   New principle: catalog/capabilities query seams are async end-to-end, and query ports await readmodel readers.
+workflow_query_port_files=()
+while IFS= read -r query_port_file; do
+  workflow_query_port_files+=("${query_port_file}")
+done < <(
+  find src/workflow \
+    -type f \
+    \( -name '*QueryPort.cs' -o -path '*/Queries/*.cs' -o -path '*/Workflows/*ReadModelQueryPort.cs' \) \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if (( ${#workflow_query_port_files[@]} > 0 )); then
+  set +e
+  workflow_query_port_sync_blocking_report="$(
+    rg -n "\.Result|\.Wait[[:space:]]*\(|GetAwaiter\(\)\.GetResult\(\)" "${workflow_query_port_files[@]}" \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+  )"
+  workflow_query_port_sync_blocking_status=$?
+  set -e
+
+  if [[ ${workflow_query_port_sync_blocking_status} -ne 0 && ${workflow_query_port_sync_blocking_status} -ne 1 ]]; then
+    echo "Workflow query-port sync-blocking guard execution failed."
+    exit "${workflow_query_port_sync_blocking_status}"
+  fi
+
+  if [ -n "${workflow_query_port_sync_blocking_report}" ]; then
+    echo "${workflow_query_port_sync_blocking_report}"
+    echo "Workflow production query ports must not sync-block async reads. Use async query seams and await readmodel readers."
+    exit 1
+  fi
 fi
 
 # Refactor (iter18/cluster-001):
@@ -86,8 +161,182 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+# Refactor (iter56/cluster-933-channel-registration-rebuild-narrow):
+#   Old: channel registration projection rebuild was exposed through HTTP, tool,
+#   prompts, docs, facade, and relay-local DI.
+#   New: rebuild is only the internal Runtime startup refresh path.
+set +e
+channel_registration_public_rebuild_report="$(
+  rg -n "rebuild_projection|/registrations/rebuild|RebuildProjectionAsync|ChannelBotRebuildProjectionCommand" \
+    src/Aevatar.AI.ToolProviders.ChannelAdmin \
+    agents/channels/Aevatar.GAgents.Channel.NyxIdRelay \
+    agents/Aevatar.GAgents.NyxidChat \
+    docs/operations \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /Refactor \(iter56\/cluster-933-channel-registration-rebuild-narrow\)/)
+    next;
+
+  print $0;
+}'
+)"
+channel_registration_public_rebuild_status=$?
+set -e
+
+if [[ ${channel_registration_public_rebuild_status} -ne 0 && ${channel_registration_public_rebuild_status} -ne 1 ]]; then
+  echo "Channel registration public rebuild guard execution failed."
+  exit "${channel_registration_public_rebuild_status}"
+fi
+
+if [ -n "${channel_registration_public_rebuild_report}" ]; then
+  echo "${channel_registration_public_rebuild_report}"
+  echo "Channel registration projection rebuild must not be exposed through public/tool/prompt/docs/facade/relay DI surfaces."
+  exit 1
+fi
+
 if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   echo "Legacy GAgent actor store is forbidden. Use registry command/query/admission ports."
+  exit 1
+fi
+
+# Refactor (PR #1010 r3):
+#   Old pattern: /run-agent, /disable-agent, and /enable-agent used runner execution
+#   readmodel Status as a cross-authority business admission view.
+#   New principle: lifecycle command admission is catalog-only. Runner Enabled/Disabled
+#   is authoritative inside SkillRunnerGAgent's own turn and is later observed via readmodel.
+python3 - <<'PY'
+from pathlib import Path
+import sys
+
+path = Path("agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderTool.cs")
+text = path.read_text()
+methods = [
+    "RunAgentAsync",
+    "DisableAgentAsync",
+    "EnableAgentAsync",
+    "RequireManagedAgentAsync",
+]
+forbidden = [
+    "executionQueryPort",
+    "_executionQueryPort",
+    "QueryAgentForCallerAsync",
+    "MergeExecution",
+    "StatusDisabled",
+    "StatusRunning",
+]
+
+def method_body(source: str, name: str) -> str:
+    marker = name + "("
+    start = source.find(marker)
+    if start < 0:
+        raise RuntimeError(f"method not found: {name}")
+    open_brace = source.find("{", start)
+    if open_brace < 0:
+        raise RuntimeError(f"method body not found: {name}")
+    depth = 0
+    for index in range(open_brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace:index + 1]
+    raise RuntimeError(f"method body unterminated: {name}")
+
+violations = []
+for method in methods:
+    body = method_body(text, method)
+    for token in forbidden:
+        if token in body:
+            violations.append(f"{path}:{method}: forbidden lifecycle admission token `{token}`")
+
+if violations:
+    print("\n".join(violations))
+    print("Scheduled-agent lifecycle command admission must stay catalog-only; execution Status belongs to runner-owned observation.")
+    sys.exit(1)
+PY
+
+# Refactor (iter92/cluster-645):
+#   Old pattern: no guard blocked new production consumers from depending on StreamingProxy.
+#   New principle: this guard prevents new consumers, wrappers, or re-maps; direct model streaming goes through /v1/responses.
+set +e
+streaming_proxy_consumer_report="$(
+  rg -n "streaming-proxy|MapStreamingProxyEndpoints|AddStreamingProxy|Aevatar\.GAgents\.StreamingProxy" \
+    src agents apps \
+    -g '*.{cs,ts,tsx,js,jsx,md,json,yml,yaml,sh}' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["tools/ci/architecture_guards.sh"] = 1;
+  allowed["tools/ci/README.md"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\//)
+    next;
+  if (file ~ /^agents\/Aevatar\.GAgents\.StreamingProxy\./)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  print $0;
+}'
+)"
+streaming_proxy_consumer_status=$?
+set -e
+
+if [[ ${streaming_proxy_consumer_status} -ne 0 && ${streaming_proxy_consumer_status} -ne 1 ]]; then
+  echo "StreamingProxy consumer guard execution failed."
+  exit "${streaming_proxy_consumer_status}"
+fi
+
+if [ -n "${streaming_proxy_consumer_report}" ]; then
+  echo "${streaming_proxy_consumer_report}"
+  echo "StreamingProxy is deprecated compatibility surface only. Do not add new production consumers; use /v1/responses for direct model streaming."
+  exit 1
+fi
+
+# Issue #643:
+#   Old: Foundation MultiAgent experimental actors/protos stayed visible as
+#   production GAgent surface without production callers. Studio empty-state
+#   generators previously appeared as endpoint GAgents.
+#   New: MultiAgent is retired; Studio generation remains Application-layer
+#   authoring preview helpers unless a future ADR reopens the actor model.
+if rg -n "Aevatar\.Foundation\.(Core|Abstractions)\.MultiAgent|MultiAgent/multi_agent_(state|messages)\.proto|package[[:space:]]+aevatar\.multiagent|TaskBoardGAgent|TeamManagerGAgent" \
+  src agents \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Retired Foundation MultiAgent actor/proto surface is forbidden without a new ADR reopening the model."
+  exit 1
+fi
+
+if [ -d "src/Aevatar.Studio.Hosting/Endpoints" ] && rg -n "ScriptGenerateGAgent|WorkflowGenerateGAgent|AIGAgentBase[[:space:]]*<[[:space:]]*Empty[[:space:]]*>" \
+  src/Aevatar.Studio.Hosting/Endpoints \
+  -g '*.cs' \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Studio empty-state generation must stay demoted to Application authoring preview helpers, not endpoint GAgents."
   exit 1
 fi
 
@@ -111,7 +360,6 @@ dispatch_projection_boundary_report="$(
     -g '!*.Designer.cs' \
     | awk -F: '
 BEGIN {
-  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
@@ -146,6 +394,38 @@ fi
 if [ -n "${dispatch_projection_boundary_report}" ]; then
   echo "${dispatch_projection_boundary_report}"
   echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
+# Refactor (iter95/cluster-095-dispatch-port-runtime-ack-drift):
+#   Old: Local IActorDispatchPort awaited actor.HandleEventAsync while Orleans
+#   only awaited transport admission, so DispatchAsync ACK semantics drifted by
+#   runtime.
+#   New: DispatchAsync returns DispatchAdmission only. It may await runtime/inbox
+#   admission, but must not synchronously wait for actor handler completion.
+dispatch_admission_handler_wait_report=""
+while IFS= read -r dispatch_port_file; do
+  [ -z "${dispatch_port_file}" ] && continue
+
+  hits="$(rg -n "\.HandleEventAsync[[:space:]]*\(" "${dispatch_port_file}" || true)"
+
+  if [ -n "${hits}" ]; then
+    dispatch_admission_handler_wait_report="${dispatch_admission_handler_wait_report}${hits}"$'\n'
+  fi
+done < <(
+  find src agents \
+    -type f \
+    -name '*ActorDispatchPort.cs' \
+    -not -path '*/bin/*' \
+    -not -path '*/obj/*' \
+    -not -name '*.g.cs' \
+    -not -name '*.Designer.cs' \
+    | sort
+)
+
+if [ -n "${dispatch_admission_handler_wait_report}" ]; then
+  echo "${dispatch_admission_handler_wait_report}"
+  echo "Actor dispatch ports must return DispatchAdmission after runtime/inbox admission; do not call or await actor HandleEventAsync in DispatchAsync."
   exit 1
 fi
 
@@ -290,6 +570,9 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
+bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"
+bash "${SCRIPT_DIR}/public_projection_ensure_ports_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
@@ -303,7 +586,28 @@ bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
 bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
+bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
+bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
+
+studio_catalog_query_ports=(
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
+  "src/Aevatar.Studio.Application/Studio/Abstractions/IRoleCatalogQueryPort.cs"
+)
+
+for query_port in "${studio_catalog_query_ports[@]}"; do
+  if [ ! -f "${query_port}" ]; then
+    echo "Studio catalog query port is missing: ${query_port}"
+    exit 1
+  fi
+done
+
+if rg -n "Task(<[^>]+>)?[[:space:]]+(Import|Save|Delete|Create|Update|Ensure|Dispatch|Send)[A-Za-z0-9_]*Async[[:space:]]*\(" \
+  "${studio_catalog_query_ports[@]}"
+then
+  echo "Studio catalog query ports must remain read-only. Move mutating methods to catalog command ports."
+  exit 1
+fi
 
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do
@@ -346,11 +650,6 @@ if rg -n "project:\s*static|project:\s*\(" test/Aevatar.Scripting.Core.Tests tes
   exit 1
 fi
 
-if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
-  echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
-  exit 1
-fi
-
 if rg -n "IProjectionEventReducer|AddAIDefaultProjectionLayer|AddAllAIProjectionEventReducers|EnableWorkflowAIProjection" src; then
   echo "Reducer-era projection abstractions and workflow AI projection toggles are forbidden on the production path."
   exit 1
@@ -375,8 +674,12 @@ set +e
 # Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
 # Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
 # by requiring the call to be on a reader/document field (dot prefix pattern).
+projection_document_reader_scan_roots=(src test)
+if [[ -d demos ]]; then
+  projection_document_reader_scan_roots+=(demos)
+fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" src test demos \
+  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
     | xargs -r rg -n "\.ListAsync\(" \
     | rg -i "(reader|document|projection).*\.ListAsync"
 )"
@@ -597,7 +900,11 @@ then
   exit 1
 fi
 
-if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
+type_url_scan_roots=(src)
+if [[ -d demos ]]; then
+  type_url_scan_roots+=(demos)
+fi
+if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" "${type_url_scan_roots[@]}"; then
   echo "Found string-based event type matching."
   exit 1
 fi
@@ -700,7 +1007,7 @@ fi
 
 mass_transit_v9_refs="$(
   rg -n "<Package(Reference|Version) Include=\"MassTransit(\.[^\"]*)?\" Version=\"9\." \
-    Directory.Packages.props src test demos tools \
+    Directory.Packages.props src test tools \
     -g 'Directory.Packages.props' -g '*.csproj' || true
 )"
 
@@ -1148,6 +1455,130 @@ if [ -n "${command_side_readmodel_violations}" ]; then
   exit 1
 fi
 
+# Refactor (iter57/cluster-065-lark-card-signal-only):
+#   Old pattern: ConversationGAgent Lark CardKit Task.Run helpers built rich business
+#   continuation payloads outside the actor turn.
+#   New principle: helpers only dispatch LarkCardOperationCompletedEvent with minimal raw
+#   operation result; actor handlers own error-code interpretation, timestamps, and lifecycle
+#   field mapping.
+lark_card_streaming_file="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.LarkCardStreaming.cs"
+if [ -f "${lark_card_streaming_file}" ]; then
+  lark_card_taskrun_helper_report="$(
+    awk '
+      /private async Task ExecuteLarkCard(Create|Stream|Finalize)OperationAsync/ {
+        in_helper = 1
+        body_started = 0
+        brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
+      }
+      in_helper {
+        line = $0
+        hard_forbidden = "LarkCard(Create|Stream|Finalize)ContinuationEvent|To(Create|Stream|Finalize)Continuation|CompletedAtUnixMs|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|ErrorCode[[:space:]]*=|\\$\"(create|stream|finalize)_threw"
+        lifecycle_mapping = "CardMessageId[[:space:]]*=|FinalTextWritten[[:space:]]*="
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/
+
+        if (body_started && line ~ hard_forbidden) {
+          print FILENAME ":" FNR ":" $0
+        }
+        if (body_started && !inside_completed_signal && line ~ lifecycle_mapping) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+LarkCardOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
+          in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
+        }
+      }
+    ' "${lark_card_streaming_file}"
+  )"
+  if [ -n "${lark_card_taskrun_helper_report}" ]; then
+    echo "${lark_card_taskrun_helper_report}"
+    echo "ConversationGAgent Lark CardKit Task.Run helpers must stay signal-only: no rich continuation types, business error-code strings, timestamps, or lifecycle field mapping in ExecuteLarkCard*OperationAsync."
+    exit 1
+  fi
+fi
+
+# Refactor (iter57/cluster-068-lark-extend-signal):
+#   Old pattern: ConversationGAgent Nyx relay text streaming awaited external relay writes
+#   inside the actor turn and interpreted their result inline.
+#   New principle: text helpers only dispatch NyxRelayTextOperationCompletedEvent with
+#   minimal raw result; actor handlers own lifecycle, timestamps, terminal reasons, and
+#   completion persistence.
+conversation_gagent_file="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"
+if [ -f "${conversation_gagent_file}" ]; then
+  nyx_relay_text_helper_report="$(
+    awk '
+      /private async Task ExecuteNyxRelayTextOperationAsync/ {
+        in_helper = 1
+        body_started = 0
+        brace_depth = 0
+        completed_signal_pending = 0
+        completed_signal_depth = -1
+      }
+      in_helper {
+        line = $0
+        hard_forbidden = "TransitionNyxRelayStreamingPhaseAsync|PersistStreamedCompletionAsync|DateTimeOffset\\.UtcNow\\.ToUnixTimeMilliseconds\\(\\)|TerminalSucceeded|TerminalPartial|DisabledPreSend|SuppressingInterim|terminalReason|failed_self_heal|final_edit_failed|interim_edit_failed|first_send_failed"
+        inside_completed_signal = completed_signal_depth >= 0 || line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/
+
+        if (body_started && !inside_completed_signal && line ~ hard_forbidden) {
+          print FILENAME ":" FNR ":" $0
+        }
+
+        if (line ~ /new[[:space:]]+NyxRelayTextOperationCompletedEvent/) {
+          completed_signal_pending = 1
+        }
+
+        opens = gsub(/\{/, "{", line)
+        closes = gsub(/\}/, "}", line)
+        if (!body_started && opens > 0) {
+          body_started = 1
+        }
+        brace_depth += opens - closes
+
+        if (completed_signal_pending && opens > 0) {
+          completed_signal_depth = brace_depth
+          completed_signal_pending = 0
+        }
+        if (completed_signal_depth >= 0 && brace_depth < completed_signal_depth) {
+          completed_signal_depth = -1
+        }
+        if (body_started && brace_depth == 0) {
+          in_helper = 0
+          body_started = 0
+          completed_signal_pending = 0
+          completed_signal_depth = -1
+        }
+      }
+    ' "${conversation_gagent_file}"
+  )"
+  if [ -n "${nyx_relay_text_helper_report}" ]; then
+    echo "${nyx_relay_text_helper_report}"
+    echo "ConversationGAgent Nyx relay text helper must stay signal-only: no lifecycle transitions, terminal reasons, timestamps, or persistence in ExecuteNyxRelayTextOperationAsync."
+    exit 1
+  fi
+fi
+
 check_orchestration_class_guard() {
   local file_path="$1"
   local max_non_empty_lines="$2"
@@ -1192,6 +1623,9 @@ bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
+
+echo "Running projection activation provider coverage guard..."
+bash tools/ci/projection_activation_provider_coverage_guard.sh
 
 echo "Running scripting runtime snapshot guard..."
 bash tools/ci/scripting_runtime_snapshot_guard.sh

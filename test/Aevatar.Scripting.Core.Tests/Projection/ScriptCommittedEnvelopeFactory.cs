@@ -60,7 +60,6 @@ internal static class ScriptCommittedEnvelopeFactory
             DefinitionActorId = definitionActorId,
             ScriptId = scriptId,
             Revision = revision,
-            SourceText = sourceText ?? string.Empty,
             SourceHash = sourceHash ?? string.Empty,
             StateTypeUrl = Any.Pack(stateRoot).TypeUrl,
             StateRoot = Any.Pack(stateRoot),

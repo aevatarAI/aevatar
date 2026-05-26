@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -33,6 +34,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             var type when type == typeof(ServiceServingSetManagerGAgent) => ServingSetPlans(context.ActorId, payload),
             var type when type == typeof(ServiceRolloutManagerGAgent) => RolloutPlans(context.ActorId),
             var type when type == typeof(ServiceRunGAgent) => ServiceRunPlans(context.ActorId),
+            _ when payload.Is(RoleChatSessionCompletedEvent.Descriptor) => GAgentRunTerminalPlans(context),
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
             _ => [],
@@ -113,6 +115,25 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             ServiceProjectionKinds.Runs),
     ];
 
+    private static IEnumerable<ProjectionActivationPlan> GAgentRunTerminalPlans(CommittedStatePublicationContext context)
+    {
+        var payload = context.Published.StateEvent?.EventData;
+        if (payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+            return [];
+
+        var correlationId = context.SourceEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(correlationId))
+            return [];
+
+        return
+        [
+            DurablePlan<GAgentRunTerminalProjectionContext>(
+                context.ActorId,
+                ResolveTerminalProjectionKind(payload.Unpack<RoleChatSessionCompletedEvent>()),
+                correlationId),
+        ];
+    }
+
     private static IEnumerable<ProjectionActivationPlan> LlmSessionPlans(string actorId) =>
     [
         DurablePlan<LlmSessionCurrentStateProjectionContext>(
@@ -129,7 +150,8 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
 
     private static ProjectionActivationPlan DurablePlan<TContext>(
         string actorId,
-        string projectionKind)
+        string projectionKind,
+        string sessionId = "")
         where TContext : class, IProjectionMaterializationContext =>
         new()
         {
@@ -139,6 +161,24 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
                 RootActorId = actorId,
                 ProjectionKind = projectionKind,
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
+                SessionId = sessionId,
             },
         };
+
+    private static string ResolveTerminalProjectionKind(RoleChatSessionCompletedEvent completed)
+    {
+        if (IsApprovalTerminalCompletion(completed))
+            return ServiceProjectionKinds.GAgentRunTerminalApproval;
+
+        return ServiceProjectionKinds.GAgentRunTerminalDraftRun;
+    }
+
+    private static bool IsApprovalTerminalCompletion(RoleChatSessionCompletedEvent completed)
+    {
+        var content = completed.Content ?? string.Empty;
+        return content.StartsWith("[[AEVATAR_LLM_ERROR]]", StringComparison.Ordinal) &&
+               (content.Contains("approval_continuation_failed:", StringComparison.Ordinal) ||
+                content.Contains("approval_denied:", StringComparison.Ordinal) ||
+                content.Contains("approval_timeout:", StringComparison.Ordinal));
+    }
 }

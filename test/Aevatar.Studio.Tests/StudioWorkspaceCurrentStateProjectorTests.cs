@@ -29,8 +29,6 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             Settings = new StudioWorkspaceSettings
             {
                 RuntimeBaseUrl = "http://127.0.0.1:5100",
-                AppearanceTheme = "teal",
-                ColorMode = "dark",
             },
         };
         state.Directories.Add(new StudioWorkspaceDirectory
@@ -56,7 +54,7 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         written.LastEventId.Should().Be("evt-7");
         written.UpdatedAt.Should().NotBeNull();
         written.StateRoot.Is(StudioWorkspaceState.Descriptor).Should().BeTrue();
-        written.StateRoot.Unpack<StudioWorkspaceState>().Settings.ColorMode.Should().Be("dark");
+        written.StateRoot.Unpack<StudioWorkspaceState>().Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
     }
 
     [Fact]

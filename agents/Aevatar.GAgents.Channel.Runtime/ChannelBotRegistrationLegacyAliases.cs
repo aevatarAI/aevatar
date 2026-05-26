@@ -16,7 +16,6 @@ internal static class ChannelBotRegistrationLegacyAliases
     internal const string UnregisterCommandProto = ProtoPrefix + "ChannelBotUnregisterCommand";
     internal const string RebuildProjectionCommandProto = ProtoPrefix + "ChannelBotRebuildProjectionCommand";
     internal const string CompactTombstonesCommandProto = ProtoPrefix + "ChannelBotCompactTombstonesCommand";
-    internal const string RepairScopeIdCommandProto = ProtoPrefix + "ChannelBotRepairScopeIdCommand";
     internal const string ProjectionRebuildRequestedEventProto = ProtoPrefix + "ChannelBotProjectionRebuildRequestedEvent";
     internal const string TombstonesCompactedEventProto = ProtoPrefix + "ChannelBotTombstonesCompactedEvent";
     internal const string RegistrationRejectedEventProto = ProtoPrefix + "ChannelBotRegistrationRejectedEvent";
@@ -53,9 +52,6 @@ public sealed partial class ChannelBotRebuildProjectionCommand;
 
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.CompactTombstonesCommandProto)]
 public sealed partial class ChannelBotCompactTombstonesCommand;
-
-[LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.RepairScopeIdCommandProto)]
-public sealed partial class ChannelBotRepairScopeIdCommand;
 
 [LegacyProtoFullName(ChannelBotRegistrationLegacyAliases.ProjectionRebuildRequestedEventProto)]
 public sealed partial class ChannelBotProjectionRebuildRequestedEvent;

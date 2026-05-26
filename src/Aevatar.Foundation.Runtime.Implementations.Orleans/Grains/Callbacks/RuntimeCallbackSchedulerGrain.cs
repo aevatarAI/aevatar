@@ -9,15 +9,20 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
 public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSchedulerGrain, IRemindable
 {
+    // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+    //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+    //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
     private const string ReminderNamePrefix = "runtime-callback:";
+    private const string SchedulerStateName = "runtime-callback-scheduler-v2";
+    private const int SchedulerSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2;
     private static readonly TimeSpan OneShotReminderPeriod = TimeSpan.FromDays(36500);
 
-    private readonly IPersistentState<RuntimeCallbackSchedulerGrainState> _state;
+    private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
 
     public RuntimeCallbackSchedulerGrain(
-        [PersistentState("runtime-callback-scheduler", OrleansRuntimeConstants.GrainStateStorageName)]
-        IPersistentState<RuntimeCallbackSchedulerGrainState> state)
+        [PersistentState(SchedulerStateName, OrleansRuntimeConstants.GrainStateStorageName)]
+        IPersistentState<RuntimeCallbackSchedulerState> state)
     {
         _state = state;
     }
@@ -25,17 +30,16 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     public override Task OnActivateAsync(CancellationToken cancellationToken)
     {
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
-        _state.State.ReminderCallbacks ??= [];
         return base.OnActivateAsync(cancellationToken);
     }
 
     public async Task<long> ScheduleTimeoutAsync(
         string callbackId,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         int dueTimeMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
-        ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
+        ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
         var nextGeneration = await ResetExistingCallbackAndGetNextGenerationAsync(callbackId);
         await UpsertReminderCallbackAsync(
@@ -43,7 +47,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             nextGeneration,
             periodic: false,
             periodMs: 0,
-            envelopeBytes,
+            triggerEnvelope,
             dueTime,
             deliveryMode);
         return nextGeneration;
@@ -51,12 +55,12 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     public async Task<long> ScheduleTimerAsync(
         string callbackId,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         int dueTimeMs,
         int periodMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
-        ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
+        ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
 
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
@@ -66,19 +70,25 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             nextGeneration,
             periodic: true,
             periodMs,
-            envelopeBytes,
+            triggerEnvelope,
             dueTime,
             deliveryMode);
         return nextGeneration;
     }
 
-    public async Task CancelAsync(string callbackId, long expectedGeneration = 0)
+    public async Task CancelAsync(
+        string callbackId,
+        long expectedGeneration = 0,
+        int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
 
         if (expectedGeneration > 0 && reminderCallback.Generation != expectedGeneration)
+            return;
+
+        if (expectedGeneration > 0 && reminderCallback.SlotEpoch != expectedSlotEpoch)
             return;
 
         _state.State.ReminderCallbacks.Remove(callbackId);
@@ -104,11 +114,13 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         DeactivateOnIdle();
     }
 
-    private static void ValidateScheduleRequest(string callbackId, byte[] envelopeBytes, int dueTimeMs)
+    private static void ValidateScheduleRequest(string callbackId, EventEnvelope triggerEnvelope, int dueTimeMs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
-        ArgumentNullException.ThrowIfNull(envelopeBytes);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTimeMs, 0);
+        DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
     }
 
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)
@@ -132,15 +144,19 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             return;
 
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var scheduled))
+        {
+            await TryUnregisterReminderAsync(callbackId);
             return;
+        }
 
         var fireIndex = scheduled.FireIndex + 1;
         await PublishScheduledEnvelopeAsync(
             callbackId,
             scheduled.Generation,
-            fireIndex,
-            scheduled.EnvelopeBytes,
-            scheduled.DeliveryMode,
+            scheduled.SlotEpoch,
+            checked((int)fireIndex),
+            scheduled.TriggerEnvelope,
+            FromProtoDeliveryMode(scheduled.DeliveryMode),
             CancellationToken.None);
 
         if (!scheduled.Periodic)
@@ -163,19 +179,26 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         long generation,
         bool periodic,
         int periodMs,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         TimeSpan dueTime,
         RuntimeCallbackDeliveryMode deliveryMode)
     {
+        // Refactor (iter48/issue-879-runtime-callback-persistent-state-not-proto):
+        //   Old pattern: Orleans durable callback state stored as hand-written C# class with Dictionary<string, ReminderScheduledCallbackState> and byte[] EnvelopeBytes.
+        //   New principle: Durable runtime callback ownership is typed protobuf contract; callback ids, schedule fields, generation, fire index, delivery mode, and trigger envelope are explicit proto fields.
         var reminderName = BuildReminderName(callbackId);
-        _state.State.ReminderCallbacks[callbackId] = new ReminderScheduledCallbackState
+        _state.State.ReminderCallbacks[callbackId] = new RuntimeScheduledCallback
         {
+            ActorId = this.GetPrimaryKeyString(),
+            CallbackId = callbackId,
             Generation = generation,
+            SlotEpoch = SchedulerSlotEpoch,
             Periodic = periodic,
-            PeriodMs = periodMs,
-            EnvelopeBytes = envelopeBytes,
+            DueTimeMillis = checked((long)dueTime.TotalMilliseconds),
+            PeriodMillis = periodMs,
             FireIndex = 0,
-            DeliveryMode = deliveryMode,
+            DeliveryMode = ToProtoDeliveryMode(deliveryMode),
+            TriggerEnvelope = triggerEnvelope.Clone(),
         };
         await _state.WriteStateAsync();
 
@@ -197,8 +220,9 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private async Task PublishScheduledEnvelopeAsync(
         string callbackId,
         long generation,
+        int slotEpoch,
         int fireIndex,
-        byte[] envelopeBytes,
+        EventEnvelope triggerEnvelope,
         RuntimeCallbackDeliveryMode deliveryMode,
         CancellationToken ct)
     {
@@ -207,8 +231,9 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             callbackId,
             generation,
             fireIndex,
-            EventEnvelope.Parser.ParseFrom(envelopeBytes),
-            deliveryMode);
+            triggerEnvelope,
+            deliveryMode,
+            slotEpoch);
 
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }
@@ -235,5 +260,26 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
         callbackId = reminderName[ReminderNamePrefix.Length..];
         return !string.IsNullOrWhiteSpace(callbackId);
+    }
+
+    private static RuntimeCallbackScheduleDeliveryMode ToProtoDeliveryMode(RuntimeCallbackDeliveryMode deliveryMode)
+    {
+        return deliveryMode switch
+        {
+            RuntimeCallbackDeliveryMode.FiredSelfEvent => RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackDeliveryMode.EnvelopeRedelivery => RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery,
+            _ => throw new ArgumentOutOfRangeException(nameof(deliveryMode), deliveryMode, "Unknown callback delivery mode."),
+        };
+    }
+
+    private static RuntimeCallbackDeliveryMode FromProtoDeliveryMode(RuntimeCallbackScheduleDeliveryMode deliveryMode)
+    {
+        return deliveryMode switch
+        {
+            RuntimeCallbackScheduleDeliveryMode.Unspecified => RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent => RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackScheduleDeliveryMode.EnvelopeRedelivery => RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            _ => throw new ArgumentOutOfRangeException(nameof(deliveryMode), deliveryMode, "Unknown persisted callback delivery mode."),
+        };
     }
 }

@@ -68,14 +68,6 @@ message ChannelBotCompactTombstonesCommand {
   int64 safe_state_version = 1;
 }
 
-// Repairs the canonical scope_id of an existing registration without rewriting
-// the rest of the entry. Emitted by the rebuild backfill path so empty-scope
-// entries can be patched in place — preserves created_at and webhook target.
-message ChannelBotRepairScopeIdCommand {
-  string registration_id = 1;
-  string scope_id = 2;
-}
-
 message ChannelBotProjectionRebuildRequestedEvent {
   string reason = 1;
   google.protobuf.Timestamp requested_at = 2;
@@ -98,9 +90,9 @@ message ChannelBotRegistrationRejectedEvent {
   google.protobuf.Timestamp rejected_at = 5;
 }
 
-// Emitted when a previously empty-scope entry is repaired in place. Captures
-// the prior scope_id so the audit trail records the rewrite without losing
-// historical context, and the projector picks the new scope_id off state.
+// Refactor (iter27/cluster-003-channel-registration-scope-backfill):
+//   Old pattern: live repair commands emitted this event from readmodel-derived candidates.
+//   New principle: no new live repair path emits it; the event remains for committed replay compatibility.
 message ChannelBotScopeIdRepairedEvent {
   string registration_id = 1;
   string previous_scope_id = 2;

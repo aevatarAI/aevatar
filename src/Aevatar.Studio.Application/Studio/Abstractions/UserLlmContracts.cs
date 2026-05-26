@@ -6,6 +6,13 @@ public sealed record SaveUserLlmSettingsCommand(
     [property: JsonPropertyName("routeValue")] string RouteValue,
     [property: JsonPropertyName("model")] string? Model = null);
 
+public sealed record SaveUserLlmPreferenceCommand(
+    string? ServiceId = null,
+    string? RouteValue = null,
+    string? Model = null,
+    string? PresetId = null,
+    bool? Reset = null);
+
 public sealed record UserLlmSettingsView(
     [property: JsonPropertyName("savedRoute")] string SavedRoute,
     [property: JsonPropertyName("savedRouteLabel")] string SavedRouteLabel,
@@ -54,6 +61,26 @@ public static class UserLlmCatalogStatus
     public const string Empty = "empty";
     public const string Unavailable = "unavailable";
 }
+
+public sealed record UserLlmOptionsView(
+    [property: JsonPropertyName("current")] UserLlmOption? Current,
+    [property: JsonPropertyName("available")] IReadOnlyList<UserLlmOption> Available,
+    [property: JsonPropertyName("setupHint")] UserLlmSetupHint? SetupHint)
+{
+    public static readonly UserLlmOptionsView Empty = new(null, [], null);
+}
+
+public sealed record UserLlmOption(
+    [property: JsonPropertyName("serviceId")] string ServiceId,
+    [property: JsonPropertyName("serviceSlug")] string ServiceSlug,
+    [property: JsonPropertyName("displayName")] string DisplayName,
+    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("defaultModel")] string? DefaultModel,
+    [property: JsonPropertyName("availableModels")] IReadOnlyList<string> AvailableModels,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("allowed")] bool Allowed,
+    [property: JsonPropertyName("description")] string? Description);
 
 public sealed record UserLlmSetupHint(
     [property: JsonPropertyName("setupUrl")] string SetupUrl,
@@ -113,9 +140,4 @@ public interface IUserLlmCatalogPort
 public interface IUserLlmPreferenceService
 {
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
-
-    Task<UserConfig> SaveSettingsAsync(
-        string? bearerToken,
-        SaveUserLlmSettingsCommand command,
-        CancellationToken ct);
 }

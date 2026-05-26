@@ -1,7 +1,5 @@
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
-using Aevatar.Studio.Domain.Studio.Utilities;
-
 namespace Aevatar.Studio.Domain.Studio.Services;
 
 public sealed record WorkflowValidationOptions
@@ -152,7 +150,7 @@ public sealed class WorkflowValidator
                 code: "children_import_only"));
         }
 
-        if (step.Parameters.Any(parameter => parameter.Value.IsComplexValue()))
+        if (step.Parameters.Any(parameter => parameter.Value?.IsComplexValue() == true))
         {
             findings.Add(ValidationFinding.Warning(
                 $"{stepPath}/parameters",
@@ -214,7 +212,7 @@ public sealed class WorkflowValidator
                 continue;
             }
 
-            var parameterValue = value.ToWorkflowScalarString();
+            var parameterValue = value?.ToWorkflowScalarString();
             if (string.IsNullOrWhiteSpace(parameterValue))
             {
                 findings.Add(ValidationFinding.Error(
@@ -304,7 +302,7 @@ public sealed class WorkflowValidator
             }
 
             if (step.Parameters.TryGetValue("max_iterations", out var maxIterationsNode) &&
-                !string.IsNullOrWhiteSpace(maxIterationsNode.ToWorkflowScalarString()) &&
+                !string.IsNullOrWhiteSpace(maxIterationsNode?.ToWorkflowScalarString()) &&
                 !HasPositiveIntegerParameter(step, "max_iterations"))
             {
                 findings.Add(ValidationFinding.Error(
@@ -362,7 +360,7 @@ public sealed class WorkflowValidator
     }
 
     private static string? GetParameter(StepModel step, string key) =>
-        step.Parameters.TryGetValue(key, out var value) ? value.ToWorkflowScalarString() : null;
+        step.Parameters.TryGetValue(key, out var value) ? value?.ToWorkflowScalarString() : null;
 
     private static bool HasNonEmptyParameter(StepModel step, string key) =>
         !string.IsNullOrWhiteSpace(GetParameter(step, key));

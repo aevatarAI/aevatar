@@ -51,18 +51,27 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     // Refactor (iter22/cluster-004):
     //   Old pattern: callback envelopes were indistinguishable from user-observable events in the normal handler pipeline.
     //   New principle: the manager advertises only its typed internal callback signals for actor-turn short-circuiting.
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // Inbound transport messages now enter through ExternalLinkMessageReceivedSignal.
+    // The regular event pipeline still only sees committed external-link events.
     public bool CanHandle(EventEnvelope envelope)
     {
         if (envelope.Payload == null)
             return false;
 
         return envelope.Payload.Is(ExternalLinkReconnectDueSignal.Descriptor)
+               || envelope.Payload.Is(ExternalLinkMessageReceivedSignal.Descriptor)
                || envelope.Payload.Is(ExternalLinkTransportStateChangedSignal.Descriptor);
     }
 
     // Refactor (iter22/cluster-004):
     //   Old pattern: callback work could continue on background threads after transport callbacks or delayed reconnect loops.
     //   New principle: internal callback envelopes are unpacked and handled as explicit actor-turn signals.
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // Message/state signals are consumed here before business events are emitted.
+    // Link existence is reconciled inside the manager's actor-turn handling.
     public async Task HandleAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         if (envelope.Payload == null)
@@ -71,6 +80,12 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         if (envelope.Payload.Is(ExternalLinkReconnectDueSignal.Descriptor))
         {
             await HandleReconnectDueAsync(envelope.Payload.Unpack<ExternalLinkReconnectDueSignal>(), ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(ExternalLinkMessageReceivedSignal.Descriptor))
+        {
+            await HandleMessageReceivedAsync(envelope.Payload.Unpack<ExternalLinkMessageReceivedSignal>(), ct);
             return;
         }
 
@@ -96,9 +111,13 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             var link = new ManagedLink(descriptor, transport);
             _links[descriptor.LinkId] = link;
 
-            transport.OnMessageReceived = (data, innerCt) => OnMessageReceivedAsync(link, data, innerCt);
-            transport.OnStateChanged = (state, reason, innerCt) =>
-                OnTransportStateChangedSignalAsync(link.Descriptor.LinkId, state, reason, innerCt);
+            // Refactor (iter56/cluster-912-external-link-signal-contract):
+            // old=transport direct callback, new=typed signal sink.
+            // The transport receives only a sink that can publish internal signals.
+            // This manager stamps link identity and dispatches to the actor inbox.
+            transport.SignalSink = new ExternalLinkTransportSignalSink(
+                descriptor.LinkId,
+                DispatchSignalAsync);
 
             await ConnectLinkAsync(link, ct);
         }
@@ -258,13 +277,17 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 
     // ── Transport callbacks ───────────────────────────────────
 
-    private async Task OnMessageReceivedAsync(ManagedLink link, ReadOnlyMemory<byte> data, CancellationToken ct)
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // Public ExternalLinkMessageReceivedEvent is emitted from a handled signal.
+    // The transport no longer invokes this conversion directly.
+    private async Task OnMessageReceivedAsync(ManagedLink link, ExternalLinkMessageReceivedSignal signal, CancellationToken ct)
     {
         var evt = new ExternalLinkMessageReceivedEvent
         {
             LinkId = link.Descriptor.LinkId,
-            RawPayload = Google.Protobuf.ByteString.CopyFrom(data.Span),
-            ReceivedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            RawPayload = signal.RawPayload,
+            ReceivedAt = signal.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         };
 
         await DispatchEventAsync(evt, ct);
@@ -338,19 +361,18 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     // Refactor (iter22/cluster-004):
     //   Old pattern: transport callbacks directly mutated ManagedLink or started reconnect loops from I/O callback threads.
     //   New principle: callbacks only signal the actor inbox; state changes happen when the signal is handled in the actor turn.
-    private Task OnTransportStateChangedSignalAsync(
-        string linkId,
-        ExternalLinkStateChange state,
-        string? reason,
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // Transport-owned callbacks publish protobuf signals with link identity.
+    // Business events are emitted only after this manager handles the signal.
+    private async Task HandleMessageReceivedAsync(
+        ExternalLinkMessageReceivedSignal signal,
         CancellationToken ct)
     {
-        var signal = new ExternalLinkTransportStateChangedSignal
-        {
-            LinkId = linkId,
-            State = ToSignalKind(state),
-            Reason = reason ?? string.Empty,
-        };
-        return DispatchSignalAsync(signal, ct);
+        if (!_links.TryGetValue(signal.LinkId, out var link))
+            return;
+
+        await OnMessageReceivedAsync(link, signal, ct);
     }
 
     private Task<RuntimeCallbackLease> ScheduleSignalAfterDelayAsync(
@@ -425,16 +447,6 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     private static string? EmptyToNull(string value) =>
         string.IsNullOrEmpty(value) ? null : value;
 
-    private static ExternalLinkTransportStateSignalKind ToSignalKind(ExternalLinkStateChange state) =>
-        state switch
-        {
-            ExternalLinkStateChange.Connected => ExternalLinkTransportStateSignalKind.Connected,
-            ExternalLinkStateChange.Disconnected => ExternalLinkTransportStateSignalKind.Disconnected,
-            ExternalLinkStateChange.Error => ExternalLinkTransportStateSignalKind.Error,
-            ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
-            _ => ExternalLinkTransportStateSignalKind.Unspecified,
-        };
-
     private static ExternalLinkStateChange ToTransportStateChange(ExternalLinkTransportStateSignalKind state) =>
         state switch
         {
@@ -444,4 +456,27 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             ExternalLinkTransportStateSignalKind.Closed => ExternalLinkStateChange.Closed,
             _ => ExternalLinkStateChange.Error,
         };
+
+    // Refactor (iter56/cluster-912-external-link-signal-contract):
+    // old=transport direct callback, new=typed signal sink.
+    // This adapter stamps link identity on transport signals and dispatches them.
+    // Actor/module turns remain the only place where link facts are changed.
+    private sealed class ExternalLinkTransportSignalSink(
+        string linkId,
+        Func<IMessage, CancellationToken, Task> dispatchSignalAsync) : IExternalLinkSignalSink
+    {
+        public Task PublishMessageReceivedAsync(ExternalLinkMessageReceivedSignal signal, CancellationToken ct)
+        {
+            signal.LinkId = linkId;
+            if (signal.ReceivedAt == null)
+                signal.ReceivedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+            return dispatchSignalAsync(signal, ct);
+        }
+
+        public Task PublishStateChangedAsync(ExternalLinkTransportStateChangedSignal signal, CancellationToken ct)
+        {
+            signal.LinkId = linkId;
+            return dispatchSignalAsync(signal, ct);
+        }
+    }
 }

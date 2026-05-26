@@ -67,7 +67,7 @@ public sealed class TombstoneCompactionTargetTests
     {
         var target = new UserAgentCatalogTombstoneCompactionTarget();
         target.ActorId.Should().Be(UserAgentCatalogGAgent.WellKnownId);
-        target.ProjectionKind.Should().Be(UserAgentCatalogProjectionPort.ProjectionKind);
+        target.ProjectionKind.Should().Be(UserAgentCatalogProjectionBootstrapActivator.ProjectionKind);
         target.TargetName.Should().Be("user agent catalog");
     }
 

@@ -11,6 +11,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
@@ -373,6 +374,7 @@ public sealed class ConversationGAgentDedupTests
         events[0].EventType.ShouldContain(nameof(NeedsLlmReplyEvent));
         var parsed = NeedsLlmReplyEvent.Parser.ParseFrom(events[0].EventData.Value);
         parsed.CorrelationId.ShouldBe("act-llm");
+        parsed.RunId.ShouldBe("act-llm");
         parsed.Activity.Id.ShouldBe("act-llm");
     }
 
@@ -443,6 +445,33 @@ public sealed class ConversationGAgentDedupTests
             "OnlySelfHandling must stay false: it gates by envelope TopologyAudience.Self, " +
             "but SendToAsync(Id, ...) produces a Direct-route envelope whose audience is " +
             "Unspecified, so enabling this flag would re-drop the admitted event.");
+    }
+
+    [Theory]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredLlmReplyDispatchRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredInboundTurnRetryRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationTimeoutFiredAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationTimeoutFiredAsync), true)]
+    public void ConversationSelfContinuationHandlers_MustOptInToSelfHandling(
+        string handlerName,
+        bool selfAudience)
+    {
+        var method = typeof(ConversationGAgent).GetMethod(
+            handlerName,
+            BindingFlags.Instance | BindingFlags.Public);
+        method.ShouldNotBeNull();
+
+        var attr = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attr.ShouldNotBeNull($"{handlerName} must be decorated with [EventHandler].");
+        attr!.AllowSelfHandling.ShouldBeTrue(
+            $"{handlerName} handles an actor-owned continuation or timeout whose " +
+            "PublisherActorId is the conversation actor itself.");
+        attr.OnlySelfHandling.ShouldBeFalse(
+            selfAudience
+                ? $"{handlerName} must currently allow runtime callback envelopes whose route shape may vary by scheduler."
+                : $"{handlerName} receives Direct self-dispatch envelopes, so OnlySelfHandling would filter it.");
     }
 
     [Fact]
@@ -887,11 +916,12 @@ public sealed class ConversationGAgentDedupTests
 
         dispatcher.Dispatched.Count.ShouldBe(1);
         dispatcher.Dispatched[0].CorrelationId.ShouldBe("act-direct");
+        dispatcher.Dispatched[0].RunId.ShouldBe("act-direct");
         dispatcher.Dispatched[0].TargetActorId.ShouldBe(agent.Id);
     }
 
     [Fact]
-    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteForwardsToGAgent_CarriesTargetRefToDispatcher()
+    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteUsesGAgentToolHint_CarriesTargetRefToDispatcher()
     {
         var dispatcher = new RecordingRunDispatcher();
         var runner = new RecordingTurnRunner
@@ -919,10 +949,7 @@ public sealed class ConversationGAgentDedupTests
                         Channel = "lark",
                         CommandName = "/daily",
                     },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
-                    },
+                    Action = GAgentToolHint("target-gagent-1"),
                 },
             ]));
         var resolver = new ChatRouteResolver(new StaticChatRouteFallbackProvider("fallback-model"));
@@ -958,7 +985,9 @@ public sealed class ConversationGAgentDedupTests
         });
 
         dispatcher.Dispatched.ShouldHaveSingleItem();
-        dispatcher.Dispatched[0].TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        dispatcher.Dispatched[0].RunId.ShouldBe("corr-route");
+        dispatcher.Dispatched[0].TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"]
+            .StringValue.ShouldBe("target-gagent-1");
         dispatcher.Dispatched[0].ReplyToken.ShouldBe("runtime-only-token");
 
         var events = await store.GetEventsAsync(agent.Id);
@@ -1482,10 +1511,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-first");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-first", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.StreamChunkCount.ShouldBe(1);
         runner.LastStreamChunkCurrentPlatformMessageId.ShouldBeNull();
@@ -1499,12 +1530,15 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_first"),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-2");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-2", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-2", "relay-msg-1", "first chunk plus more"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.StreamChunkCount.ShouldBe(2);
         runner.LastStreamChunkCurrentPlatformMessageId.ShouldBe("om_first");
@@ -1518,10 +1552,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, _) =>
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-fail");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-fail", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fail", "relay-msg-1", "first"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fail", "relay-msg-1", "first plus second"));
         await agent.HandleLlmReplyStreamChunkAsync(
@@ -1550,10 +1586,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_stream"),
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-short-circuit", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-sc", "relay-msg-1", "final text"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1584,6 +1622,94 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task NyxRelayStreaming_EmitsTransitionFactsForStartEditAndTerminal()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, currentPmid) =>
+                ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_nyx_emit"),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-nyx-emit", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-nyx-emit", "relay-msg-1", "hello"));
+        var started = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            started,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextIdle,
+            ConversationReplyLifecyclePhase.TextIdle);
+        started.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        started.OperationSequence.ShouldBe(1);
+        started.OperationGeneration.ShouldBe(1);
+        started.QueuedAccumulatedText.ShouldBe("hello");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var flushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            flushed,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextIdle,
+            ConversationReplyLifecyclePhase.TextPlaceholderSent);
+        flushed.PlatformMessageIdAssigned.ShouldBe("om_nyx_emit");
+        flushed.FlushedTextDelta.ShouldBe("hello");
+        flushed.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        flushed.OperationSequence.ShouldBe(0);
+        flushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-nyx-emit", "relay-msg-1", "hello edited"));
+        var editStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            editStarted,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextPlaceholderSent,
+            ConversationReplyLifecyclePhase.TextPlaceholderSent);
+        editStarted.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Interim);
+        editStarted.OperationSequence.ShouldBe(1);
+        editStarted.OperationGeneration.ShouldBe(2);
+        editStarted.QueuedAccumulatedText.ShouldBe("hello edited");
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var edited = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            edited,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextPlaceholderSent,
+            ConversationReplyLifecyclePhase.TextStreaming);
+        edited.FlushedTextDelta.ShouldBe("hello edited");
+        edited.EditCountDelta.ShouldBe(1);
+        edited.NyxRelayOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        edited.OperationSequence.ShouldBe(0);
+        edited.OperationGeneration.ShouldBe(2);
+        edited.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-nyx-emit",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-nyx-emit", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello edited" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        var terminated = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            terminated,
+            ConversationReplyLifecycleMode.NyxRelayText,
+            "act-nyx-emit",
+            ConversationReplyLifecyclePhase.TextStreaming,
+            ConversationReplyLifecyclePhase.TextTerminalSucceeded);
+        terminated.TerminalReason.ShouldBe("completed");
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_TextStreamingLifecycleSurvivesReactivation()
     {
         var store = new InMemoryEventStore();
@@ -1596,6 +1722,16 @@ public sealed class ConversationGAgentDedupTests
 
         await firstAgent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-reactivate", "relay-msg-1", "first partial"));
+        await firstAgent.HandleNyxRelayTextOperationCompletedAsync(new NyxRelayTextOperationCompletedEvent
+        {
+            CorrelationId = "act-stream-reactivate",
+            Operation = NyxRelayTextOperationKind.Interim,
+            Sequence = 1,
+            OperationGeneration = firstAgent.State.ActiveReplyLifecycles.Single().NyxRelayOperationGeneration,
+            State = NyxRelayTextOperationResultState.Succeeded,
+            RawResult = new NyxRelayTextOperationRawResult { PlatformMessageId = "om_reactivated" },
+            Chunk = CreateStreamChunk("act-stream-reactivate", "relay-msg-1", "first partial"),
+        });
 
         var lifecycle = firstAgent.State.ActiveReplyLifecycles.Single();
         lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
@@ -1608,7 +1744,8 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_reactivated"),
         };
-        var (secondAgent, _) = CreateAgent(secondRunner, "conv-stream-reactivate", store: store);
+        var secondDispatch = new RecordingActorDispatchPort();
+        var (secondAgent, _) = CreateAgent(secondRunner, "conv-stream-reactivate", store: store, dispatchPort: secondDispatch);
 
         await secondAgent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -1622,6 +1759,7 @@ public sealed class ConversationGAgentDedupTests
             ReplyToken = "runtime-ready-token",
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         });
+        await CompleteNextNyxRelayTextOperationAsync(secondAgent, secondDispatch);
 
         secondRunner.LlmReplyCount.ShouldBe(0);
         secondRunner.StreamChunkCount.ShouldBe(1);
@@ -1634,6 +1772,83 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossNyxRelayTransitions()
+    {
+        var store = new InMemoryEventStore();
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextIdle,
+                Phase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
+                ChangedAtUnixMs = 100,
+                PlatformMessageIdAssigned = "om_fact",
+                FlushedTextDelta = "first",
+                OperationGeneration = 1,
+            },
+            1);
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextPlaceholderSent,
+                Phase = ConversationReplyLifecyclePhase.TextStreaming,
+                ChangedAtUnixMs = 200,
+                FlushedTextDelta = "second",
+                EditCountDelta = 2,
+                NyxRelayOperation = NyxRelayTextOperationKind.Final,
+                OperationSequence = 2,
+                OperationGeneration = 2,
+                FinalizeText = "final",
+                FinalizeCommandId = "cmd-final",
+                NyxRelayTerminalState = LlmReplyTerminalState.Completed,
+            },
+            2);
+        await AppendStateEventAsync(
+            store,
+            "conv-nyx-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-nyx-fact",
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                PreviousPhase = ConversationReplyLifecyclePhase.TextStreaming,
+                Phase = ConversationReplyLifecyclePhase.TextTerminalSucceeded,
+                ChangedAtUnixMs = 300,
+                NyxRelayOperation = NyxRelayTextOperationKind.Unspecified,
+                OperationSequence = 0,
+                FinalizeText = string.Empty,
+                FinalizeCommandId = string.Empty,
+                NyxRelayTerminalState = LlmReplyTerminalState.Unspecified,
+                TerminalReason = "completed",
+            },
+            3);
+
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-nyx-fact-replay", store: store);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.CorrelationId.ShouldBe("corr-nyx-fact");
+        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.NyxRelayText);
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextTerminalSucceeded);
+        lifecycle.PlatformMessageId.ShouldBe("om_fact");
+        lifecycle.LastFlushedText.ShouldBe("second");
+        lifecycle.EditCount.ShouldBe(2);
+        lifecycle.NyxRelayInFlightOperation.ShouldBe(NyxRelayTextOperationKind.Unspecified);
+        lifecycle.NyxRelayInFlightSequence.ShouldBe(0);
+        lifecycle.NyxRelayOperationGeneration.ShouldBe(2);
+        lifecycle.PendingFinalizeText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeCommandId.ShouldBeEmpty();
+        lifecycle.PendingNyxRelayTerminalState.ShouldBe(LlmReplyTerminalState.Unspecified);
+        lifecycle.TerminalReason.ShouldBe("completed");
+        lifecycle.UpdatedAtUnixMs.ShouldBe(300);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenStreamingDisabled_FallsBackToRunLlmReplyAsync()
     {
         var runner = new RecordingTurnRunner
@@ -1641,10 +1856,12 @@ public sealed class ConversationGAgentDedupTests
             StreamChunkResultFactory = (_, _) =>
                 ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "nope", editUnsupported: true),
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-fallback");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-fallback", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-fb", "relay-msg-1", "partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1689,14 +1906,17 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
             },
         };
-        var (agent, _) = CreateAgent(runner, "conv-stream-suppress");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-suppress", dispatchPort: dispatch);
 
         // First chunk consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         // Interim edit fails after token consumed.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         // Later interim chunk must be dropped (not dispatched to runner).
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-suppress", "relay-msg-1", "hello world again"));
@@ -1724,12 +1944,15 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Succeeded(pmid ?? "om_first_consumed");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-retry", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1742,6 +1965,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         // Must not fall back to RunLlmReplyAsync — the token is already consumed.
         runner.LlmReplyCount.ShouldBe(0);
@@ -1772,12 +1996,15 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("transient_edit_error", "boom");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-final-degraded", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-final-degraded", "relay-msg-1", "hello partial more"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1790,6 +2017,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.LlmReplyCount.ShouldBe(0);
         var events = await store.GetEventsAsync(agent.Id);
@@ -1827,11 +2055,13 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Succeeded(pmid ?? "om_placeholder_consumed");
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit", dispatchPort: dispatch);
 
         // First chunk lands the placeholder + consumes the reply token.
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-failed", "relay-msg-1", "..."));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1848,6 +2078,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         // Must NOT fall through to RunLlmReplyAsync (would 401 on the dead token).
         runner.LlmReplyCount.ShouldBe(0);
@@ -1882,10 +2113,12 @@ public sealed class ConversationGAgentDedupTests
                 return ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "lark refused", editUnsupported: true);
             },
         };
-        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny");
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateStreamChunk("act-stream-failed-deny", "relay-msg-1", "first partial"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -1900,6 +2133,7 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         runner.LlmReplyCount.ShouldBe(0);
         var events = await store.GetEventsAsync(agent.Id);
@@ -2003,6 +2237,27 @@ public sealed class ConversationGAgentDedupTests
             ],
             expectedVersion: version - 1);
 
+    private static ConversationReplyLifecycleChangedEvent LastReplyLifecycleChanged(
+        IReadOnlyList<StateEvent> events) =>
+        events
+            .Where(e => e.EventType == ConversationReplyLifecycleChangedEvent.Descriptor.FullName)
+            .Select(e => ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(e.EventData.Value))
+            .Last();
+
+    private static void AssertReplyLifecycleTransition(
+        ConversationReplyLifecycleChangedEvent evt,
+        ConversationReplyLifecycleMode mode,
+        string correlationId,
+        ConversationReplyLifecyclePhase previousPhase,
+        ConversationReplyLifecyclePhase phase)
+    {
+        evt.Mode.ShouldBe(mode);
+        evt.CorrelationId.ShouldBe(correlationId);
+        evt.PreviousPhase.ShouldBe(previousPhase);
+        evt.Phase.ShouldBe(phase);
+        evt.ChangedAtUnixMs.ShouldBeGreaterThan(0);
+    }
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(
         RecordingTurnRunner runner,
         string agentId,
@@ -2011,11 +2266,13 @@ public sealed class ConversationGAgentDedupTests
         IChatRoutePolicyQueryPort? queryPort = null,
         ChatRouteResolver? chatRouteResolver = null,
         IEventStore? store = null,
-        IEventPublisher? eventPublisher = null)
+        IEventPublisher? eventPublisher = null,
+        RecordingActorDispatchPort? dispatchPort = null)
     {
         store ??= new InMemoryEventStore();
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore>(store);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort ?? new RecordingActorDispatchPort());
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
@@ -2119,6 +2376,15 @@ public sealed class ConversationGAgentDedupTests
         DispatchedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
     };
 
+    private static async Task<NyxRelayTextOperationCompletedEvent> CompleteNextNyxRelayTextOperationAsync(
+        ConversationGAgent agent,
+        RecordingActorDispatchPort dispatchPort)
+    {
+        var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
+        await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
+        return completed;
+    }
+
     private sealed class RecordingTurnRunner : IConversationTurnRunner
     {
         public int InboundCount;
@@ -2205,14 +2471,10 @@ public sealed class ConversationGAgentDedupTests
     {
         public List<NeedsLlmReplyEvent> Dispatched { get; } = [];
 
-        public Task<DispatchOutcome> DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+        public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
         {
             Dispatched.Add(request.Clone());
-            return Task.FromResult(new DispatchOutcome(
-                Phase: DispatchPhase.Accepted,
-                CommandId: request.CorrelationId ?? string.Empty,
-                RunActorId: null,
-                AcceptedAtUnixMs: 0));
+            return Task.CompletedTask;
         }
     }
 
@@ -2240,6 +2502,24 @@ public sealed class ConversationGAgentDedupTests
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction GAgentToolHint(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Value.ForString(actorId),
+                    },
+                },
+            },
+        },
     };
 
     private sealed class RecordingEventPublisher : IEventPublisher
@@ -2272,6 +2552,48 @@ public sealed class ConversationGAgentDedupTests
         }
     }
 
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+        private readonly Queue<EventEnvelope> _pending = new();
+        private readonly SemaphoreSlim _available = new(0);
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            var clone = envelope.Clone();
+            Dispatches.Add((actorId, clone.Clone()));
+            lock (_pending)
+            {
+                _pending.Enqueue(clone);
+            }
+            _available.Release();
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+
+        public async Task<T> WaitForPayloadAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || !await _available.WaitAsync(remaining))
+                    break;
+
+                EventEnvelope envelope;
+                lock (_pending)
+                {
+                    envelope = _pending.Dequeue();
+                }
+
+                if (envelope.Payload.Is(new T().Descriptor))
+                    return envelope.Payload.Unpack<T>();
+            }
+
+            throw new TimeoutException($"Timed out waiting for dispatched {typeof(T).Name}.");
+        }
+    }
+
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
@@ -2300,135 +2622,385 @@ public sealed class ConversationGAgentDedupTests
     // ─── Lark CardKit card-mode streaming tests ───
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_FirstChunk_RunsCardCreate()
+    public async Task HandleLarkCardOperationCompletedAsync_TypedSignalFlow_MaterializesStreamingState()
     {
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-        };
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-first", cardRunner: card);
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-flow");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-first", "relay-msg-1", "hello"));
+            CreateCardStreamChunk("act-card-flow", "relay-msg-1", "hello"));
 
-        card.CardCreateCount.ShouldBe(1);
-        card.CardStreamCount.ShouldBe(0);
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.LarkCardCreating);
+        lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Create);
+        lifecycle.LarkCardInFlightSequence.ShouldBe(1);
+
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-flow",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-flow", "relay-msg-1", "hello"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
+
+        lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.LarkCardStreaming);
+        lifecycle.CardId.ShouldBe("card_xyz");
+        lifecycle.CardMessageId.ShouldBe("om_card_msg");
+        lifecycle.Sequence.ShouldBe(1);
+        lifecycle.LastFlushedText.ShouldBe("hello");
+        lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
     }
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_SubsequentChunk_RunsCardStreamWithIncrementingSequence()
+    public async Task LarkCardStreaming_EmitsTransitionFactsForCreateStreamFinalize()
     {
-        var card = new RecordingCardTurnRunner
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-emit");
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello"));
+        var createStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            createStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.Unspecified,
+            ConversationReplyLifecyclePhase.LarkCardCreating);
+        createStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Create);
+        createStarted.OperationSequence.ShouldBe(1);
+        createStarted.OperationGeneration.ShouldBe(1);
+        createStarted.QueuedAccumulatedText.ShouldBe("hello");
+
+        var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-emit",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello"),
+            success: true,
+            cardId: "card_emit",
+            cardMessageId: "om_card_emit"));
+        var createFlushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            createFlushed,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardCreating,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        createFlushed.CardIdAssigned.ShouldBe("card_emit");
+        createFlushed.CardMessageIdAssigned.ShouldBe("om_card_emit");
+        createFlushed.OriginalCardIdAssigned.ShouldBe("card_emit");
+        createFlushed.FlushedTextDelta.ShouldBe("hello");
+        createFlushed.SequenceDelta.ShouldBe(1);
+        createFlushed.HasStreamingElementIdSelected.ShouldBeFalse();
+        createFlushed.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        createFlushed.OperationSequence.ShouldBe(0);
+        createFlushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyCardStreamChunkAsync(
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello edited"));
+        var streamStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            streamStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        streamStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Stream);
+        streamStarted.OperationSequence.ShouldBe(2);
+        streamStarted.OperationGeneration.ShouldBe(2);
+        streamStarted.QueuedAccumulatedText.ShouldBe("hello edited");
+
+        var streamLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-emit",
+            streamLifecycle.LarkCardInFlightSequence,
+            streamLifecycle.LarkCardOperationGeneration,
+            "card_emit",
+            CreateCardStreamChunk("act-card-emit", "relay-msg-1", "hello edited"),
+            success: true));
+        var streamFlushed = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            streamFlushed,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        streamFlushed.FlushedTextDelta.ShouldBe("hello edited");
+        streamFlushed.SequenceDelta.ShouldBe(1);
+        streamFlushed.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        streamFlushed.OperationSequence.ShouldBe(0);
+        streamFlushed.OperationGeneration.ShouldBe(2);
+        streamFlushed.QueuedAccumulatedText.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-            CardStreamResultFactory = (_, _, _, _) => ConversationCardStreamResult.Succeeded(),
-        };
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-seq", cardRunner: card);
+            CorrelationId = "act-card-emit",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-card-emit", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        var finalizeStarted = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            finalizeStarted,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardStreaming);
+        finalizeStarted.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Finalize);
+        finalizeStarted.OperationSequence.ShouldBe(3);
+        finalizeStarted.OperationGeneration.ShouldBe(3);
+        finalizeStarted.FinalizeText.ShouldBe("hello final");
+        finalizeStarted.FinalizeCommandId.ShouldBe("llm:act-card-emit");
 
-        await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first"));
-        await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first plus second"));
-        await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first plus second plus third"));
-
-        card.CardCreateCount.ShouldBe(1);
-        card.CardStreamCount.ShouldBe(2);
-        card.LastCardStreamSequence.ShouldBe(3L);
+        var finalizeLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-emit",
+            finalizeLifecycle.LarkCardInFlightSequence,
+            finalizeLifecycle.LarkCardOperationGeneration,
+            "card_emit",
+            "om_card_emit",
+            "llm:act-card-emit",
+            CreateRelayActivity("act-card-emit", "relay-msg-1"),
+            "hello final",
+            "hello edited",
+            success: true,
+            finalTextWritten: true));
+        var finalized = LastReplyLifecycleChanged(await store.GetEventsAsync(agent.Id));
+        AssertReplyLifecycleTransition(
+            finalized,
+            ConversationReplyLifecycleMode.LarkCard,
+            "act-card-emit",
+            ConversationReplyLifecyclePhase.LarkCardStreaming,
+            ConversationReplyLifecyclePhase.LarkCardCompleted);
+        finalized.LarkCardOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        finalized.OperationSequence.ShouldBe(0);
+        finalized.OperationGeneration.ShouldBe(3);
+        finalized.QueuedAccumulatedText.ShouldBeEmpty();
+        finalized.FinalizeText.ShouldBeEmpty();
+        finalized.FinalizeCommandId.ShouldBeEmpty();
+        finalized.TerminalReason.ShouldBe("completed");
     }
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_CreateRateLimited_FallsBackToTextEdit()
+    public async Task ActivateAsync_ReplyLifecycleTransitionFacts_DeriveStateAcrossLarkCardTransitions()
     {
-        // Card create reports a fallbackable failure (rate limit / table limit). The actor must
-        // route the chunk to the legacy text-edit path so the user still sees a reply, and
-        // every subsequent chunk for the same correlation continues down the text-edit path
-        // because the card phase is now CreationFailed.
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Failed(
-                "card_create_failed",
-                "rate-limited",
-                isRateLimited: true),
-        };
+        var store = new InMemoryEventStore();
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.Unspecified,
+                Phase = ConversationReplyLifecyclePhase.LarkCardCreating,
+                ChangedAtUnixMs = 100,
+                LarkCardOperation = LarkCardOperationPhase.Create,
+                OperationSequence = 1,
+                OperationGeneration = 1,
+            },
+            1);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardCreating,
+                Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                ChangedAtUnixMs = 200,
+                CardIdAssigned = "card_fact",
+                CardMessageIdAssigned = "om_fact",
+                OriginalCardIdAssigned = "card_fact",
+                FlushedTextDelta = "hello",
+                SequenceDelta = 1,
+                StreamingElementIdSelected = "streaming_main",
+                LarkCardOperation = LarkCardOperationPhase.Unspecified,
+                OperationSequence = 0,
+            },
+            2);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                Phase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                ChangedAtUnixMs = 300,
+                QueuedAccumulatedText = "queued",
+                FinalizeText = "final",
+                FinalizeCommandId = "cmd-final",
+                LarkCardOperation = LarkCardOperationPhase.Finalize,
+                OperationSequence = 2,
+                OperationGeneration = 2,
+            },
+            3);
+        await AppendStateEventAsync(
+            store,
+            "conv-card-fact-replay",
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = "corr-card-fact",
+                Mode = ConversationReplyLifecycleMode.LarkCard,
+                PreviousPhase = ConversationReplyLifecyclePhase.LarkCardStreaming,
+                Phase = ConversationReplyLifecyclePhase.LarkCardCompleted,
+                ChangedAtUnixMs = 400,
+                FlushedTextDelta = "final",
+                SequenceDelta = 1,
+                QueuedAccumulatedText = string.Empty,
+                FinalizeText = string.Empty,
+                FinalizeCommandId = string.Empty,
+                LarkCardOperation = LarkCardOperationPhase.Unspecified,
+                OperationSequence = 0,
+                TerminalReason = "completed",
+            },
+            4);
+
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-fact-replay", store: store);
+
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.CorrelationId.ShouldBe("corr-card-fact");
+        lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.LarkCard);
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.LarkCardCompleted);
+        lifecycle.CardId.ShouldBe("card_fact");
+        lifecycle.CardMessageId.ShouldBe("om_fact");
+        lifecycle.OriginalCardId.ShouldBe("card_fact");
+        lifecycle.LastFlushedText.ShouldBe("final");
+        lifecycle.Sequence.ShouldBe(2);
+        lifecycle.StreamingElementId.ShouldBe("streaming_main");
+        lifecycle.PendingAccumulatedText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeText.ShouldBeEmpty();
+        lifecycle.PendingFinalizeCommandId.ShouldBeEmpty();
+        lifecycle.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
+        lifecycle.LarkCardInFlightSequence.ShouldBe(0);
+        lifecycle.LarkCardOperationGeneration.ShouldBe(2);
+        lifecycle.TerminalReason.ShouldBe("completed");
+        lifecycle.UpdatedAtUnixMs.ShouldBe(400);
+    }
+
+    [Fact]
+    public async Task HandleLarkCardOperationTimeoutFiredAsync_CreateTimeout_DoesNotPersistCredentialChunk()
+    {
         var text = new RecordingTurnRunner
         {
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
-        var (agent, _) = CreateAgent(text, "conv-card-fallback", cardRunner: card);
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(text, "conv-card-timeout", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-fallback", "relay-msg-1", "hello"));
-        await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-fallback", "relay-msg-1", "hello world"));
+            CreateCardStreamChunk("act-card-timeout", "relay-msg-1", "hello"));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
 
-        card.CardCreateCount.ShouldBe(1);
-        card.CardStreamCount.ShouldBe(0);
-        text.StreamChunkCount.ShouldBe(2);
+        await agent.HandleLarkCardOperationTimeoutFiredAsync(new LarkCardOperationTimeoutFiredEvent
+        {
+            CorrelationId = "act-card-timeout",
+            Operation = LarkCardOperationPhase.Create,
+            Sequence = lifecycle.LarkCardInFlightSequence,
+            OperationGeneration = lifecycle.LarkCardOperationGeneration,
+            CommandId = "llm-reply:act-card-timeout",
+            FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        text.StreamChunkCount.ShouldBe(0);
+        agent.State.ActiveReplyLifecycles.ShouldContain(x =>
+            x.Mode == ConversationReplyLifecycleMode.LarkCard &&
+            x.Phase == ConversationReplyLifecyclePhase.LarkCardCreationFailed);
     }
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_StreamRateLimited_DropsFrameAndKeepsSequence()
+    public async Task HandleLarkCardOperationCompletedAsync_StaleKey_DoesNotMutateLifecycle()
     {
-        // Mid-stream rate-limit (Lark 230020) is recoverable: the card path skips the frame
-        // and the next chunk re-uses the same sequence slot. The card runner should observe
-        // the same sequence on the failing call and the recovering call (fresh seq=2).
-        var seenSequences = new List<long>();
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-            CardStreamResultFactory = (_, _, _, sequence) =>
-            {
-                seenSequences.Add(sequence);
-                return seenSequences.Count == 1
-                    ? ConversationCardStreamResult.Failed("card_rate_limit", "slow down", isRateLimited: true)
-                    : ConversationCardStreamResult.Succeeded();
-            },
-        };
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-rate", cardRunner: card);
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-stale");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first"));
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"));
+        var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-stale",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first plus second"));
-        await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first plus second plus third"));
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "second"));
+        var active = agent.State.ActiveReplyLifecycles.Single();
 
-        seenSequences.ShouldBe(new[] { 2L, 2L });
-        card.CardStreamCount.ShouldBe(2);
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-stale",
+            active.LarkCardInFlightSequence,
+            active.LarkCardOperationGeneration + 99,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-stale", "relay-msg-1", "stale"),
+            success: true));
+
+        var unchanged = agent.State.ActiveReplyLifecycles.Single();
+        unchanged.LastFlushedText.ShouldBe("first");
+        unchanged.PendingAccumulatedText.ShouldBe("second");
+        unchanged.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Stream);
     }
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_TableLimit_TerminatesPersistsAndDropsLaterChunks()
+    public async Task HandleLarkCardOperationCompletedAsync_SerialCoalescing_UsesLatestPendingText()
     {
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-            CardStreamResultFactory = (_, _, _, _) =>
-                ConversationCardStreamResult.Failed("card_table_limit", "too big", isTableLimitExceeded: true),
-        };
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-tl", cardRunner: card);
+        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-coalesce");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first"));
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"));
+        var createLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-coalesce",
+            createLifecycle.LarkCardInFlightSequence,
+            createLifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first plus second"));
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "second"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
-            CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first plus second plus third"));
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "third"));
+        var streamLifecycle = agent.State.ActiveReplyLifecycles.Single();
+        streamLifecycle.PendingAccumulatedText.ShouldBe("third");
 
-        // Only one CardStream call before termination; chunk 3 is dropped by the
-        // ProcessedCommandIds guard once mid-stream persistence ran.
-        card.CardStreamCount.ShouldBe(1);
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-coalesce",
+            streamLifecycle.LarkCardInFlightSequence,
+            streamLifecycle.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "second"),
+            success: true));
 
-        // Mid-stream Terminated must persist a partial-card terminal record so the event
-        // store has a terminal entry before LlmReplyReady arrives — otherwise the ready
-        // event would fall through to RunLlmReplyAsync and post a duplicate text reply.
-        var events = await store.GetEventsAsync(agent.Id);
-        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
-        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
-        completed.SentActivityId.ShouldStartWith("lark-card-stream:");
-        completed.Outbound.Text.ShouldBe("first");
+        var followUp = agent.State.ActiveReplyLifecycles.Single();
+        followUp.LastFlushedText.ShouldBe("second");
+        followUp.Sequence.ShouldBe(2);
+        followUp.PendingAccumulatedText.ShouldBe("third");
+        followUp.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Stream);
+        followUp.LarkCardInFlightSequence.ShouldBe(3);
+
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-coalesce",
+            followUp.LarkCardInFlightSequence,
+            followUp.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-coalesce", "relay-msg-1", "third"),
+            success: true));
+
+        var coalesced = agent.State.ActiveReplyLifecycles.Single();
+        coalesced.LastFlushedText.ShouldBe("third");
+        coalesced.Sequence.ShouldBe(3);
+        coalesced.PendingAccumulatedText.ShouldBeEmpty();
+        coalesced.LarkCardInFlightOperation.ShouldBe(LarkCardOperationPhase.Unspecified);
     }
 
     [Fact]
@@ -2439,25 +3011,26 @@ public sealed class ConversationGAgentDedupTests
         // The actor must NOT fall back to the legacy text-edit sink (that would post a
         // duplicate reply on top of the empty card). It transitions to Terminated, persists
         // a partial-card terminal record, and the text-edit runner is never invoked.
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.PostSendFailed(
-                cardId: "card_orphan",
-                cardMessageId: "om_orphan",
-                errorCode: "card_first_stream_failed",
-                errorSummary: "stream rejected"),
-        };
         var text = new RecordingTurnRunner();
-        var (agent, store) = CreateAgent(text, "conv-card-postsend", cardRunner: card);
+        var (agent, store) = CreateAgent(text, "conv-card-postsend");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-postsend",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"),
+            success: false,
+            cardId: "card_orphan",
+            cardMessageId: "om_orphan",
+            isPostSendFailure: true,
+            errorCode: "card_first_stream_failed",
+            errorSummary: "stream rejected"));
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello world"));
 
-        // Card runner saw create exactly once; text-edit runner never saw a chunk because
-        // the post-send-failure path terminates instead of falling back.
-        card.CardCreateCount.ShouldBe(1);
         text.StreamChunkCount.ShouldBe(0);
 
         // Partial-card terminal record persisted with the orphan card_message_id.
@@ -2470,15 +3043,19 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleLlmReplyReadyAsync_CardModeStreamingCompleted_PersistsLarkCardStreamPrefix()
     {
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-            CardFinalizeResultFactory = (_, _, _, _) => ConversationCardFinalizeResult.Succeeded(),
-        };
-        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize", cardRunner: card);
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize");
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"));
+        var create = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-finalize",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
 
         var ready = new LlmReplyReadyEvent
         {
@@ -2491,8 +3068,20 @@ public sealed class ConversationGAgentDedupTests
             ReadyAtUnixMs = 100,
         };
         await agent.HandleLlmReplyReadyAsync(ready);
+        var finalize = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-finalize",
+            finalize.LarkCardInFlightSequence,
+            finalize.LarkCardOperationGeneration,
+            "card_xyz",
+            "om_card_msg",
+            "llm-reply:act-card-finalize",
+            CreateRelayActivity("act-card-finalize", "relay-msg-1"),
+            "complete answer",
+            "complete answer",
+            success: true,
+            finalTextWritten: true));
 
-        card.CardFinalizeCount.ShouldBe(1);
         var events = await store.GetEventsAsync(agent.Id);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
@@ -2504,17 +3093,29 @@ public sealed class ConversationGAgentDedupTests
     public async Task HandleLlmReplyReadyAsync_CardLifecycleSurvivesReactivationWithMonotonicSequence()
     {
         var store = new InMemoryEventStore();
-        var firstCard = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Succeeded("card_xyz", "om_card_msg"),
-            CardStreamResultFactory = (_, _, _, _) => ConversationCardStreamResult.Succeeded(),
-        };
-        var (firstAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", cardRunner: firstCard, store: store);
+        var (firstAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
 
         await firstAgent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"));
+        var create = firstAgent.State.ActiveReplyLifecycles.Single();
+        await firstAgent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-reactivate",
+            create.LarkCardInFlightSequence,
+            create.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "first"),
+            success: true,
+            cardId: "card_xyz",
+            cardMessageId: "om_card_msg"));
         await firstAgent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "second"));
+        var stream = firstAgent.State.ActiveReplyLifecycles.Single();
+        await firstAgent.HandleLarkCardOperationCompletedAsync(CreateCardStreamCompletion(
+            "act-card-reactivate",
+            stream.LarkCardInFlightSequence,
+            stream.LarkCardOperationGeneration,
+            "card_xyz",
+            CreateCardStreamChunk("act-card-reactivate", "relay-msg-1", "second"),
+            success: true));
 
         var lifecycle = firstAgent.State.ActiveReplyLifecycles.Single();
         lifecycle.Mode.ShouldBe(ConversationReplyLifecycleMode.LarkCard);
@@ -2523,11 +3124,7 @@ public sealed class ConversationGAgentDedupTests
         lifecycle.Sequence.ShouldBe(2);
         lifecycle.LastFlushedText.ShouldBe("second");
 
-        var secondCard = new RecordingCardTurnRunner
-        {
-            CardFinalizeResultFactory = (_, _, _, _) => ConversationCardFinalizeResult.Succeeded(),
-        };
-        var (secondAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", cardRunner: secondCard, store: store);
+        var (secondAgent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-reactivate", store: store);
 
         await secondAgent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
         {
@@ -2541,9 +3138,21 @@ public sealed class ConversationGAgentDedupTests
             ReplyToken = "runtime-ready-token",
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         });
+        var finalize = secondAgent.State.ActiveReplyLifecycles.Single();
+        finalize.LarkCardInFlightSequence.ShouldBe(3);
+        await secondAgent.HandleLarkCardOperationCompletedAsync(CreateCardFinalizeCompletion(
+            "act-card-reactivate",
+            finalize.LarkCardInFlightSequence,
+            finalize.LarkCardOperationGeneration,
+            "card_xyz",
+            "om_card_msg",
+            "llm-reply:act-card-reactivate",
+            CreateRelayActivity("act-card-reactivate", "relay-msg-1"),
+            "third",
+            "second",
+            success: true,
+            finalTextWritten: true));
 
-        secondCard.CardFinalizeCount.ShouldBe(1);
-        secondCard.LastCardFinalizeSequence.ShouldBe(3);
         secondAgent.State.ActiveReplyLifecycles.ShouldBeEmpty();
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(
             (await store.GetEventsAsync(secondAgent.Id)).Last().EventData.Value);
@@ -2558,22 +3167,27 @@ public sealed class ConversationGAgentDedupTests
         // finalize path takes over. This guards against a regression where TryComplete
         // CardStreamedReplyAsync incorrectly returns true while the card never actually
         // streamed, swallowing the legitimate text-edit finalize.
-        var card = new RecordingCardTurnRunner
-        {
-            CardCreateResultFactory = _ => ConversationCardCreateResult.Failed(
-                "card_create_failed",
-                "down",
-                isRateLimited: true),
-        };
         var text = new RecordingTurnRunner
         {
             StreamChunkResultFactory = (_, currentPmid) =>
                 ConversationStreamChunkResult.Succeeded(currentPmid ?? "om_text_first"),
         };
-        var (agent, store) = CreateAgent(text, "conv-card-fb-final", cardRunner: card);
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(text, "conv-card-fb-final", dispatchPort: dispatch);
 
         await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"));
+        var lifecycle = agent.State.ActiveReplyLifecycles.Single();
+        await agent.HandleLarkCardOperationCompletedAsync(CreateCardCreateCompletion(
+            "act-card-fb-final",
+            lifecycle.LarkCardInFlightSequence,
+            lifecycle.LarkCardOperationGeneration,
+            CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"),
+            success: false,
+            isRateLimited: true,
+            errorCode: "card_create_failed",
+            errorSummary: "down"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
 
         var ready = new LlmReplyReadyEvent
         {
@@ -2587,8 +3201,8 @@ public sealed class ConversationGAgentDedupTests
         };
         await agent.HandleLlmReplyReadyAsync(ready);
 
-        card.CardFinalizeCount.ShouldBe(0);
-        // Text-edit finalize lands the ConversationTurnCompletedEvent with the legacy prefix.
+        // Text-edit fallback lands the ConversationTurnCompletedEvent with the legacy prefix
+        // after the typed text operation completion reconciles inside the actor.
         var events = await store.GetEventsAsync(agent.Id);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
@@ -2605,6 +3219,117 @@ public sealed class ConversationGAgentDedupTests
             ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ReplyToken = "runtime-token-" + correlationId,
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardCreateCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        LlmReplyCardStreamChunkEvent chunk,
+        bool success,
+        string cardId = "",
+        string cardMessageId = "",
+        bool isRateLimited = false,
+        bool isTableLimitExceeded = false,
+        bool isCardUnavailable = false,
+        bool isPostSendFailure = false,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:create:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Create,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            Chunk = chunk,
+            RawResult = new LarkCardOperationRawResult
+            {
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                IsRateLimited = isRateLimited,
+                IsTableLimitExceeded = isTableLimitExceeded,
+                IsCardUnavailable = isCardUnavailable,
+                IsPostSendFailure = isPostSendFailure,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardStreamCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        LlmReplyCardStreamChunkEvent chunk,
+        bool success,
+        bool isRateLimited = false,
+        bool isTableLimitExceeded = false,
+        bool isCardUnavailable = false,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:stream:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Stream,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            CardId = cardId,
+            StreamingElementId = "streaming_main",
+            Chunk = chunk,
+            RawResult = new LarkCardOperationRawResult
+            {
+                IsRateLimited = isRateLimited,
+                IsTableLimitExceeded = isTableLimitExceeded,
+                IsCardUnavailable = isCardUnavailable,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
+        };
+
+    private static LarkCardOperationCompletedEvent CreateCardFinalizeCompletion(
+        string correlationId,
+        long sequence,
+        long generation,
+        string cardId,
+        string cardMessageId,
+        string commandId,
+        ChatActivity activity,
+        string finalText,
+        string lastFlushedText,
+        bool success,
+        bool finalTextWritten,
+        string errorCode = "",
+        string errorSummary = "") =>
+        new()
+        {
+            OperationId = $"{correlationId}:finalize:{sequence}:{generation}",
+            CorrelationId = correlationId,
+            Operation = LarkCardOperationPhase.Finalize,
+            Sequence = sequence,
+            OperationGeneration = generation,
+            State = success
+                ? LarkCardOperationResultState.Succeeded
+                : LarkCardOperationResultState.Failed,
+            CardId = cardId,
+            CardMessageId = cardMessageId,
+            CommandId = commandId,
+            Activity = activity,
+            FinalText = finalText,
+            LastFlushedText = lastFlushedText,
+            RawResult = new LarkCardOperationRawResult
+            {
+                FinalTextWritten = finalTextWritten,
+                RawErrorCode = errorCode,
+                RawErrorSummary = errorSummary,
+            },
         };
 
     private sealed class RecordingCardTurnRunner : IConversationCardTurnRunner

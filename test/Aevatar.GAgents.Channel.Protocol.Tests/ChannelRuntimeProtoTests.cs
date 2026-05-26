@@ -92,7 +92,20 @@ public sealed class ChannelRuntimeProtoTests
             },
             TargetRef = new ChatRouteAction
             {
-                ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolChoiceHint = new ChatRouteToolChoiceHint
+                    {
+                        ToolName = "aevatar_invoke_gagent",
+                        PrefilledArguments = new Struct
+                        {
+                            Fields =
+                            {
+                                ["actor_id"] = Value.ForString("target-gagent-1"),
+                            },
+                        },
+                    },
+                },
             },
             RequestedAtUnixMs = 42,
         };
@@ -125,7 +138,8 @@ public sealed class ChannelRuntimeProtoTests
         PayloadQuarantineReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(PlatformQuarantineEnvelope));
         llmRequested.Clone().ShouldBe(llmRequested);
-        llmRequested.Clone().TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        llmRequested.Clone().TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"]
+            .StringValue.ShouldBe("target-gagent-1");
         llmReady.Clone().ShouldBe(llmReady);
     }
 }

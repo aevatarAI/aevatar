@@ -18,8 +18,8 @@ namespace Aevatar.Studio.Tests;
 ///   typed implementation_ref the actor expects.
 /// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
-///   IActorDispatchPort, so the projection scope is active before the
-///   command lands on the inbox.
+///   IActorDispatchPort, so actor provisioning happens before the command
+///   lands on the inbox.
 /// </summary>
 public sealed class ActorDispatchStudioMemberCommandServiceTests
 {
@@ -30,7 +30,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -66,7 +66,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -89,9 +89,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     [Fact]
     public async Task CreateAsync_ShouldRejectUnknownImplementationKind()
     {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(),
-            new RecordingDispatchPort());
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.CreateAsync(
             ScopeId,
@@ -112,7 +110,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         var implementation = kind switch
         {
@@ -158,7 +156,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -194,7 +192,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -222,15 +220,15 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     public async Task StartBindingRunAsync_ShouldComputeStableHashFromPayload()
     {
         var firstDispatch = new RecordingDispatchPort();
-        var firstService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), firstDispatch);
+        var firstService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(firstDispatch));
         await firstService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-a"), CancellationToken.None);
 
         var repeatDispatch = new RecordingDispatchPort();
-        var repeatService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), repeatDispatch);
+        var repeatService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(repeatDispatch));
         await repeatService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-a"), CancellationToken.None);
 
         var changedDispatch = new RecordingDispatchPort();
-        var changedService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), changedDispatch);
+        var changedService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(changedDispatch));
         await changedService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-b"), CancellationToken.None);
 
         var firstHash = firstDispatch.Dispatches[0].Envelope.Payload
@@ -250,7 +248,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -291,7 +289,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     public async Task StartBindingRunAsync_ShouldDefaultMissingGAgentEndpointResponseTypeUrl()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -301,7 +299,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "Aevatar.Studio.Hosting.Endpoints.ScriptGenerateGAgent, Aevatar.Studio.Hosting",
+                        ActorTypeName: "Example.Studio.CommandMember, Example.Studio",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "run",
@@ -328,9 +326,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     [Fact]
     public async Task StartBindingRunAsync_ShouldRejectMissingGAgentEndpointKind()
     {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(),
-            new RecordingDispatchPort());
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var act = () => service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -359,7 +355,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     public void Constructor_ShouldRejectNullDependencies()
     {
         FluentActions.Invoking(() =>
-                new ActorDispatchStudioMemberCommandService(null!, new RecordingDispatchPort()))
+                new ActorDispatchStudioMemberCommandService(null!, CreateCommandDispatch(new RecordingDispatchPort())))
             .Should().Throw<ArgumentNullException>();
         FluentActions.Invoking(() =>
                 new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), null!))
@@ -395,13 +391,33 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add(new DispatchedCommand(actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
+    }
+
+    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
+    {
+        var service = new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchService<
+            StudioProjectionActorCommand,
+            StudioProjectionActorCommandTarget,
+            StudioProjectionActorCommandReceipt,
+            StudioProjectionActorCommandStartError>(
+            new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchPipeline<
+                StudioProjectionActorCommand,
+                StudioProjectionActorCommandTarget,
+                StudioProjectionActorCommandReceipt,
+                StudioProjectionActorCommandStartError>(
+                new StudioProjectionActorCommandTargetResolver(),
+                new Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy(),
+                new StudioProjectionActorCommandEnvelopeFactory(),
+                new Aevatar.CQRS.Core.Commands.ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
+                new StudioProjectionActorCommandReceiptFactory()));
+        return new StudioProjectionActorCommandDispatch(service);
     }
 
     private static StudioMemberBindingRunStartRequest NewScriptRunStartRequest(

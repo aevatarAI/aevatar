@@ -582,10 +582,10 @@ public sealed class DefaultServiceInvocationDispatcherTests
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -621,19 +621,19 @@ public sealed class DefaultServiceInvocationDispatcherTests
         }
     }
 
-    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<WorkflowDefinitionBinding> CreateRunCalls { get; } = [];
 
         public RecordingActor RunActor { get; } = new("workflow-run");
 
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new RecordingActor(actorId ?? "workflow-definition"));
+        public Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(WorkflowDefinitionBinding definition, string? preferredActorId = null, CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowDefinitionProvisioningReceipt(preferredActorId ?? definition.DefinitionActorId, CreatedNow: true));
 
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
         {
             CreateRunCalls.Add(definition);
-            return Task.FromResult(new WorkflowRunCreationResult(RunActor, definition.DefinitionActorId, [RunActor.Id]));
+            return Task.FromResult(new WorkflowRunCreationReceipt(RunActor.Id, definition.DefinitionActorId, [RunActor.Id]));
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
@@ -642,7 +642,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Task.CompletedTask;
 
         public Task BindWorkflowDefinitionAsync(
-            IActor actor,
+            string actorId,
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,

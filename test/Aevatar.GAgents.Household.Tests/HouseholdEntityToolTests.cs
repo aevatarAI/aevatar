@@ -187,11 +187,11 @@ internal sealed class RecordingActorDispatchPort : IActorDispatchPort
     public string? ActorId { get; private set; }
     public EventEnvelope? Envelope { get; private set; }
 
-    public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
     {
         ActorId = actorId;
         Envelope = envelope;
-        return Task.CompletedTask;
+        return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 }
 

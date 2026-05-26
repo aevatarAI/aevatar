@@ -11,18 +11,15 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     private const string FallbackReasonSavedRouteUnavailable = "saved_route_unavailable";
 
     private readonly IUserConfigQueryPort _queryPort;
-    private readonly IUserConfigCommandService _commandService;
     private readonly IUserLlmCatalogPort _catalogPort;
     private readonly string _gatewayRouteLabel;
 
     public UserLlmPreferenceService(
         IUserConfigQueryPort queryPort,
-        IUserConfigCommandService commandService,
         IUserLlmCatalogPort catalogPort,
         IOptions<UserLlmSettingsOptions>? options = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
-        _commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
         _catalogPort = catalogPort ?? throw new ArgumentNullException(nameof(catalogPort));
         _gatewayRouteLabel = NormalizeOptional(options?.Value.GatewayRouteLabel) ?? DefaultGatewayRouteLabel;
     }
@@ -39,6 +36,7 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         try
         {
             var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
+            (savedRoute, defaultModel) = ResolveLegacyPrefixedModel(result, savedRoute, defaultModel);
             return BuildAvailableSettings(result, savedRoute, defaultModel);
         }
         catch (OperationCanceledException)
@@ -49,76 +47,6 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         {
             return BuildUnavailableSettings(savedRoute, defaultModel);
         }
-    }
-
-    public async Task<UserConfig> SaveSettingsAsync(
-        string? bearerToken,
-        SaveUserLlmSettingsCommand command,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-
-        var routeValue = UserConfigLlmRoute.Normalize(command.RouteValue);
-        var current = await _queryPort.GetAsync(ct).ConfigureAwait(false);
-        UserConfig next;
-        if (string.Equals(routeValue, UserConfigLlmRouteDefaults.Gateway, StringComparison.OrdinalIgnoreCase))
-        {
-            next = current with
-            {
-                PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
-                DefaultModel = NormalizeModel(command.Model),
-            };
-        }
-        else
-        {
-            var services = await LoadServicesAsync(bearerToken, ct).ConfigureAwait(false);
-            var service = FindRoutableService(services, routeValue);
-            if (service is null)
-                throw new InvalidOperationException($"LLM route '{command.RouteValue}' is not routable for this user.");
-
-            EnsureSelectable(service);
-            next = current with
-            {
-                PreferredLlmRoute = UserConfigLlmRoute.Normalize(service.RouteValue),
-                DefaultModel = NormalizeModel(command.Model),
-            };
-        }
-
-        await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
-        return next;
-    }
-
-    private async Task<IReadOnlyList<NyxIdLlmService>> LoadServicesAsync(string? bearerToken, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(bearerToken))
-            throw new InvalidOperationException("Bearer token is required to read LLM services.");
-
-        var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        return result.Services;
-    }
-
-    private static NyxIdLlmService? FindRoutableService(IReadOnlyList<NyxIdLlmService> services, string requested)
-    {
-        var normalized = requested.Trim();
-        return services.FirstOrDefault(service =>
-            IsUserServiceRoute(service) &&
-            (
-                string.Equals(service.UserServiceId, normalized, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(service.ServiceSlug, normalized, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(service.DisplayName, normalized, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(UserConfigLlmRoute.Normalize(service.RouteValue), normalized, StringComparison.OrdinalIgnoreCase)
-            ));
-    }
-
-    private static void EnsureSelectable(NyxIdLlmService service)
-    {
-        var displayName = NormalizeDisplayName(service.DisplayName, service.ServiceSlug);
-        if (!service.Allowed)
-            throw new InvalidOperationException($"LLM service '{displayName}' is not allowed for this user.");
-
-        var status = NormalizeStatus(service.Status);
-        if (!string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"LLM service '{displayName}' is not ready: {status}.");
     }
 
     private UserLlmSettingsView BuildAvailableSettings(
@@ -383,6 +311,64 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     }
 
     private static string NormalizeModel(string? model) => model?.Trim() ?? string.Empty;
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static (string SavedRoute, string DefaultModel) ResolveLegacyPrefixedModel(
+        NyxIdLlmServicesResult result,
+        string savedRoute,
+        string defaultModel)
+    {
+        if (!string.IsNullOrWhiteSpace(savedRoute) ||
+            UserConfigLlmModel.TryParseRouteModel(defaultModel) is not { } prefixed)
+        {
+            return (savedRoute, defaultModel);
+        }
+
+        var prefixedOption = result.Services
+            .Select(NyxIdLlmServiceMapping.ToOption)
+            .FirstOrDefault(option => IsSameOption(option, prefixed.RouteSlug));
+        return prefixedOption is null
+            ? (savedRoute, defaultModel)
+            : (UserConfigLlmRoute.Normalize(prefixedOption.RouteValue), prefixed.Model);
+    }
+
+    private static bool IsSameOption(UserLlmOption option, string requested) =>
+        string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
+}
+
+public static class NyxIdLlmServiceMapping
+{
+    public static UserLlmOption ToOption(NyxIdLlmService service) => new(
+        ServiceId: NormalizeRequired(service.UserServiceId, nameof(service.UserServiceId)),
+        ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
+        DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
+        RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
+        DefaultModel: NormalizeOptional(service.DefaultModel),
+        AvailableModels: service.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Select(model => model.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray(),
+        Status: NormalizeRequired(service.Status, nameof(service.Status)),
+        Source: NormalizeRequired(service.Source, nameof(service.Source)),
+        Allowed: service.Allowed,
+        Description: NormalizeOptional(service.Description));
+
+    private static string NormalizeRequired(string value, string name)
+    {
+        var normalized = value.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException($"{name} must not be empty.");
+        return normalized;
+    }
 
     private static string? NormalizeOptional(string? value)
     {

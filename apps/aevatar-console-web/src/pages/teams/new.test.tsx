@@ -27,8 +27,8 @@ describe('TeamCreatePage', () => {
     displayName: '订单助手团队',
     description: '处理订单异常',
     lifecycleStage: 'active',
-    entryMemberId: null,
     memberCount: 0,
+    entryMemberId: null,
     createdAt: '2026-05-06T08:00:00Z',
     updatedAt: '2026-05-06T08:00:00Z',
   };

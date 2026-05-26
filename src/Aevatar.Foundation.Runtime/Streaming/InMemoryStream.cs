@@ -19,8 +19,8 @@ public sealed class InMemoryStream : IStream
     private volatile Func<EventEnvelope, Task>[] _subscribers = [];
     private readonly Lock _lock = new();
     private readonly CancellationTokenSource _cts = new();
-    private readonly Task _pumpLoop;
-    private readonly Task _dispatchLoop;
+    private Task _pumpLoop;
+    private Task _dispatchLoop;
     private readonly InMemoryStreamOptions _options;
     private readonly ILogger<InMemoryStream> _logger;
     private readonly Func<EventEnvelope, Task>? _onDispatchedAsync;
@@ -40,7 +40,8 @@ public sealed class InMemoryStream : IStream
         Func<EventEnvelope, Task>? onDispatchedAsync = null,
         Func<StreamForwardingBinding, CancellationToken, Task>? upsertRelayAsync = null,
         Func<string, CancellationToken, Task>? removeRelayAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>>? listRelaysAsync = null)
+        Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>>? listRelaysAsync = null,
+        bool autoStart = true)
     {
         _options = options ?? new InMemoryStreamOptions();
         var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
@@ -61,8 +62,22 @@ public sealed class InMemoryStream : IStream
         _upsertRelayAsync = upsertRelayAsync ?? ((_, _) => Task.CompletedTask);
         _removeRelayAsync = removeRelayAsync ?? ((_, _) => Task.CompletedTask);
         _listRelaysAsync = listRelaysAsync ?? (_ => Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]));
-        _pumpLoop = Task.Run(PumpLoopAsync);
-        _dispatchLoop = Task.Run(DispatchLoopAsync);
+        _pumpLoop = Task.CompletedTask;
+        _dispatchLoop = Task.CompletedTask;
+        if (autoStart)
+            Start();
+    }
+
+    internal void Start()
+    {
+        lock (_lock)
+        {
+            if (!_pumpLoop.IsCompleted || !_dispatchLoop.IsCompleted || _cts.IsCancellationRequested)
+                return;
+
+            _pumpLoop = Task.Run(PumpLoopAsync);
+            _dispatchLoop = Task.Run(DispatchLoopAsync);
+        }
     }
 
     /// <summary>Writes message into stream; non-EventEnvelope messages are auto-wrapped.</summary>

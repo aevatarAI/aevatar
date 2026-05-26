@@ -17,12 +17,12 @@ public sealed class ScriptBehaviorCompilationRequestTests
         request.ScriptId.Should().BeEmpty();
         request.Revision.Should().BeEmpty();
         request.HasProtoFiles.Should().BeFalse();
-        request.SourceText.Should().Be("public sealed class Behavior { }");
+        request.Package.CSharpSources.Should().ContainSingle(x => x.Content == "public sealed class Behavior { }");
         request.ResolvedPackageHash.Should().NotBeEmpty();
     }
 
     [Fact]
-    public void Ctor_ShouldSerializePackage_WhenPackageContainsMultipleSourcesOrProtoFiles()
+    public void Ctor_ShouldKeepTypedPackage_WhenPackageContainsMultipleSourcesOrProtoFiles()
     {
         var package = new ScriptPackageSpec
         {
@@ -46,8 +46,8 @@ public sealed class ScriptBehaviorCompilationRequestTests
             SourceHash: "provided-hash");
 
         request.HasProtoFiles.Should().BeTrue();
-        request.SourceText.Should().Contain("\"cSharpSources\"");
-        request.SourceText.Should().Contain("\"protoFiles\"");
+        request.Package.CSharpSources.Should().HaveCount(2);
+        request.Package.ProtoFiles.Should().ContainSingle(x => x.Path == "proto/messages.proto");
         request.ResolvedPackageHash.Should().Be("provided-hash");
     }
 
@@ -64,23 +64,21 @@ public sealed class ScriptBehaviorCompilationRequestTests
     }
 
     [Fact]
-    public void FromPersistedSource_ShouldDeserializePackage_WhenPayloadIsSerializedPackage()
+    public void ResolvedPackageHash_ShouldUseTypedCanonicalPackage_WhenSourceHashIsMissing()
     {
         var package = new ScriptSourcePackage(
             ScriptSourcePackage.CurrentFormat,
             [new ScriptSourceFile("Behavior.cs", "public sealed class Behavior { }")],
             [new ScriptSourceFile("proto/messages.proto", "syntax = \"proto3\";")],
             "Behavior");
-        var persisted = ScriptSourcePackageSerializer.Serialize(package);
-
-        var request = ScriptBehaviorCompilationRequest.FromPersistedSource(
-            scriptId: "script-1",
-            revision: "rev-1",
-            sourceText: persisted,
-            sourceHash: string.Empty);
+        var request = new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-1",
+            Revision: "rev-1",
+            Package: package,
+            SourceHash: string.Empty);
 
         request.HasProtoFiles.Should().BeTrue();
         request.Package.ProtoFiles.Should().ContainSingle(x => x.Path == "proto/messages.proto");
-        request.ResolvedPackageHash.Should().NotBeEmpty();
+        request.ResolvedPackageHash.Should().Be(ScriptPackageModel.ComputePackageHash(package));
     }
 }

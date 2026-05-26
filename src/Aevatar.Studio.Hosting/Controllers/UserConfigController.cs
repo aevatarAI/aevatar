@@ -11,19 +11,16 @@ namespace Aevatar.Studio.Hosting.Controllers;
 [Route("api/user-config")]
 public sealed class UserConfigController : ControllerBase
 {
-    private readonly IUserConfigQueryPort _queryPort;
-    private readonly IUserConfigCommandService _commandService;
+    private readonly IUserConfigService _userConfigService;
     private readonly IUserLlmPreferenceService _llmPreferenceService;
     private readonly ILogger<UserConfigController> _logger;
 
     public UserConfigController(
-        IUserConfigQueryPort queryPort,
-        IUserConfigCommandService commandService,
+        IUserConfigService userConfigService,
         IUserLlmPreferenceService llmPreferenceService,
         ILogger<UserConfigController> logger)
     {
-        _queryPort = queryPort;
-        _commandService = commandService;
+        _userConfigService = userConfigService;
         _llmPreferenceService = llmPreferenceService;
         _logger = logger;
     }
@@ -33,7 +30,7 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            return Ok(await _queryPort.GetAsync(cancellationToken));
+            return Ok(await _userConfigService.GetAsync(cancellationToken));
         }
         catch (InvalidOperationException exception)
         {
@@ -53,17 +50,18 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            var current = await _queryPort.GetAsync(cancellationToken);
-            var merged = new UserConfig(
-                DefaultModel: request.DefaultModel is null ? current.DefaultModel : request.DefaultModel.Trim(),
-                PreferredLlmRoute: request.PreferredLlmRoute is null ? current.PreferredLlmRoute : UserConfigLlmRoute.Normalize(request.PreferredLlmRoute),
-                RuntimeMode: request.RuntimeMode is null ? current.RuntimeMode : request.RuntimeMode.Trim(),
-                LocalRuntimeBaseUrl: request.LocalRuntimeBaseUrl is null ? current.LocalRuntimeBaseUrl : request.LocalRuntimeBaseUrl.Trim(),
-                RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim(),
-                GithubUsername: request.GithubUsername is null ? current.GithubUsername : NormalizeOptional(request.GithubUsername),
-                MaxToolRounds: request.MaxToolRounds ?? current.MaxToolRounds);
-            await _commandService.SaveAsync(merged, cancellationToken);
-            return Ok(merged);
+            var next = await _userConfigService.SaveAsync(
+                ExtractBearerToken(),
+                new SaveUserConfigCommand(
+                    request.DefaultModel,
+                    request.PreferredLlmRoute,
+                    request.RuntimeMode,
+                    request.LocalRuntimeBaseUrl,
+                    request.RemoteRuntimeBaseUrl,
+                    request.GithubUsername,
+                    request.MaxToolRounds),
+                cancellationToken);
+            return Ok(next);
         }
         catch (InvalidOperationException exception)
         {
@@ -84,12 +82,6 @@ public sealed class UserConfigController : ControllerBase
         [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null,
         [property: JsonPropertyName("githubUsername")] string? GithubUsername = null,
         [property: JsonPropertyName("maxToolRounds")] int? MaxToolRounds = null);
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 
     [HttpGet("llm")]
     public async Task<ActionResult<UserLlmSettingsView>> GetLlmSettings(CancellationToken cancellationToken)
@@ -118,9 +110,11 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            await _llmPreferenceService.SaveSettingsAsync(
+            await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
-                request,
+                new SaveUserLlmPreferenceCommand(
+                    RouteValue: request.RouteValue,
+                    Model: request.Model),
                 cancellationToken).ConfigureAwait(false);
             return Ok(await _llmPreferenceService
                 .GetSettingsAsync(ExtractBearerToken(), cancellationToken)
@@ -142,7 +136,7 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            var config = await _queryPort.GetAsync(cancellationToken);
+            var config = await _userConfigService.GetAsync(cancellationToken);
             return Ok(new UserConfigRuntimeView(
                 RuntimeMode: UserConfigRuntime.NormalizeMode(config.RuntimeMode),
                 ActiveRuntimeBaseUrl: UserConfigRuntime.ResolveActiveRuntimeBaseUrl(config),

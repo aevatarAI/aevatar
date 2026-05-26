@@ -650,7 +650,7 @@ describe('StudioWorkflowBuildPanel', () => {
       runId: 'run-script-1',
       sourceHash: 'hash-run',
       commandTypeUrl: 'type.googleapis.com/AppScriptCommand',
-      readModelUrl: 'type.googleapis.com/AppScriptReadModel',
+      activityUrl: '/api/app/scripts/runtimes/runtime-run/activity',
     });
 
     render(
@@ -673,7 +673,7 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
     expect(screen.getByText('run-script-1')).toBeInTheDocument();
     expect(screen.getByText('runtime-run')).toBeInTheDocument();
-    expect(screen.getByText('type.googleapis.com/AppScriptReadModel')).toBeInTheDocument();
+    expect(screen.getByText('type.googleapis.com/AppScriptCommand')).toBeInTheDocument();
   });
 
   it('keeps save observation pending honest and exposes catalog refresh', async () => {

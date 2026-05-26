@@ -21,19 +21,19 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         watermarkQueryPort.GetLastSuccessfulVersionAsync(
                 Arg.Is<ProjectionRuntimeScopeKey>(key =>
                     key.RootActorId == ChannelBotRegistrationGAgent.WellKnownId &&
-                    key.ProjectionKind == ChannelBotRegistrationProjectionPort.ProjectionKind),
+                    key.ProjectionKind == ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind),
                 Arg.Any<CancellationToken>())
             .Returns(12L);
         watermarkQueryPort.GetLastSuccessfulVersionAsync(
                 Arg.Is<ProjectionRuntimeScopeKey>(key =>
                     key.RootActorId == DeviceRegistrationGAgent.WellKnownId &&
-                    key.ProjectionKind == DeviceRegistrationProjectionPort.ProjectionKind),
+                    key.ProjectionKind == DeviceRegistrationProjectionBootstrapActivator.ProjectionKind),
                 Arg.Any<CancellationToken>())
             .Returns(22L);
         watermarkQueryPort.GetLastSuccessfulVersionAsync(
                 Arg.Is<ProjectionRuntimeScopeKey>(key =>
                     key.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
-                    key.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
+                    key.ProjectionKind == UserAgentCatalogProjectionBootstrapActivator.ProjectionKind),
                 Arg.Any<CancellationToken>())
             .Returns(32L);
 

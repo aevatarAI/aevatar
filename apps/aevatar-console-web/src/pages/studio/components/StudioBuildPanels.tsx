@@ -3078,8 +3078,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 ['Run', lastRunResult.runId],
                 ['Runtime', lastRunResult.runtimeActorId],
                 ['Definition', lastRunResult.definitionActorId],
+                ['Command type', lastRunResult.commandTypeUrl],
                 ['Source hash', lastRunResult.sourceHash],
-                ['Read model', lastRunResult.readModelUrl],
+                ['Activity', lastRunResult.activityUrl],
               ].map(([label, value]) => (
                 <div key={label} style={{ display: 'grid', gap: 2 }}>
                   <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>

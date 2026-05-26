@@ -11,6 +11,19 @@ option csharp_namespace = "Aevatar.Foundation.Abstractions";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
+// Refactor (iter91/cluster-091-owner-scope-foundation):
+//   Old: OwnerScope lived in agents/Aevatar.GAgents.Scheduled as a foundational
+//        caller-identity tuple; chat routing carried a same-shape OwnerScope mirror.
+//   New: OwnerScope is the canonical Foundation.Abstractions caller-scope contract.
+//        Scheduled and chat routing import this type directly and keep their existing
+//        containing-field tags for wire compatibility.
+message OwnerScope {
+  string nyx_user_id = 1;
+  string platform = 2;
+  string registration_scope_id = 3;
+  string sender_id = 4;
+}
+
 // Publication audiences.
 
 enum TopologyAudience {
@@ -106,6 +119,7 @@ message EnvelopeCallbackContext {
   int64  generation             = 2;
   int64  fire_index             = 3;
   int64  fired_at_unix_time_ms  = 4;
+  int32  slot_epoch             = 5;
 }
 
 message EnvelopeDispatchControl {

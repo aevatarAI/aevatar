@@ -11,6 +11,7 @@ using Orleans.Streams;
 
 namespace Aevatar.Hosting.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetDistributedHostBuilderExtensionsTests
 {
     [Fact]

@@ -28,6 +28,36 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "root-status-actor",
+            ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+            ProjectionRuntimeMode.DurableMaterialization);
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+
+        await using var provider = services.BuildServiceProvider();
+        var lookup = provider.GetRequiredService<IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>>();
+
+        var lease = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+        });
+
+        lease.Should().NotBeNull();
+        lease!.Context.RootActorId.Should().Be("root-status-actor");
+        lease.Context.ProjectionKind.Should().Be(ProjectionScopeStatusMaterializationContext.ProjectionKindValue);
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MaterializationActivation_EnsuresStatusScopeForNormalProjection()
     {
         var runtime = new RecordingActorRuntime();
@@ -142,11 +172,11 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     {
         public List<(string actorId, EventEnvelope command)> Dispatched { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Dispatched.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

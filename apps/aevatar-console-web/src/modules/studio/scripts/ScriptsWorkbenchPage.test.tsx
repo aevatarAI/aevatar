@@ -16,7 +16,7 @@ jest.mock('@/shared/studio/scriptsApi', () => ({
     getScript: jest.fn(),
     getScriptCatalog: jest.fn(),
     listRuntimes: jest.fn(),
-    getRuntimeReadModel: jest.fn(),
+    getRuntimeActivity: jest.fn(),
     getEvolutionDecision: jest.fn(),
     saveScript: jest.fn(),
     observeSaveScript: jest.fn(),
@@ -44,7 +44,7 @@ const mockedScriptsApi = scriptsApi as unknown as {
   getScript: jest.Mock;
   getScriptCatalog: jest.Mock;
   listRuntimes: jest.Mock;
-  getRuntimeReadModel: jest.Mock;
+  getRuntimeActivity: jest.Mock;
   getEvolutionDecision: jest.Mock;
   saveScript: jest.Mock;
   observeSaveScript: jest.Mock;
@@ -135,13 +135,16 @@ describe('ScriptsWorkbenchPage', () => {
     mockedScriptsApi.validateDraft.mockResolvedValue(validationResult);
     mockedScriptsApi.listScripts.mockResolvedValue([]);
     mockedScriptsApi.listRuntimes.mockResolvedValue([]);
-    mockedScriptsApi.getRuntimeReadModel.mockResolvedValue({
+    mockedScriptsApi.getRuntimeActivity.mockResolvedValue({
       actorId: 'runtime-1',
       scriptId: 'script-1',
       definitionActorId: 'definition-1',
       revision: 'draft-1',
-      readModelTypeUrl: 'type.googleapis.com/example.ReadModel',
-      readModelPayloadJson: '{"status":"ok"}',
+      input: '',
+      output: '',
+      status: 'ok',
+      lastCommandId: '',
+      notes: [],
       stateVersion: 1,
       lastEventId: 'event-1',
       updatedAt: '2026-03-24T00:00:00Z',
@@ -219,7 +222,7 @@ describe('ScriptsWorkbenchPage', () => {
       runId: 'run-1',
       sourceHash: 'hash-1',
       commandTypeUrl: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
-      readModelUrl: '/api/app/scripts/runtimes/runtime-1/readmodel',
+      activityUrl: '/api/app/scripts/runtimes/runtime-1/activity',
     });
     mockedScriptsApi.proposeEvolution.mockResolvedValue({
       accepted: true,

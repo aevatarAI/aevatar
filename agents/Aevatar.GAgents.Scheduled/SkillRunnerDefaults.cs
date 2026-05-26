@@ -12,6 +12,7 @@ public static class SkillRunnerDefaults
     public const string StatusRunning = "running";
     public const string StatusError = "error";
     public const string StatusDisabled = "disabled";
+    public const string RejectionReasonRunnerDisabled = "runner_disabled";
     public const string TriggerCallbackId = "skill-runner-next-fire";
     public const string RetryCallbackId = "skill-runner-retry";
     public const int MaxRetryAttempts = 1;

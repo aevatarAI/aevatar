@@ -506,6 +506,13 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestAccepted(input: string, init?: RequestInit): Promise<void> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+}
+
 async function streamSse(
   input: string,
   body: unknown,

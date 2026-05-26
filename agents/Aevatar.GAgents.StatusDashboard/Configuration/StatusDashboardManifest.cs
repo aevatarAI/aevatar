@@ -1,6 +1,3 @@
-using System.Text.Json;
-using System.Text.RegularExpressions;
-
 namespace Aevatar.GAgents.StatusDashboard.Configuration;
 
 /// <summary>
@@ -12,6 +9,7 @@ public sealed class StatusDashboardManifest
 {
     private const string HttpStatusProbe = "http_status";
     private const string ReadmodelFreshnessProbe = "readmodel_freshness";
+    private const string AevatarCoreLoopProbe = "aevatar_core_loop";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
@@ -98,51 +96,19 @@ public sealed class StatusDashboardManifest
                 ["ExpectedStatuses"] = "200",
                 ["DegradedOnNon2xx"] = "true",
             }),
-            HttpTarget(
-            slug: "responses-api-auth-gate",
-            name: "Responses API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/responses",
-            method: "POST",
-            expectedStatuses: "401",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            new()
             {
-                ["Body"] = "{}",
-            }),
-            HttpTarget(
-            slug: "messages-api-auth-gate",
-            name: "Anthropic Messages API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/messages",
-            method: "POST",
-            expectedStatuses: "401",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
-            HttpTarget(
-            slug: "models-api-auth-gate",
-            name: "Models API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/v1/models",
-            expectedStatuses: "401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "voice-websocket-auth-gate",
-            name: "Voice WebSocket route",
-            category: "feature",
-            url: $"{selfBaseUrl}/ws/voice",
-            expectedStatuses: "400,401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "channel-registration-api-auth-gate",
-            name: "Channel registration API auth gate",
-            category: "feature",
-            url: $"{selfBaseUrl}/api/channels/registrations",
-            expectedStatuses: "200,401",
-            intervalSeconds: 60),
+                Slug = "aevatar-core-loop-tools",
+                Name = "Aevatar Core Loop Tools",
+                Category = "feature",
+                Probe = AevatarCoreLoopProbe,
+                IntervalSeconds = 60,
+                Parameters =
+                {
+                    ["ToolSet"] = "workspace.default",
+                    ["RequireWorkspaceSources"] = "true",
+                },
+            },
             new()
             {
                 Slug = "channel-bot-runtime",
@@ -157,174 +123,20 @@ public sealed class StatusDashboardManifest
                 },
             },
             HttpTarget(
-            slug: "nyxid-llm-status",
-            name: "NyxID LLM status",
+            slug: "nyxid-http-health",
+            name: "NyxID HTTP health",
             category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/llm/status",
-            expectedStatuses: "200,401",
+            url: $"{NyxIdAuthorityPlaceholder}/health",
             intervalSeconds: 60),
             HttpTarget(
-            slug: "nyxid-llm-gateway-auth-gate",
-            name: "NyxID LLM gateway auth gate",
+            slug: "nyxid-oidc-discovery",
+            name: "NyxID OIDC discovery",
             category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/llm/gateway/v1/models",
-            expectedStatuses: "200,401",
+            url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
             intervalSeconds: 60),
-            HttpTarget(
-            slug: "nyxid-channel-bots-auth-gate",
-            name: "NyxID channel bots auth gate",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/channel-bots",
-            expectedStatuses: "200,401",
-            intervalSeconds: 60),
-            HttpTarget(
-            slug: "nyxid-channel-relay-reply-auth-gate",
-            name: "NyxID channel relay reply auth gate",
-            category: "upstream",
-            url: $"{NyxIdAuthorityPlaceholder}/api/v1/channel-relay/reply",
-            method: "POST",
-            expectedStatuses: "200,400,401,422",
-            intervalSeconds: 60,
-            parameters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Body"] = "{}",
-            }),
         };
 
-        targets.AddRange(ResponsesForwardToTeamTargets(selfBaseUrl, options.ResponsesForwardToTeam));
         return targets;
-    }
-
-    private static IReadOnlyList<StatusProbeTargetConfig> ResponsesForwardToTeamTargets(
-        string selfBaseUrl,
-        ResponsesForwardToTeamStatusProbeOptions options)
-    {
-        if (!options.Enabled)
-            return [];
-
-        var directBaseUrl = NormalizeSelfBaseUrl(
-            string.IsNullOrWhiteSpace(options.DirectBaseUrl) ? selfBaseUrl : options.DirectBaseUrl);
-        var nyxBaseUrl = NormalizeSelfBaseUrl(
-            string.IsNullOrWhiteSpace(options.NyxIdBaseUrl) ? NyxIdAuthorityPlaceholder : options.NyxIdBaseUrl);
-        var serviceSlug = string.IsNullOrWhiteSpace(options.NyxIdServiceSlug)
-            ? "aevatar"
-            : options.NyxIdServiceSlug.Trim();
-        var endpointId = string.IsNullOrWhiteSpace(options.EndpointId) ? "chat" : options.EndpointId.Trim();
-        var model = string.IsNullOrWhiteSpace(options.Model) ? "deepseek/deepseek-chat" : options.Model.Trim();
-        var prompt = string.IsNullOrWhiteSpace(options.Prompt)
-            ? "Aevatar status probe. Reply in one short sentence."
-            : options.Prompt.Trim();
-        var intervalSeconds = options.IntervalSeconds > 0 ? options.IntervalSeconds : 300;
-        var timeoutMs = options.TimeoutMs > 0 ? options.TimeoutMs : 45_000;
-        var authHeader = $"Bearer {ConfigurationPlaceholder(options.AccessTokenConfigurationKey)}";
-        var scopeId = options.ScopeId.Trim();
-        var teamId = options.TeamId.Trim();
-        var memberId = options.MemberId.Trim();
-        var publishedServiceId = string.IsNullOrWhiteSpace(options.PublishedServiceId)
-            ? $"member-{memberId}"
-            : options.PublishedServiceId.Trim();
-        var category = "feature";
-
-        return
-        [
-            HttpTarget(
-                slug: "responses-forward-team-01-nyxid-service",
-                name: "Responses -> Studio Team 01 NyxID service",
-                category: category,
-                url: $"{nyxBaseUrl}/api/v1/proxy/services",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    "\"proxy_url_slug\"\\s*:\\s*\"[^\"]*/s/" +
-                    Regex.Escape(serviceSlug) +
-                    "/\\{path\\}\"")),
-            HttpTarget(
-                slug: "responses-forward-team-02-nyxid-proxy-models",
-                name: "Responses -> Studio Team 02 NyxID proxy",
-                category: category,
-                url: $"{nyxBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}/v1/models",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex: """(?s)"data"\s*:""")),
-            HttpTarget(
-                slug: "responses-forward-team-03-direct-responses",
-                name: "Responses -> Studio Team 03 direct /v1/responses",
-                category: category,
-                url: $"{directBaseUrl}/v1/responses",
-                method: "POST",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    body: ResponsesBody(model, prompt),
-                    expectedBodyContains: "event: response.completed",
-                    forbiddenBodyContains: "event: response.failed")),
-            HttpTarget(
-                slug: "responses-forward-team-04-route-policy",
-                name: "Responses -> Studio Team 04 route policy",
-                category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/chat-route-policy",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    $$"""(?s)(?=.*"sourceKind"\s*:\s*"CHAT_SOURCE_KIND_NYX_RESPONSES")(?=.*"forwardToTeam")(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"endpointId"\s*:\s*"{{Regex.Escape(endpointId)}}").*""")),
-            HttpTarget(
-                slug: "responses-forward-team-05-team-entry-member",
-                name: "Responses -> Studio Team 05 team entry member",
-                category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    $$"""(?s)(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"entryMemberId"\s*:\s*"{{Regex.Escape(memberId)}}").*""")),
-            HttpTarget(
-                slug: "responses-forward-team-06-member-binding",
-                name: "Responses -> Studio Team 06 member binding",
-                category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    "\"lastBinding\"\\s*:\\s*\\{(?=[^{}]*\"publishedServiceId\"\\s*:\\s*\"" +
-                    Regex.Escape(publishedServiceId) +
-                    "\")[^{}]*\\}")),
-            HttpTarget(
-                slug: "responses-forward-team-07-direct-team-invoke",
-                name: "Responses -> Studio Team 07 direct team invoke",
-                category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/invoke/{Uri.EscapeDataString(endpointId)}:stream",
-                method: "POST",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    body: TeamInvokeBody(prompt),
-                    expectedBodyContains: "runStarted",
-                    forbiddenBodyContains: "runError")),
-            HttpTarget(
-                slug: "responses-forward-team-08-nyxid-proxy-e2e",
-                name: "Responses -> Studio Team 08 NyxID proxy e2e",
-                category: category,
-                url: $"{nyxBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}/v1/responses",
-                method: "POST",
-                expectedStatuses: "200",
-                intervalSeconds: intervalSeconds,
-                timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    body: ResponsesBody(model, prompt),
-                    expectedBodyContains: "event: response.completed",
-                    forbiddenBodyContains: "event: response.failed")),
-        ];
     }
 
     private static StatusProbeTargetConfig HttpTarget(
@@ -358,38 +170,4 @@ public sealed class StatusDashboardManifest
         return target;
     }
 
-    private static Dictionary<string, string> AuthenticatedParameters(
-        string authHeader,
-        string? body = null,
-        string? expectedBodyContains = null,
-        string? expectedBodyRegex = null,
-        string? forbiddenBodyContains = null)
-    {
-        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Header.Authorization"] = authHeader,
-        };
-        if (!string.IsNullOrWhiteSpace(body))
-            parameters["Body"] = body;
-        if (!string.IsNullOrWhiteSpace(expectedBodyContains))
-            parameters["ExpectedBodyContains"] = expectedBodyContains;
-        if (!string.IsNullOrWhiteSpace(expectedBodyRegex))
-            parameters["ExpectedBodyRegex"] = expectedBodyRegex;
-        if (!string.IsNullOrWhiteSpace(forbiddenBodyContains))
-            parameters["ForbiddenBodyContains"] = forbiddenBodyContains;
-        return parameters;
-    }
-
-    private static string ConfigurationPlaceholder(string key) =>
-        "${configuration:" + (string.IsNullOrWhiteSpace(key)
-            ? "Aevatar:Status:ResponsesForwardToTeam:BearerToken"
-            : key.Trim()) + "}";
-
-    private static string ResponsesBody(string model, string prompt) =>
-        "{\"model\":" + JsonSerializer.Serialize(model) +
-        ",\"input\":" + JsonSerializer.Serialize(prompt) +
-        ",\"stream\":true}";
-
-    private static string TeamInvokeBody(string prompt) =>
-        "{\"prompt\":" + JsonSerializer.Serialize(prompt) + "}";
 }

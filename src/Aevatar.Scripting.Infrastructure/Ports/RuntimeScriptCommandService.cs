@@ -7,14 +7,11 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
 {
     private readonly ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly IScriptExecutionReadModelActivationPort _readModelActivationPort;
 
     public RuntimeScriptCommandService(
-        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        IScriptExecutionReadModelActivationPort readModelActivationPort)
+        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
     }
 
     public async Task RunRuntimeAsync(
@@ -71,8 +68,10 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string? scopeId,
         CancellationToken ct)
     {
-        _ = await _readModelActivationPort.ActivateAsync(runtimeActorId, ct);
-
+        // Refactor (iter56/cluster-910-projection-activation-cleanup):
+        //   old=command-path pre-dispatch activation
+        //   new=committed-state plan provider
+        //   dispatch ACK remains accepted-only and does not imply readmodel visibility.
         var result = await _dispatchService.DispatchAsync(
             new RunScriptRuntimeCommand(
                 runtimeActorId,

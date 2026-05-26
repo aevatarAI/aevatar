@@ -65,9 +65,7 @@ public static class WorkflowValidator
 
         foreach (var step in allSteps)
         {
-            var hasAgentTypeOverride = HasAgentTypeOverride(step);
-            if (!hasAgentTypeOverride &&
-                !string.IsNullOrWhiteSpace(step.TargetRole) &&
+            if (!string.IsNullOrWhiteSpace(step.TargetRole) &&
                 !roleIds.Contains(step.TargetRole))
             {
                 errors.Add($"步骤 '{step.Id}' 引用不存在的角色 '{step.TargetRole}'");
@@ -136,7 +134,7 @@ public static class WorkflowValidator
             }
         }
 
-        ValidateAgentTypeParameters(step, errors);
+        ValidateRawActorLifecycleParameters(step, errors);
 
         if (stepType == "conditional")
         {
@@ -222,54 +220,16 @@ public static class WorkflowValidator
         }
     }
 
-    private static bool HasAgentTypeOverride(StepDefinition step) =>
-        TryGetParameter(step.Parameters, "agent_type", out var agentType) &&
-        !string.IsNullOrWhiteSpace(agentType);
-
-    private static void ValidateAgentTypeParameters(StepDefinition step, List<string> errors)
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    private static void ValidateRawActorLifecycleParameters(StepDefinition step, List<string> errors)
     {
-        if (TryGetParameter(step.Parameters, "agent_type", out var agentTypeRaw))
-        {
-            var trimmed = (agentTypeRaw ?? string.Empty).Trim();
-            if (trimmed.Length == 0)
-            {
-                errors.Add($"步骤 '{step.Id}' 的参数 'agent_type' 不能为空");
-            }
-            else if (!IsLikelyAgentTypeString(trimmed))
-            {
-                errors.Add($"步骤 '{step.Id}' 的参数 'agent_type' 格式非法：'{trimmed}'");
-            }
-        }
+        if (TryGetParameter(step.Parameters, "agent_type", out _))
+            errors.Add($"步骤 '{step.Id}' 的参数 'agent_type' 已废止；请在 roles.agent_kind 绑定 stable kind，并在步骤使用 target_role");
 
-        if (TryGetParameter(step.Parameters, "agent_id", out var agentIdRaw) &&
-            string.IsNullOrWhiteSpace(agentIdRaw))
-        {
-            errors.Add($"步骤 '{step.Id}' 的参数 'agent_id' 不能为空字符串");
-        }
-    }
-
-    private static bool IsLikelyAgentTypeString(string value)
-    {
-        var commaIndex = value.IndexOf(',');
-        var typePart = commaIndex >= 0 ? value[..commaIndex].Trim() : value.Trim();
-        var assemblyPart = commaIndex >= 0 ? value[(commaIndex + 1)..].Trim() : string.Empty;
-        if (typePart.Length == 0)
-            return false;
-        if (commaIndex >= 0 && assemblyPart.Length == 0)
-            return false;
-
-        var first = typePart[0];
-        if (!(char.IsLetter(first) || first == '_'))
-            return false;
-
-        foreach (var ch in typePart)
-        {
-            if (char.IsLetterOrDigit(ch) || ch is '_' or '.' or '+' or '`')
-                continue;
-            return false;
-        }
-
-        return !typePart.Contains("..", StringComparison.Ordinal);
+        if (TryGetParameter(step.Parameters, "agent_id", out _))
+            errors.Add($"步骤 '{step.Id}' 的参数 'agent_id' 已废止；actor id 由 WorkflowRunGAgent 生命周期管理");
     }
 
     private static bool TryGetParameter(

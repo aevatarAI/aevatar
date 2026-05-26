@@ -39,6 +39,22 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         : _fallbackRuntimeContext;
 
     private readonly WorkflowExecutionRuntimeContext _fallbackRuntimeContext = new();
+    private TimeSpan? _nextElapsedTime;
+
+    public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.UtcNow;
+
+    public long GetTimestamp() => 1;
+
+    public TimeSpan GetElapsedTime(long startingTimestamp)
+    {
+        _ = startingTimestamp;
+        return _nextElapsedTime ?? TimeSpan.Zero;
+    }
+
+    public void SetNextElapsedTime(TimeSpan elapsedTime)
+    {
+        _nextElapsedTime = elapsedTime;
+    }
 
     public TState LoadState<TState>(string scopeKey)
         where TState : class, IMessage<TState>, new()
@@ -163,7 +179,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(UtcNow),
             Payload = Any.Pack(callback.Event),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? AgentId, TopologyAudience.Self),
         };
@@ -179,7 +195,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             CallbackId = callback.CallbackId,
             Generation = callback.Generation,
             FireIndex = 0,
-            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            FiredAtUnixTimeMs = UtcNow.ToUnixTimeMilliseconds(),
         };
         return envelope;
     }

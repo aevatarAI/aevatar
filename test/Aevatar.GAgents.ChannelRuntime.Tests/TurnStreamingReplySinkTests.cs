@@ -71,7 +71,7 @@ public sealed class TurnStreamingReplySinkTests
     {
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException(new InvalidOperationException("boom")));
+            .Returns(_ => Task.FromException<DispatchAdmission>(new InvalidOperationException("boom")));
         var sink = CreateSink(dispatchPort, out _);
 
         var act = async () => await sink.OnDeltaAsync("hello", CancellationToken.None);
@@ -150,7 +150,7 @@ public sealed class TurnStreamingReplySinkTests
         var envelopes = new List<EventEnvelope>();
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         dispatchPort.When(x => x.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
         return (dispatchPort, envelopes);

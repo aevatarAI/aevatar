@@ -120,7 +120,6 @@ public sealed class ScriptDefinitionBindingSpecConversionsTests
         {
             ScriptId = "script-3",
             Revision = "rev-3",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
@@ -430,7 +429,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactoryTests
         var ai = new RecordingAICapability();
         var factory = new ScriptBehaviorRuntimeCapabilityFactory(
             ai,
-            new RecordingActorRuntime(),
             new RecordingDefinitionSnapshotPort(),
             new RecordingProposalPort(),
             new RecordingDefinitionCommandPort(),
@@ -462,14 +460,13 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactoryTests
     {
         var cases = new (string Name, Func<ScriptBehaviorRuntimeCapabilityFactory> Create)[]
         {
-            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilityFactory(null!, new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("runtime", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort())),
-            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!)),
+            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilityFactory(null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort())),
+            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!)),
         };
 
         foreach (var testCase in cases)
@@ -635,8 +632,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var result = await service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            ScriptSources.StructuredProfileBehavior,
-            string.Empty,
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
             null,
             CancellationToken.None);
 
@@ -651,7 +647,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
     }
 
     [Fact]
-    public async Task UpsertDefinitionWithSnapshotAsync_ShouldUseProvidedActorIdAndSourceHash()
+    public async Task UpsertDefinitionWithSnapshotAsync_ShouldUseProvidedActorIdAndCanonicalPackageHash()
     {
         var dispatch = new RecordingDispatchService<UpsertScriptDefinitionCommand>(
             _ => CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
@@ -664,15 +660,16 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var result = await service.UpsertDefinitionWithSnapshotAsync(
             "script-2",
             "rev-2",
-            ScriptSources.UppercaseBehavior,
-            "hash-custom",
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             "definition-custom",
             CancellationToken.None);
 
+        var expectedHash = ScriptPackageModel.ComputePackageHash(
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior));
         result.ActorId.Should().Be("definition-custom");
-        result.Snapshot.SourceHash.Should().Be("hash-custom");
+        result.Snapshot.SourceHash.Should().Be(expectedHash);
         dispatch.CapturedCommand!.DefinitionActorId.Should().Be("definition-custom");
-        dispatch.CapturedCommand.SourceHash.Should().Be("hash-custom");
+        dispatch.CapturedCommand.SourceHash.Should().Be(expectedHash);
     }
 
     [Fact]
@@ -688,8 +685,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var act = () => service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            ScriptSources.UppercaseBehavior,
-            ScriptSources.UppercaseBehaviorHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             null,
             CancellationToken.None);
 
@@ -709,8 +705,7 @@ public sealed class RuntimeScriptDefinitionCommandServiceBranchTests
         var act = () => service.UpsertDefinitionWithSnapshotAsync(
             "script-1",
             "rev-1",
-            "if (true {",
-            ScriptSources.UppercaseBehaviorHash,
+            ScriptPackageSpecExtensions.CreateSingleSource("if (true {"),
             null,
             CancellationToken.None);
 
@@ -742,15 +737,13 @@ public sealed class ScriptEvolutionCommandTargetTests
     {
         var projectionPort = new RecordingEvolutionProjectionPort();
 
-        Action nullActor = () => new ScriptEvolutionCommandTarget(null!, "proposal-1", projectionPort, projectionPort);
-        Action blankProposal = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), " ", projectionPort, projectionPort);
-        Action nullPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", null!, projectionPort);
-        Action nullReadModelActivationPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", projectionPort, null!);
+        Action nullActor = () => new ScriptEvolutionCommandTarget(null!, "proposal-1", projectionPort);
+        Action blankProposal = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), " ", projectionPort);
+        Action nullPort = () => new ScriptEvolutionCommandTarget(new FakeActor("session-1"), "proposal-1", null!);
 
         nullActor.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("actor");
         blankProposal.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("proposalId");
         nullPort.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("projectionPort");
-        nullReadModelActivationPort.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("readModelActivationPort");
     }
 
     [Fact]
@@ -759,7 +752,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
 
         Action nullLease = () => target.BindLiveObservation(null!, new RecordingLiveSinkLease(), new RecordingCompletedEventSink());
@@ -775,7 +767,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
 
         Action act = () => target.RequireLiveSink();
@@ -791,7 +782,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         var lease = new RecordingEvolutionProjectionLease("session-1", "proposal-1");
         var liveSinkLease = new RecordingLiveSinkLease();
@@ -814,7 +804,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
         var sink = new RecordingCompletedEventSink();
         target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), new RecordingLiveSinkLease(), sink);
@@ -835,7 +824,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
@@ -865,7 +853,6 @@ public sealed class ScriptEvolutionCommandTargetTests
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
-            projectionPort,
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
@@ -966,8 +953,7 @@ internal sealed class RecordingAICapability : IAICapability
 }
 
 internal sealed class RecordingExecutionProjectionPort
-    : IScriptExecutionProjectionPort,
-      IScriptExecutionReadModelActivationPort
+    : IScriptExecutionProjectionPort
 {
     public bool ProjectionEnabled => true;
 
@@ -976,9 +962,6 @@ internal sealed class RecordingExecutionProjectionPort
         ct.ThrowIfCancellationRequested();
         return Task.FromResult<IScriptExecutionProjectionLease?>(new RecordingExecutionProjectionLease(actorId));
     }
-
-    public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-        await EnsureActorProjectionAsync(actorId, ct) != null;
 
     public Task<IScriptExecutionProjectionLease?> EnsureProjectionAsync(string actorId, string projectionName, string input, string commandId, CancellationToken ct = default)
     {
@@ -1071,19 +1054,19 @@ internal sealed class RecordingDefinitionCommandPort : IScriptDefinitionCommandP
     public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
         return Task.FromResult(new ScriptDefinitionUpsertResult(
             definitionActorId ?? "definition-created",
             new ScriptDefinitionSnapshot(
                 scriptId,
                 scriptRevision,
-                sourceText,
                 sourceHash,
+                scriptPackage,
                 ScriptSources.UppercaseStateTypeUrl,
                 ScriptSources.UppercaseReadModelTypeUrl,
                 "1",
@@ -1162,8 +1145,7 @@ internal sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
 }
 
 internal sealed class RecordingEvolutionProjectionPort
-    : IScriptEvolutionProjectionPort,
-      IScriptEvolutionReadModelActivationPort
+    : IScriptEvolutionProjectionPort
 {
     public bool ProjectionEnabled => true;
     public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
@@ -1177,8 +1159,18 @@ internal sealed class RecordingEvolutionProjectionPort
         return Task.FromResult<IScriptEvolutionProjectionLease?>(new RecordingEvolutionProjectionLease(sessionActorId, proposalId));
     }
 
-    public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-        await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
+    public async Task<EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>?> AttachExistingActorProjectionAsync(
+        string sessionActorId,
+        string proposalId,
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+        CancellationToken ct = default)
+    {
+        var lease = new RecordingEvolutionProjectionLease(sessionActorId, proposalId);
+        var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+        return liveSinkLease == null
+            ? null
+            : new EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>(lease, liveSinkLease);
+    }
 
     public async Task<IAsyncDisposable?> AttachLiveSinkAsync(IScriptEvolutionProjectionLease lease, IEventSink<ScriptEvolutionSessionCompletedEvent> sink, CancellationToken ct = default)
     {

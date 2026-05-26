@@ -17,14 +17,15 @@ public sealed class ScriptReadModelProjectorNeutralityTests
     public async Task ProjectAsync_ShouldNotMutateCommittedStateMirror()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
-        var projector = new ScriptReadModelProjector(
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow));
         var readModel = new SimpleTextReadModel
         {
             HasValue = true,
             Value = "HELLO",
         };
+        var projector = new ScriptReadModelProjector(
+            dispatcher,
+            StubScriptProjectionPayloadMaterializer.WithReadModel(readModel),
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
         var state = ScriptCommittedEnvelopeFactory.CreateState(
             "definition-1",
             "script-1",
@@ -47,7 +48,6 @@ public sealed class ScriptReadModelProjectorNeutralityTests
                 Current = readModel.Clone(),
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
         var context = new ScriptExecutionMaterializationContext

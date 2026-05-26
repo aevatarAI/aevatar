@@ -290,6 +290,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             CallerContext = request.CallerContext,
             ToolContext = request.ToolContext,
             RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
             Tools = request.Tools,
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
@@ -334,9 +335,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveModel(LLMRequest request)
     {
-        var metadataModel = request.RoutingContext?.ModelOverride
-                            ?? request.ToolContext?.Routing.ModelOverride
-                            ?? TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
+        var metadataModel = request.LlmControl?.ModelOverride
+                            ?? request.RoutingContext?.ModelOverride;
         var requestedModel = request.Model?.Trim();
 
         return !string.IsNullOrWhiteSpace(metadataModel)
@@ -348,24 +348,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        // Preferred typed channel — keeps the bearer out of the string-keyed
-        // Metadata bag that telemetry sinks may serialize. Other call sites
-        // (workflow / studio / channel runtime) still populate Metadata; we
-        // read that as a legacy fallback until those callers migrate. The
-        // host-level accessor remains as the last resort (currently always
-        // null for NyxID providers — see Aevatar.Bootstrap.Extensions.AI
-        // BuildNyxIdFactory — but kept for future host-credential modes).
         var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
         if (!string.IsNullOrWhiteSpace(typedToken))
             return typedToken;
 
-        var toolContextToken = request.ToolContext?.Credentials.NyxIdAccessToken?.Trim();
-        if (!string.IsNullOrWhiteSpace(toolContextToken))
-            return toolContextToken;
-
-        var metadataToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
-        if (!string.IsNullOrWhiteSpace(metadataToken))
-            return metadataToken;
+        var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(controlToken))
+            return controlToken;
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
@@ -374,15 +363,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         throw new NyxIdAuthenticationRequiredException(Name);
     }
 
-    private static string? TryGetMetadataValue(LLMRequest request, string key) =>
-        request.Metadata != null && request.Metadata.TryGetValue(key, out var value)
-            ? value?.Trim()
-            : null;
-
     private static string? ResolveRoutePreference(LLMRequest request) =>
-        request.RoutingContext?.NyxIdRoutePreference
-        ?? request.ToolContext?.Routing.NyxIdRoutePreference
-        ?? TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdRoutePreference);
+        request.LlmControl?.NyxIdRoutePreference
+        ?? request.RoutingContext?.NyxIdRoutePreference;
 
     private static string NormalizeRoutePreference(string? value)
     {

@@ -17,11 +17,13 @@ public sealed class NyxIdSshExecTool : IAgentTool
     private const int MaxTimeoutSecs = 300;
 
     private readonly NyxIdApiClient _client;
+    private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
 
-    public NyxIdSshExecTool(NyxIdApiClient client, ILogger? logger = null)
+    public NyxIdSshExecTool(NyxIdApiClient client, NyxIdToolOptions? options = null, ILogger? logger = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _options = options ?? new NyxIdToolOptions();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -37,8 +39,11 @@ public sealed class NyxIdSshExecTool : IAgentTool
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-    /// <summary>SSH execution can mutate the remote host arbitrarily; always request approval.</summary>
-    public bool? RequiresApproval(string argumentsJson) => true;
+    /// <summary>
+    /// SSH execution can mutate the remote host arbitrarily. Hosts may explicitly bypass
+    /// this local approval gate only for internal-only deployments with their own trust boundary.
+    /// </summary>
+    public bool? RequiresApproval(string argumentsJson) => !_options.BypassSshExecApproval;
 
     public string ParametersSchema => """
         {

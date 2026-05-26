@@ -25,6 +25,10 @@ public sealed class ToolProviderHttpClientRegistrationTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IHttpClientFactory>().Should().NotBeNull();
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
+        provider.GetRequiredService<INyxIdApiClientFactory>()
+            .CreateClient()
+            .Should()
+            .NotBeNull();
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
         provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
@@ -54,6 +58,29 @@ public sealed class ToolProviderHttpClientRegistrationTests
         names.Should().NotContain("nyxid_search_capabilities");
         names.Should().NotContain("nyxid_proxy_execute");
         tools.Should().ContainSingle(tool => tool is NyxIdProxyTool);
+    }
+
+    [Fact]
+    public async Task AddNyxIdTools_WithSshBypass_DiscoversSshExecWithoutLocalApprovalHandler()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.test";
+            options.EnableSshExecTool = true;
+            options.BypassSshExecApproval = true;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+
+        var tools = await source.DiscoverToolsAsync();
+        var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
+        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
+            .Should()
+            .BeFalse();
     }
 
     [Fact]

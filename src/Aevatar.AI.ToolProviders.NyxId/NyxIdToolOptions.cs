@@ -15,4 +15,12 @@ public sealed class NyxIdToolOptions
     /// like the share-ops Lark bot) opt in by setting this to <c>true</c>.
     /// </summary>
     public bool EnableSshExecTool { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, <c>ssh_exec</c> returns <c>RequiresApproval=false</c> so the
+    /// local tool approval middleware executes it immediately. Defaults to false; enable
+    /// only in a host-owned, internal-only deployment where the surrounding channel and
+    /// identity policy already define the trust boundary.
+    /// </summary>
+    public bool BypassSshExecApproval { get; set; }
 }

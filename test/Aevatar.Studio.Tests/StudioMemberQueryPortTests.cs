@@ -20,6 +20,9 @@ namespace Aevatar.Studio.Tests;
 /// </summary>
 public sealed class ProjectionStudioMemberQueryPortTests
 {
+    // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+    //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+    //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
     private const string ScopeId = "scope-1";
 
     [Fact]
@@ -118,6 +121,41 @@ public sealed class ProjectionStudioMemberQueryPortTests
         reader.LastQuery.Cursor.Should().Be("cursor-1");
         roster.NextPageToken.Should().Be("cursor-next");
         roster.Members.Select(m => m.MemberId).Should().BeEquivalentTo("m-1", "m-2");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldApplyTeamFilterBeforePagination()
+    {
+        var inOtherTeamA = NewDocument(scopeId: ScopeId, memberId: "m-other-1", teamId: "other-team");
+        var inTeamA = NewDocument(scopeId: ScopeId, memberId: "m-team-1", teamId: "team-1");
+        var inOtherScope = NewDocument(scopeId: "scope-other", memberId: "m-foreign", teamId: "team-1");
+        var inOtherTeamB = NewDocument(scopeId: ScopeId, memberId: "m-other-2", teamId: "other-team");
+        var inTeamB = NewDocument(scopeId: ScopeId, memberId: "m-team-2", teamId: "team-1");
+        var reader = new StubDocumentReader([inOtherTeamA, inTeamA, inOtherScope, inOtherTeamB, inTeamB])
+        {
+            NextCursor = "team-cursor-2",
+        };
+        var port = new ProjectionStudioMemberQueryPort(reader);
+
+        var roster = await port.ListAsync(
+            ScopeId,
+            new StudioMemberRosterPageRequest(PageSize: 2, PageToken: "team-cursor-1", TeamId: " team-1 "));
+
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Cursor.Should().Be("team-cursor-1");
+        reader.LastQuery.Take.Should().Be(2);
+        reader.LastQuery.Filters.Any(f =>
+            string.Equals(f.FieldPath, "scope_id", StringComparison.Ordinal) &&
+            f.Value.RawValue is string scope &&
+            string.Equals(scope, ScopeId, StringComparison.Ordinal))
+            .Should().BeTrue();
+        reader.LastQuery.Filters.Any(f =>
+            string.Equals(f.FieldPath, "team_id", StringComparison.Ordinal) &&
+            f.Value.RawValue is string team &&
+            string.Equals(team, "team-1", StringComparison.Ordinal))
+            .Should().BeTrue();
+        roster.Members.Select(m => m.MemberId).Should().ContainInOrder("m-team-1", "m-team-2");
+        roster.NextPageToken.Should().Be("team-cursor-2");
     }
 
     [Fact]
@@ -231,7 +269,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         StudioMemberLifecycleStage lifecycle = StudioMemberLifecycleStage.Created,
         bool includeImplementationRef = false,
         bool includeLastBinding = false,
-        bool includeBindingStatus = false)
+        bool includeBindingStatus = false,
+        string? teamId = null)
     {
         var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
         var publishedServiceId = StudioMemberConventions.BuildPublishedServiceId(memberId);
@@ -274,6 +313,9 @@ public sealed class ProjectionStudioMemberQueryPortTests
             doc.BindingCurrentStatus = StudioMemberBindingRunStatusNames.PlatformBindingPending;
             doc.BindingUpdatedAt = now;
         }
+
+        if (teamId != null)
+            doc.TeamId = teamId;
 
         return doc;
     }
@@ -325,6 +367,9 @@ public sealed class ProjectionStudioMemberQueryPortTests
     private sealed class StubDocumentReader
         : IProjectionDocumentReader<StudioMemberCurrentStateDocument, string>
     {
+        // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+        //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+        //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
         private readonly Dictionary<string, StudioMemberCurrentStateDocument> _byId;
         public ProjectionDocumentQuery? LastQuery { get; private set; }
         public string? NextCursor { get; init; }
@@ -345,14 +390,21 @@ public sealed class ProjectionStudioMemberQueryPortTests
         {
             LastQuery = query;
 
-            // Honor the scope_id filter the query port issues.
+            // Honor the readmodel filters before pagination, matching store
+            // semantics that the query port relies on.
             var scopeFilter = query.Filters.FirstOrDefault(
                 f => string.Equals(f.FieldPath, "scope_id", StringComparison.Ordinal));
+            var teamFilter = query.Filters.FirstOrDefault(
+                f => string.Equals(f.FieldPath, "team_id", StringComparison.Ordinal));
 
             IEnumerable<StudioMemberCurrentStateDocument> items = _byId.Values;
             if (scopeFilter != null && scopeFilter.Value.RawValue is string scope)
             {
                 items = items.Where(d => string.Equals(d.ScopeId, scope, StringComparison.Ordinal));
+            }
+            if (teamFilter != null && teamFilter.Value.RawValue is string team)
+            {
+                items = items.Where(d => d.HasTeamId && string.Equals(d.TeamId, team, StringComparison.Ordinal));
             }
 
             return Task.FromResult(new ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>

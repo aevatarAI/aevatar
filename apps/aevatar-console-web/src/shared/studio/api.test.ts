@@ -1184,11 +1184,11 @@ describe('studioApi host-session requests', () => {
             scopeId: 'scope-1',
             displayName: 'Alpha Team',
             description: 'Owns support workflows',
-            entryMemberId: 'joker',
             lifecycleStage: 'active',
             memberCount: 2,
             createdAt: '2026-05-01T08:00:00Z',
             updatedAt: '2026-05-01T08:05:00Z',
+            entryMemberId: 'member-team-alpha',
           },
         ],
         nextPageToken: null,
@@ -1204,11 +1204,11 @@ describe('studioApi host-session requests', () => {
           scopeId: 'scope-1',
           displayName: 'Alpha Team',
           description: 'Owns support workflows',
-          entryMemberId: 'joker',
           lifecycleStage: 'active',
           memberCount: 2,
           createdAt: '2026-05-01T08:00:00Z',
           updatedAt: '2026-05-01T08:05:00Z',
+          entryMemberId: 'member-team-alpha',
         },
       ],
       nextPageToken: null,
@@ -1243,11 +1243,11 @@ describe('studioApi host-session requests', () => {
         scopeId: 'scope-1',
         displayName: 'Alpha Team',
         description: 'Owns support workflows',
-        entryMemberId: null,
         lifecycleStage: 'active',
         memberCount: 2,
         createdAt: '2026-05-01T08:00:00Z',
         updatedAt: '2026-05-01T08:05:00Z',
+        entryMemberId: 'member-team-alpha',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -1257,11 +1257,11 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-1',
       displayName: 'Alpha Team',
       description: 'Owns support workflows',
-      entryMemberId: null,
       lifecycleStage: 'active',
       memberCount: 2,
       createdAt: '2026-05-01T08:00:00Z',
       updatedAt: '2026-05-01T08:05:00Z',
+      entryMemberId: 'member-team-alpha',
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1290,11 +1290,11 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-1',
       displayName: 'Alpha Team',
       description: 'Owns support workflows',
-      entryMemberId: null,
       lifecycleStage: 'active',
       memberCount: 1,
       createdAt: '2026-05-01T08:00:00Z',
       updatedAt: '2026-05-01T08:05:00Z',
+      entryMemberId: 'joker',
     };
     const fetchMock = jest
       .fn()
@@ -1501,7 +1501,7 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('accepts asynchronous studio team entry member updates', async () => {
+  it('accepts asynchronous studio team entry member updates through the team authority endpoint', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -1527,11 +1527,41 @@ describe('studioApi host-session requests', () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(
-      studioApi.setTeamEntryMember('scope-1', 't-alpha', 'joker'),
+      studioApi.setTeamEntryMember(
+        ' scope-1 ',
+        ' t-alpha ',
+        ' member-team-alpha ',
+      ),
     ).resolves.toBeUndefined();
     await expect(
-      studioApi.clearTeamEntryMember('scope-1', 't-alpha'),
+      studioApi.clearTeamEntryMember(' scope-1 ', ' t-alpha '),
     ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        body: JSON.stringify({
+          memberId: 'member-team-alpha',
+        }),
+        credentials: 'same-origin',
+        method: 'PUT',
+      }),
+    );
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Content-Type')).toBe(
+      'application/json',
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/teams/t-alpha/entry-member',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
+      }),
+    );
   });
 
   it('gets a studio member detail from the member authority endpoint', async () => {

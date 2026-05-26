@@ -1,17 +1,10 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Cryptography;
-using System.Text;
-using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.Foundation.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -30,8 +23,7 @@ public static partial class NyxIdChatEndpoints
     //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] INyxIdRelayIngressPort relayIngressPort,
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
@@ -130,42 +122,27 @@ public static partial class NyxIdChatEndpoints
                     validation.UserAccessToken,
                     logger,
                     ct);
-            var relayInbound = new NyxRelayInboundActivity
-            {
-                Activity = activity,
-                ReplyToken = payload.ReplyToken?.Trim() ?? string.Empty,
-                ReplyTokenExpiresAtUnixMs = ResolveReplyTokenExpiresAtUnixMs(payload.ReplyToken, relayOptions),
-                CorrelationId = activity.OutboundDelivery.CorrelationId,
-                RelayApiKeyId = validation.RelayApiKeyId ?? string.Empty,
-                CallbackJti = validation.CallbackJti ?? string.Empty,
-                CallbackObservedAtUnixMs = validation.CallbackObservedAtUnixMs,
-                CallbackReplayExpiresAtUnixMs = validation.CallbackReplayExpiresAtUnixMs,
-            };
-
-            var actorId = BuildScopedRelayConversationActorId(scopeId, activity.Conversation.CanonicalKey);
-            var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
-            var command = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(relayInbound),
-                Route = EnvelopeRouteSemantics.CreateDirect("nyxid-chat.relay", actorId),
-            };
-
-            await actorDispatchPort.DispatchAsync(actor.Id, command, ct);
-
-            logger.LogInformation(
-                "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",
-                activity.Id,
-                actorId,
-                activity.ChannelId?.Value,
-                activity.Type);
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Relay endpoint validates NyxID callback/HMAC/user token and maps the typed activity only.
+            // Conversation actor creation and dispatch are owned by the relay ingress port.
+            // This keeps Host runtime-neutral without requiring any NyxID repository change.
+            var accepted = await relayIngressPort.AcceptAsync(
+                new NyxIdRelayIngressRequest(
+                    scopeId,
+                    activity,
+                    payload.ReplyToken,
+                    ResolveReplyTokenExpiresAtUnixMs(payload.ReplyToken, relayOptions),
+                    validation.RelayApiKeyId,
+                    validation.CallbackJti,
+                    validation.CallbackObservedAtUnixMs,
+                    validation.CallbackReplayExpiresAtUnixMs),
+                ct);
 
             return Results.Accepted(value: new
             {
                 status = "accepted",
-                message_id = activity.Id,
-                actor_id = actorId,
+                message_id = accepted.MessageId,
+                actor_id = accepted.ActorId,
             });
         }
         catch (OperationCanceledException)
@@ -279,16 +256,6 @@ public static partial class NyxIdChatEndpoints
                 "Failed to resolve sender NyxID at relay ingress; chat-routing per-user policies will not match for this turn.");
             return string.Empty;
         }
-    }
-
-    private static string BuildScopedRelayConversationActorId(string? scopeId, string canonicalKey)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
-
-        var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
-            .ToLowerInvariant();
-        return $"{ConversationGAgent.BuildActorId(canonicalKey)}:scope:{scopeHash}";
     }
 
     private static string? NormalizeOptional(string? value)

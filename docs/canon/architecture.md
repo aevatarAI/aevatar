@@ -187,7 +187,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>` 负责 accepted-only 路径（只返回 accepted receipt，不持有 live sink）
   - `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` 负责 run control 命令入口
   - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
-  - `WorkflowRunObservationLifecycle` 负责 projection lease/live sink 绑定与清理兜底
+  - `WorkflowRunObservationLifecycle` 负责 attach-only projection lease/live sink 绑定与清理兜底，不在命令 dispatch 前 ensure/activate projection
   - `WorkflowRunAcceptedCommandTargetResolver` 负责 accepted-only target 解析
   - `WorkflowRunAcceptedReceiptFactory` 负责 `actorId + commandId + correlationId` receipt 生成
   - `WorkflowExecutionQueryApplicationService` 提供读侧查询

@@ -56,6 +56,51 @@ public sealed class ChatRoutePolicyGAgent : GAgentBase<ChatRoutePolicyState>, IP
         await PersistDomainEventAsync(new ChatRoutePolicyUpdated { State = nextState });
     }
 
+    // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+    //   Old pattern: Voice demo bootstrap read the route-policy readmodel and synthesized a full replacement policy outside the actor.
+    //   New principle: Single-rule upserts are merged inside ChatRoutePolicyGAgent against authoritative actor state.
+    /// <summary>
+    /// Adds or replaces one rule while preserving all other authoritative actor
+    /// state. If the policy is not initialized yet,
+    /// <c>default_target_if_uninitialized</c> establishes the required fallback.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleUpsertRuleAsync(UpsertChatRouteRuleRequested command)
+    {
+        if (command.Rule is null || string.IsNullOrWhiteSpace(command.Rule.RuleId))
+        {
+            throw new InvalidOperationException(
+                "UpsertChatRouteRuleRequested.rule.rule_id is required.");
+        }
+
+        var hasExistingPolicy = IsInitialized();
+        if (!hasExistingPolicy &&
+            (command.DefaultTargetIfUninitialized is null ||
+             command.DefaultTargetIfUninitialized.ActionCase == ChatRouteAction.ActionOneofCase.None))
+        {
+            throw new InvalidOperationException(
+                "UpsertChatRouteRuleRequested.default_target_if_uninitialized is required when the policy is not initialized.");
+        }
+
+        var nextState = new ChatRoutePolicyState
+        {
+            PolicyId = string.IsNullOrEmpty(State.PolicyId) ? Id : State.PolicyId,
+            OwnerScope = hasExistingPolicy
+                ? State.OwnerScope?.Clone()
+                : command.OwnerScope?.Clone(),
+            DefaultTarget = hasExistingPolicy
+                ? State.DefaultTarget.Clone()
+                : command.DefaultTargetIfUninitialized.Clone(),
+            Version = State.Version + 1,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        nextState.Rules.AddRange(OrderRulesByPriority(State.Rules
+            .Where(rule => !string.Equals(rule.RuleId, command.Rule.RuleId, StringComparison.Ordinal))
+            .Append(command.Rule)));
+
+        await PersistDomainEventAsync(new ChatRoutePolicyUpdated { State = nextState });
+    }
+
     /// <summary>
     /// Removes a single rule by id. Rejects an empty id, an uninitialized
     /// policy, and an unknown rule id with an actionable error rather than

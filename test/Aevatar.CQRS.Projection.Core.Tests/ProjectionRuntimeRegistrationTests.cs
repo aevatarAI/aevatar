@@ -104,6 +104,121 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+
+        services.AddProjectionMaterializationRuntimeCore<
+            TestSessionScopedMaterializationContext,
+            TestSessionScopedMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestSessionScopedMaterializationContext>>(
+            scopeKey => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionScopedMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var lookup = provider.GetRequiredService<IProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-lookup",
+            "projection-lookup",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "correlation-lookup");
+
+        var missing = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+        var lease = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+
+        missing.Should().BeNull();
+        lease.Should().NotBeNull();
+        lease!.Context.RootActorId.Should().Be("actor-lookup");
+        lease.Context.ProjectionKind.Should().Be("projection-lookup");
+        lease.Context.SessionId.Should().Be("correlation-lookup");
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectionScopeAttachExistingLeaseLookup_ShouldValidateInputsAndCancellation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var lookup = new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            static request => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            static (_, context) => new TestSessionScopedMaterializationLease(context));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Func<Task> nullRequest = () => lookup.TryGetAsync(null!);
+        Func<Task> canceledRequest = () => lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = "actor-canceled",
+            ProjectionKind = "projection-canceled",
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        }, cts.Token);
+
+        await nullRequest.Should().ThrowAsync<ArgumentNullException>();
+        await canceledRequest.Should().ThrowAsync<OperationCanceledException>();
+        runtime.CreatedActorIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProjectionScopeAttachExistingLeaseLookup_ShouldValidateConstructorDependencies()
+    {
+        var runtime = new RecordingActorRuntime();
+        Func<ProjectionScopeStartRequest, TestSessionScopedMaterializationContext> contextFactory =
+            static request => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            };
+        Func<ProjectionRuntimeScopeKey, TestSessionScopedMaterializationContext, TestSessionScopedMaterializationLease> leaseFactory =
+            static (_, context) => new TestSessionScopedMaterializationLease(context);
+
+        var nullRuntime = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            null!,
+            contextFactory,
+            leaseFactory);
+        var nullContextFactory = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            null!,
+            leaseFactory);
+        var nullLeaseFactory = () => new ProjectionScopeAttachExistingLeaseLookup<TestSessionScopedMaterializationLease, TestSessionScopedMaterializationContext>(
+            runtime,
+            contextFactory,
+            null!);
+
+        nullRuntime.Should().Throw<ArgumentNullException>().WithParameterName("runtime");
+        nullContextFactory.Should().Throw<ArgumentNullException>().WithParameterName("contextFactory");
+        nullLeaseFactory.Should().Throw<ArgumentNullException>().WithParameterName("leaseFactory");
+    }
+
+    [Fact]
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterSessionLifecycleAndSessionScopeContext()
     {
         var runtime = new RecordingActorRuntime();
@@ -150,6 +265,52 @@ public sealed class ProjectionRuntimeRegistrationTests
         dispatchPort.Dispatched.Should().HaveCount(2);
         dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().SessionId.Should().Be("session-9");
         dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId.Should().Be("session-9");
+    }
+
+    [Fact]
+    public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterAttachExistingSessionLeaseLookup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+
+        services.AddEventSinkProjectionRuntimeCore<
+            TestSessionContext,
+            TestSessionLease,
+            StringValue,
+            ProjectionSessionScopeGAgent<TestSessionContext>>(
+            scopeKey => new TestSessionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var lookup = provider.GetRequiredService<IProjectionScopeAttachExistingLeaseLookup<TestSessionLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-session",
+            "projection-session",
+            ProjectionRuntimeMode.SessionObservation,
+            "session-lookup");
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
+
+        var lease = await lookup.TryGetAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+
+        lease.Should().NotBeNull();
+        lease!.ScopeId.Should().Be("actor-session");
+        lease.SessionId.Should().Be("session-lookup");
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]
@@ -239,10 +400,10 @@ public sealed class ProjectionRuntimeRegistrationTests
     {
         public List<(string actorId, EventEnvelope command)> Dispatched { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatched.Add((actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

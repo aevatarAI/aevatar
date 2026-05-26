@@ -487,6 +487,8 @@ public record MessageContent(
 
 **核心原则**：`MessageContent` 描述 "要表达什么"，不描述 "长什么样"。`IMessageComposer` 把它翻译成 channel-native 的具体 payload。
 
+**Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
+
 **为什么不做 universal card schema（Adaptive Cards 路线）**：universal schema 是 Level-3 抽象——为了一致性牺牲 native 表达力。Slack Block Kit 的嵌套 / Discord Embed 的字段限制 / Lark 卡片的交互模型各自有自己最自然的表达方式，强行统一会得到"处处一致但处处不好用"的结果。我们选 Level-2：intent 层统一，表达层 native，能力缺失就显式降级。
 
 ### 5.4 `IChannelTransport` + `IChannelOutboundPort` + `IMessageComposer`
@@ -1092,7 +1094,7 @@ adapter 在构造 `ChatActivity` 时**必须**：
 - `Aevatar.GAgents.ChatHistory` —— 独立 GAgent（`ChatConversationGAgent` / `ChatHistoryIndexGAgent`）。**但当前 ChannelRuntime 未集成它**；对话历史实际上是 `AIGAgentBase` 里的进程内 `ChatHistory`（见 `src/Aevatar.AI.Core/AIGAgentBase.cs`）。`ConversationGAgent` 要集成它是**新工作**，不是"复用现有集成"
 - `Aevatar.GAgents.UserMemory` —— 同样独立 GAgent 存在，但当前无集成。`ConversationGAgent` 的 long-term memory 集成是新工作
 - `Aevatar.GAgents.ChatbotClassifier` —— 按需包成 `ClassificationMiddleware`
-- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— LLM streaming 底层可复用
+- `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— deprecated compatibility surface only. It is not reusable LLM streaming infrastructure for new channel work; direct model streaming should use `/v1/responses`, while room/fan-out semantics require a named room contract.
 - `Aevatar.GAgents.Registry` —— 平台级 GAgent registry，和拟改名的 `UserAgentCatalog` 各司其职（platform actor routing vs user agent metadata）
 
 **诚实承认**：早期 RFC 版本措辞是 "必须调用 ChatHistory / UserMemory，不重复存"——暗示已有集成。实际上这些是**未来集成目标**，不是现状复用。本 RFC 实施时需要把这层集成**新建**出来，不要误以为是捡现成。
@@ -1512,8 +1514,7 @@ agents/                                ← production code
 ├── Aevatar.GAgents.NyxidChat/
 ├── Aevatar.GAgents.Registry/          ← 平台级 registry
 ├── Aevatar.GAgents.RoleCatalog/
-├── Aevatar.GAgents.StreamingProxy/
-├── Aevatar.GAgents.StreamingProxyParticipant/
+├── Aevatar.GAgents.StreamingProxy/    ← deprecated compatibility surface; no new channel consumer
 ├── Aevatar.GAgents.UserConfig/
 └── Aevatar.GAgents.UserMemory/        ← ConversationGAgent 与其集成
 
@@ -2420,7 +2421,7 @@ public interface ICredentialProvider {
 
 ### 17.5 Orleans grain-based cluster-singleton primitive（P2 — 第二 long-conn 场景触发）
 
-**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `StreamingProxyParticipantGAgent.cs:13` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
+**缺口**：aevatar 缺"**集群唯一持有某个外部长连接/会话所有权**"的通用做法。现有"well-known singleton actor" 模式（`RoleCatalogGAgent.cs:14` / `ConnectorCatalogGAgent.cs:14` / `ChannelBotRegistrationGAgent.cs:15` / `DeviceRegistrationGAgent.cs:15`）是**被动 actor**——只要 grain id 固定就行，没有 lease / epoch fencing / failover ownership 语义。
 
 现有 hosted service（`UserAgentCatalogStartupService.cs:22-60` / `ChannelBotRegistrationStartupService.cs:33-72`）是 **node-local startup/warmup**——host 启动时 poke 一下 grain 让它 activate，不是 cluster-wide supervisor。
 

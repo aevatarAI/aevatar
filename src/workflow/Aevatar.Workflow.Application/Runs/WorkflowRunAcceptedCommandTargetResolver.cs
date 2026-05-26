@@ -10,14 +10,14 @@ internal sealed class WorkflowRunAcceptedCommandTargetResolver
     : ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
-    private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
 
     public WorkflowRunAcceptedCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunProvisioningPort runProvisioningPort)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
     }
 
     public async Task<CommandTargetResolution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>> ResolveAsync(
@@ -30,14 +30,14 @@ internal sealed class WorkflowRunAcceptedCommandTargetResolver
         ArgumentNullException.ThrowIfNull(command);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(command, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
+        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
             return CommandTargetResolution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>.Failure(actorResolution.Error);
 
         return CommandTargetResolution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>.Success(
             new WorkflowRunAcceptedCommandTarget(
-                actorResolution.Actor,
+                actorResolution.Target.ActorId,
                 actorResolution.WorkflowNameForRun,
-                actorResolution.CreatedActorIds,
-                _actorPort));
+                actorResolution.Target.CreatedActorIds,
+                _runProvisioningPort));
     }
 }

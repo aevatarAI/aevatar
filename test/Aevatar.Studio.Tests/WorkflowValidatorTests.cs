@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Domain.Studio.Services;
 using FluentAssertions;
@@ -156,7 +155,7 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "transform", TargetRole = "role1",
-                Parameters = new Dictionary<string, JsonNode?> { ["data"] = new JsonObject() },
+                Parameters = new StudioStepParameters { ["data"] = StudioStepParameterValue.FromObject([]) },
             }],
         };
         var findings = _validator.Validate(doc);
@@ -282,7 +281,7 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "while",
-                Parameters = new Dictionary<string, JsonNode?> { ["max_iterations"] = JsonValue.Create("0") },
+                Parameters = new StudioStepParameters { ["max_iterations"] = StudioStepParameterValue.FromScalar("0") },
             }],
         };
         var findings = _validator.Validate(doc);
@@ -297,7 +296,7 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "while",
-                Parameters = new Dictionary<string, JsonNode?> { ["condition"] = JsonValue.Create("x > 0") },
+                Parameters = new StudioStepParameters { ["condition"] = StudioStepParameterValue.FromScalar("x > 0") },
             }],
         };
         var findings = _validator.Validate(doc);
@@ -323,10 +322,10 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "workflow_call",
-                Parameters = new Dictionary<string, JsonNode?>
+                Parameters = new StudioStepParameters
                 {
-                    ["workflow"] = JsonValue.Create("child"),
-                    ["lifecycle"] = JsonValue.Create("invalid"),
+                    ["workflow"] = StudioStepParameterValue.FromScalar("child"),
+                    ["lifecycle"] = StudioStepParameterValue.FromScalar("invalid"),
                 },
             }],
         };
@@ -342,9 +341,9 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "workflow_call",
-                Parameters = new Dictionary<string, JsonNode?>
+                Parameters = new StudioStepParameters
                 {
-                    ["workflow"] = JsonValue.Create("missing-wf"),
+                    ["workflow"] = StudioStepParameterValue.FromScalar("missing-wf"),
                 },
             }],
         };
@@ -394,7 +393,7 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "foreach",
-                Parameters = new Dictionary<string, JsonNode?> { ["sub_step_type"] = JsonValue.Create("") },
+                Parameters = new StudioStepParameters { ["sub_step_type"] = StudioStepParameterValue.FromScalar("") },
             }],
         };
         var findings = _validator.Validate(doc);
@@ -409,7 +408,7 @@ public sealed class WorkflowValidatorTests
             Steps = [new StepModel
             {
                 Id = "s1", Type = "foreach",
-                Parameters = new Dictionary<string, JsonNode?> { ["sub_step_type"] = JsonValue.Create("nonexistent") },
+                Parameters = new StudioStepParameters { ["sub_step_type"] = StudioStepParameterValue.FromScalar("nonexistent") },
             }],
         };
         var findings = _validator.Validate(doc);

@@ -27,6 +27,17 @@ public static class ProjectionMaterializationRuntimeRegistration
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
         services.TryAddSingleton<IProjectionFailureAlertSink, LoggingProjectionFailureAlertSink>();
         services.TryAddSingleton<Func<ProjectionRuntimeScopeKey, TContext>>(_ => contextFactory);
+        services.TryAddSingleton<IProjectionScopeAttachExistingLeaseLookup<TRuntimeLease>>(sp =>
+            new ProjectionScopeAttachExistingLeaseLookup<
+                TRuntimeLease,
+                TContext>(
+                sp.GetRequiredService<IActorRuntime>(),
+                request => contextFactory(new ProjectionRuntimeScopeKey(
+                    request.RootActorId,
+                    request.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    request.SessionId)),
+                (_, context) => leaseFactory(context)));
         services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
             new ProjectionScopeStatusActivationService<TRuntimeLease>(
                 new ProjectionScopeActivationService<
@@ -43,7 +54,8 @@ public static class ProjectionMaterializationRuntimeRegistration
                 (_, context) => leaseFactory(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>()),
+                sp.GetService<ILoggerFactory>(),
+                streams: sp.GetService<IStreamProvider>()),
                 sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<

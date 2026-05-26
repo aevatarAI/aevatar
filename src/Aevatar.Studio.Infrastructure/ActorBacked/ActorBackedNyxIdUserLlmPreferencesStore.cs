@@ -33,8 +33,9 @@ internal sealed class ActorBackedNyxIdUserLlmPreferencesStore : INyxIdUserLlmPre
         return Project(config);
     }
 
-    private static NyxIdUserLlmPreferences Project(UserConfig config) => new(
-        config.DefaultModel,
-        UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
-        config.MaxToolRounds);
+    private static NyxIdUserLlmPreferences Project(UserConfig config)
+        => new(
+            config.DefaultModel,
+            UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
+            config.MaxToolRounds);
 }

@@ -9,6 +9,9 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IStudioMemberQueryPort
 {
+    // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+    //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+    //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
     Task<StudioMemberRosterResponse> ListAsync(
         string scopeId,
         StudioMemberRosterPageRequest? page = null,

@@ -103,6 +103,69 @@ public class WebSocketVoiceTransportTests
     }
 
     [Fact]
+    public async Task Completion_should_finish_when_receive_loop_observes_close()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var transport = new WebSocketVoiceTransport(socket);
+
+        var frames = new List<VoiceTransportFrame>();
+        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+            frames.Add(frame);
+
+        frames.Count.ShouldBe(0);
+        await transport.Completion;
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Completion_should_finish_when_audio_send_fails_with_websocket_exception()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open)
+        {
+            SendException = new WebSocketException("send failed"),
+        };
+        await using var transport = new WebSocketVoiceTransport(socket);
+
+        await Should.ThrowAsync<WebSocketException>(() =>
+            transport.SendAudioAsync(new byte[] { 1 }, CancellationToken.None));
+
+        transport.Completion.IsCompleted.ShouldBeTrue();
+        await transport.Completion;
+    }
+
+    [Fact]
+    public async Task Completion_should_finish_when_control_send_is_cancelled()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        await using var transport = new WebSocketVoiceTransport(socket);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() =>
+            transport.SendControlAsync(new VoiceControlFrame(), cts.Token));
+
+        transport.Completion.IsCompleted.ShouldBeTrue();
+        await transport.Completion;
+    }
+
+    [Fact]
+    public async Task Completion_should_finish_when_send_observes_server_abort()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open)
+        {
+            SendException = new ObjectDisposedException(nameof(FakeWebSocket)),
+        };
+        await using var transport = new WebSocketVoiceTransport(socket);
+        socket.Abort();
+
+        await Should.ThrowAsync<ObjectDisposedException>(() =>
+            transport.SendAudioAsync(new byte[] { 1 }, CancellationToken.None));
+
+        transport.Completion.IsCompleted.ShouldBeTrue();
+        await transport.Completion;
+    }
+
+    [Fact]
     public async Task DisposeAsync_should_close_open_socket_and_swallow_close_failures()
     {
         var openSocket = new FakeWebSocket(WebSocketState.Open);

@@ -20,6 +20,7 @@ public sealed class ExternalLinkManagerTests
         var manager = CreateManager(new RecordingDispatchPort(), new RecordingCallbackScheduler(), new RecordingTransport());
 
         manager.CanHandle(Envelope(new ExternalLinkReconnectDueSignal())).Should().BeTrue();
+        manager.CanHandle(Envelope(new ExternalLinkMessageReceivedSignal())).Should().BeTrue();
         manager.CanHandle(Envelope(new ExternalLinkTransportStateChangedSignal())).Should().BeTrue();
         manager.CanHandle(new EventEnvelope()).Should().BeFalse();
         manager.CanHandle(Envelope(new ExternalLinkConnectedEvent())).Should().BeFalse();
@@ -467,12 +468,12 @@ public sealed class ExternalLinkManagerTests
     {
         public List<IMessage> Payloads { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             actorId.Should().Be("actor-1");
             envelope.Payload.Should().NotBeNull();
             Payloads.Add(Unpack(envelope.Payload));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         private static IMessage Unpack(Any payload)
@@ -539,10 +540,9 @@ public sealed class ExternalLinkManagerTests
         public int ConnectCalls { get; private set; }
         public int ConnectFailuresRemaining { get; set; }
         public string TransportType => "recording";
-        public Func<ReadOnlyMemory<byte>, CancellationToken, Task>? OnMessageReceived { private get; set; }
-        public Func<ExternalLinkStateChange, string?, CancellationToken, Task>? OnStateChanged { private get; set; }
-        public bool HasMessageReceivedHandler => OnMessageReceived != null;
-        public bool HasStateChangedHandler => OnStateChanged != null;
+        public IExternalLinkSignalSink? SignalSink { private get; set; }
+        public bool HasMessageReceivedHandler => SignalSink != null;
+        public bool HasStateChangedHandler => SignalSink != null;
 
         public Task ConnectAsync(ExternalLinkDescriptor descriptor, CancellationToken ct)
         {
@@ -565,8 +565,21 @@ public sealed class ExternalLinkManagerTests
             string? reason,
             CancellationToken ct)
         {
-            OnStateChanged.Should().NotBeNull();
-            return OnStateChanged(state, reason, ct);
+            SignalSink.Should().NotBeNull();
+            return SignalSink.PublishStateChangedAsync(
+                new ExternalLinkTransportStateChangedSignal
+                {
+                    State = state switch
+                    {
+                        ExternalLinkStateChange.Connected => ExternalLinkTransportStateSignalKind.Connected,
+                        ExternalLinkStateChange.Disconnected => ExternalLinkTransportStateSignalKind.Disconnected,
+                        ExternalLinkStateChange.Error => ExternalLinkTransportStateSignalKind.Error,
+                        ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
+                        _ => ExternalLinkTransportStateSignalKind.Unspecified,
+                    },
+                    Reason = reason ?? string.Empty,
+                },
+                ct);
         }
     }
 

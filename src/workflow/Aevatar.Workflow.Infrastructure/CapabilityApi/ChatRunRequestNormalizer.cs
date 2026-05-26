@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -33,26 +34,19 @@ internal static class ChatRunRequestNormalizer
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var normalizedInputParts = NormalizeInputParts(input.InputParts);
         if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
         var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
         var normalizedMetadata = normalizedContext.Metadata;
-        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
-        var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
-        var legacyWorkflowYaml = input.WorkflowYaml;
-        var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
+        var sourceResult = NormalizeSource(input);
+        if (!sourceResult.Succeeded)
+            return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
 
-        if (hasLegacyWorkflowYaml && string.IsNullOrWhiteSpace(legacyWorkflowYaml))
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
-
-        if (hasLegacyWorkflowYaml && inlineWorkflowYamls.Count > 0)
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
-
-        if (hasLegacyWorkflowYaml)
-            inlineWorkflowYamls = [legacyWorkflowYaml!];
+        var source = sourceResult.Source!;
+        var requestedWorkflowName = source.WorkflowName ?? string.Empty;
+        var inlineWorkflowYamls = source.WorkflowYamls ?? [];
 
         var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
         if (rawPrompt.Length == 0)
@@ -65,45 +59,128 @@ internal static class ChatRunRequestNormalizer
             normalizedMetadata,
             capabilities);
 
-        if (inlineWorkflowYamls.Count > 0)
-        {
-            return ChatRunRequestNormalizationResult.Success(
-                new WorkflowChatRunRequest(
-                    Prompt: normalizedPrompt,
-                    WorkflowName: string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
-                    ActorId: normalizedAgentId,
-                    SessionId: NormalizeSessionId(input.SessionId),
-                    InputParts: normalizedInputParts,
-                    WorkflowYamls: inlineWorkflowYamls,
-                    Metadata: normalizedMetadata,
-                    ScopeId: normalizedContext.ScopeId));
-        }
-
-        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
-        {
-            return ChatRunRequestNormalizationResult.Success(
-                new WorkflowChatRunRequest(
-                    Prompt: normalizedPrompt,
-                    WorkflowName: requestedWorkflowName,
-                    ActorId: normalizedAgentId,
-                    SessionId: NormalizeSessionId(input.SessionId),
-                    InputParts: normalizedInputParts,
-                    WorkflowYamls: null,
-                    Metadata: normalizedMetadata,
-                    ScopeId: normalizedContext.ScopeId));
-        }
-
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: normalizedPrompt,
-                WorkflowName: null,
-                ActorId: normalizedAgentId,
+                WorkflowName: string.IsNullOrWhiteSpace(source.WorkflowName) ? null : source.WorkflowName,
+                ActorId: NormalizeAgentId(source.ActorId),
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
-                WorkflowYamls: null,
+                WorkflowYamls: source.WorkflowYamls,
                 Metadata: normalizedMetadata,
-                ScopeId: normalizedContext.ScopeId));
+                ScopeId: normalizedContext.ScopeId,
+                Source: source,
+                LlmControl: NormalizeLlmControl(input.LlmControl)));
     }
+
+    private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
+    {
+        if (source == null)
+            return null;
+
+        return new LLMControlContext(
+            NormalizeOptional(source.NyxIdAccessToken),
+            NormalizeOptional(source.NyxIdOrgToken),
+            NormalizeOptional(source.SenderNyxIdAccessToken),
+            NormalizeOptional(source.ModelOverride),
+            NormalizeOptional(source.NyxIdRoutePreference),
+            source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
+            NormalizeOptional(source.UserMemoryPrompt));
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private readonly record struct SourceNormalizationResult(
+        WorkflowChatSource? Source,
+        WorkflowChatRunStartError Error)
+    {
+        public bool Succeeded => Error == WorkflowChatRunStartError.None && Source != null;
+        public static SourceNormalizationResult Success(WorkflowChatSource source) =>
+            new(source, WorkflowChatRunStartError.None);
+        public static SourceNormalizationResult Failed(WorkflowChatRunStartError error) =>
+            new(null, error);
+    }
+
+    private static SourceNormalizationResult NormalizeSource(ChatInput input)
+    {
+        if (input.Source != null)
+            return NormalizeTypedSource(input.Source);
+
+        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
+        var normalizedAgentId = NormalizeAgentId(input.AgentId);
+        var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
+        var legacyWorkflowYaml = input.WorkflowYaml;
+        var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
+
+        if (hasLegacyWorkflowYaml && string.IsNullOrWhiteSpace(legacyWorkflowYaml))
+            return SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
+
+        if (hasLegacyWorkflowYaml && inlineWorkflowYamls.Count > 0)
+            return SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
+
+        if (hasLegacyWorkflowYaml)
+            inlineWorkflowYamls = [legacyWorkflowYaml!];
+
+        if (inlineWorkflowYamls.Count > 0)
+            return SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
+                inlineWorkflowYamls,
+                string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
+                string.IsNullOrWhiteSpace(normalizedAgentId) ? null : normalizedAgentId));
+
+        if (!string.IsNullOrWhiteSpace(normalizedAgentId))
+            return SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(
+                normalizedAgentId,
+                string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName));
+
+        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
+            return SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(requestedWorkflowName));
+
+        return SourceNormalizationResult.Success(WorkflowChatSource.Direct());
+    }
+
+    private static SourceNormalizationResult NormalizeTypedSource(WorkflowChatSourceInput source)
+    {
+        var kind = NormalizeSourceKind(source.Kind);
+        var workflowName = NormalizeWorkflowName(source.WorkflowName);
+        var actorId = NormalizeAgentId(source.ActorId);
+        var workflowYamls = NormalizeInlineWorkflowYamls(source.WorkflowYamls);
+
+        return kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow when string.IsNullOrWhiteSpace(workflowName) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.WorkflowNotFound),
+            WorkflowChatSourceKind.CatalogWorkflow =>
+                SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(workflowName)),
+            WorkflowChatSourceKind.DefinitionActor when string.IsNullOrWhiteSpace(actorId) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.AgentNotFound),
+            WorkflowChatSourceKind.DefinitionActor =>
+                SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(actorId, string.IsNullOrWhiteSpace(workflowName) ? null : workflowName)),
+            WorkflowChatSourceKind.InlineYamlBundle when workflowYamls.Count == 0 || workflowYamls.Any(string.IsNullOrWhiteSpace) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
+            WorkflowChatSourceKind.InlineYamlBundle =>
+                SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
+                    workflowYamls,
+                    string.IsNullOrWhiteSpace(workflowName) ? null : workflowName,
+                    string.IsNullOrWhiteSpace(actorId) ? null : actorId)),
+            WorkflowChatSourceKind.Direct =>
+                SourceNormalizationResult.Success(WorkflowChatSource.Direct(actorId)),
+            _ => SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
+        };
+    }
+
+    private static WorkflowChatSourceKind NormalizeSourceKind(string? kind) =>
+        kind?.Trim().ToLowerInvariant() switch
+        {
+            "catalog_workflow" or "catalog-workflow" or "catalog" or "workflow" =>
+                WorkflowChatSourceKind.CatalogWorkflow,
+            "definition_actor" or "definition-actor" or "actor" =>
+                WorkflowChatSourceKind.DefinitionActor,
+            "inline_yaml_bundle" or "inline-yaml-bundle" or "inline_yaml" or "inline-yaml" =>
+                WorkflowChatSourceKind.InlineYamlBundle,
+            "direct" => WorkflowChatSourceKind.Direct,
+            _ => WorkflowChatSourceKind.Unspecified,
+        };
 
     private static IReadOnlyList<string> NormalizeInlineWorkflowYamls(IReadOnlyList<string>? workflowYamls)
     {

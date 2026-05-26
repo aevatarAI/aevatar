@@ -1,6 +1,7 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.ChatRouting.Core.Tests;
@@ -25,7 +26,7 @@ public sealed class ChatRoutePolicyQueryPortTests
         {
             Id = "chat-route-policy:bot-1",
             ActorId = "chat-route-policy:bot-1",
-            OwnerScope = ToChatRouteCallerScope(ChatRouteResolverTests.CallerScope()),
+            OwnerScope = ChatRouteResolverTests.CallerScope().Clone(),
             DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("default-model"),
         };
         document.Rules.Add(new ChatRouteRule
@@ -56,7 +57,7 @@ public sealed class ChatRoutePolicyQueryPortTests
     {
         var document = new ChatRoutePolicyCurrentStateDocument
         {
-            OwnerScope = ToChatRouteCallerScope(OwnerScope.ForChannel("user-2", "lark", "bot-1", "sender-2")),
+            OwnerScope = OwnerScope.ForChannel("user-2", "lark", "bot-1", "sender-2"),
             DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("other-model"),
         };
         var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([document]));
@@ -72,7 +73,7 @@ public sealed class ChatRoutePolicyQueryPortTests
         var caller = OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1");
         var scopeOnlyDocument = new ChatRoutePolicyCurrentStateDocument
         {
-            OwnerScope = ToChatRouteCallerScope(OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty)),
+            OwnerScope = OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty),
             DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("scope-default-model"),
         };
         var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([scopeOnlyDocument]));
@@ -89,12 +90,12 @@ public sealed class ChatRoutePolicyQueryPortTests
         var caller = OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1");
         var scopeOnlyDocument = new ChatRoutePolicyCurrentStateDocument
         {
-            OwnerScope = ToChatRouteCallerScope(OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty)),
+            OwnerScope = OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty),
             DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("scope-default-model"),
         };
         var specificDocument = new ChatRoutePolicyCurrentStateDocument
         {
-            OwnerScope = ToChatRouteCallerScope(caller),
+            OwnerScope = caller.Clone(),
             DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("specific-model"),
         };
         var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([scopeOnlyDocument, specificDocument]));
@@ -104,15 +105,6 @@ public sealed class ChatRoutePolicyQueryPortTests
         snapshot.Should().NotBeNull();
         snapshot!.DefaultTarget.ForwardToModel.ModelName.Should().Be("specific-model");
     }
-
-    private static ChatRouteCallerScope ToChatRouteCallerScope(OwnerScope scope) =>
-        new()
-        {
-            NyxUserId = scope.NyxUserId,
-            Platform = scope.Platform,
-            RegistrationScopeId = scope.RegistrationScopeId,
-            SenderId = scope.SenderId,
-        };
 
     private sealed class StaticFallbackProvider : IChatRouteFallbackProvider
     {

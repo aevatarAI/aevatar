@@ -20,14 +20,21 @@ internal static class IdentityGAgentTestHarness
     /// </summary>
     internal sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        private long _nextGeneration;
+
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = new();
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
+            CancellationToken ct = default)
+        {
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
-                Generation: 0,
+                Generation: ++_nextGeneration,
                 RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,

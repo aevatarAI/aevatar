@@ -1,8 +1,6 @@
-using System.Diagnostics.CodeAnalysis;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Application.Responses;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
@@ -30,135 +28,64 @@ internal sealed record ResponsesCreateRequest
     public JsonElement Tools { get; init; }
 }
 
-internal sealed record NormalizedResponsesRequest(
-    string ResponseId,
-    string MessageItemId,
-    string Model,
-    string Prompt,
-    bool Stream,
-    string? PreviousResponseId,
-    double? Temperature,
-    int? MaxOutputTokens,
-    IReadOnlyList<ResponsesToolDeclaration> DeclaredTools,
-    IReadOnlyList<ResponsesToolResultInput> ToolResults);
-
-internal sealed record ResponsesToolDeclaration(
-    string Name,
-    string Description,
-    string ParametersJson,
-    string SchemaHash);
-
-internal sealed record ResponsesToolResultInput(
-    string CallId,
-    string Output,
-    string? SchemaHash);
-
-internal readonly record struct ResponsesRequestNormalizationResult(
-    NormalizedResponsesRequest? Request,
+internal readonly record struct ResponsesProtocolMappingResult(
+    ResponsesCommandRequest? Request,
     string? ErrorCode,
     string? ErrorMessage)
 {
     public bool Succeeded => Request != null && ErrorCode == null;
 
-    public static ResponsesRequestNormalizationResult Success(NormalizedResponsesRequest request) =>
+    public static ResponsesProtocolMappingResult Success(ResponsesCommandRequest request) =>
         new(request, null, null);
 
-    public static ResponsesRequestNormalizationResult Failed(string code, string message) =>
+    public static ResponsesProtocolMappingResult Failed(string code, string message) =>
         new(null, code, message);
 }
 
-internal static class ResponsesRequestNormalizer
+internal static class ResponsesProtocolMapper
 {
-    public static ResponsesRequestNormalizationResult Normalize(ResponsesCreateRequest request)
+    // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+    //   Old pattern: Application command contracts carried raw JsonElement from the OpenAI Responses wire protocol.
+    //   New principle: Host converts boundary JSON into typed command fields before delegating orchestration to Application.
+    public static ResponsesProtocolMappingResult ToCommandRequest(ResponsesCreateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var model = request.Model?.Trim();
-        if (string.IsNullOrWhiteSpace(model))
-            return ResponsesRequestNormalizationResult.Failed("model_required", "model is required.");
-
-        if (!TryExtractDeclaredTools(request.Tools, out var declaredTools, out var toolsError))
-            return ResponsesRequestNormalizationResult.Failed("invalid_tools", toolsError);
-
         if (!TryExtractInput(request.Input, out var prompt, out var toolResults, out var inputError))
-            return ResponsesRequestNormalizationResult.Failed("invalid_input", inputError);
+            return ResponsesProtocolMappingResult.Failed("invalid_input", inputError);
+        if (!TryExtractDeclaredTools(request.Tools, out var declaredTools, out var toolsError))
+            return ResponsesProtocolMappingResult.Failed("invalid_tools", toolsError);
 
-        if (request.MaxOutputTokens is <= 0)
-        {
-            return ResponsesRequestNormalizationResult.Failed(
-                "invalid_max_output_tokens",
-                "max_output_tokens must be greater than zero when provided.");
-        }
-
-        var previousResponseId = NormalizeOptional(request.PreviousResponseId);
-
-        // OpenAI Responses spec pairs `function_call_output` items in `input` with
-        // `previous_response_id` so the server can match them to a pending tool call
-        // (#629 §13 continuation contract). But Anthropic→OpenAI translators (CC Switch,
-        // Codex when wrapping Claude Code) often forward Claude Code's prior tool-result
-        // turns in the `input` array WITHOUT propagating previous_response_id — they
-        // don't model OpenAI's server-side session. Treating that strictly returns
-        // `function_call_output requires previous_response_id` and the agent can't
-        // ever continue a multi-turn tool conversation.
-        //
-        // Resolution: when previous_response_id is absent, fold any function_call_output
-        // entries into the user prompt as historical context (with a synthetic
-        // `[tool_result …]` marker) and clear ToolResults. The continuation contract
-        // only kicks in when previous_response_id IS provided — that path is unchanged.
-        if (previousResponseId is null && toolResults.Count > 0)
-        {
-            var foldedSections = new List<string>();
-            if (!string.IsNullOrWhiteSpace(prompt))
-                foldedSections.Add(prompt);
-            foreach (var tr in toolResults)
-            {
-                var marker = $"[tool_result call_id={tr.CallId}]";
-                foldedSections.Add(string.IsNullOrWhiteSpace(tr.Output) ? marker : $"{marker} {tr.Output}");
-            }
-            prompt = string.Join("\n", foldedSections);
-            toolResults = [];
-        }
-
-        return ResponsesRequestNormalizationResult.Success(new NormalizedResponsesRequest(
-            ResponseId: ResponsesIds.NewResponseId(),
-            MessageItemId: ResponsesIds.NewMessageId(),
-            Model: model,
-            Prompt: prompt,
-            Stream: request.Stream == true,
-            PreviousResponseId: previousResponseId,
-            Temperature: request.Temperature,
-            MaxOutputTokens: request.MaxOutputTokens,
-            DeclaredTools: declaredTools,
-            ToolResults: toolResults));
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+        return ResponsesProtocolMappingResult.Success(new ResponsesCommandRequest(
+            request.Model,
+            prompt,
+            toolResults,
+            request.Stream,
+            request.PreviousResponseId,
+            request.Temperature,
+            request.MaxOutputTokens,
+            declaredTools));
     }
 
     private static bool TryExtractInput(
         JsonElement input,
-        [NotNullWhen(true)] out string? prompt,
+        out string prompt,
         out IReadOnlyList<ResponsesToolResultInput> toolResults,
-        [NotNullWhen(false)] out string? error)
+        out string error)
     {
         var parts = new List<string>();
         var results = new List<ResponsesToolResultInput>();
         ExtractInput(input, parts, results);
 
-        prompt = string.Join("\n", parts.Select(static x => x.Trim()).Where(static x => x.Length > 0));
+        prompt = string.Join("\n", parts.Select(static part => part.Trim()).Where(static part => part.Length > 0));
         toolResults = results;
         if (prompt.Length > 0 || results.Count > 0)
         {
-            error = null;
+            error = string.Empty;
             return true;
         }
 
         error = "input must contain at least one text value.";
-        prompt = null;
-        toolResults = [];
         return false;
     }
 
@@ -219,11 +146,9 @@ internal static class ResponsesRequestNormalizer
             parts.Add(value);
     }
 
-    private static bool TryExtractToolResult(
-        JsonElement element,
-        [NotNullWhen(true)] out ResponsesToolResultInput? toolResult)
+    private static bool TryExtractToolResult(JsonElement element, out ResponsesToolResultInput toolResult)
     {
-        toolResult = null;
+        toolResult = new ResponsesToolResultInput(string.Empty, string.Empty, null);
         var type = GetStringProperty(element, "type");
         if (!string.Equals(type, "function_call_output", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
@@ -245,20 +170,17 @@ internal static class ResponsesRequestNormalizer
 
         var schemaHash = GetStringProperty(element, "schema_hash")
                          ?? GetStringProperty(element, "schemaHash");
-        toolResult = new ResponsesToolResultInput(
-            callId.Trim(),
-            output ?? string.Empty,
-            NormalizeOptional(schemaHash));
+        toolResult = new ResponsesToolResultInput(callId.Trim(), output ?? string.Empty, schemaHash);
         return true;
     }
 
     private static bool TryExtractDeclaredTools(
         JsonElement tools,
-        out IReadOnlyList<ResponsesToolDeclaration> declaredTools,
-        [NotNullWhen(false)] out string? error)
+        out IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        out string error)
     {
         declaredTools = [];
-        error = null;
+        error = string.Empty;
         if (tools.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
             return true;
         if (tools.ValueKind != JsonValueKind.Array)
@@ -267,7 +189,7 @@ internal static class ResponsesRequestNormalizer
             return false;
         }
 
-        var result = new List<ResponsesToolDeclaration>();
+        var result = new List<ResponsesApplicationToolDeclaration>();
         var toolIndex = -1;
         foreach (var tool in tools.EnumerateArray())
         {
@@ -278,26 +200,6 @@ internal static class ResponsesRequestNormalizer
                 return false;
             }
 
-            // OpenAI Responses API allows built-in tool declarations like
-            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
-            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
-            // that don't carry a `function` block or `name`. They're routing hints to
-            // the model provider, not custom function definitions. aevatar's classifier
-            // only owns function-typed tools (forward / substitute / additive); silently
-            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
-            // Cursor) can advertise built-ins without breaking the request — even
-            // though aevatar won't map them to a local handler and the model provider
-            // gets to decide what to do with them.
-            // OpenAI Responses API allows built-in tool declarations like
-            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
-            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
-            // that don't carry a `function` block or `name`. They're routing hints to
-            // the model provider, not custom function definitions. aevatar's classifier
-            // only owns function-typed tools (forward / substitute / additive); silently
-            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
-            // Cursor) can advertise built-ins without breaking the request — even
-            // though aevatar won't map them to a local handler and the model provider
-            // gets to decide what to do with them.
             var toolType = GetStringProperty(tool, "type");
             var isFunctionType = string.IsNullOrWhiteSpace(toolType) ||
                                  string.Equals(toolType, "function", StringComparison.OrdinalIgnoreCase);
@@ -319,7 +221,7 @@ internal static class ResponsesRequestNormalizer
             var parametersJson = function.TryGetProperty("parameters", out var parameters)
                 ? ElementToPayloadString(parameters)
                 : """{"type":"object","properties":{}}""";
-            result.Add(new ResponsesToolDeclaration(
+            result.Add(new ResponsesApplicationToolDeclaration(
                 name.Trim(),
                 description,
                 parametersJson,
@@ -341,16 +243,6 @@ internal static class ResponsesRequestNormalizer
         element.ValueKind == JsonValueKind.String
             ? element.GetString() ?? string.Empty
             : element.GetRawText();
-
-}
-
-internal static class ResponsesToolSchemaHashes
-{
-    public static string Compute(string parametersJson)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(parametersJson));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
 }
 
 internal sealed record ResponsesApiErrorResponse
@@ -648,61 +540,4 @@ internal sealed record ResponsesModelEntry
     [JsonPropertyName("description")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; init; }
-}
-
-/// <summary>Splits an OpenRouter-style `vendor/model` identifier. Vendor is preserved only when it
-/// looks like a NyxID service slug (lowercase + digits + hyphens, length 2-64); otherwise the whole
-/// string is treated as a bare model name (e.g. for Anthropic-style namespacing the LLM provider
-/// may want intact).
-/// Gateway-routed models are emitted bare by the catalog, so a prefix is only ever produced for
-/// UserService / ProxyService routes that resolve to `/api/v1/proxy/s/{slug}`. A client that
-/// invents an unknown slug gets a clean NyxID 404 — fail-closed; we don't validate against the
-/// catalog here to keep `/v1/responses` off the catalog HTTP critical path.</summary>
-internal static class ResponsesModelRouteParser
-{
-    public static ResponsesModelRoute Parse(string model)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        var trimmed = model.Trim();
-        var slashIndex = trimmed.IndexOf('/');
-        if (slashIndex <= 0 || slashIndex >= trimmed.Length - 1)
-            return new ResponsesModelRoute(null, trimmed);
-
-        var prefix = trimmed[..slashIndex];
-        var rest = trimmed[(slashIndex + 1)..];
-        return LooksLikeSlug(prefix)
-            ? new ResponsesModelRoute(prefix, rest)
-            : new ResponsesModelRoute(null, trimmed);
-    }
-
-    private static bool LooksLikeSlug(string value)
-    {
-        if (value.Length is < 2 or > 64) return false;
-        if (!char.IsAsciiLetterLower(value[0])) return false;
-        foreach (var c in value)
-        {
-            if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-'))
-                return false;
-        }
-        return true;
-    }
-}
-
-internal readonly record struct ResponsesModelRoute(string? RouteSlug, string Model);
-
-internal static class ResponsesIds
-{
-    public static string NewResponseId() => "resp_" + NewOpaqueId();
-
-    public static string NewMessageId() => "msg_" + NewOpaqueId();
-
-    public static string NewOpaqueId()
-    {
-        Span<byte> bytes = stackalloc byte[16];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
 }
