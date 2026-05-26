@@ -435,17 +435,6 @@ public sealed class TelegramUserConnector : IConnector
             Directory.CreateDirectory(directory);
     }
 
-    private static string ToBotStyleChatId(Peer peer)
-    {
-        return peer switch
-        {
-            PeerChannel channel => (-1_000_000_000_000L - channel.channel_id).ToString(CultureInfo.InvariantCulture),
-            PeerChat chat => (-chat.chat_id).ToString(CultureInfo.InvariantCulture),
-            PeerUser user => user.user_id.ToString(CultureInfo.InvariantCulture),
-            _ => string.Empty,
-        };
-    }
-
     private static string NormalizeOperation(string operation)
     {
         if (string.IsNullOrWhiteSpace(operation))

@@ -678,7 +678,7 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public async Task TelegramUserConnector_GetUpdates_ShouldRouteCallersToNyxIdRelay()
+    public async Task TelegramUserConnector_GetUpdates_ShouldRejectGetUpdatesWithNyxIdRelayGuidance()
     {
         var connector = new TelegramUserConnector(
             "telegram-user-no-inbound",
