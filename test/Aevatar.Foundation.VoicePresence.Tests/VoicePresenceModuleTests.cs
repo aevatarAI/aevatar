@@ -487,7 +487,6 @@ public class VoicePresenceModuleTests
 
         moduleSource.ShouldNotContain("VoicePresenceRuntimeState _runtimeState", Case.Sensitive);
         moduleSource.ShouldNotContain("StateMachine", Case.Sensitive);
-        moduleSource.ShouldNotContain("VoicePresenceStateMachine", Case.Sensitive);
         moduleSource.ShouldNotContain("IVoiceTransport? _userTransport", Case.Sensitive);
         moduleSource.ShouldNotContain("CancellationTokenSource? _relayCts", Case.Sensitive);
         moduleSource.ShouldNotContain("Task? _userToProviderRelay", Case.Sensitive);
