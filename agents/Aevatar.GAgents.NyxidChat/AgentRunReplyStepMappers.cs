@@ -7,6 +7,9 @@ namespace Aevatar.GAgents.NyxidChat;
 
 internal static class AgentRunReplyStepMappers
 {
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
     public static AgentRunChatMessage ToProto(ChatMessage source)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -73,6 +76,17 @@ internal static class AgentRunReplyStepMappers
 
     public static AgentToolExecutionContext ToolContextFromProto(AgentRunReplyStepState state) =>
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+
+    // Refactor helper, no behavior change: keep executor/actor result payload conversion narrow.
+    public static AgentRunReplyTokenUsage? ToProto(TokenUsage? source) =>
+        source is null
+            ? null
+            : new AgentRunReplyTokenUsage
+            {
+                PromptTokens = source.PromptTokens,
+                CompletionTokens = source.CompletionTokens,
+                TotalTokens = source.TotalTokens,
+            };
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
