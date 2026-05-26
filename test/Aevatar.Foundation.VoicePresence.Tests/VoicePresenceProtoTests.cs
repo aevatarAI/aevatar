@@ -74,6 +74,8 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceControlFrame));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceToolDefinition));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceEventDedupeFenceEntry));
     }
 
     [Fact]
@@ -140,6 +142,33 @@ public class VoicePresenceProtoTests
         parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
         VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
             .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_lifetime_completed()
+    {
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var completed = new VoiceTransportLifetimeCompleted
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = expiresAt,
+            Reason = "host_transport_completed",
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLifetimeCompleted = completed,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted);
+        parsed.TransportLifetimeCompleted.ShouldBe(completed);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceTransportLifetimeCompleted));
     }
 
     [Fact]

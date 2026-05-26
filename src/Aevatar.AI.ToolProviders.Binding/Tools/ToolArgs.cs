@@ -16,6 +16,8 @@ internal sealed class ToolArgs
     /// <summary>Parse error message, if the input JSON was malformed.</summary>
     public string? ParseError => _parseError;
 
+    public bool Has(string name) => _props.ContainsKey(name);
+
     public static ToolArgs Parse(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -73,5 +75,25 @@ internal sealed class ToolArgs
             .Where(e => e.ValueKind == JsonValueKind.String)
             .Select(e => e.GetString()!)
             .ToArray();
+    }
+
+    public IReadOnlyDictionary<string, string>? StrDictionary(string name)
+    {
+        if (!_props.TryGetValue(name, out var el))
+            return null;
+
+        if (el.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var prop in el.EnumerateObject())
+        {
+            if (prop.Value.ValueKind != JsonValueKind.String)
+                return null;
+
+            result[prop.Name] = prop.Value.GetString() ?? string.Empty;
+        }
+
+        return result;
     }
 }

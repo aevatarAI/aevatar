@@ -1,10 +1,14 @@
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.AI.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -15,6 +19,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
+    private readonly ILongRunningBusinessIoExecutor _businessIoExecutor;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -25,15 +31,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     public AgentRunReplyGenerationExecutor(
         IActorDispatchPort actorDispatchPort,
+        ILongRunningBusinessIoExecutor businessIoExecutor,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
         ILogger<AgentRunReplyGenerationExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IActorHandledDispatchPort? actorHandledDispatchPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _businessIoExecutor = businessIoExecutor ?? throw new ArgumentNullException(nameof(businessIoExecutor));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -41,223 +50,340 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _userConfigQueryPort = userConfigQueryPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _actorHandledDispatchPort = actorHandledDispatchPort;
     }
 
-    public Task StartAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct)
+    public async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+        AgentRunReplyGenerationExecutionRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var replyRequest = request.Request.Clone();
+        using (var metadataCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            metadataCts.CancelAfter(AgentRunGAgent.MetadataBuildBudget);
+            ReplyGenerationContext generationContext;
+            try
+            {
+                generationContext = await BuildGenerationContextAsync(replyRequest, metadataCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (metadataCts.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            var generator = RequireStepGenerator();
+            var plan = await generator.BuildStepPlanAsync(
+                    replyRequest.Activity!,
+                    generationContext.Metadata,
+                    generationContext.LlmControl,
+                    generationContext.ToolContext,
+                    metadataCts.Token)
+                .ConfigureAwait(false);
+
+            var state = new AgentRunReplyStepState
+            {
+                RunId = request.RunId,
+                CorrelationId = replyRequest.CorrelationId,
+                TargetActorId = replyRequest.TargetActorId,
+                Attempt = request.Attempt,
+                NextStepIndex = 1,
+                Round = 0,
+                MaxToolRounds = plan.MaxToolRounds,
+                LlmControl = plan.LlmControl.ToPayload(),
+                ToolContext = plan.ToolContext.ToPayload(),
+            };
+            foreach (var pair in plan.Metadata)
+                state.ExternalMetadata[pair.Key] = pair.Value;
+            state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
+            return state;
+        }
+    }
+
+    public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
-        var workItem = request with { Request = request.Request.Clone() };
-        _ = Task.Run(() => ExecuteAndReportAsync(workItem), CancellationToken.None);
-        return Task.CompletedTask;
+        var workItem = request with
+        {
+            Request = request.Request.Clone(),
+            StepState = request.StepState.Clone(),
+        };
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: executor owned the whole multi-round LLM/tool loop.
+        // New principle: AgentRunGAgent owns per-step continuation; executor performs exactly one LLM IO step.
+        return _businessIoExecutor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:llm:{workItem.StepIndex}",
+                workItem.RunActorId,
+                "agent-run-reply-llm-step",
+                workItem.Request.CorrelationId,
+                ResolveFallbackTimeout(),
+                executorCt => ExecuteLlmStepAndReportAsync(workItem, executorCt)),
+            ct);
     }
 
-    private async Task ExecuteAndReportAsync(AgentRunReplyGenerationExecutionRequest workItem)
+    public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ct.ThrowIfCancellationRequested();
+        var workItem = request with
+        {
+            Request = request.Request.Clone(),
+            StepState = request.StepState.Clone(),
+        };
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: tool execution stayed inside ChatRuntime's multi-round loop.
+        // New principle: a typed self-message asks for one tool IO step, then actor reconciles the result.
+        return _businessIoExecutor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:tool:{workItem.StepIndex}",
+                workItem.RunActorId,
+                "agent-run-reply-tool-step",
+                workItem.Request.CorrelationId,
+                ResolveFallbackTimeout(),
+                executorCt => ExecuteToolStepAndReportAsync(workItem, executorCt)),
+            ct);
+    }
+
+    private async Task ExecuteLlmStepAndReportAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
     {
         try
         {
-            var completed = await ExecuteAsync(workItem).ConfigureAwait(false);
-            await DispatchToRunActorAsync(workItem.RunActorId, completed, CancellationToken.None)
+            var command = await BuildLlmStepContinuationAsync(workItem, ct).ConfigureAwait(false);
+            await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
-                ex,
-                "Agent run reply generation executor failed before completion: runId={RunId} correlation={CorrelationId}",
-                workItem.RunId,
-                workItem.Request.CorrelationId);
-            var failed = new AgentRunReplyGenerationFailed
-            {
-                RunId = workItem.RunId,
-                CorrelationId = workItem.Request.CorrelationId,
-                TargetActorId = workItem.Request.TargetActorId,
-                ErrorCode = "agent_run_generation_executor_failed",
-                ErrorSummary = ex.Message,
-                FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                Attempt = workItem.Attempt,
-                Request = workItem.Request.Clone(),
-            };
-            try
-            {
-                await DispatchToRunActorAsync(workItem.RunActorId, failed, CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception dispatchEx)
-            {
-                _logger.LogError(
-                    dispatchEx,
-                    "Failed to dispatch agent run generation failure command: runId={RunId} actorId={ActorId}",
-                    workItem.RunId,
-                    workItem.RunActorId);
-            }
+            await DispatchStepFailureAsync(workItem, ex).ConfigureAwait(false);
         }
     }
 
-    internal async Task<AgentRunReplyGenerationCompleted> ExecuteAsync(
-        AgentRunReplyGenerationExecutionRequest workItem)
+    private async Task ExecuteToolStepAndReportAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
+    {
+        try
+        {
+            var command = await BuildToolStepContinuationAsync(workItem, ct).ConfigureAwait(false);
+            await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await DispatchStepFailureAsync(workItem, ex).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
     {
         var request = workItem.Request.Clone();
-        string replyText;
-        MessageContent? outboundIntent = null;
-        var terminalState = LlmReplyTerminalState.Completed;
-        var errorCode = string.Empty;
-        var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
+        var generator = RequireStepGenerator();
+        var plan = await generator.BuildStepPlanAsync(
+                request.Activity!,
+                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
+                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                ct)
+            .ConfigureAwait(false);
+        var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
+        var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
+            messages,
+            request.Activity.Id,
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            workItem.StepState.Round,
+            workItem.StepState.FinalNoToolsStep);
 
-        ReplyGenerationContext generationContext;
-        using (var metadataCts = new CancellationTokenSource(AgentRunGAgent.MetadataBuildBudget))
-        {
-            try
-            {
-                generationContext = await BuildGenerationContextAsync(request, metadataCts.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException ex) when (metadataCts.IsCancellationRequested)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Deferred LLM reply metadata build timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
-                    (int)AgentRunGAgent.MetadataBuildBudget.TotalSeconds,
-                    workItem.RunId,
-                    request.CorrelationId);
-                replyText = "Sorry, I couldn't load your model preferences in time. Please try again.";
-                terminalState = LlmReplyTerminalState.Failed;
-                errorCode = "llm_reply_metadata_timeout";
-                errorSummary =
-                    $"Metadata enrichment exceeded {(int)AgentRunGAgent.MetadataBuildBudget.TotalSeconds}s budget.";
-                await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent)
-                    .ConfigureAwait(false);
-                return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
-            }
-        }
-
-        var fallbackTimeout = ResolveFallbackTimeout();
-        using var timeoutCts = fallbackTimeout > TimeSpan.Zero
-            ? new CancellationTokenSource(fallbackTimeout)
-            : new CancellationTokenSource();
-
-        try
-        {
-            IDisposable? interactiveReplyScope = null;
-            try
-            {
-                if (ShouldCaptureInteractiveReply(request.Activity))
-                    interactiveReplyScope = _interactiveReplyCollector?.BeginScope();
-
-                var replyResult = _replyGenerator is ITypedConversationReplyGenerator typedReplyGenerator
-                    ? await typedReplyGenerator.GenerateReplyAsync(
-                            request.Activity!,
-                            generationContext.Metadata,
-                            generationContext.LlmControl,
-                            generationContext.ToolContext,
-                            streamingState,
-                            timeoutCts.Token)
-                        .ConfigureAwait(false)
-                    : await _replyGenerator.GenerateReplyAsync(
-                            request.Activity!,
-                            generationContext.Metadata,
-                            streamingState,
-                            timeoutCts.Token)
-                        .ConfigureAwait(false);
-                replyText = replyResult.Text ?? string.Empty;
-                if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
-                {
-                    _logger.LogInformation(
-                        "LLM reply closeout: runId={RunId} correlation={CorrelationId} promptTokens={Prompt} completionTokens={Completion} totalTokens={Total} finishReason={FinishReason}",
-                        workItem.RunId,
-                        request.CorrelationId,
-                        replyResult.Usage?.PromptTokens,
-                        replyResult.Usage?.CompletionTokens,
-                        replyResult.Usage?.TotalTokens,
-                        replyResult.FinishReason ?? "(none)");
-                }
-
-                outboundIntent = _interactiveReplyCollector?.TryTake();
-            }
-            finally
-            {
-                interactiveReplyScope?.Dispose();
-            }
-
-            if (streamingState is not null &&
-                outboundIntent is null &&
-                !string.IsNullOrWhiteSpace(replyText))
-            {
-                await streamingState.FinalizeAsync(replyText, CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-
-            if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
-            {
-                terminalState = LlmReplyTerminalState.Failed;
-                errorCode = "empty_reply";
-                errorSummary = "Reply generator returned an empty response.";
-                replyText = "Sorry, I wasn't able to generate a response. Please try again.";
-            }
-        }
-        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested)
-        {
-            terminalState = LlmReplyTerminalState.Failed;
-            errorCode = "llm_reply_timeout";
-            errorSummary = $"LLM reply generation exceeded {(int)fallbackTimeout.TotalSeconds}s budget.";
-            replyText = "Sorry, this took too long to process - the model or one of its tools didn't " +
-                        "respond in time. Please try again, or rephrase the request.";
-            _logger.LogWarning(
-                ex,
-                "Deferred LLM reply timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
-                (int)fallbackTimeout.TotalSeconds,
-                workItem.RunId,
-                request.CorrelationId);
-        }
-        catch (Exception ex)
-        {
-            terminalState = LlmReplyTerminalState.Failed;
-            errorCode = "llm_reply_failed";
-            errorSummary = ex.Message;
-            replyText = NyxIdRelayErrorClassifier.Classify(ex.Message);
-            _logger.LogWarning(
-                ex,
-                "Deferred LLM reply generation failed: runId={RunId} correlation={CorrelationId}",
-                workItem.RunId,
-                request.CorrelationId);
-        }
-
-        if (terminalState == LlmReplyTerminalState.Failed)
-        {
-            await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent)
+        var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
+        using var interactiveScope = TryBeginInteractiveScope(request);
+        var llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                    plan.StepExecutor.ResolveProvider(),
+                    llmRequest,
+                    async (chunk, token) =>
+                    {
+                        if (string.IsNullOrEmpty(chunk.DeltaContent))
+                            return;
+                        output.Append(chunk.DeltaContent);
+                        if (streamingState is not null)
+                            await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                    },
+                    ct)
                 .ConfigureAwait(false);
+        if (streamingState is not null)
+            await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
+
+        var nextState = workItem.StepState.Clone();
+        nextState.NextStepIndex = workItem.StepIndex + 1;
+        nextState.AccumulatedText = output.ToString();
+        AddUsage(nextState, llmResult.Usage);
+        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
+            nextState.OutboundIntent = outboundIntent.Clone();
+        if (!string.IsNullOrEmpty(llmResult.FinishReason))
+            nextState.LastFinishReason = llmResult.FinishReason;
+        if (!string.IsNullOrEmpty(llmResult.Content))
+            nextState.HasStreamedTextContent = true;
+
+        var effectiveContent = llmResult.Content;
+        var effectiveToolCalls = llmResult.ToolCalls;
+        if (effectiveToolCalls is not { Count: > 0 } && !workItem.StepState.FinalNoToolsStep && effectiveContent is not null)
+        {
+            var parsed = TextToolCallParser.Parse(effectiveContent);
+            if (parsed.ToolCalls.Count > 0)
+            {
+                effectiveContent = parsed.CleanedContent;
+                effectiveToolCalls = parsed.ToolCalls;
+            }
         }
 
-        return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
-    }
+        nextState.PendingToolCalls.Clear();
+        if (effectiveToolCalls is { Count: > 0 })
+            nextState.PendingToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
 
-    private AgentRunReplyGenerationCompleted BuildCompleted(
-        AgentRunReplyGenerationExecutionRequest workItem,
-        NeedsLlmReplyEvent request,
-        string replyText,
-        MessageContent? outboundIntent,
-        LlmReplyTerminalState terminalState,
-        string errorCode,
-        string errorSummary)
-    {
-        var completed = new AgentRunReplyGenerationCompleted
+        if (!string.IsNullOrEmpty(effectiveContent) ||
+            !string.IsNullOrEmpty(llmResult.ReasoningContent) ||
+            effectiveToolCalls is { Count: > 0 })
+        {
+            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(new ChatMessage
+            {
+                Role = "assistant",
+                Content = effectiveContent,
+                ReasoningContent = llmResult.ReasoningContent,
+                ToolCalls = effectiveToolCalls,
+            }));
+        }
+
+        return new AgentRunNextLlmStepRequestedEvent
         {
             RunId = workItem.RunId,
             CorrelationId = request.CorrelationId,
             TargetActorId = request.TargetActorId,
-            ReplyText = replyText ?? string.Empty,
-            TerminalState = terminalState,
-            ErrorCode = errorCode,
-            ErrorSummary = errorSummary,
-            CompletedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
             Request = request.Clone(),
+            StepState = nextState,
         };
-        if (outboundIntent is not null)
-            completed.Outbound = outboundIntent.Clone();
-        return completed;
+    }
+
+    public async Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+        AgentRunReplyStepExecutionRequest workItem,
+        CancellationToken ct)
+    {
+        var request = workItem.Request.Clone();
+        var generator = RequireStepGenerator();
+        var plan = await generator.BuildStepPlanAsync(
+                request.Activity!,
+                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
+                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                ct)
+            .ConfigureAwait(false);
+        var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
+            .ConfigureAwait(false);
+
+        var nextState = workItem.StepState.Clone();
+        nextState.NextStepIndex = workItem.StepIndex + 1;
+        nextState.PendingToolCalls.Clear();
+        foreach (var result in results)
+        {
+            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(
+                ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result)));
+        }
+
+        nextState.Round++;
+
+        return new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            StepState = nextState,
+        };
+    }
+
+    private IAgentRunStepConversationReplyGenerator RequireStepGenerator() =>
+        _replyGenerator as IAgentRunStepConversationReplyGenerator
+        ?? throw new InvalidOperationException("Per-step agent run execution requires a step-capable reply generator.");
+
+    private IDisposable? TryBeginInteractiveScope(NeedsLlmReplyEvent request)
+    {
+        if (_interactiveReplyCollector is null)
+            return null;
+        if (_relayOptions is not { InteractiveRepliesEnabled: true })
+            return null;
+        if (!IsRelayRequest(request))
+            return null;
+
+        return _interactiveReplyCollector.BeginScope();
+    }
+
+    private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>
+        request.Activity?.OutboundDelivery is
+        {
+            ReplyMessageId.Length: > 0,
+            CorrelationId.Length: > 0,
+        };
+
+    private MessageContent? TryTakeOutboundIntent(IAgentRunStepConversationReplyGenerator generator)
+    {
+        var typedIntent = generator.TryTakeOutboundIntent();
+        var scopedIntent = _interactiveReplyCollector?.TryTake();
+        return typedIntent ?? scopedIntent;
+    }
+
+    private async Task DispatchStepFailureAsync(AgentRunReplyStepExecutionRequest workItem, Exception ex)
+    {
+        _logger.LogWarning(
+            ex,
+            "Agent run reply step executor failed: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+            workItem.RunId,
+            workItem.Request.CorrelationId,
+            workItem.StepIndex);
+        var failed = new AgentRunReplyGenerationFailed
+        {
+            RunId = workItem.RunId,
+            CorrelationId = workItem.Request.CorrelationId,
+            TargetActorId = workItem.Request.TargetActorId,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = ex.Message,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Attempt = workItem.Attempt,
+            Request = workItem.Request.Clone(),
+        };
+        try
+        {
+            await DispatchToRunActorAsync(workItem.RunActorId, failed, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception dispatchEx)
+        {
+            _logger.LogError(
+                dispatchEx,
+                "Failed to dispatch agent run step failure command: runId={RunId} actorId={ActorId}",
+                workItem.RunId,
+                workItem.RunActorId);
+        }
+    }
+
+    private static void AddUsage(AgentRunReplyStepState state, TokenUsage? usage)
+    {
+        if (usage is null)
+            return;
+        state.AggregatedUsage ??= new AgentRunReplyTokenUsage();
+        state.AggregatedUsage.PromptTokens += usage.PromptTokens;
+        state.AggregatedUsage.CompletionTokens += usage.CompletionTokens;
+        state.AggregatedUsage.TotalTokens += usage.TotalTokens;
     }
 
     private async Task DispatchToRunActorAsync<TCommand>(
@@ -271,30 +397,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
+            Route = command is AgentRunNextLlmStepRequestedEvent or AgentRunNextToolStepRequestedEvent
+                ? EnvelopeRouteSemantics.CreateTopologyPublication(runActorId, TopologyAudience.Self)
+                : EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
         };
         await _actorDispatchPort.DispatchAsync(runActorId, envelope, ct).ConfigureAwait(false);
-    }
-
-    private async Task FinalizeFailureStreamingSinkAsync(
-        StreamingReplyRunState? streamingState,
-        string replyText,
-        MessageContent? outboundIntent)
-    {
-        if (streamingState is not null &&
-            outboundIntent is null &&
-            !string.IsNullOrWhiteSpace(replyText))
-        {
-            try
-            {
-                await streamingState.FinalizeAsync(replyText, CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to finalize streaming failure text for agent run");
-            }
-        }
     }
 
     private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
@@ -314,7 +421,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
         return new TurnStreamingReplySink(
-            _actorDispatchPort,
+            _actorHandledDispatchPort ?? new AdmissionOnlyHandledDispatchPortAdapter(_actorDispatchPort),
             targetActorId,
             request.CorrelationId,
             request.RegistrationId,
@@ -324,6 +431,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             _timeProvider,
             _logger,
             cardMode);
+    }
+
+    private sealed class AdmissionOnlyHandledDispatchPortAdapter : IActorHandledDispatchPort
+    {
+        private readonly IActorDispatchPort _dispatchPort;
+
+        public AdmissionOnlyHandledDispatchPortAdapter(IActorDispatchPort dispatchPort)
+        {
+            _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        }
+
+        public Task<DispatchAdmission> DispatchAndWaitHandledAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default) =>
+            _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
     private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink)
@@ -463,21 +586,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (configured <= 0)
             return TimeSpan.Zero;
         return TimeSpan.FromSeconds(configured);
-    }
-
-    private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
-    {
-        if (_interactiveReplyCollector is null)
-            return false;
-
-        if (_relayOptions is { InteractiveRepliesEnabled: false })
-            return false;
-
-        return activity?.OutboundDelivery is
-        {
-            ReplyMessageId.Length: > 0,
-            CorrelationId.Length: > 0,
-        };
     }
 
     private static string? NormalizeOptional(string? value)

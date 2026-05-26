@@ -23,12 +23,11 @@ public sealed class NyxIdChatProjectionSessionTests
     [Fact]
     public async Task ProjectionPort_ShouldAttachExistingDetachAndReleaseChatSession()
     {
-        var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
         runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
-        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, CreateAttachExistingLookup(runtime));
+        var port = new NyxIdChatSessionProjectionPort(release, hub, CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
         var attachment = await port.AttachExistingChatProjectionAsync("chat-actor-1", "session-1", sink, CancellationToken.None);
@@ -42,8 +41,6 @@ public sealed class NyxIdChatProjectionSessionTests
         });
         await port.DetachLiveSinkAsync(attachment!.LiveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None);
-
-        activation.Requests.Should().BeEmpty();
         var runtimeLease = attachment.ProjectionLease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
         runtimeLease.ActorId.Should().Be("chat-actor-1");
         runtimeLease.RootEntityId.Should().Be("chat-actor-1");
@@ -75,7 +72,6 @@ public sealed class NyxIdChatProjectionSessionTests
         runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
         var hub = new RecordingSessionEventHub();
         var port = new NyxIdChatSessionProjectionPort(
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -103,7 +99,6 @@ public sealed class NyxIdChatProjectionSessionTests
         var runtime = new RecordingActorRuntime();
         var hub = new RecordingSessionEventHub();
         var port = new NyxIdChatSessionProjectionPort(
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -221,27 +216,6 @@ public sealed class NyxIdChatProjectionSessionTests
             CancellationToken.None);
 
         hub.Published.Should().BeEmpty();
-    }
-
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public NyxIdChatSessionRuntimeLease LeaseToReturn { get; } = new(new NyxIdChatSessionProjectionContext
-        {
-            RootActorId = "chat-actor-1",
-            ProjectionKind = "nyxid-chat-session",
-            SessionId = "session-1",
-        });
-
-        public Task<NyxIdChatSessionRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
     }
 
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>

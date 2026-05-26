@@ -158,7 +158,6 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 "Aevatar OAuth client already provisioned: actorId={ActorId}, authority={Authority}; no OAuth client fact changed",
                 Id,
                 cmd.NyxidAuthority);
-            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -662,19 +661,12 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         return $"v{now.ToUnixTimeSeconds()}";
     }
 
-    private Task EnsureCommittedStateActivatedAsync()
-    {
-        var activation = Services.GetService(typeof(IChannelIdentityCommittedStateActivationService))
-            as IChannelIdentityCommittedStateActivationService;
-        if (activation == null || string.IsNullOrWhiteSpace(Id) || EventSourcing == null)
-            return Task.CompletedTask;
-
-        return activation.EnsureAevatarOAuthClientCommittedStateActivatedAsync(
-            Id,
-            State.Clone(),
-            EventSourcing.CurrentVersion,
-            CancellationToken.None);
-    }
+    // Refactor (iter97/cluster-097): Old pattern: already-provisioned command
+    // no-op activated committed-state projection by side-reading the latest
+    // event and manually dispatching a projection envelope. New principle:
+    // identity commands only commit real facts; committed-state hook +
+    // activation plan provider own projection materialization, and drift
+    // repair must be an explicit maintenance/admin path.
 
     // ─── State transitions ───
 

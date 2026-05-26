@@ -67,26 +67,24 @@ public sealed class StudioMemberServiceTeamTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldDispatchReassignment_WhenTeamIdChanges()
+    public async Task UpdateAsync_ShouldDispatchPatchIntent_WhenTeamIdPresent()
     {
-        var detail = NewDetail(currentTeamId: "old-team");
         var commandPort = new RecordingMemberCommandPort();
         var service = NewService(
             commandPort: commandPort,
-            memberQueryPort: new InMemoryMemberQueryPort(detail));
+            memberQueryPort: new InMemoryMemberQueryPort(NewDetail(currentTeamId: "old-team")));
 
         await service.UpdateAsync(
             ScopeId,
             MemberId,
             new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("new-team")));
 
-        commandPort.ReassignCalls.Should().Be(1);
-        commandPort.LastFromTeamId.Should().Be("old-team");
-        commandPort.LastToTeamId.Should().Be("new-team");
+        commandPort.PatchTeamAssignmentCalls.Should().Be(1);
+        commandPort.LastTargetTeamId.Should().Be("new-team");
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldNoOp_WhenTeamIdAlreadyMatches()
+    public async Task UpdateAsync_ShouldDispatchPatchIntent_EvenWhenProjectionAlreadyMatches()
     {
         var detail = NewDetail(currentTeamId: TeamId);
         var commandPort = new RecordingMemberCommandPort();
@@ -99,7 +97,8 @@ public sealed class StudioMemberServiceTeamTests
             MemberId,
             new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of(TeamId)));
 
-        commandPort.ReassignCalls.Should().Be(0);
+        commandPort.PatchTeamAssignmentCalls.Should().Be(1);
+        commandPort.LastTargetTeamId.Should().Be(TeamId);
     }
 
     [Fact]
@@ -131,9 +130,8 @@ public sealed class StudioMemberServiceTeamTests
             MemberId,
             new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of(null)));
 
-        commandPort.ReassignCalls.Should().Be(1);
-        commandPort.LastFromTeamId.Should().Be(TeamId);
-        commandPort.LastToTeamId.Should().BeNull();
+        commandPort.PatchTeamAssignmentCalls.Should().Be(1);
+        commandPort.LastTargetTeamId.Should().BeNull();
     }
 
     [Fact]
@@ -247,9 +245,8 @@ public sealed class StudioMemberServiceTeamTests
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {
         public int CreateCalls { get; private set; }
-        public int ReassignCalls { get; private set; }
-        public string? LastFromTeamId { get; private set; }
-        public string? LastToTeamId { get; private set; }
+        public int PatchTeamAssignmentCalls { get; private set; }
+        public string? LastTargetTeamId { get; private set; }
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
@@ -278,13 +275,12 @@ public sealed class StudioMemberServiceTeamTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task ReassignTeamAsync(
-            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+        public Task PatchTeamAssignmentAsync(
+            string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default)
         {
-            ReassignCalls++;
-            LastFromTeamId = fromTeamId;
-            LastToTeamId = toTeamId;
+            PatchTeamAssignmentCalls++;
+            LastTargetTeamId = targetTeamId;
             return Task.CompletedTask;
         }
     }

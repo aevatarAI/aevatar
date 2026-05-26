@@ -152,7 +152,7 @@ public static class ScopeGAgentAguiEventMapper
                 {
                     RunError = new RunErrorEvent
                     {
-                        Message = content.Trim(),
+                        Message = NormalizeLlmFailureMessage(content),
                     },
                 };
             }
@@ -165,6 +165,25 @@ public static class ScopeGAgentAguiEventMapper
                 MessageId = sessionId,
             },
         };
+    }
+
+    public static string NormalizeLlmFailureMessage(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return "LLM request failed.";
+
+        var trimmed = content.Trim();
+        const string toolAnnotatedPrefix = "LLM request failed [tools=";
+        if (!trimmed.StartsWith(toolAnnotatedPrefix, StringComparison.Ordinal))
+            return trimmed;
+
+        var marker = "]: ";
+        var markerIndex = trimmed.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+            return trimmed;
+
+        var message = trimmed[(markerIndex + marker.Length)..].Trim();
+        return string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message;
     }
 
     public static Struct BuildToolApprovalStruct(Any payload)

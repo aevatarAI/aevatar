@@ -400,14 +400,27 @@ public sealed partial class ConversationGAgent
         ConversationTurnRuntimeContext runtimeContext)
     {
         var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardCreateOperationAsync(
-            runner,
-            evt.Clone(),
-            correlationId,
-            streamingElementId,
-            sequence,
-            generation,
-            runtimeContext));
+        var executor = ResolveBusinessIoExecutor();
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Create, sequence, generation);
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit create IO from the actor turn.
+        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
+        _ = executor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                workItemId,
+                Id,
+                "lark-card-create",
+                correlationId,
+                StreamingFailureUpdateTimeout,
+                ct => ExecuteLarkCardCreateOperationAsync(
+                    runner,
+                    evt.Clone(),
+                    correlationId,
+                    streamingElementId,
+                    sequence,
+                    generation,
+                    runtimeContext,
+                    ct)),
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardCreateOperationAsync(
@@ -417,7 +430,8 @@ public sealed partial class ConversationGAgent
         string streamingElementId,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -426,7 +440,7 @@ public sealed partial class ConversationGAgent
                     chunk,
                     streamingElementId,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -471,15 +485,30 @@ public sealed partial class ConversationGAgent
         ConversationTurnRuntimeContext runtimeContext)
     {
         var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardStreamOperationAsync(
-            runner,
-            evt.Clone(),
-            correlationId,
-            state.CardId ?? string.Empty,
-            state.StreamingElementId,
-            sequence,
-            generation,
-            runtimeContext));
+        var executor = ResolveBusinessIoExecutor();
+        var cardId = state.CardId ?? string.Empty;
+        var streamingElementId = state.StreamingElementId;
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Stream, sequence, generation);
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit stream IO from the actor turn.
+        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
+        _ = executor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                workItemId,
+                Id,
+                "lark-card-stream",
+                correlationId,
+                StreamingFailureUpdateTimeout,
+                ct => ExecuteLarkCardStreamOperationAsync(
+                    runner,
+                    evt.Clone(),
+                    correlationId,
+                    cardId,
+                    streamingElementId,
+                    sequence,
+                    generation,
+                    runtimeContext,
+                    ct)),
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardStreamOperationAsync(
@@ -490,7 +519,8 @@ public sealed partial class ConversationGAgent
         string streamingElementId,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -501,7 +531,7 @@ public sealed partial class ConversationGAgent
                     streamingElementId,
                     sequence,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -553,20 +583,37 @@ public sealed partial class ConversationGAgent
         ConversationTurnRuntimeContext runtimeContext)
     {
         var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardFinalizeOperationAsync(
-            runner,
-            activityForToken.Clone(),
-            correlationId,
-            commandId,
-            state.CardId ?? string.Empty,
-            state.CardMessageId ?? string.Empty,
-            state.StreamingElementId,
-            finalText,
-            state.LastFlushedText,
-            finalDiffers,
-            sequence,
-            generation,
-            runtimeContext));
+        var executor = ResolveBusinessIoExecutor();
+        var cardId = state.CardId ?? string.Empty;
+        var cardMessageId = state.CardMessageId ?? string.Empty;
+        var streamingElementId = state.StreamingElementId;
+        var lastFlushedText = state.LastFlushedText;
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Finalize, sequence, generation);
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit finalize IO from the actor turn.
+        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
+        _ = executor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                workItemId,
+                Id,
+                "lark-card-finalize",
+                correlationId,
+                StreamingFailureUpdateTimeout,
+                ct => ExecuteLarkCardFinalizeOperationAsync(
+                    runner,
+                    activityForToken.Clone(),
+                    correlationId,
+                    commandId,
+                    cardId,
+                    cardMessageId,
+                    streamingElementId,
+                    finalText,
+                    lastFlushedText,
+                    finalDiffers,
+                    sequence,
+                    generation,
+                    runtimeContext,
+                    ct)),
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardFinalizeOperationAsync(
@@ -582,7 +629,8 @@ public sealed partial class ConversationGAgent
         bool finalDiffers,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -595,7 +643,7 @@ public sealed partial class ConversationGAgent
                     finalDiffers,
                     sequence,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -1423,7 +1471,8 @@ public sealed partial class ConversationGAgent
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = correlationId,
-            RunId = correlationId,
+            RunId = NormalizeOptional(State.PendingLlmReplyRequests.FirstOrDefault(request =>
+                string.Equals(request.CorrelationId, correlationId, StringComparison.Ordinal))?.RunId) ?? string.Empty,
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"lark-card-stream:{cardMessageId}",
         };

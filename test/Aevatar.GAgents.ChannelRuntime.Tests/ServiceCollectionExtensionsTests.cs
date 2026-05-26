@@ -52,6 +52,9 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ILongRunningBusinessIoExecutor) &&
+            descriptor.ImplementationType == typeof(LongRunningBusinessIoExecutor));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
@@ -83,14 +86,6 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(ChannelRegistrationCommandFacade));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
-        services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(ICommandTargetResolver<ChannelBotRebuildProjectionCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>));
-        services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(ICommandEnvelopeFactory<ChannelBotRebuildProjectionCommand>));
-        services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(ICommandDispatchPipeline<ChannelBotRebuildProjectionCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
-        services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRebuildProjectionCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
     }
 
@@ -135,6 +130,9 @@ public sealed class ServiceCollectionExtensionsTests
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
     }
 
     [Fact]

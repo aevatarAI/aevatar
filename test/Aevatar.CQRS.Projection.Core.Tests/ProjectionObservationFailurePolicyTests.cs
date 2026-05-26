@@ -29,6 +29,26 @@ public sealed class ProjectionObservationFailurePolicyTests
     }
 
     [Fact]
+    public void ShouldPropagate_ShouldReturnTrue_ForProjectionDispatchAggregateContainingNonFirstOptimisticConcurrencyException()
+    {
+        var aggregate = new ProjectionDispatchAggregateException(
+        [
+            new ProjectionDispatchFailure(
+                "projector-a",
+                1,
+                new InvalidOperationException("deterministic")),
+            new ProjectionDispatchFailure(
+                "projector-b",
+                2,
+                new EventStoreOptimisticConcurrencyException("actor-2", 7, 8)),
+        ]);
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(aggregate).Should().BeTrue();
+        ProjectionObservationFailurePolicy.ContainsOcc(aggregate).Should().BeTrue();
+        aggregate.InnerException.Should().BeOfType<AggregateException>();
+    }
+
+    [Fact]
     public void ShouldPropagate_ShouldReturnFalse_ForDeterministicProjectionFailure()
     {
         var aggregate = new ProjectionDispatchAggregateException(

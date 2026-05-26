@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -186,19 +187,23 @@ public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
     ResponsesCreateCompletedCommandResult? Completed,
+    ResponsesCreateAcceptedCommandResult? Accepted,
     ResponsesForwardCommandResult? Forward)
 {
     public static ResponsesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null, null);
 
     public static ResponsesCreateCommandResult FromStreamPlan(ResponsesCreateCommandPlan plan) =>
-        new(null, plan, null, null);
+        new(null, plan, null, null, null);
 
     public static ResponsesCreateCommandResult FromCompleted(ResponsesCreateCompletedCommandResult completed) =>
-        new(null, null, completed, null);
+        new(null, null, completed, null, null);
+
+    public static ResponsesCreateCommandResult FromAccepted(ResponsesCreateAcceptedCommandResult accepted) =>
+        new(null, null, null, accepted, null);
 
     public static ResponsesCreateCommandResult FromForward(ResponsesForwardCommandResult forward) =>
-        new(null, null, null, forward);
+        new(null, null, null, null, forward);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -234,20 +239,36 @@ public sealed record ResponsesCreateCompletedCommandResult(
     long CreatedAt,
     LlmSessionCompletionSnapshot Completion);
 
+// Refactor (iter103/cluster-1 r2):
+//   Old pattern: Application facades treated IActorDispatchPort ACK as committed/readmodel-observed completion.
+//   New principle: direct Responses/Messages create returns only the accepted dispatch receipt; terminal completion is observed asynchronously.
+public sealed record ResponsesCreateAcceptedCommandResult(
+    NormalizedResponsesRequest Normalized,
+    long CreatedAt,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Streaming completion errors and final data were encoded directly into SSE handler branches.
 //   New principle: Application reports stream execution outcome as typed data; Host renders the appropriate SSE or error frame.
 public sealed record ResponsesStreamCommandResult(
     ResponsesCommandError? Error,
-    LlmSessionCompletionSnapshot? Completion)
+    LlmSessionCompletionSnapshot? Completion,
+    ResponsesStreamAcceptedCommandResult? Accepted)
 {
     public static ResponsesStreamCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
 
     public static ResponsesStreamCommandResult FromCompleted(
         LlmSessionCompletionSnapshot completion) =>
-        new(null, completion);
+        new(null, completion, null);
+
+    public static ResponsesStreamCommandResult FromAccepted(ResponsesStreamAcceptedCommandResult accepted) =>
+        new(null, null, accepted);
 }
+
+public sealed record ResponsesStreamAcceptedCommandResult(
+    DispatchAdmission Admission);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Cancel response visibility and status transition lived inside the Host endpoint.
@@ -280,16 +301,20 @@ public sealed record MessagesCreateCommandPlan(
 public sealed record MessagesCreateCommandResult(
     ResponsesCommandError? Error,
     MessagesCreateCommandPlan? StreamPlan,
-    MessagesCreateCompletedCommandResult? Completed)
+    MessagesCreateCompletedCommandResult? Completed,
+    MessagesCreateAcceptedCommandResult? Accepted)
 {
     public static MessagesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
 
     public static MessagesCreateCommandResult FromStreamPlan(MessagesCreateCommandPlan plan) =>
-        new(null, plan, null);
+        new(null, plan, null, null);
 
     public static MessagesCreateCommandResult FromCompleted(MessagesCreateCompletedCommandResult completed) =>
-        new(null, null, completed);
+        new(null, null, completed, null);
+
+    public static MessagesCreateCommandResult FromAccepted(MessagesCreateAcceptedCommandResult accepted) =>
+        new(null, null, null, accepted);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -298,6 +323,11 @@ public sealed record MessagesCreateCommandResult(
 public sealed record MessagesCreateCompletedCommandResult(
     NormalizedMessagesRequest Normalized,
     LlmSessionCompletionSnapshot Completion);
+
+public sealed record MessagesCreateAcceptedCommandResult(
+    NormalizedMessagesRequest Normalized,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: /v1/responses endpoints owned command orchestration and called many lower-level collaborators directly.

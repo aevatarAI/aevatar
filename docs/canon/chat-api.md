@@ -130,7 +130,7 @@ POST /api/workflows/signal
 
 ## 5. 输出事件（SSE/WS）
 
-统一输出 `WorkflowOutputFrame`，核心事件类型包括：
+统一输出 `WorkflowRunEventEnvelope` proto；JSON 仅作为 SSE/WS external wire adapter 表达。核心事件类型包括：
 
 - `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR`
 - `STEP_STARTED` / `STEP_FINISHED`
@@ -169,7 +169,7 @@ POST /api/workflows/signal
 服务端回包类型：
 
 - `command.ack`：返回 `commandId/actorId/workflow`
-- `agui.event`：逐帧业务事件（payload 即 `WorkflowOutputFrame`）
+- `agui.event`：逐帧业务事件（payload 即 `WorkflowRunEventEnvelope` 的 JSON wire 表达）
 - `command.error`：输入或启动阶段错误
 
 `command.ack` 使用约束：

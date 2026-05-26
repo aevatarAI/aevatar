@@ -25,13 +25,13 @@ public interface IStudioTeamService
         string teamId,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> UpdateAsync(
+    Task<StudioTeamCommandResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> ArchiveAsync(
+    Task<StudioTeamCommandResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default);

@@ -67,6 +67,11 @@ message VoiceProviderResponseBinding {
   int32 response_id = 2;
 }
 
+message VoicePresenceEventDedupeFenceEntry {
+  string key = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+}
+
 // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
 //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
 //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
@@ -90,6 +95,7 @@ message VoicePresenceRuntimeState {
   VoiceRemoteAudioSupport remote_audio_support = 17;
   string active_transport_lease_id = 18;
   string active_lease_owner_id = 19;
+  repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -235,6 +241,15 @@ message VoiceTransportRelayStopped {
   google.protobuf.Timestamp lease_expires_at = 5;
 }
 
+// Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
+message VoiceTransportLifetimeCompleted {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+}
+
 message VoiceProviderEventReceived {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -279,6 +294,7 @@ message VoiceModuleSignal {
     VoiceTransportRelayStopped transport_relay_stopped = 13;
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportAudioFrameReceived transport_audio_frame_received = 15;
+    VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
   }
 }
 
@@ -298,4 +314,5 @@ message VoicePresenceCapabilityReadModel {
   string active_session_id = 10;
   google.protobuf.Timestamp lease_expires_at = 11;
   VoiceRemoteAudioSupport remote_audio_support = 12;
+  string active_transport_lease_id = 13;
 }

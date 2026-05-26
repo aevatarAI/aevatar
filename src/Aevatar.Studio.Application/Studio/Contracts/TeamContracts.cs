@@ -34,6 +34,20 @@ public sealed record StudioTeamRosterPageRequest(
     int? PageSize = null,
     string? PageToken = null);
 
+public static class StudioTeamCommandStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string NoChange = "no_change";
+}
+
+public sealed record StudioTeamCommandResponse(
+    string Status,
+    string ScopeId,
+    string TeamId,
+    string? CommandId = null,
+    string? CorrelationId = null,
+    DateTimeOffset? AckedAt = null);
+
 public sealed record CreateStudioTeamRequest(
     string DisplayName,
     string? Description = null,

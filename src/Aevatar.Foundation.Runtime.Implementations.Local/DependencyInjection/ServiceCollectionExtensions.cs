@@ -69,6 +69,7 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<LocalActorRuntime>>());
         });
         services.TryAddSingleton<IActorDispatchPort, LocalActorDispatchPort>();
+        services.TryAddSingleton<IActorHandledDispatchPort, LocalActorHandledDispatchPort>();
 
         // Persistence
         var eventSourcingOptions = new EventSourcingRuntimeOptions();

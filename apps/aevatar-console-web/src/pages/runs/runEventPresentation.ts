@@ -161,6 +161,7 @@ export function extractRunFinishedOutput(events: AGUIEvent[]): string {
     (latestRunFinished as unknown as Record<string, unknown>).result,
   );
 
+  // Refactor (iter98/cluster-790): Old: missed-live fallback expected generic result keys after backend text synthesis. New: RunFinished.result is typed GAgentDraftRunResultPayload, and consumers read result.output directly.
   return (
     readOptionalRecordString(result, 'output') ||
     readOptionalRecordString(result, 'Output') ||

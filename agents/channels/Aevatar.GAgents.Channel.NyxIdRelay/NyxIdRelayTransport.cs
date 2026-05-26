@@ -219,12 +219,36 @@ public sealed class NyxIdRelayTransport
         if (TryBuildWorkflowResumePayload(submission, out var workflowResume))
         {
             submission.WorkflowResume = workflowResume;
+            RemoveKeys(
+                submission.Arguments,
+                "actor_id",
+                "run_id",
+                "step_id",
+                "approved");
+            RemoveKeys(
+                submission.FormFields,
+                "user_input",
+                "edited_content",
+                "feedback");
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
         {
             submission.LlmSelection = llmSelection;
+            RemoveKeys(
+                submission.Arguments,
+                "llm_action",
+                "service_id",
+                "preset_id");
         }
+    }
+
+    private static void RemoveKeys(
+        Google.Protobuf.Collections.MapField<string, string> values,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+            values.Remove(key);
     }
 
     private static bool TryBuildWorkflowResumePayload(

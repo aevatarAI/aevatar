@@ -24,8 +24,6 @@ namespace Aevatar.GAgents.NyxidChat;
 //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
-    public const string ActorIdPrefix = "channel-agent-run:";
-
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
@@ -46,6 +44,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
+    internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
+    private const string DropNotificationRetryCallbackPrefix = "agent-run-drop-notification-retry";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
@@ -70,20 +70,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public static string BuildActorId(string correlationId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
-        return ActorIdPrefix + correlationId.Trim();
-    }
-
     protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<AgentRunStartedEvent>(ApplyStarted)
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
+            .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
+            .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
             .On<AgentRunCleanupCompletedEvent>(ApplyCleanupCompleted)
             .OrCurrent();
@@ -111,8 +107,41 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
+        // Refactor (iter101/cluster-105): Old=run_id could be recovered by parsing the run actor id; New=run_id is command data.
+        if (!AgentRunId.TryParse(command.RunId, out var typedCommandRunId))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without typed run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                command.Request.CorrelationId);
+            return;
+        }
+
+        var commandRunId = typedCommandRunId.Value;
         var request = command.Request.Clone();
         ApplyTargetRefOverrides(request);
+        if (!string.IsNullOrWhiteSpace(request.RunId) &&
+            !string.Equals(request.RunId.Trim(), commandRunId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command with mismatched run_id: commandRunId={CommandRunId} requestRunId={RequestRunId} runActor={RunActorId}",
+                commandRunId,
+                request.RunId,
+                Id);
+            return;
+        }
+
+        request.RunId = commandRunId;
+        if (!AgentRunId.TryParse(request.RunId, out _))
+        {
+            // Refactor (iter98/cluster-002): Old=missing run_id fell back to correlation/actor id; New=start commands without explicit run_id are malformed.
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                request.CorrelationId);
+            return;
+        }
+
         var runId = ResolveRunId(request);
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
@@ -196,51 +225,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     [EventHandler]
-    public async Task HandleReplyGenerationCompletedAsync(AgentRunReplyGenerationCompleted command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
-            return;
-
-        var request = command.Request?.Clone() ?? new NeedsLlmReplyEvent
-        {
-            CorrelationId = command.CorrelationId,
-            TargetActorId = command.TargetActorId,
-            RunId = command.RunId,
-        };
-        ApplyTargetRefOverrides(request);
-        if (string.IsNullOrWhiteSpace(request.TargetActorId))
-            request.TargetActorId = command.TargetActorId;
-
-        try
-        {
-            await ProduceAndDispatchAsync(
-                request,
-                command.RunId,
-                command.ReplyText ?? string.Empty,
-                command.Outbound,
-                command.TerminalState,
-                command.ErrorCode ?? string.Empty,
-                command.ErrorSummary ?? string.Empty);
-        }
-        catch (AgentRunOutputDispatchException ex)
-        {
-            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
-                return;
-
-            await PersistFailedAsync(
-                request,
-                command.RunId,
-                "agent_run_output_dispatch_failed",
-                ex.Message);
-        }
-        catch (Exception ex)
-        {
-            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
-        }
-    }
-
-    [EventHandler]
     public async Task HandleOutputDispatchRetryAsync(AgentRunOutputDispatchRetryRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -275,6 +259,25 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     [EventHandler]
+    public async Task HandleDropNotificationRetryAsync(AgentRunDropNotificationRetryRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!IsCurrentDropNotificationRetry(command))
+            return;
+
+        try
+        {
+            await DispatchPendingDropNotificationAsync();
+            await TryPersistDropNotificationDispatchedAsync();
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            await TryScheduleDropNotificationRetryAsync(command.Attempt + 1, ex);
+        }
+    }
+
+    [EventHandler]
     public async Task HandleReplyGenerationFailedAsync(AgentRunReplyGenerationFailed command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -291,11 +294,30 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             request.TargetActorId = command.TargetActorId;
 
-        await PersistFailedAsync(
-            request,
-            command.RunId,
-            NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed",
-            command.ErrorSummary ?? string.Empty);
+        var errorCode = NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed";
+        var errorSummary = command.ErrorSummary ?? string.Empty;
+        try
+        {
+            await ProduceAndDispatchAsync(
+                request,
+                command.RunId,
+                "Sorry, I wasn't able to generate a response. Please try again.",
+                null,
+                LlmReplyTerminalState.Failed,
+                errorCode,
+                errorSummary);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                return;
+
+            await PersistFailedAsync(request, command.RunId, errorCode, errorSummary);
+        }
+        catch (Exception ex)
+        {
+            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
+        }
     }
 
     [EventHandler]
@@ -419,13 +441,204 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         });
 
         await ScheduleGenerationTimeoutAsync(request, runId, attempt);
-        await _generationExecutor.StartAsync(
-            new AgentRunReplyGenerationExecutionRequest(
-                runId,
+        await StartPerStepReplyGenerationAsync(request, runId, attempt);
+    }
+
+    private async Task StartPerStepReplyGenerationAsync(NeedsLlmReplyEvent request, string runId, int attempt)
+    {
+        var generationContext = await BuildInitialStepStateAsync(request, runId, attempt);
+        await PersistStepStateAsync(generationContext);
+        await PublishAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = attempt,
+            StepIndex = generationContext.NextStepIndex,
+            Request = request.Clone(),
+            StepState = generationContext.Clone(),
+        }, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        int attempt)
+    {
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
+        // New principle: AgentRunGAgent persists the per-step waterline and advances through typed self-messages.
+        return await _generationExecutor.BuildInitialStepStateAsync(
+                new AgentRunReplyGenerationExecutionRequest(runId, Id, attempt, request.Clone()),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
+    {
+        await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
+        {
+            RunId = stepState.RunId,
+            CorrelationId = stepState.CorrelationId,
+            TargetActorId = stepState.TargetActorId,
+            Attempt = stepState.Attempt,
+            StepState = stepState.Clone(),
+        });
+    }
+
+    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteLlmStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
                 Id,
-                attempt,
-                request.Clone()),
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
             CancellationToken.None);
+    }
+
+    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteToolStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
+            CancellationToken.None);
+    }
+
+    private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        await ProduceAndDispatchAsync(
+            request,
+            stepState.RunId,
+            hasReplyText
+                ? stepState.AccumulatedText
+                : "Sorry, I wasn't able to generate a response. Please try again.",
+            stepState.OutboundIntent?.Clone(),
+            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            hasReplyText ? string.Empty : "empty_reply",
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
+    }
+
+    private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
+    {
+        if (stepState.PendingToolCalls.Count > 0)
+            return false;
+
+        if (stepState.FinalNoToolsStep)
+            return true;
+
+        if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
+            return true;
+
+        if (stepState.Round >= stepState.MaxToolRounds)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+    }
+
+    private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(AgentRunReplyStepState stepState)
+    {
+        var next = stepState.Clone();
+        next.FinalNoToolsStep = true;
+        next.NextStepIndex++;
+        await PersistStepStateAsync(next);
+        return next;
+    }
+
+    private bool IsCurrentStepContinuation(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
+            return false;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null)
+            return stepIndex <= 1;
+
+        return stepIndex == currentStep.NextStepIndex || stepIndex == currentStep.NextStepIndex + 1;
+    }
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextLlmStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextToolStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextLlmStepAsync(AgentRunNextLlmStepRequestedEvent command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            return;
+
+        var isCompletedLlmStep = State.GenerationStep is not null &&
+                                 command.StepState is not null &&
+                                 command.StepIndex == State.GenerationStep.NextStepIndex + 1;
+
+        if (command.StepState is not null)
+            await PersistStepStateAsync(command.StepState);
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+
+        var stepState = command.StepState ?? State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (ShouldCompleteAfterLlmStep(stepState, isCompletedLlmStep))
+        {
+            await CompletePerStepReplyAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.PendingToolCalls.Count > 0)
+        {
+            await DispatchToolStepExecutorAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextToolStepAsync(AgentRunNextToolStepRequestedEvent command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            return;
+
+        if (command.StepState is not null)
+            await PersistStepStateAsync(command.StepState);
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+        var stepState = command.StepState ?? State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
     }
 
     /// <summary>
@@ -454,7 +667,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             errorCode,
             errorSummary);
 
-        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await DispatchReadyEventAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -477,6 +690,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var outbound = State.ProducedOutbound;
         await DispatchReadyEventAsync(
             request,
+            runId,
             State.ProducedReplyText ?? string.Empty,
             outbound,
             State.ProducedTerminalState,
@@ -530,17 +744,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
     {
-        if (CanNotifyDrop(request))
-            await DispatchDropNotificationAsync(request, reason);
-
-        await PersistDomainEventAsync(new AgentRunDroppedEvent
+        // Refactor (iter99/cluster-605-drop-outbox):
+        //   Old pattern: notify DeferredLlmReplyDroppedEvent before persisting AgentRunDroppedEvent; notification failure left no actor-owned retry fact.
+        //   New principle: persist the drop outbox fact first, then notify; retry callbacks replay the notification from AgentRunGAgentState.
+        var dropped = new AgentRunDroppedEvent
         {
             RunId = runId,
             CorrelationId = request.CorrelationId,
             TargetActorId = request.TargetActorId,
             Reason = reason,
             DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+        };
+        await PersistDomainEventAsync(dropped);
+
+        if (CanNotifyDrop(request))
+        {
+            try
+            {
+                await DispatchPendingDropNotificationAsync();
+                await TryPersistDropNotificationDispatchedAsync();
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                await TryScheduleDropNotificationRetryAsync(1, ex);
+            }
+        }
 
         await ScheduleTerminalCleanupAsync(runId);
     }
@@ -579,6 +807,29 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             TargetActorId = request.TargetActorId,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+    }
+
+    private async Task TryPersistDropNotificationDispatchedAsync()
+    {
+        try
+        {
+            await PersistDomainEventAsync(new AgentRunDropNotificationDispatchedEvent
+            {
+                RunId = State.PendingDropNotificationRunId,
+                CorrelationId = State.PendingDropNotificationCorrelationId,
+                TargetActorId = State.PendingDropNotificationTargetActorId,
+                DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to persist AgentRunDropNotificationDispatchedEvent after successful drop notification; " +
+                "drop outbox may retry until the dispatched marker is committed. runId={RunId} correlation={CorrelationId}",
+                State.PendingDropNotificationRunId,
+                State.PendingDropNotificationCorrelationId);
+        }
     }
 
     private async Task PersistFailedAsync(
@@ -646,6 +897,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DispatchReadyEventAsync(
         NeedsLlmReplyEvent request,
+        string runId,
         string replyText,
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
@@ -671,6 +923,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             // entry. The actor consumes these fields and never persists them.
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
+            RunId = runId,
         };
         try
         {
@@ -706,24 +959,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(request.TargetActorId) &&
         !string.IsNullOrWhiteSpace(request.CorrelationId);
 
-    private async Task DispatchDropNotificationAsync(NeedsLlmReplyEvent request, string reason)
+    private async Task DispatchPendingDropNotificationAsync()
     {
+        var targetActorId = NormalizeOptional(State.PendingDropNotificationTargetActorId);
+        var correlationId = NormalizeOptional(State.PendingDropNotificationCorrelationId);
+        if (targetActorId is null || correlationId is null)
+            return;
+
         var dropped = new DeferredLlmReplyDroppedEvent
         {
-            CorrelationId = request.CorrelationId,
-            Reason = reason,
-            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            CorrelationId = correlationId,
+            Reason = State.PendingDropNotificationReason ?? string.Empty,
+            DroppedAtUnixMs = State.PendingDropNotificationDroppedAtUnixMs > 0
+                ? State.PendingDropNotificationDroppedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
 
         try
         {
             using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, dropped, outputCts.Token);
+            await SendToAsync(targetActorId, dropped, outputCts.Token);
         }
         catch (Exception ex)
         {
             throw new AgentRunOutputDispatchException(
-                $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
+                $"Failed to send deferred LLM reply drop event to conversation actor '{targetActorId}' (reason '{dropped.Reason}').",
                 ex);
         }
     }
@@ -810,6 +1070,47 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ex,
                 "Failed to schedule agent run output retry: runId={RunId} actorId={ActorId}",
                 runId,
+                Id);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryScheduleDropNotificationRetryAsync(
+        int attempt,
+        AgentRunOutputDispatchException dispatchException)
+    {
+        _logger.LogWarning(
+            dispatchException,
+            "Agent run drop notification was not accepted; run remains retryable from drop outbox state: runId={RunId} correlation={CorrelationId}",
+            State.PendingDropNotificationRunId,
+            State.PendingDropNotificationCorrelationId);
+
+        if (_callbackScheduler is null)
+            return false;
+
+        try
+        {
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildDropNotificationRetryCallbackId(State.PendingDropNotificationRunId, attempt),
+                    DropNotificationRetryDelay,
+                    new AgentRunDropNotificationRetryRequested
+                    {
+                        RunId = State.PendingDropNotificationRunId,
+                        CorrelationId = State.PendingDropNotificationCorrelationId,
+                        TargetActorId = State.PendingDropNotificationTargetActorId,
+                        Attempt = Math.Max(1, attempt),
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    }),
+                ct: CancellationToken.None);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule agent run drop notification retry: runId={RunId} actorId={ActorId}",
+                State.PendingDropNotificationRunId,
                 Id);
             return false;
         }
@@ -910,6 +1211,41 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return command.Attempt <= 0 || State.GenerationAttempt == command.Attempt;
     }
 
+    private bool IsCurrentDropNotificationRetry(AgentRunDropNotificationRetryRequested command)
+    {
+        if (State.Status is not AgentRunStatus.Dropped)
+            return false;
+
+        if (State.DropNotificationDispatchedAtUnixMs != 0)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) ||
+            string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationRunId) &&
+            !string.Equals(State.PendingDropNotificationRunId, command.RunId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) &&
+            !string.Equals(State.PendingDropNotificationCorrelationId, command.CorrelationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId) &&
+            !string.Equals(State.PendingDropNotificationTargetActorId, command.TargetActorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private NeedsLlmReplyEvent BuildOutputDispatchRetryRequest(AgentRunOutputDispatchRetryRequested command) =>
         new()
         {
@@ -976,6 +1312,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Take(96)
             .ToArray();
         return $"{OutputDispatchRetryCallbackPrefix}:{new string(chars)}";
+    }
+
+    private static string BuildDropNotificationRetryCallbackId(string runId, int attempt)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{DropNotificationRetryCallbackPrefix}:{new string(chars)}:{Math.Max(1, attempt)}";
     }
 
     private static string BuildGenerationTimeoutCallbackId(string runId, int attempt)
@@ -1108,6 +1454,20 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    private static AgentRunGAgentState ApplyReplyStepStateUpdated(
+        AgentRunGAgentState current,
+        AgentRunReplyStepStateUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        if (evt.Attempt > 0)
+            next.GenerationAttempt = evt.Attempt;
+        next.GenerationStep = evt.StepState?.Clone();
+        return next;
+    }
+
     private static AgentRunGAgentState ApplyReplyProduced(
         AgentRunGAgentState current,
         AgentRunReplyProducedEvent evt)
@@ -1169,6 +1529,24 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.DroppedAtUnixMs;
         next.ErrorCode = evt.Reason;
         next.ErrorSummary = string.Empty;
+        next.PendingDropNotificationRunId = evt.RunId;
+        next.PendingDropNotificationCorrelationId = evt.CorrelationId;
+        next.PendingDropNotificationTargetActorId = evt.TargetActorId;
+        next.PendingDropNotificationReason = evt.Reason;
+        next.PendingDropNotificationDroppedAtUnixMs = evt.DroppedAtUnixMs;
+        next.DropNotificationDispatchedAtUnixMs = 0;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyDropNotificationDispatched(
+        AgentRunGAgentState current,
+        AgentRunDropNotificationDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.DropNotificationDispatchedAtUnixMs = evt.DispatchedAtUnixMs;
         return next;
     }
 
@@ -1205,10 +1583,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
-    private string ResolveRunId(NeedsLlmReplyEvent request) =>
-        NormalizeOptional(request.RunId) ??
-        NormalizeOptional(request.CorrelationId) ??
-        Id;
+    private static string ResolveRunId(NeedsLlmReplyEvent request) =>
+        AgentRunId.Parse(request.RunId).Value;
 
     private sealed class AgentRunOutputDispatchException(string message, Exception innerException)
         : Exception(message, innerException);

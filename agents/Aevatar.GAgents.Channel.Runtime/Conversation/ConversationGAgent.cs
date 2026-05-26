@@ -257,6 +257,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.LlmReplyRequest is not null)
         {
+            if (string.IsNullOrWhiteSpace(result.LlmReplyRequest.RunId))
+            {
+                await DropNewLlmReplyWithoutRunIdAsync(result.LlmReplyRequest);
+                return;
+            }
+
             // The transient run command copy keeps reply_token + expiry + per-call credentials
             // in Metadata so the run actor can echo them back inside LlmReplyReadyEvent and
             // forward them to the LLM call; the persisted state copy must not carry any of
@@ -264,9 +270,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
-            runCopy.RunId = NormalizeOptional(runCopy.RunId) ??
-                            NormalizeOptional(runCopy.CorrelationId) ??
-                            activity.Id;
+            // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
+            runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             var persistedCopy = runCopy.Clone();
@@ -580,6 +585,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(request.RunId))
+        {
+            await DropLegacyPendingLlmReplyWithoutRunIdAsync(request);
+            return;
+        }
+
         try
         {
             // Refactor (iter56/cluster-935-agent-run-actor-admission): old=dispatcher in-process admission, new=actor-owned admission with plain Task
@@ -600,6 +611,46 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
+    }
+
+    private async Task DropLegacyPendingLlmReplyWithoutRunIdAsync(NeedsLlmReplyEvent request)
+    {
+        // Refactor (iter98/cluster-002): Old=dispatcher recovered actor identity from correlation_id; New=legacy persisted requests without run_id are explicitly quarantined/dropped.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        Logger.LogWarning(
+            "Dropping legacy pending LLM reply request without run_id; correlation remains trace-only. correlation={CorrelationId}",
+            request.CorrelationId);
+        await PersistDomainEventAsync(new ConversationContinueFailedEvent
+        {
+            CommandId = BuildLlmReplyCommandId(request.CorrelationId),
+            CorrelationId = request.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = "legacy_pending_llm_reply_missing_run_id_dropped",
+            ErrorSummary = "Legacy pending LLM reply request did not contain run_id and was dropped instead of deriving actor identity from correlation_id.",
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = nowMs,
+        });
+    }
+
+    private async Task DropNewLlmReplyWithoutRunIdAsync(NeedsLlmReplyEvent request)
+    {
+        // Refactor (iter98/cluster-002): Old=ConversationGAgent supplied implicit run_id; New=new dispatch without run_id is rejected before persistence/dispatch.
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        Logger.LogWarning(
+            "Rejecting deferred LLM reply request without run_id before persistence/dispatch. correlation={CorrelationId}",
+            request.CorrelationId);
+        await PersistDomainEventAsync(new ConversationContinueFailedEvent
+        {
+            CommandId = BuildLlmReplyCommandId(request.CorrelationId),
+            CorrelationId = request.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = "deferred_llm_reply_missing_run_id_rejected",
+            ErrorSummary = "Deferred LLM reply request must carry explicit run_id before persistence and dispatch.",
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = nowMs,
+        });
     }
 
     [EventHandler]
@@ -665,7 +716,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var delivered = new LlmReplyDeliveredEvent
             {
                 CorrelationId = evt.CorrelationId ?? string.Empty,
-                RunId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.RunId ?? string.Empty,
                 AckedAtUnixMs = nowMs,
                 ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
             };
@@ -697,7 +748,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var deliveryFailed = new LlmReplyDeliveryFailedEvent
         {
             CorrelationId = evt.CorrelationId ?? string.Empty,
-            RunId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
             FailedAtUnixMs = nowMs,
             ErrorCode = result.ErrorCode ?? string.Empty,
             ErrorMessage = result.ErrorSummary ?? string.Empty,
@@ -1151,19 +1202,32 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ConversationTurnRuntimeContext runtimeContext)
     {
         var runner = ResolveRunner();
-        _ = Task.Run(() => ExecuteNyxRelayTextOperationAsync(
-            runner,
-            operation,
-            chunk.Clone(),
-            correlationId,
-            currentPlatformMessageId,
-            commandId,
-            finalText,
-            lastFlushedText,
-            editCount,
-            sequence,
-            generation,
-            runtimeContext));
+        var executor = ResolveBusinessIoExecutor();
+        var workItemId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation);
+        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched Nyx relay text IO from the actor turn.
+        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
+        _ = executor.SubmitAsync(
+            new LongRunningBusinessIoWorkItem(
+                workItemId,
+                Id,
+                $"nyx-relay-text-{operation}",
+                correlationId,
+                StreamingFailureUpdateTimeout,
+                ct => ExecuteNyxRelayTextOperationAsync(
+                    runner,
+                    operation,
+                    chunk.Clone(),
+                    correlationId,
+                    currentPlatformMessageId,
+                    commandId,
+                    finalText,
+                    lastFlushedText,
+                    editCount,
+                    sequence,
+                    generation,
+                    runtimeContext,
+                    ct)),
+            CancellationToken.None);
     }
 
     private async Task ExecuteNyxRelayTextOperationAsync(
@@ -1178,17 +1242,17 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         int editCount,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         NyxRelayTextOperationCompletedEvent signal;
         try
         {
-            using var cts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             var result = await runner.RunStreamChunkAsync(
                     chunk,
                     currentPlatformMessageId,
                     runtimeContext,
-                    cts.Token)
+                    ct)
                 .ConfigureAwait(false);
             signal = new NyxRelayTextOperationCompletedEvent
             {
@@ -1550,6 +1614,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var ready = new LlmReplyReadyEvent
             {
                 CorrelationId = correlationId,
+                RunId = ResolvePendingLlmReplyRunId(correlationId) ?? string.Empty,
                 RegistrationId = sourceChunk?.RegistrationId ?? string.Empty,
                 Activity = sourceChunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = state.PendingFinalizeText },
@@ -1585,6 +1650,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             new LlmReplyReadyEvent
             {
                 CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
                 RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
                 Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = outboundText },
@@ -1607,6 +1673,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             new LlmReplyReadyEvent
             {
                 CorrelationId = evt.CorrelationId,
+                RunId = ResolvePendingLlmReplyRunId(evt.CorrelationId) ?? string.Empty,
                 RegistrationId = evt.Chunk?.RegistrationId ?? string.Empty,
                 Activity = evt.Chunk?.Activity?.Clone() ?? new ChatActivity(),
                 Outbound = new MessageContent { Text = outboundText },
@@ -1649,7 +1716,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = evt.CorrelationId ?? string.Empty,
-            RunId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.RunId ?? string.Empty,
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
         };
@@ -1909,6 +1976,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
+
+    private ILongRunningBusinessIoExecutor ResolveBusinessIoExecutor() =>
+        Services.GetRequiredService<ILongRunningBusinessIoExecutor>();
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
         string? correlationId,
@@ -2417,6 +2487,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return State.PendingLlmReplyRequests.FirstOrDefault(request =>
             string.Equals(request.CorrelationId, normalizedCorrelationId, StringComparison.Ordinal));
     }
+
+    private string? ResolvePendingLlmReplyRunId(string? correlationId) =>
+        NormalizeOptional(FindPendingLlmReplyRequest(correlationId)?.RunId);
 
     private static void UpsertPendingLlmReplyRequest(
         Google.Protobuf.Collections.RepeatedField<NeedsLlmReplyEvent> field,

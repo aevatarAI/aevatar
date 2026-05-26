@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -19,13 +21,12 @@ namespace Aevatar.GAgentService.Application.Responses;
 //   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
 //   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class ResponsesCommandFacade(
-    ILLMProviderFactory providerFactory,
     IResponsesCallerScopeResolver callerScopeResolver,
     IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort responseSessionRegistrationPort,
     ILlmSessionQueryPort responseSessionQueryPort,
-    IResponsesCompletionApplicationService completionService,
+    IActorDispatchPort dispatchPort,
     IEnumerable<IResponsesToolProvider> toolProviders,
     ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
 {
@@ -187,36 +188,9 @@ public sealed class ResponsesCommandFacade(
 
         try
         {
-            var provider = providerFactory.GetDefault();
-            var completion = await completionService.StreamAsync(
-                provider,
-                plan.LlmRequest,
-                plan.ToolContextMetadata,
-                plan.ToolClassification,
-                onTextDelta,
-                ct);
-            await PersistForwardedToolCallsAsync(
-                plan.Session,
-                plan.ToolClassification,
-                completion.ForwardedToolCalls,
-                DateTimeOffset.UtcNow,
-                ct);
+            var admission = await DispatchRunAsync(plan, ct);
             await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            var completionResult = await RecordCompletionAndReadAsync(
-                plan.Session,
-                BuildSessionCompletion(
-                completion.Text,
-                completion.ForwardedToolCalls,
-                    completion.Usage,
-                    DateTimeOffset.UtcNow),
-                ct);
-            if (completionResult.Error is not null)
-                return ResponsesStreamCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            return ResponsesStreamCommandResult.FromCompleted(completionResult.Completion!);
+            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -420,34 +394,13 @@ public sealed class ResponsesCommandFacade(
     {
         try
         {
-            var provider = providerFactory.GetDefault();
-            var completion = await completionService.CollectAsync(
-                provider,
-                plan.LlmRequest,
-                plan.ToolContextMetadata,
-                plan.ToolClassification,
-                ct);
-            var forwardedToolCalls = completion.ForwardedToolCalls;
-            await PersistForwardedToolCallsAsync(plan.Session, plan.ToolClassification, forwardedToolCalls, DateTimeOffset.UtcNow, ct);
+            var admission = await DispatchRunAsync(plan, ct);
             await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            var completionResult = await RecordCompletionAndReadAsync(
-                plan.Session,
-                BuildSessionCompletion(
-                    completion.Text,
-                    forwardedToolCalls,
-                    completion.Usage,
-                    DateTimeOffset.UtcNow),
-                ct);
-            if (completionResult.Error is not null)
-                return ResponsesCreateCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            return ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
+            return ResponsesCreateCommandResult.FromAccepted(new ResponsesCreateAcceptedCommandResult(
                 plan.Normalized,
                 plan.CreatedAt.ToUnixTimeSeconds(),
-                completionResult.Completion!));
+                plan.Session,
+                admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -819,6 +772,91 @@ public sealed class ResponsesCommandFacade(
         return CompletionRecordResult.FromCompletion(snapshot.Completion);
     }
 
+    // Refactor (iter103/cluster-1 r2):
+    //   Old pattern: dispatch was followed by an immediate readmodel completion read, upgrading accepted ACK into observed completion.
+    //   New principle: this method returns only DispatchAdmission; completion must arrive through an explicit observation/readmodel path.
+    private Task<DispatchAdmission> DispatchRunAsync(
+        ResponsesCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.CreatedAt);
+        var envelope = ServiceCommandEnvelopeFactory.Create(
+            plan.Session.ActorId,
+            command,
+            command.RunId);
+        return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
+    }
+
+    private static LlmRunRequested BuildRunRequested(
+        string responseId,
+        LLMRequest request,
+        ResponsesToolClassification toolClassification,
+        DateTimeOffset requestedAt)
+    {
+        var command = new LlmRunRequested
+        {
+            ResponseId = responseId,
+            RunId = $"{responseId}:llm-run",
+            Model = request.Model ?? string.Empty,
+            RoutePreference = request.LlmControl?.NyxIdRoutePreference ?? string.Empty,
+            ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
+            OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
+            BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            RequestedAt = Timestamp.FromDateTimeOffset(requestedAt),
+        };
+        if (request.Temperature is not null)
+            command.Temperature = request.Temperature.Value;
+        if (request.MaxTokens is not null)
+            command.MaxTokens = request.MaxTokens.Value;
+        command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
+        command.ToolSelection = ToToolSelection(toolClassification);
+        return command;
+    }
+
+    private static LlmSessionRuntimeChatMessage ToRuntimeMessage(ChatMessage message)
+    {
+        var result = new LlmSessionRuntimeChatMessage
+        {
+            Role = message.Role,
+            Content = message.Content ?? string.Empty,
+            ReasoningContent = message.ReasoningContent ?? string.Empty,
+            ToolCallId = message.ToolCallId ?? string.Empty,
+        };
+        if (message.ToolCalls is { Count: > 0 })
+            result.ToolCalls.AddRange(message.ToolCalls.Select(ToRuntimeToolCall));
+        return result;
+    }
+
+    private static LlmSessionRuntimeToolCall ToRuntimeToolCall(ToolCall call) =>
+        new()
+        {
+            CallId = call.Id,
+            ToolName = call.Name,
+            ArgumentsJson = call.ArgumentsJson,
+        };
+
+    private static LlmSessionRuntimeToolSelection ToToolSelection(ResponsesToolClassification classification)
+    {
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            SubstitutedToolNames = { classification.SubstitutedToolNames },
+            AdditiveToolNames = { classification.AdditiveToolNames },
+        };
+        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
+            new LlmSessionRuntimeToolDeclaration
+            {
+                ToolName = tool.Name,
+                Description = tool.Description,
+                ParametersJson = tool.ParametersJson,
+                SchemaHash = tool.SchemaHash,
+            }));
+        return selection;
+    }
+
     private static LlmSessionCompletion BuildSessionCompletion(
         string outputText,
         IReadOnlyList<ToolCall> forwardedToolCalls,
@@ -888,54 +926,6 @@ public sealed class ResponsesCommandFacade(
                     callId,
                     previousSnapshot.ResponseId);
             }
-        }
-    }
-
-    private async Task PersistForwardedToolCallsAsync(
-        LlmSessionRegistrationResult responseSession,
-        ResponsesToolClassification toolClassification,
-        IReadOnlyList<ToolCall> toolCalls,
-        DateTimeOffset emittedAt,
-        CancellationToken ct)
-    {
-        if (toolCalls.Count == 0)
-            return;
-
-        var declarations = toolClassification.ForwardedTools.ToDictionary(static tool => tool.Name, StringComparer.Ordinal);
-        var expiry = emittedAt.AddHours(24);
-        foreach (var toolCall in toolCalls)
-        {
-            if (string.IsNullOrWhiteSpace(toolCall.Id))
-                throw new InvalidOperationException("Forwarded tool call is missing call_id.");
-            if (string.IsNullOrWhiteSpace(toolCall.Name))
-                throw new InvalidOperationException($"Forwarded tool call '{toolCall.Id}' is missing tool name.");
-            if (!declarations.TryGetValue(toolCall.Name, out var declaration))
-            {
-                throw new InvalidOperationException(
-                    $"Forwarded tool call '{toolCall.Id}' references undeclared tool '{toolCall.Name}'.");
-            }
-
-            var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
-            var call = new LlmSessionForwardedToolCall
-            {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                SchemaHash = declaration.SchemaHash,
-                Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
-                Status = LlmSessionForwardedToolCallStatus.Pending,
-                EmittedAt = Timestamp.FromDateTimeOffset(emittedAt),
-                Expiry = Timestamp.FromDateTimeOffset(expiry),
-            };
-
-            await responseSessionRegistrationPort.RecordForwardedToolCallAsync(
-                responseSession.ActorId,
-                responseSession.ResponseId,
-                call,
-                ct);
-            logger.LogDebug(
-                "Persisted forwarded Responses tool call {CallId} for response {ResponseId}.",
-                toolCall.Id,
-                responseSession.ResponseId);
         }
     }
 

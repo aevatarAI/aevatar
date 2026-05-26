@@ -36,7 +36,7 @@ namespace Aevatar.Hosting.Tests;
 public sealed class MainnetResponsesEndpointsTests
 {
     [Fact]
-    public async Task PostResponses_WithJsonRequest_ShouldReturnCompletedResponseAndPassRequestScopedBearer()
+    public async Task PostResponses_WithJsonRequest_ShouldReturnAcceptedResponseAndPassRequestScopedBearer()
     {
         var provider = new RecordingLLMProvider
         {
@@ -79,51 +79,20 @@ public sealed class MainnetResponsesEndpointsTests
         root.GetProperty("id").GetString().Should().StartWith("resp_");
         var responseId = root.GetProperty("id").GetString()!;
         root.GetProperty("object").GetString().Should().Be("response");
-        root.GetProperty("status").GetString().Should().Be("completed");
+        root.GetProperty("status").GetString().Should().Be("in_progress");
         root.GetProperty("model").GetString().Should().Be("gpt-5.4");
         root.GetProperty("max_output_tokens").GetInt32().Should().Be(128);
         root.GetProperty("temperature").GetDouble().Should().Be(0.2);
         root.GetProperty("parallel_tool_calls").GetBoolean().Should().BeTrue();
         root.GetProperty("reasoning").GetProperty("effort").ValueKind.Should().Be(JsonValueKind.Null);
         root.GetProperty("output")[0].GetProperty("type").GetString().Should().Be("message");
-        root.GetProperty("output")[0].GetProperty("content")[0].GetProperty("type").GetString()
-            .Should()
-            .Be("output_text");
-        root.GetProperty("output")[0].GetProperty("content")[0].GetProperty("text").GetString()
-            .Should()
-            .Be("pong");
-        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(3);
-        root.GetProperty("usage").GetProperty("input_tokens_details").GetProperty("cached_tokens")
-            .GetInt32()
-            .Should()
-            .Be(0);
-        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(2);
-        root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(5);
+        root.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        root.GetProperty("output")[0].GetProperty("content").GetArrayLength().Should().Be(0);
+        root.GetProperty("usage").ValueKind.Should().Be(JsonValueKind.Null);
         sessions.RecordedCompletions.Should().ContainSingle()
             .Which.Completion.OutputText.Should().Be("pong");
-        (await sessions.GetByResponseIdAsync(responseId))!
-            .Completion!.Usage.Should().Be(new TokenUsage(3, 2, 5));
-
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Model.Should().Be("gpt-5.4");
-        provider.LastRequest.MaxTokens.Should().Be(128);
-        provider.LastRequest.Temperature.Should().Be(0.2);
-        provider.LastRequest.Messages.Should().ContainSingle();
-        provider.LastRequest.Messages[0].Content.Should().Be("ping");
-        provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext(
-            "user-1",
-            "user-1",
-            responseId,
-            new LLMRequestCallerCredentials("secret-token")));
-        // The NyxID bearer is carried on the typed CallerContext.Credentials channel,
-        // NOT through LLMRequest.Metadata. Metadata is the log-shaped string-keyed bag
-        // that telemetry sinks may serialize; secret material belongs out-of-band.
-        // Tool providers read the bearer from AgentToolRequestContext (separate path).
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -131,8 +100,6 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("pong");
     }
 
     [Fact]
@@ -168,21 +135,16 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_item.added");
-        body.Should().Contain("\"type\":\"response.output_text.delta\"");
-        body.Should().Contain("\"delta\":\"po\"");
-        body.Should().Contain("\"delta\":\"ng\"");
-        body.Should().Contain("event: response.output_text.done");
-        body.Should().Contain("event: response.output_item.done");
-        body.Should().Contain("event: response.completed");
-        body.Should().Contain("\"text\":\"pong\"");
+        body.Should().Contain("event: response.in_progress");
+        body.Should().NotContain("\"type\":\"response.output_text.delta\"");
+        body.Should().NotContain("event: response.output_text.done");
+        body.Should().NotContain("event: response.completed");
         body.Should().NotContain("stream-secret");
 
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("pong");
+        sessions.RecordedCompletions.Should().ContainSingle();
+        sessions.RecordedCompletions.Should().OnlyContain(record => record.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -234,11 +196,8 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var output = doc.RootElement.GetProperty("output");
-        output.GetArrayLength().Should().Be(2);
-        output[1].GetProperty("type").GetString().Should().Be("function_call");
-        output[1].GetProperty("call_id").GetString().Should().Be("call_weather_1");
-        output[1].GetProperty("name").GetString().Should().Be("get_weather");
-        output[1].GetProperty("arguments").GetString().Should().Be("""{"city":"Singapore"}""");
+        output.GetArrayLength().Should().Be(1);
+        output[0].GetProperty("status").GetString().Should().Be("in_progress");
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().ContainSingle();
@@ -323,12 +282,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Messages[2].ToolCallId.Should().Be("call_task_1");
         sessions.ForwardedToolCalls.Should().BeEmpty();
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("output")[0].GetProperty("content")[0].GetProperty("text").GetString()
-            .Should()
-            .Be("delegated");
-        doc.RootElement.GetProperty("output").EnumerateArray()
-            .Should()
-            .NotContain(item => item.GetProperty("type").GetString() == "function_call");
+        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        doc.RootElement.GetProperty("output")[0].GetProperty("content").GetArrayLength().Should().Be(0);
     }
 
     [Fact]
@@ -1060,6 +1015,185 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task Cancel_ForeignResponse_Returns403()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_foreign",
+            "other-user",
+            "other-user",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_foreign",
+            1,
+            "resp_foreign:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_foreign/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        AssertErrorBody(
+            body,
+            "response_scope_mismatch",
+            "permission_error",
+            "response id is not visible to the current caller scope.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Cancel_OriginMismatch_Returns403()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_channel",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.Channel,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_channel",
+            1,
+            "resp_channel:registered"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_channel/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        AssertErrorBody(
+            body,
+            "response_origin_mismatch",
+            "permission_error",
+            "response id origin does not match the current ingress origin.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Cancel_ExpiredResponse_Returns400()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_expired",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Expired,
+            DateTimeOffset.UtcNow.AddHours(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_expired",
+            2,
+            "resp_expired:status:expired"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_expired/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        AssertErrorBody(
+            body,
+            "response_expired",
+            "invalid_request_error",
+            "response id refers to an expired response session.");
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithExpiredForwardedToolCallContinuation_Returns400()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:expired",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Expired,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    """{"error":"tool_call_expired","call_id":"call_1"}""",
+                    DateTimeOffset.UtcNow.AddMinutes(-5),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        AssertErrorBody(
+            body,
+            "tool_call_not_available",
+            "invalid_request_error",
+            "Forwarded tool call 'call_1' is Expired and cannot receive a result.");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithoutBearer_ShouldReturnUnauthorized()
     {
         var provider = new RecordingLLMProvider();
@@ -1107,7 +1241,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            sessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -1177,7 +1314,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            sessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -2244,7 +2384,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(responseSessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            responseSessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -2282,6 +2425,20 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static void AssertErrorBody(
+        string body,
+        string expectedCode,
+        string expectedType,
+        string expectedMessage)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var error = doc.RootElement.GetProperty("error");
+        error.GetProperty("code").GetString().Should().Be(expectedCode);
+        error.GetProperty("type").GetString().Should().Be(expectedType);
+        error.GetProperty("message").GetString().Should().Be(expectedMessage);
+        error.GetProperty("param").ValueKind.Should().Be(JsonValueKind.Null);
+    }
 
     private sealed class RecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
@@ -2739,6 +2896,344 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesToolProviderContext context,
             CancellationToken ct = default) =>
             ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class RecordingLlmRunDispatchPort(
+        RecordingLLMProvider provider,
+        RecordingResponseSessionStore sessions,
+        IEnumerable<IResponsesToolProvider> toolProviders) : IActorDispatchPort
+    {
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            var command = envelope.Payload.Unpack<LlmRunRequested>();
+            var tools = await BuildEffectiveToolsAsync(command, ct);
+            var messages = command.Messages.Select(ToChatMessage).ToList();
+            var outputText = new StringBuilder();
+            TokenUsage? usage = null;
+
+            for (var round = 0; round < 8; round++)
+            {
+                var request = new LLMRequest
+                {
+                    Messages = [.. messages],
+                    RequestId = command.ResponseId,
+                    Metadata = BuildRequestMetadata(command),
+                    CallerContext = new LLMRequestCallerContext(
+                        command.ScopeId,
+                        command.OwnerSubject,
+                        command.ResponseId,
+                        new LLMRequestCallerCredentials(command.BearerToken)),
+                    Tools = tools,
+                    LlmControl = new LLMControlContext(
+                        NyxIdAccessToken: null,
+                        NyxIdOrgToken: null,
+                        SenderNyxIdAccessToken: null,
+                        ModelOverride: null,
+                        NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference)
+                            ? null
+                            : command.RoutePreference,
+                        MaxToolRoundsOverride: null,
+                        UserMemoryPrompt: null),
+                    Model = string.IsNullOrWhiteSpace(command.Model) ? null : command.Model,
+                    Temperature = command.HasTemperature ? command.Temperature : null,
+                    MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
+                };
+
+                var accumulatedToolCalls = new TestToolCallAccumulator();
+                await foreach (var chunk in provider.ChatStreamAsync(request, ct))
+                {
+                    var delta = ExtractChunkText(chunk);
+                    if (!string.IsNullOrEmpty(delta))
+                        outputText.Append(delta);
+                    if (chunk.Usage is not null)
+                        usage = chunk.Usage;
+                    if (chunk.DeltaToolCall is not null)
+                        accumulatedToolCalls.TrackDelta(chunk.DeltaToolCall);
+                    if (chunk.IsLast)
+                        break;
+                }
+
+                var toolCalls = accumulatedToolCalls.BuildToolCalls();
+                var forwarded = SelectForwardedToolCalls(toolCalls, command.ToolSelection);
+                foreach (var toolCall in forwarded)
+                {
+                    await sessions.RecordForwardedToolCallAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildForwardedToolCall(toolCall, command.ToolSelection),
+                        ct);
+                }
+
+                if (forwarded.Count > 0)
+                {
+                    await sessions.RecordCompletionAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildCompletion(outputText.ToString(), forwarded, usage),
+                        ct);
+                    return DispatchAdmissionFactory.Create(actorId, envelope);
+                }
+
+                var local = SelectLocalToolCalls(toolCalls, command.ToolSelection, tools);
+                if (local.Count == 0)
+                {
+                    await sessions.RecordCompletionAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildCompletion(outputText.ToString(), [], usage),
+                        ct);
+                    return DispatchAdmissionFactory.Create(actorId, envelope);
+                }
+
+                messages.Add(new ChatMessage
+                {
+                    Role = "assistant",
+                    ToolCalls = local,
+                });
+
+                var localTools = tools
+                    .Where(static tool => tool is not ForwardedTestAgentTool)
+                    .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+                    .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+                foreach (var toolCall in local)
+                {
+                    var result = localTools.TryGetValue(toolCall.Name, out var tool)
+                        ? await tool.ExecuteAsync(
+                            string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
+                            ct)
+                        : "{}";
+                    messages.Add(ChatMessage.Tool(toolCall.Id, result));
+                }
+            }
+
+            await sessions.RecordCompletionAsync(
+                actorId,
+                command.ResponseId,
+                BuildCompletion(outputText.ToString(), [], usage),
+                ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
+
+        private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
+            LlmRunRequested command,
+            CancellationToken ct)
+        {
+            var context = new ResponsesToolProviderContext(
+                new ResponsesToolProviderCallerScope(command.ScopeId, command.OwnerSubject, LlmSessionOriginKind.ApiKey.ToString()),
+                BuildRequestMetadata(command));
+            var providers = toolProviders.ToArray();
+            var substituteTools = new List<IAgentTool>();
+            var additiveTools = new List<IAgentTool>();
+            foreach (var toolProvider in providers)
+            {
+                substituteTools.AddRange(await toolProvider.GetSubstituteToolsAsync(context, ct));
+                additiveTools.AddRange(await toolProvider.GetAdditiveToolsAsync(context, ct));
+            }
+
+            var substitutedNames = (command.ToolSelection?.SubstitutedToolNames ?? [])
+                .ToHashSet(StringComparer.Ordinal);
+            var additiveNames = (command.ToolSelection?.AdditiveToolNames ?? [])
+                .ToHashSet(StringComparer.Ordinal);
+            var substitutesByName = substituteTools
+                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+            var effective = new List<IAgentTool>();
+            foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
+            {
+                if (substitutedNames.Contains(declaration.ToolName) &&
+                    substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
+                    effective.Add(substitute);
+                else
+                    effective.Add(new ForwardedTestAgentTool(declaration));
+            }
+
+            var names = effective.Select(static tool => tool.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var substitutedName in substitutedNames)
+            {
+                if (names.Contains(substitutedName))
+                    continue;
+                if (substitutesByName.TryGetValue(substitutedName, out var substitute) &&
+                    names.Add(substitute.Name))
+                {
+                    effective.Add(substitute);
+                }
+            }
+
+            foreach (var additive in additiveTools)
+            {
+                if (additiveNames.Contains(additive.Name) && names.Add(additive.Name))
+                    effective.Add(additive);
+            }
+
+            return effective;
+        }
+
+        private static Dictionary<string, string> BuildRequestMetadata(LlmRunRequested command) =>
+            new(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
+                ["scope_id"] = command.ScopeId,
+            };
+
+        private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
+            new()
+            {
+                Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
+                Content = message.Content,
+                ReasoningContent = string.IsNullOrWhiteSpace(message.ReasoningContent) ? null : message.ReasoningContent,
+                ToolCallId = string.IsNullOrWhiteSpace(message.ToolCallId) ? null : message.ToolCallId,
+                ToolCalls = message.ToolCalls.Count == 0
+                    ? null
+                    : message.ToolCalls.Select(static call => new ToolCall
+                    {
+                        Id = call.CallId,
+                        Name = call.ToolName,
+                        ArgumentsJson = call.ArgumentsJson,
+                    }).ToArray(),
+            };
+
+        private static string? ExtractChunkText(LLMStreamChunk chunk)
+        {
+            if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
+                return chunk.DeltaContent;
+            return chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part
+                ? part.Text
+                : null;
+        }
+
+        private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(
+            IReadOnlyList<ToolCall> toolCalls,
+            LlmSessionRuntimeToolSelection? selection)
+        {
+            if (selection is null || selection.ForwardedTools.Count == 0)
+                return [];
+
+            var substituted = selection.SubstitutedToolNames.ToHashSet(StringComparer.Ordinal);
+            var forwarded = selection.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Where(name => !substituted.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            return toolCalls.Where(call => forwarded.Contains(call.Name)).ToArray();
+        }
+
+        private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
+            IReadOnlyList<ToolCall> toolCalls,
+            LlmSessionRuntimeToolSelection? selection,
+            IReadOnlyList<IAgentTool> tools)
+        {
+            var forwarded = SelectForwardedToolCalls(toolCalls, selection)
+                .Select(static call => call.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            var localNames = tools
+                .Select(static tool => tool.Name)
+                .Where(name => !forwarded.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            return toolCalls.Where(call => localNames.Contains(call.Name)).ToArray();
+        }
+
+        private static LlmSessionForwardedToolCall BuildForwardedToolCall(
+            ToolCall toolCall,
+            LlmSessionRuntimeToolSelection? selection)
+        {
+            var declaration = selection?.ForwardedTools
+                .FirstOrDefault(tool => string.Equals(tool.ToolName, toolCall.Name, StringComparison.Ordinal));
+            return new LlmSessionForwardedToolCall
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                SchemaHash = declaration?.SchemaHash ?? string.Empty,
+                Arguments = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+                Status = LlmSessionForwardedToolCallStatus.Pending,
+                EmittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Expiry = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(24)),
+            };
+        }
+
+        private static LlmSessionCompletion BuildCompletion(
+            string outputText,
+            IReadOnlyList<ToolCall> forwardedToolCalls,
+            TokenUsage? usage)
+        {
+            var completion = new LlmSessionCompletion
+            {
+                OutputText = outputText,
+                CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            };
+            if (usage is not null)
+            {
+                completion.Usage = new LlmSessionTokenUsage
+                {
+                    PromptTokens = usage.PromptTokens,
+                    CompletionTokens = usage.CompletionTokens,
+                    TotalTokens = usage.TotalTokens,
+                };
+            }
+
+            completion.ToolCalls.AddRange(forwardedToolCalls.Select(static call => new LlmSessionCompletedToolCall
+            {
+                CallId = call.Id,
+                ToolName = call.Name,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson),
+            }));
+            return completion;
+        }
+
+        private sealed class TestToolCallAccumulator
+        {
+            private readonly Dictionary<string, (string Name, StringBuilder Arguments)> _calls = new(StringComparer.Ordinal);
+            private readonly List<string> _order = [];
+            private int _anonymousCounter;
+
+            public void TrackDelta(ToolCall delta)
+            {
+                var id = string.IsNullOrWhiteSpace(delta.Id)
+                    ? $"anonymous-{_anonymousCounter++}"
+                    : delta.Id;
+                if (!_calls.TryGetValue(id, out var current))
+                {
+                    current = (delta.Name, new StringBuilder());
+                    _calls[id] = current;
+                    _order.Add(id);
+                }
+
+                if (!string.IsNullOrWhiteSpace(delta.Name))
+                    current.Name = delta.Name;
+                if (!string.IsNullOrEmpty(delta.ArgumentsJson))
+                    current.Arguments.Append(delta.ArgumentsJson);
+                _calls[id] = current;
+            }
+
+            public IReadOnlyList<ToolCall> BuildToolCalls() =>
+                _order.Select(id =>
+                {
+                    var current = _calls[id];
+                    return new ToolCall
+                    {
+                        Id = id,
+                        Name = current.Name,
+                        ArgumentsJson = current.Arguments.ToString(),
+                    };
+                }).ToArray();
+        }
+
+        private sealed class ForwardedTestAgentTool(LlmSessionRuntimeToolDeclaration declaration) : IAgentTool
+        {
+            public string Name { get; } = declaration.ToolName;
+
+            public string Description { get; } = declaration.Description;
+
+            public string ParametersSchema { get; } = declaration.ParametersJson;
+
+            public bool IsReadOnly => true;
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+                throw new InvalidOperationException("Forwarded test tool must not execute locally.");
+        }
     }
 
     private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

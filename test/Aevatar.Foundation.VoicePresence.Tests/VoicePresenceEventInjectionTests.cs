@@ -132,6 +132,28 @@ public class VoicePresenceEventInjectionTests
     }
 
     [Fact]
+    public async Task Duplicate_event_should_be_dropped_across_module_instances_from_actor_owned_dedupe_fence()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
+        var provider = new RecordingVoiceProvider();
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(roleAgent);
+        var firstModule = CreateModule(provider, timeProvider: timeProvider);
+        var secondModule = CreateModule(provider, timeProvider: timeProvider);
+        var envelope = CreateExternalEnvelope("sensor-1", "temp-high", timeProvider.GetUtcNow());
+
+        await firstModule.InitializeAsync(CancellationToken.None);
+        await secondModule.InitializeAsync(CancellationToken.None);
+
+        await firstModule.HandleAsync(envelope, ctx, CancellationToken.None);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(500));
+        await secondModule.HandleAsync(envelope, ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        roleAgent.VoicePresence["voice_presence"].EventDedupeFence.ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task Pending_buffer_should_drop_oldest_event_when_capacity_is_reached()
     {
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));

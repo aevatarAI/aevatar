@@ -1686,12 +1686,12 @@ public class NyxIdChatEndpointsCoverageTests
         activity.Type.Should().Be(ActivityType.CardAction);
         var cardAction = activity.Content.CardAction;
         cardAction.Should().NotBeNull();
-        cardAction!.Arguments.Should().ContainKey("actor_id").WhoseValue.Should().Be("workflow-actor-1");
-        cardAction.Arguments.Should().ContainKey("run_id").WhoseValue.Should().Be("run-1");
-        cardAction.Arguments.Should().ContainKey("step_id").WhoseValue.Should().Be("approval-1");
-        cardAction.Arguments.Should().ContainKey("approved").WhoseValue.Should().Be("False");
-        cardAction.FormFields.Should().ContainKey("user_input")
-            .WhoseValue.Should().Be("Need stronger hook");
+        cardAction!.WorkflowResume.Should().NotBeNull();
+        cardAction.WorkflowResume!.ActorId.Should().Be("workflow-actor-1");
+        cardAction.WorkflowResume.RunId.Should().Be("run-1");
+        cardAction.WorkflowResume.StepId.Should().Be("approval-1");
+        cardAction.WorkflowResume.Approved.Should().BeFalse();
+        cardAction.WorkflowResume.UserInput.Should().Be("Need stronger hook");
     }
 
     [Fact]

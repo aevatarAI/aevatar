@@ -100,6 +100,8 @@ export function getInvokeRunStatusLabel(
       return '运行中';
     case 'success':
       return '成功';
+    case 'cancelled':
+      return '已停止';
     case 'error':
       return '失败';
     default:
@@ -131,7 +133,7 @@ export function getInvokeStatusTone(status: InvokeResultState['status']): {
     };
   }
 
-  if (status === 'error') {
+  if (status === 'error' || status === 'cancelled') {
     return {
       background: studioInvokeColors.dangerSoft,
       border: studioInvokeColors.dangerBorder,

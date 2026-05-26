@@ -13,6 +13,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
@@ -1415,7 +1416,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1523,7 +1524,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1599,7 +1600,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1753,7 +1754,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1824,7 +1825,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -2080,7 +2081,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-orders-1",
             new PreparedServiceRevisionArtifact
@@ -2163,7 +2164,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-member-a-1",
             new PreparedServiceRevisionArtifact
@@ -2251,7 +2252,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-team-member-a-1",
             new PreparedServiceRevisionArtifact
@@ -2380,7 +2381,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-orders-1",
             new PreparedServiceRevisionArtifact
@@ -2920,7 +2921,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldPackPayloadJson_AsTypedAny_UsingExplicitRevision()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -2966,7 +2967,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonTypeUrlMissingFromRevision()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -2991,7 +2992,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonIsMalformed()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -4565,7 +4566,7 @@ public sealed class ScopeServiceEndpointsTests
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
-            FakeServiceRevisionArtifactStore artifactStore,
+            FakeServiceRevisionCatalogQueryReader revisionCatalog,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
@@ -4588,7 +4589,7 @@ public sealed class ScopeServiceEndpointsTests
             ServingQueryPort = servingQueryPort;
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
-            ArtifactStore = artifactStore;
+            RevisionCatalog = revisionCatalog;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
@@ -4629,7 +4630,7 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
 
-        public FakeServiceRevisionArtifactStore ArtifactStore { get; }
+        public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
         public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
@@ -4669,7 +4670,7 @@ public sealed class ScopeServiceEndpointsTests
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
-            var artifactStore = new FakeServiceRevisionArtifactStore();
+            var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
@@ -4707,7 +4708,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
-            builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
@@ -4825,7 +4826,7 @@ public sealed class ScopeServiceEndpointsTests
                 servingQueryPort,
                 serviceCatalogReader,
                 trafficViewReader,
-                artifactStore,
+                revisionCatalog,
                 teamEntryMemberResolver,
                 interactionService,
                 staticGAgentStreamInvocationPort,
@@ -5325,20 +5326,51 @@ public sealed class ScopeServiceEndpointsTests
             Task.FromResult(View);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
-        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
 
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
+        public Task UpsertRevisionAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
-            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _revisionCatalog[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
         }
 
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
-            return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisions = _revisionCatalog
+                .Where(x => x.Key.StartsWith(serviceKey + ":", StringComparison.Ordinal))
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
         }
     }
 

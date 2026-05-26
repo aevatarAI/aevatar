@@ -458,6 +458,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         emitted.Should().ContainSingle();
         emitted[0].RunFinished.ThreadId.Should().Be("actor-1");
         emitted[0].RunFinished.RunId.Should().Be("cmd-1");
+        emitted[0].RunFinished.Result.Unpack<GAgentDraftRunResultPayload>().Output.Should().BeEmpty();
 
         var terminalQuery = new RecordingGAgentRunTerminalQueryPort
         {
