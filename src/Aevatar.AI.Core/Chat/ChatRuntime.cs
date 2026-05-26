@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -302,27 +303,21 @@ public sealed class ChatRuntime
         var skillRecoveryCount = 0;
         var hasStreamedTextContent = false;
         var skillRecovery = baseRequest.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty;
-        if (skillRecovery.RequireInitialOrnnSearch &&
-            SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
-                skillRecovery,
-                pendingHistoryMessages,
-                finalContent: null,
-                skillRecoveryCount,
-                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
-                out var initialRecoveryDirective))
+        if (skillRecovery.RequireInitialOrnnSearch)
         {
             var recoveryExecutor = new StreamingToolExecutor(
                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
                 toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
-            await ApplySkillRecoveryDirectiveAsync(
-                initialRecoveryDirective,
+            skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
+                skillRecovery,
+                skillRecoveryCount,
+                finalContent: null,
+                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
                 recoveryExecutor,
                 messages,
                 pendingHistoryMessages,
                 runToken);
-            if (initialRecoveryDirective.ConsumesOrnnSearchAttempt)
-                skillRecoveryCount++;
         }
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
@@ -398,14 +393,15 @@ public sealed class ChatRuntime
                         out var recoveryDirective))
                 {
                     streamingExecutor.Discard(streamingToolState);
-                    await ApplySkillRecoveryDirectiveAsync(
-                        recoveryDirective,
+                    skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
+                        skillRecovery,
+                        skillRecoveryCount,
+                        roundResult.Content,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
                         streamingExecutor,
                         messages,
                         pendingHistoryMessages,
                         runToken);
-                    if (recoveryDirective.ConsumesOrnnSearchAttempt)
-                        skillRecoveryCount++;
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -536,14 +532,15 @@ public sealed class ChatRuntime
                         _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                         requestMetadata: baseRequest.Metadata,
                         toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
-                    await ApplySkillRecoveryDirectiveAsync(
-                        recoveryDirective,
+                    skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
+                        skillRecovery,
+                        skillRecoveryCount,
+                        roundResult.Content,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
                         recoveryExecutor,
                         messages,
                         pendingHistoryMessages,
                         runToken);
-                    if (recoveryDirective.ConsumesOrnnSearchAttempt)
-                        skillRecoveryCount++;
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -739,6 +736,43 @@ public sealed class ChatRuntime
         }
     }
 
+    private static async Task<int> ApplySkillRecoveryDirectivesAsync(
+        AgentSkillRecoveryContext skillRecovery,
+        int skillRecoveryCount,
+        string? finalContent,
+        string? callIdPrefix,
+        StreamingToolExecutor executor,
+        List<ChatMessage> messages,
+        List<ChatMessage> pendingHistoryMessages,
+        CancellationToken ct)
+    {
+        const int maxChainedDirectives = 4;
+        for (var i = 0; i < maxChainedDirectives; i++)
+        {
+            if (!SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
+                    skillRecovery,
+                    pendingHistoryMessages,
+                    finalContent,
+                    skillRecoveryCount,
+                    callIdPrefix,
+                    out var directive))
+            {
+                break;
+            }
+
+            await ApplySkillRecoveryDirectiveAsync(directive, executor, messages, pendingHistoryMessages, ct)
+                .ConfigureAwait(false);
+            if (directive.ConsumesOrnnSearchAttempt)
+                skillRecoveryCount++;
+
+            // A fresh tool result should determine the next chained action. Keeping the prior
+            // final failure text would make a no-match recovery search immediately re-trigger.
+            finalContent = null;
+        }
+
+        return skillRecoveryCount;
+    }
+
     private async Task RunStopHookAsync(
         string? finalContent,
         IReadOnlyList<ChatMessage> pendingHistoryMessages,
@@ -780,6 +814,7 @@ public sealed class ChatRuntime
         //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
         var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
+        var llmStartedAt = Stopwatch.GetTimestamp();
 
         var llmCallContext = new LLMCallContext
         {
@@ -893,6 +928,7 @@ public sealed class ChatRuntime
         };
         _history.Budget.RecordUsage(response.Usage);
         llmHookContext.LLMResponse = response;
+        llmHookContext.Duration = Stopwatch.GetElapsedTime(llmStartedAt);
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
 
         roundScope.Result = new StreamingRoundResult(response.Content, response.ReasoningContent, response.ToolCalls, llmCallContext.Terminate, response.FinishReason ?? streamedFinishReason);

@@ -357,6 +357,7 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Be("daily report from loaded skill");
+        providerFactory.Requests.Should().ContainSingle();
         providerFactory.ObservedToolCalls.Should().Contain("ornn_search_skills");
         providerFactory.ObservedToolCalls.Should().Contain("use_skill");
         providerFactory.Requests.Any(request =>
@@ -408,7 +409,7 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Be("recovered daily report");
-        providerFactory.Requests.Should().HaveCountGreaterThanOrEqualTo(4);
+        providerFactory.Requests.Should().HaveCount(3);
         providerFactory.Requests.Any(request =>
             request.Messages.Any(message =>
                 message.Role == "assistant" &&
@@ -458,6 +459,7 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Be("goal command from loaded skill");
+        providerFactory.Requests.Should().ContainSingle();
         providerFactory.ObservedToolCalls.Should().Contain("ornn_search_skills");
         providerFactory.ObservedToolCalls.Should().Contain("use_skill");
         providerFactory.Requests.Any(request =>
