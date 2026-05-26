@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.VoicePresence;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.Mainnet.Host.Api.Voice;
@@ -37,10 +38,10 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ForwardToGAgent("voice-agent-default", "voice_presence_openai"),
             []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-default"]);
-        var stateTransitions = new List<VoicePresenceState>();
+        var statusTransitions = new List<VoicePresenceRuntimeStatus>();
         var resolver = RecordingVoiceSessionResolver.Attached(
-            CreateSessionWithStateMachine(stateTransitions),
-            stateTransitions);
+            CreateSessionWithRuntimeState(statusTransitions),
+            statusTransitions);
         using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
         var context = CreateVoiceContext(app, "/ws/voice?codec=pcm16&sample_rate_hz=24000");
         context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.CloseReceived)));
@@ -53,11 +54,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
             request.ActorId == "voice-agent-default" &&
             request.ModuleName == "voice_presence_openai");
         catalog.Requests.Should().ContainSingle(request => request.AgentId == "voice-agent-default");
-        stateTransitions.Should().Equal(
-            VoicePresenceState.Idle,
-            VoicePresenceState.UserSpeaking,
-            VoicePresenceState.ResponseInProgress,
-            VoicePresenceState.AudioDraining);
+        statusTransitions.Should().Equal(
+            VoicePresenceRuntimeStatus.Idle,
+            VoicePresenceRuntimeStatus.UserSpeaking,
+            VoicePresenceRuntimeStatus.ResponseInProgress,
+            VoicePresenceRuntimeStatus.AudioDraining);
     }
 
     [Fact]
@@ -538,21 +539,29 @@ public sealed class PolicyAwareVoiceEndpointsTests
             detachTransportAsync: static (_, _) => Task.CompletedTask,
             pcmSampleRateHz: 24000);
 
-    private static VoicePresenceSession CreateSessionWithStateMachine(List<VoicePresenceState> transitions)
+    private static VoicePresenceSession CreateSessionWithRuntimeState(List<VoicePresenceRuntimeStatus> transitions)
     {
-        var stateMachine = new VoicePresenceStateMachine();
-        transitions.Add(stateMachine.State);
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        transitions.Add(runtimeState.Status);
         return new VoicePresenceSession(
             isInitialized: static () => true,
             isTransportAttached: static () => false,
             attachTransportAsync: (_, _) =>
             {
-                stateMachine.OnSpeechStarted();
-                transitions.Add(stateMachine.State);
-                stateMachine.OnResponseStarted(1);
-                transitions.Add(stateMachine.State);
-                stateMachine.OnResponseDone(1);
-                transitions.Add(stateMachine.State);
+                runtimeState.Status = VoicePresenceRuntimeStatus.UserSpeaking;
+                transitions.Add(runtimeState.Status);
+                runtimeState.CurrentResponseId = 1;
+                runtimeState.NextResponseId = 2;
+                runtimeState.Status = VoicePresenceRuntimeStatus.ResponseInProgress;
+                transitions.Add(runtimeState.Status);
+                runtimeState.Status = VoicePresenceRuntimeStatus.AudioDraining;
+                transitions.Add(runtimeState.Status);
                 return Task.CompletedTask;
             },
             detachTransportAsync: static (_, _) => Task.CompletedTask,
@@ -628,19 +637,19 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         private RecordingVoiceSessionResolver(
             VoicePresenceSessionResolution resolution,
-            IReadOnlyList<VoicePresenceState>? stateTransitions = null)
+            IReadOnlyList<VoicePresenceRuntimeStatus>? statusTransitions = null)
         {
             _resolution = resolution;
-            StateTransitions = stateTransitions ?? [];
+            StatusTransitions = statusTransitions ?? [];
         }
 
         public List<VoicePresenceSessionRequest> Requests { get; } = [];
-        public IReadOnlyList<VoicePresenceState> StateTransitions { get; }
+        public IReadOnlyList<VoicePresenceRuntimeStatus> StatusTransitions { get; }
 
         public static RecordingVoiceSessionResolver Attached(
             VoicePresenceSession session,
-            IReadOnlyList<VoicePresenceState>? stateTransitions = null) =>
-            new(VoicePresenceSessionResolution.LeaseAcceptedAttached(session), stateTransitions);
+            IReadOnlyList<VoicePresenceRuntimeStatus>? statusTransitions = null) =>
+            new(VoicePresenceSessionResolution.LeaseAcceptedAttached(session), statusTransitions);
 
         public static RecordingVoiceSessionResolver PendingAttach(VoicePresenceSession session) =>
             new(VoicePresenceSessionResolution.LeaseAcceptedPendingAttach(session));
