@@ -15,6 +15,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
+// Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+//   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+//   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
@@ -105,7 +108,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var workItem = request with
         {
             Request = request.Request.Clone(),
-            StepState = request.StepState.Clone(),
         };
         // Refactor (iter99/cluster-596-phase-e): Old pattern: executor owned the whole multi-round LLM/tool loop.
         // New principle: AgentRunGAgent owns per-step continuation; executor performs exactly one LLM IO step.
@@ -127,7 +129,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var workItem = request with
         {
             Request = request.Request.Clone(),
-            StepState = request.StepState.Clone(),
         };
         // Refactor (iter99/cluster-596-phase-e): Old pattern: tool execution stayed inside ChatRuntime's multi-round loop.
         // New principle: a typed self-message asks for one tool IO step, then actor reconciles the result.
@@ -178,6 +179,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         AgentRunReplyStepExecutionRequest workItem,
         CancellationToken ct)
     {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
@@ -217,17 +221,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (streamingState is not null)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
-        var nextState = workItem.StepState.Clone();
-        nextState.NextStepIndex = workItem.StepIndex + 1;
-        nextState.AccumulatedText = output.ToString();
-        AddUsage(nextState, llmResult.Usage);
-        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
-            nextState.OutboundIntent = outboundIntent.Clone();
-        if (!string.IsNullOrEmpty(llmResult.FinishReason))
-            nextState.LastFinishReason = llmResult.FinishReason;
-        if (!string.IsNullOrEmpty(llmResult.Content))
-            nextState.HasStreamedTextContent = true;
-
         var effectiveContent = llmResult.Content;
         var effectiveToolCalls = llmResult.ToolCalls;
         if (effectiveToolCalls is not { Count: > 0 } && !workItem.StepState.FinalNoToolsStep && effectiveContent is not null)
@@ -240,22 +233,20 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             }
         }
 
-        nextState.PendingToolCalls.Clear();
-        if (effectiveToolCalls is { Count: > 0 })
-            nextState.PendingToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
-
-        if (!string.IsNullOrEmpty(effectiveContent) ||
-            !string.IsNullOrEmpty(llmResult.ReasoningContent) ||
-            effectiveToolCalls is { Count: > 0 })
+        var result = new AgentRunLlmStepResult
         {
-            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(new ChatMessage
-            {
-                Role = "assistant",
-                Content = effectiveContent,
-                ReasoningContent = llmResult.ReasoningContent,
-                ToolCalls = effectiveToolCalls,
-            }));
-        }
+            AccumulatedText = output.ToString(),
+            Content = effectiveContent ?? string.Empty,
+            ReasoningContent = llmResult.ReasoningContent ?? string.Empty,
+            FinishReason = llmResult.FinishReason ?? string.Empty,
+            HasStreamedTextContent = !string.IsNullOrEmpty(llmResult.Content),
+        };
+        if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
+            result.Usage = usage;
+        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
+            result.OutboundIntent = outboundIntent.Clone();
+        if (effectiveToolCalls is { Count: > 0 })
+            result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
 
         return new AgentRunNextLlmStepRequestedEvent
         {
@@ -265,7 +256,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Attempt = workItem.Attempt,
             StepIndex = workItem.StepIndex + 1,
             Request = request.Clone(),
-            StepState = nextState,
+            LlmStepResult = result,
         };
     }
 
@@ -273,6 +264,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         AgentRunReplyStepExecutionRequest workItem,
         CancellationToken ct)
     {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
         var generator = RequireStepGenerator();
         var plan = await generator.BuildStepPlanAsync(
@@ -286,16 +280,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
             .ConfigureAwait(false);
 
-        var nextState = workItem.StepState.Clone();
-        nextState.NextStepIndex = workItem.StepIndex + 1;
-        nextState.PendingToolCalls.Clear();
-        foreach (var result in results)
+        var toolStepResult = new AgentRunToolStepResult
         {
-            nextState.Messages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result)));
+            AdvanceRound = true,
+        };
+        foreach (var toolResult in results)
+        {
+            toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
+                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.Result)));
         }
-
-        nextState.Round++;
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -305,7 +298,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Attempt = workItem.Attempt,
             StepIndex = workItem.StepIndex + 1,
             Request = request.Clone(),
-            StepState = nextState,
+            ToolStepResult = toolStepResult,
         };
     }
 
@@ -371,16 +364,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.RunId,
                 workItem.RunActorId);
         }
-    }
-
-    private static void AddUsage(AgentRunReplyStepState state, TokenUsage? usage)
-    {
-        if (usage is null)
-            return;
-        state.AggregatedUsage ??= new AgentRunReplyTokenUsage();
-        state.AggregatedUsage.PromptTokens += usage.PromptTokens;
-        state.AggregatedUsage.CompletionTokens += usage.CompletionTokens;
-        state.AggregatedUsage.TotalTokens += usage.TotalTokens;
     }
 
     private async Task DispatchToRunActorAsync<TCommand>(
