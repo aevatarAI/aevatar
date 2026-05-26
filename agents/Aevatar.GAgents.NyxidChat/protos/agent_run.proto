@@ -127,6 +127,27 @@ message AgentRunReplyStepState {
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
 }
 
+// Typed LLM IO facts returned by the executor. The run actor reconciles these
+// facts with its current AgentRunReplyStepState before persisting the next
+// waterline.
+message AgentRunLlmStepResult {
+  string accumulated_text = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated AgentRunToolCall tool_calls = 4;
+  AgentRunReplyTokenUsage usage = 5;
+  string finish_reason = 6;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
+  bool has_streamed_text_content = 8;
+}
+
+// Typed tool IO facts returned by the executor. The run actor owns round
+// advancement and message/state persistence.
+message AgentRunToolStepResult {
+  repeated AgentRunChatMessage result_messages = 1;
+  bool advance_round = 2;
+}
+
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
 // a short-lived relay reply_token; AgentRunGAgent must never persist that
 // credential into AgentRunGAgentState, AgentRun*Event facts, or durable
@@ -223,7 +244,7 @@ message AgentRunNextLlmStepRequestedEvent {
   int32 attempt = 4;
   int32 step_index = 5;
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
-  AgentRunReplyStepState step_state = 7;
+  AgentRunLlmStepResult llm_step_result = 7;
 }
 
 // Typed self-message: request the next single tool IO step. The nested request
@@ -235,7 +256,7 @@ message AgentRunNextToolStepRequestedEvent {
   int32 attempt = 4;
   int32 step_index = 5;
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
-  AgentRunReplyStepState step_state = 7;
+  AgentRunToolStepResult tool_step_result = 7;
 }
 
 // Transient command for executor failures that did not produce a normal reply
