@@ -351,6 +351,63 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
     }
 
     [Fact]
+    public async Task HandleEnvelopeAsync_ShouldPublishCommittedFactOutcome_WhenDispatcherReturnsCommittedFact()
+    {
+        var outcomePublisher = new RecordingOutcomePublisher();
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            [
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = request.ActorId,
+                    DefinitionActorId = request.DefinitionActorId,
+                    ScriptId = request.ScriptId,
+                    Revision = request.Revision,
+                    RunId = "run-outcome",
+                    CommandId = "fact-command",
+                    CorrelationId = "correlation-outcome",
+                    EventSequence = 1,
+                    EventType = ScriptSources.UppercaseEventTypeUrl,
+                    DomainEventPayload = Any.Pack(new SimpleTextEvent
+                    {
+                        CommandId = "fact-command",
+                        Current = new SimpleTextReadModel
+                        {
+                            HasValue = true,
+                            Value = "OUTCOME",
+                        },
+                    }),
+                    StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+                    ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+                    StateVersion = request.CurrentStateVersion + 1,
+                    OccurredAtUnixTimeMs = 1234,
+                },
+            ]),
+            outcomePublisher: outcomePublisher);
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-outcome",
+            CommandId = "run-command",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "fact-command",
+                Value = "hello",
+            }),
+        }));
+
+        outcomePublisher.CommittedFacts.Should().ContainSingle();
+        var published = outcomePublisher.CommittedFacts.Single();
+        published.Fact.RunId.Should().Be("run-outcome");
+        published.Fact.CommandId.Should().Be("fact-command");
+        published.Fact.StateVersion.Should().Be(2);
+    }
+
+    [Fact]
     public async Task HandleEnvelopeAsync_ShouldPreserveBindingValues_WhenCommittedFactOmitsOptionalFields()
     {
         var harness = CreateHarness(
@@ -455,10 +512,16 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
 
     private static BranchCoverageHarness CreateHarness(
         IScriptBehaviorDispatcher? dispatcher = null,
-        IScriptBehaviorRuntimeCapabilityFactory? capabilityFactory = null)
+        IScriptBehaviorRuntimeCapabilityFactory? capabilityFactory = null,
+        IScriptCommandOutcomePublisher? outcomePublisher = null)
     {
         var eventStore = new InMemoryEventStore();
-        var agent = new ScriptBehaviorGAgent(dispatcher ?? new NoOpDispatcher(), capabilityFactory ?? new NoOpCapabilityFactory(), CreateArtifactResolver(), new ProtobufMessageCodec())
+        var agent = new ScriptBehaviorGAgent(
+            dispatcher ?? new NoOpDispatcher(),
+            capabilityFactory ?? new NoOpCapabilityFactory(),
+            CreateArtifactResolver(),
+            new ProtobufMessageCodec(),
+            outcomePublisher)
         {
             EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(eventStore),
@@ -627,6 +690,42 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingOutcomePublisher : IScriptCommandOutcomePublisher
+    {
+        public List<(string CommandId, ScriptBehaviorBoundEvent Bound)> Bounds { get; } = [];
+        public List<(string CommandId, ScriptDomainFactCommitted Fact)> CommittedFacts { get; } = [];
+
+        public Task<ScriptBehaviorBoundEvent> ObserveBoundAsync(
+            string commandId,
+            CancellationToken ct) =>
+            Task.FromCanceled<ScriptBehaviorBoundEvent>(ct.IsCancellationRequested ? ct : new CancellationToken(true));
+
+        public Task<ScriptDomainFactCommitted> ObserveCommittedFactAsync(
+            string commandId,
+            CancellationToken ct) =>
+            Task.FromCanceled<ScriptDomainFactCommitted>(ct.IsCancellationRequested ? ct : new CancellationToken(true));
+
+        public Task PublishBoundAsync(
+            string commandId,
+            ScriptBehaviorBoundEvent bound,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Bounds.Add((commandId, bound.Clone()));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedFactAsync(
+            string commandId,
+            ScriptDomainFactCommitted fact,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            CommittedFacts.Add((commandId, fact.Clone()));
             return Task.CompletedTask;
         }
     }
