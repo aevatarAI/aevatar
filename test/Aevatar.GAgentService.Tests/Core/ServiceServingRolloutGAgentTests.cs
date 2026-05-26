@@ -8,7 +8,6 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -521,7 +520,7 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceServingSetManager_ShouldResolveTargetsFromDeploymentAndArtifact()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "rev-1",
@@ -604,7 +603,7 @@ public sealed class ServiceServingRolloutGAgentTests
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var serviceKey = ServiceKeys.Build(identity);
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
 
         var missingRevisionAgent = CreateServingSetAgent(
             new InMemoryEventStore(),
@@ -708,7 +707,7 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceServingSetManager_ShouldPreserveExplicitServingFieldsDuringResolution()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "rev-1",
@@ -759,7 +758,7 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldResolvePlanAndExplicitBaselineTargets()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "rev-base",
@@ -842,7 +841,7 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldUseServingSnapshotBaselineWhenExplicitBaselineMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "rev-2",
@@ -914,7 +913,7 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldUseEmptyBaselineWhenServingSnapshotMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "rev-2",

@@ -87,6 +87,7 @@ public sealed class ServiceRevisionCatalogProjector
             WorkflowName = state.Spec?.WorkflowSpec?.WorkflowName ?? string.Empty,
             WorkflowDefinitionActorId = state.Spec?.WorkflowSpec?.DefinitionActorId ?? string.Empty,
             WorkflowInlineWorkflowCount = state.Spec?.WorkflowSpec?.InlineWorkflowYamls?.Count ?? 0,
+            PreparedArtifact = state.PreparedArtifact?.Clone(),
         };
     }
 

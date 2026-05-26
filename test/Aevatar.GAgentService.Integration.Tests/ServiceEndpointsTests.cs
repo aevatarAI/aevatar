@@ -5,6 +5,7 @@ using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -1187,7 +1188,7 @@ public sealed class ServiceEndpointsTests
             RecordingServiceQueryPort queryPort,
             RecordingServiceInvocationPort invocationPort,
             FakeServiceCatalogQueryReader catalogReader,
-            FakeServiceRevisionArtifactStore artifactStore)
+            FakeServiceRevisionCatalogQueryReader artifactStore)
         {
             _app = app;
             Client = client;
@@ -1208,7 +1209,7 @@ public sealed class ServiceEndpointsTests
 
         public FakeServiceCatalogQueryReader CatalogReader { get; }
 
-        public FakeServiceRevisionArtifactStore ArtifactStore { get; }
+        public FakeServiceRevisionCatalogQueryReader ArtifactStore { get; }
 
         public static async Task<EndpointTestHost> StartAsync()
         {
@@ -1222,14 +1223,14 @@ public sealed class ServiceEndpointsTests
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
             var catalogReader = new FakeServiceCatalogQueryReader();
-            var artifactStore = new FakeServiceRevisionArtifactStore();
+            var artifactStore = new FakeServiceRevisionCatalogQueryReader();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
-            builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(artifactStore);
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
             var app = builder.Build();
@@ -1527,13 +1528,15 @@ public sealed class ServiceEndpointsTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
         private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
 
         public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
-            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _artifacts[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
         }
 
@@ -1541,6 +1544,40 @@ public sealed class ServiceEndpointsTests
         {
             _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
             return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+        }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisions = _artifacts
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
         }
     }
 

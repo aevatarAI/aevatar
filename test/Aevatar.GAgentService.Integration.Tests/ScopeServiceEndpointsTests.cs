@@ -13,6 +13,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
@@ -4565,7 +4566,7 @@ public sealed class ScopeServiceEndpointsTests
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
-            FakeServiceRevisionArtifactStore artifactStore,
+            FakeServiceRevisionCatalogQueryReader artifactStore,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
@@ -4629,7 +4630,7 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
 
-        public FakeServiceRevisionArtifactStore ArtifactStore { get; }
+        public FakeServiceRevisionCatalogQueryReader ArtifactStore { get; }
 
         public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
@@ -4669,7 +4670,7 @@ public sealed class ScopeServiceEndpointsTests
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
-            var artifactStore = new FakeServiceRevisionArtifactStore();
+            var artifactStore = new FakeServiceRevisionCatalogQueryReader();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
@@ -4707,7 +4708,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
-            builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(artifactStore);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
@@ -5325,13 +5326,15 @@ public sealed class ScopeServiceEndpointsTests
             Task.FromResult(View);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
         private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
 
         public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
-            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _artifacts[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
         }
 
@@ -5339,6 +5342,40 @@ public sealed class ScopeServiceEndpointsTests
         {
             _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
             return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+        }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisions = _artifacts
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
         }
     }
 

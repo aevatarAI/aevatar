@@ -7,7 +7,6 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
@@ -291,7 +290,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         RecordingGAgentDraftRunInteractionService interaction,
         RecordingServiceRunRegistrationPort registration)
     {
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
 
         var resolutionService = new ServiceInvocationResolutionService(

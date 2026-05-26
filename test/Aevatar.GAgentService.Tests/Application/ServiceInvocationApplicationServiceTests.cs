@@ -4,7 +4,6 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -17,7 +16,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldResolveAuthorizeAndDispatch()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             identity,
             "r1",
@@ -91,7 +90,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldGenerateIds_WhenBothCommandAndCorrelationAreMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             identity,
             "r1",
@@ -169,7 +168,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldThrow_WhenServiceNotFound()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader { GetResult = null },
             new RecordingTrafficViewQueryReader { GetResult = null },
@@ -192,7 +191,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldThrow_WhenNoTrafficView()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader
             {
@@ -232,7 +231,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldThrow_WhenEndpointNotInTrafficView()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader
             {
@@ -291,7 +290,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldThrow_WhenNoActiveTargetsOnEndpoint()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader
             {

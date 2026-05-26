@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -159,7 +160,7 @@ public sealed class ScopeWorkflowEndpointsTests
             {
                 ["child"] = "name: child\nsteps: []\n",
             });
-        var artifactStore = new FakeServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             "tenant-a:workflow-app:user:token:approval",
             "rev-1",
@@ -185,6 +186,7 @@ public sealed class ScopeWorkflowEndpointsTests
             BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
             bindingReader,
             artifactStore,
+            Options.Create(new ScopeWorkflowCapabilityOptions()),
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -236,7 +238,8 @@ public sealed class ScopeWorkflowEndpointsTests
             includeSource: true,
             BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
             bindingReader,
-            artifactStore: null,
+            new FakeServiceRevisionCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()),
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -539,7 +542,8 @@ public sealed class ScopeWorkflowEndpointsTests
             includeSource: false,
             BuildQueryPort(),
             new FakeWorkflowActorBindingReader(),
-            artifactStore: null,
+            new FakeServiceRevisionCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()),
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -560,7 +564,8 @@ public sealed class ScopeWorkflowEndpointsTests
             "nonexistent-workflow",
             BuildQueryPort(),
             new FakeWorkflowActorBindingReader(),
-            artifactStore: null,
+            new FakeServiceRevisionCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()),
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -802,13 +807,15 @@ public sealed class ScopeWorkflowEndpointsTests
             Task.FromResult(Bindings.TryGetValue(actorId, out var binding) ? binding : null);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
         private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
 
         public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
-            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _artifacts[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
         }
 
@@ -816,6 +823,40 @@ public sealed class ScopeWorkflowEndpointsTests
         {
             _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
             return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+        }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisions = _artifacts
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
         }
     }
 

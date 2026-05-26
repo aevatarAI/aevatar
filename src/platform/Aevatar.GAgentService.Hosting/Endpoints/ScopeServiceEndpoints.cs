@@ -611,7 +611,7 @@ public static class ScopeServiceEndpoints
         InvokeScopeServiceHttpRequest request,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         HandleInvokeAsync(
@@ -623,7 +623,7 @@ public static class ScopeServiceEndpoints
             appId: null,
             invocationPort,
             catalogReader,
-            artifactStore,
+            revisionCatalogReader,
             options,
             ct);
 
@@ -690,7 +690,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -715,7 +715,7 @@ public static class ScopeServiceEndpoints
                 BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId),
                 invocationPort,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 options,
                 ct);
         }
@@ -792,7 +792,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -812,7 +812,7 @@ public static class ScopeServiceEndpoints
                 BuildScopeServiceRunBasePath(teamResolution.ScopeId, teamResolution.PublishedServiceId, teamResolution.EntryMemberId),
                 invocationPort,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 options,
                 ct);
         }
@@ -1829,7 +1829,7 @@ public static class ScopeServiceEndpoints
         string? appId,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         await HandleInvokeAsyncCore(
@@ -1842,7 +1842,7 @@ public static class ScopeServiceEndpoints
             acceptedResourcePath: null,
             invocationPort,
             catalogReader,
-            artifactStore,
+            revisionCatalogReader,
             options,
             ct);
 
@@ -1856,7 +1856,7 @@ public static class ScopeServiceEndpoints
         string? acceptedResourcePath,
         IServiceInvocationPort invocationPort,
         IServiceCatalogQueryReader catalogReader,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
         IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1874,7 +1874,7 @@ public static class ScopeServiceEndpoints
                 revisionId,
                 identity,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 ct);
 
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
@@ -1911,7 +1911,7 @@ public static class ScopeServiceEndpoints
         string requestedRevisionId,
         ServiceIdentity identity,
         IServiceCatalogQueryReader catalogReader,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct)
     {
         var hasJson = !string.IsNullOrWhiteSpace(request.PayloadJson);
@@ -1933,8 +1933,8 @@ public static class ScopeServiceEndpoints
             }
 
             var packed = await ServiceJsonPayloads.PackJsonAsync(
-                artifactStore,
-                ServiceKeys.Build(identity),
+                revisionCatalogReader,
+                identity,
                 revisionId,
                 typeUrl,
                 request.PayloadJson!,

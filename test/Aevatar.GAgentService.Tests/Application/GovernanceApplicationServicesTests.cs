@@ -9,7 +9,6 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Application.Services;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
@@ -23,7 +22,7 @@ public sealed class GovernanceApplicationServicesTests
     public async Task ActivationCapabilityViewAssembler_ShouldComposeConfigurationAndArtifactFallback()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "r1",
@@ -102,7 +101,7 @@ public sealed class GovernanceApplicationServicesTests
         var assembler = new ActivationCapabilityViewAssembler(
             new RecordingCatalogQueryReader(),
             new RecordingConfigurationQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var blankRevision = () => assembler.GetAsync(identity, " ");
         var missingDefinition = () => assembler.GetAsync(identity, "r1");
@@ -121,7 +120,7 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateConfigurationSnapshot(identity),
             },
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var missingArtifact = () => missingArtifactAssembler.GetAsync(identity, "r1");
 

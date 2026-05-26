@@ -18,7 +18,8 @@ public sealed record ServiceRevisionSnapshot(
     DateTimeOffset? PreparedAt,
     DateTimeOffset? PublishedAt,
     DateTimeOffset? RetiredAt,
-    ServiceRevisionImplementationSnapshot? Implementation = null);
+    ServiceRevisionImplementationSnapshot? Implementation = null,
+    PreparedServiceRevisionArtifact? PreparedArtifact = null);
 
 public sealed record ServiceRevisionImplementationSnapshot(
     ServiceRevisionStaticSnapshot? Static = null,

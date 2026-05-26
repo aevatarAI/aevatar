@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -16,13 +18,13 @@ public sealed class EndpointSchemaProvider
     private const string TypeUrlPrefix = "type.googleapis.com/";
     private const int MaxCacheEntries = 500;
 
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogReader;
     private readonly ConcurrentDictionary<string, CacheEntry<string?>> _schemaCache = new();
     private readonly ConcurrentDictionary<string, CacheEntry<MessageDescriptor?>> _descriptorCache = new();
 
-    public EndpointSchemaProvider(IServiceRevisionArtifactStore artifactStore)
+    public EndpointSchemaProvider(IServiceRevisionCatalogQueryReader revisionCatalogReader)
     {
-        _artifactStore = artifactStore;
+        _revisionCatalogReader = revisionCatalogReader;
     }
 
     /// <summary>
@@ -124,7 +126,7 @@ public sealed class EndpointSchemaProvider
         string requestTypeUrl,
         CancellationToken ct)
     {
-        var artifact = await _artifactStore.GetAsync(serviceKey, revisionId, ct);
+        var artifact = await GetPreparedArtifactAsync(serviceKey, revisionId, ct);
         if (artifact == null || artifact.ProtocolDescriptorSet.IsEmpty)
             return null;
 
@@ -154,6 +156,33 @@ public sealed class EndpointSchemaProvider
         }
 
         return null;
+    }
+
+    private async Task<PreparedServiceRevisionArtifact?> GetPreparedArtifactAsync(
+        string serviceKey,
+        string revisionId,
+        CancellationToken ct)
+    {
+        var revisionCatalog = await _revisionCatalogReader.GetAsync(BuildServiceIdentityFromKey(serviceKey), ct);
+        return revisionCatalog?.Revisions
+            .FirstOrDefault(x => string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal))
+            ?.PreparedArtifact
+            ?.Clone();
+    }
+
+    private static ServiceIdentity BuildServiceIdentityFromKey(string serviceKey)
+    {
+        var parts = serviceKey.Split(':', 4, StringSplitOptions.None);
+        if (parts.Length != 4)
+            throw new InvalidOperationException($"Service key '{serviceKey}' is not valid.");
+
+        return new ServiceIdentity
+        {
+            TenantId = parts[0],
+            AppId = parts[1],
+            Namespace = parts[2],
+            ServiceId = parts[3],
+        };
     }
 
     private static MessageDescriptor? FindNestedType(

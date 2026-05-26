@@ -4,7 +4,6 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Ports;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 
@@ -16,7 +15,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
     public async Task CreatePreparePublish_ShouldPersistArtifact_AndReplayPublishedState()
     {
         var eventStore = new InMemoryEventStore();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
         var identity = GAgentServiceTestKit.CreateIdentity();
         var actorId = ServiceActorIds.RevisionCatalog(identity);
         var adapter = new RecordingAdapter(_ => Task.FromResult(
@@ -43,7 +42,8 @@ public sealed class ServiceRevisionCatalogGAgentTests
         record.Status.Should().Be(ServiceRevisionStatus.Published);
         record.ArtifactHash.Should().NotBeNullOrWhiteSpace();
         record.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
-        (await artifactStore.GetAsync(ServiceKeys.Build(identity), "r1")).Should().NotBeNull();
+        record.PreparedArtifact.Should().NotBeNull();
+        record.PreparedArtifact.RevisionId.Should().Be("r1");
 
         await agent.DeactivateAsync();
 
@@ -53,12 +53,46 @@ public sealed class ServiceRevisionCatalogGAgentTests
     }
 
     [Fact]
+    public async Task RestartAfterPrepare_ShouldReplayPreparedArtifactFromCommittedState()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var adapter = new RecordingAdapter(_ => Task.FromResult(
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"))));
+        var agent = CreateAgent(eventStore, new FakeServiceRevisionCatalogQueryReader(), adapter, actorId);
+        await agent.ActivateAsync();
+
+        await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        await agent.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+        await agent.DeactivateAsync();
+
+        var replayed = CreateAgent(eventStore, new FakeServiceRevisionCatalogQueryReader(), adapter, actorId);
+        await replayed.ActivateAsync();
+
+        var artifact = replayed.State.Revisions["r1"].PreparedArtifact;
+        artifact.Should().NotBeNull();
+        artifact.RevisionId.Should().Be("r1");
+        artifact.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
+    }
+
+    [Fact]
     public async Task HandlePrepareRevisionAsync_ShouldPersistPreparationFailure_WhenAdapterThrows()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => throw new InvalidOperationException("prepare failed")),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -85,7 +119,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -110,7 +144,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -134,7 +168,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -162,7 +196,6 @@ public sealed class ServiceRevisionCatalogGAgentTests
             ServiceActorIds.RevisionCatalog(identity),
             () => new ServiceRevisionCatalogGAgent(
                 [],
-                new ConfiguredServiceRevisionArtifactStore(),
                 new PreparedServiceRevisionArtifactAssembler()));
 
         await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
@@ -187,7 +220,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -213,7 +246,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var otherIdentity = GAgentServiceTestKit.CreateIdentity("svc-other");
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new ConfiguredServiceRevisionArtifactStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
             new RecordingAdapter(_ => Task.FromResult(GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"))),
             ServiceActorIds.RevisionCatalog(identity));
 
@@ -233,7 +266,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
 
     private static ServiceRevisionCatalogGAgent CreateAgent(
         InMemoryEventStore eventStore,
-        ConfiguredServiceRevisionArtifactStore artifactStore,
+        FakeServiceRevisionCatalogQueryReader artifactStore,
         IServiceImplementationAdapter adapter,
         string actorId)
     {
@@ -242,7 +275,6 @@ public sealed class ServiceRevisionCatalogGAgentTests
             actorId,
             () => new ServiceRevisionCatalogGAgent(
                 [adapter],
-                artifactStore,
                 new PreparedServiceRevisionArtifactAssembler()));
     }
 
