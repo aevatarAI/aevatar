@@ -7,6 +7,8 @@ namespace Aevatar.AI.Core.Chat;
 internal sealed class SkillRecoveryOrchestrator
 {
     private const int MaxChainedDirectives = 4;
+    private const string SyntheticToolCallReasoningContent =
+        "Aevatar is invoking a recovery tool required to continue this request.";
 
     private readonly AgentSkillRecoveryContext _recovery;
     private readonly Func<AgentToolExecutionContext?, StreamingToolExecutor> _executorFactory;
@@ -114,6 +116,7 @@ internal sealed class SkillRecoveryOrchestrator
             {
                 Role = "assistant",
                 Content = null,
+                ReasoningContent = SyntheticToolCallReasoningContent,
                 ToolCalls = [toolCall],
             };
             messages.Add(assistantToolCallMessage);

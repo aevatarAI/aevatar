@@ -30,6 +30,10 @@ public sealed class SkillRecoveryPlannerTests
 
         applied.Should().BeTrue();
         messages.Count(message => message.Role == "assistant" && message.ToolCalls is { Count: 1 }).Should().Be(2);
+        messages
+            .Where(message => message.Role == "assistant" && message.ToolCalls is { Count: 1 })
+            .Should()
+            .OnlyContain(message => !string.IsNullOrWhiteSpace(message.ReasoningContent));
         messages.Should().Contain(message =>
             message.Role == "tool" &&
             message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills" &&
