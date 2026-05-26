@@ -75,20 +75,29 @@ public class VoicePresenceModuleFactoryTests
 
     private sealed class NoopVoiceProvider : IRealtimeVoiceProvider
     {
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct) => Task.CompletedTask;
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) => Task.CompletedTask;
-
-        public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) => Task.CompletedTask;
-
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<RealtimeVoiceProviderSession> ConnectAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            CancellationToken ct)
+        {
+            _ = sessionKey;
+            _ = config;
+            _ = eventSink;
+            _ = ct;
+            return Task.FromResult<RealtimeVoiceProviderSession>(new NoopProviderSession());
+        }
+
+        private sealed class NoopProviderSession : RealtimeVoiceProviderSession
+        {
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) => Task.CompletedTask;
+            public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) => Task.CompletedTask;
+            public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 }

@@ -199,9 +199,10 @@ public class VoiceTransportRelayTests
             },
         };
 
-        await provider.SimulateEventAndWait(audioEvent, dispatchedSignal);
+        await provider.SimulateEventAsync(audioEvent);
 
         transport.SentAudio.ShouldBeEmpty();
+        provider.ConnectCalls.ShouldBe(0);
     }
 
     [Fact]
@@ -212,18 +213,29 @@ public class VoiceTransportRelayTests
         await module.InitializeAsync(CancellationToken.None);
 
         var transport = new FakeVoiceTransport([]);
-        var dispatchedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var dispatched = new List<IMessage>();
-        module.AttachTransport(transport, (message, _) =>
+        await module.AttachTransportAsync(transport, async (message, ct) =>
         {
             dispatched.Add(message);
-            dispatchedSignal.TrySetResult();
-            return Task.CompletedTask;
-        });
+            if (message is not VoiceTransportAttachRequested attach)
+                return;
 
-        await provider.SimulateEventAndWait(
-            new VoiceProviderEvent { SpeechStarted = new VoiceSpeechStarted() },
-            dispatchedSignal);
+            var roleAgent = new RecordingRoleAgent("voice-agent");
+            roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+            {
+                ActiveSessionId = attach.SessionId,
+                ActiveLeaseOwnerId = attach.OwnerId,
+                LeaseExpiresAt = attach.LeaseExpiresAt?.Clone(),
+            };
+            await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+            {
+                ModuleName = "voice_presence",
+                TransportAttachRequested = attach,
+            }), new StubEventHandlerContext(roleAgent), ct);
+        }, "lease-1", "host-1", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)));
+        dispatched.Clear();
+
+        await provider.SimulateEventAsync(new VoiceProviderEvent { SpeechStarted = new VoiceSpeechStarted() });
 
         dispatched.Count.ShouldBe(1);
         dispatched[0].ShouldBeOfType<VoiceProviderEventReceived>()
@@ -327,7 +339,8 @@ public class VoiceTransportRelayTests
 
     private sealed class RecordingProvider : IRealtimeVoiceProvider
     {
-        private Func<VoiceProviderEvent, CancellationToken, Task>? _onEvent;
+        private Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task>? _eventSink;
+        private VoiceProviderSessionKey _sessionKey = new(string.Empty, string.Empty, string.Empty, 0);
 
         public int ConnectCalls { get; private set; }
         public int UpdateSessionCalls { get; private set; }
@@ -336,24 +349,55 @@ public class VoiceTransportRelayTests
         public List<byte[]> AudioFrames { get; } = [];
         public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent
+        public Task<RealtimeVoiceProviderSession> ConnectAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            CancellationToken ct)
         {
-            set => _onEvent = value;
+            _ = config;
+            _ = ct;
+            ConnectCalls++;
+            _sessionKey = sessionKey;
+            _eventSink = eventSink;
+            return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingProviderSession(this));
         }
 
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct) { ConnectCalls++; return Task.CompletedTask; }
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) { AudioFrames.Add(pcm16.ToArray()); return Task.CompletedTask; }
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) { InjectedEvents.Add(injection.Clone()); return Task.CompletedTask; }
-        public Task CancelResponseAsync(CancellationToken ct) { CancelCalls++; return Task.CompletedTask; }
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) { UpdateSessionCalls++; return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
 
-        public async Task SimulateEventAndWait(VoiceProviderEvent evt, TaskCompletionSource signal)
+        public Task SimulateEventAsync(VoiceProviderEvent evt) =>
+            _eventSink?.Invoke(_sessionKey, evt, CancellationToken.None) ?? Task.CompletedTask;
+
+        private sealed class RecordingProviderSession(RecordingProvider provider) : RealtimeVoiceProviderSession
         {
-            if (_onEvent != null)
-                await _onEvent(evt, CancellationToken.None);
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+            {
+                provider.AudioFrames.Add(pcm16.ToArray());
+                return Task.CompletedTask;
+            }
+
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
+                Task.CompletedTask;
+
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+            {
+                provider.InjectedEvents.Add(injection.Clone());
+                return Task.CompletedTask;
+            }
+
+            public override Task CancelResponseAsync(CancellationToken ct)
+            {
+                provider.CancelCalls++;
+                return Task.CompletedTask;
+            }
+
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+            {
+                provider.UpdateSessionCalls++;
+                return Task.CompletedTask;
+            }
+
+            public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 

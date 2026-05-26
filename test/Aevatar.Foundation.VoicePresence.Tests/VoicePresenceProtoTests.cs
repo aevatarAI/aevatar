@@ -126,6 +126,7 @@ public class VoicePresenceProtoTests
             OwnerId = "host-1",
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 7,
             Pcm16 = ByteString.CopyFrom([1, 2, 3]),
             SampleRateHz = 24000,
         };
@@ -139,6 +140,7 @@ public class VoicePresenceProtoTests
 
         parsed.ShouldBe(signal);
         parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        parsed.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(7);
         parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
         VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
             .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
@@ -155,6 +157,7 @@ public class VoicePresenceProtoTests
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = expiresAt,
             Reason = "host_transport_completed",
+            LeaseEpoch = 8,
         };
         var signal = new VoiceModuleSignal
         {
@@ -166,6 +169,7 @@ public class VoicePresenceProtoTests
 
         parsed.ShouldBe(signal);
         parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted);
+        parsed.TransportLifetimeCompleted.LeaseEpoch.ShouldBe(8);
         parsed.TransportLifetimeCompleted.ShouldBe(completed);
         VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
             .ShouldContain(nameof(VoiceTransportLifetimeCompleted));
@@ -180,6 +184,7 @@ public class VoicePresenceProtoTests
             OwnerId = "host-1",
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseEpoch = 9,
             Pcm16 = ByteString.CopyFrom([4, 5, 6]),
             SampleRateHz = 24000,
         };
@@ -190,6 +195,7 @@ public class VoicePresenceProtoTests
         envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self));
         signal.ModuleName.ShouldBe("voice_presence");
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        signal.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(9);
         signal.TransportAudioFrameReceived.ShouldBe(audio);
         signal.TransportAudioFrameReceived.ShouldNotBeSameAs(audio);
     }
