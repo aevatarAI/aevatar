@@ -71,6 +71,16 @@ message StreamingProxySessionTerminalStateRequested {
   string error_message = 3;
 }
 
+message StreamingProxyChatLifecycleContinuationRequested {
+  string session_id = 1;
+  string scope_id = 2;
+  string prompt = 3;
+  string access_token = 4;
+  string preferred_route = 5;
+  string default_model = 6;
+  string room_id = 7;
+}
+
 // ─── Events ───
 
 enum StreamingProxyChatSessionTerminalStatus {
