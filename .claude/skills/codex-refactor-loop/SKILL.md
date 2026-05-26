@@ -1765,6 +1765,121 @@ Per Auric (2026-05-19) "凡是新回复都要完整重新让多个solver分析,�
 
 ---
 
+## Phase 10 — 主动 PR review pool(强制,per Auric 2026-05-26 "主动 pr review 已经存在的 pr")
+
+**目标**:对仓库内**所有 open PR**(不限 auto-loop 来源)主动派 Phase 8 三 reviewer codex,产出**advisory review**(approve/comment/reject),帮 maintainer 提速。**禁止 auto-merge** 外部 PR。
+
+### Eligibility gate(强制 — 严格筛选,防 spam / 防冒犯)
+
+每次 controller wakeup sweep open PR list,对每个 PR 按下表筛(必须**全部 yes** 才 review):
+
+| Gate | 通过条件 |
+|---|---|
+| **PR base** | base 是 `auto-refact-dev` / `dev` / `master`(本仓内 mainline) |
+| **PR state** | open + mergeable(非 conflict / 非 draft 除非 explicit ready-for-review label) |
+| **Author 在白名单** | author ∈ { loning, louis4li, eanzhao, jason-aelf, AbigailDeng, potter-sun } OR collaborator/org-member。外部贡献者(无 collaborator/org membership)**严禁**主动 review(怕被当 spam / hostile)|
+| **未已 review** | 本 PR head SHA **没** AI review banner(`## 🤖 Phase 10 advisory review`)且没 `phase10-reviewed` label。若 head SHA 已 review → skip |
+| **CI 状态** | 至少有一个 required check 已 pass(说明 PR 不是 broken WIP) |
+| **PR 不太新** | createdAt 距今 ≥ 30 min(防 author 还在 push 时打断) |
+| **PR 不太大** | diff total < 5000 LOC(过大 PR review 价值低 + reviewer codex 上下文不够) |
+| **未在 Phase 8 流程** | PR 不在 `auto-loop` label 池(那已经走 Phase 8 自动 fix-merge)|
+| **未 needs-human-review** | label 不含 `needs-human-review`(maintainer 已接管) |
+
+只有**全部 yes** 才 review。任何一个 no → skip + 不评论(避免 spam)。
+
+### Dispatch(parallel)
+
+同 Phase 8 三 reviewer codex,但 prompt 改为 **advisory 模式**:
+
+```bash
+for role in architect tests quality; do
+  ISSUE_NUMBER=${PR_NUMBER} ROLE=${role} MODE=advisory \
+    envsubst < .claude/skills/codex-refactor-loop/prompts/reviewer-${role}.md \
+    > .refactor-loop/prompts/review-pr${PR_NUMBER}-${role}-advisory.md
+  .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+    --cd "$REPO_ROOT" --prompt ... --log ... --timeout 3600
+done
+```
+
+reviewer prompt 末尾**额外要求**:
+- 第一行 header:`## 🤖 Phase 10 advisory review — \`${role}\``
+- body 末尾加固定段:
+  > 这是 auto-loop **主动 advisory review**(非 auto-merge gate)。verdict 仅参考;PR author / maintainer 可忽略 / 部分采纳 / 全采纳 — controller **不会** auto-merge 本 PR,maintainer 控制 merge 决策。
+- 末尾 `REVIEW_DONE:${PR}:${role}-advisory:<approve|comment|reject>` + sentinel
+
+### 收齐三 reviewer 后
+
+controller **不派 fix codex 不 auto-merge**(此 phase 是 advisory,不接 fix loop)。
+- 加 `phase10-reviewed` label(防重复 review;PR 新 commit head SHA 变 → label 失效 → 下次 wakeup 可 re-review)
+- post 一条 controller summary banner `## 📊 Phase 10 advisory review 完成`(给 maintainer 一站式 verdict 汇总 + 链接到 3 reviewer 评论)
+- 若**任一 reviewer reject** + author 在内部 maintainer 白名单 → 同时 PushNotification 给 user(防漏读)
+- 不 label `🆘 human:卡死`(advisory 不是 escalation)
+
+### 反面禁止
+
+- ❌ 给外部贡献者 PR 主动 review(冒犯)
+- ❌ 同 head SHA 重复 review(spam)
+- ❌ 在 reject 后派 fix codex 改外部 PR(越权)
+- ❌ Phase 10 reviewer banner 不带 "advisory" 标记(让人误以为 gate)
+- ❌ auto-merge advisory PR(那是 maintainer 决策)
+
+### Cadence
+
+每次 wakeup sweep 后,floor < 5 时把 Phase 10 dispatch 作为「填 floor 优先级」表的 priority 7(在 audit/retrospective 之后)。不主动加速 Phase 10 推派 — 它是 backfill,不是 critical path。
+
+---
+
+## Phase 11 — 主动 issue intake pool(强制,per Auric 2026-05-26 "主动解决已经存在的但没人处理的 issues")
+
+**目标**:对仓库内**所有 open issue**(不限 auto-loop 来源)主动派 **triage codex**,判定是否 refactor loop 范畴;eligible 的 issue **由 triage codex 自动 reshape 进 Phase 9 链路**;non-eligible 评论说明并放弃。
+
+### Eligibility gate(强制)
+
+每次 controller wakeup sweep open issue list,对每个 issue 按下表筛:
+
+| Gate | 通过条件 |
+|---|---|
+| **Issue state** | open(closed 不动) |
+| **Issue 不在 auto-loop 池** | label 不含 `auto-loop` / `auto-loop-triage` / `🎉 phase:merged` |
+| **未已 triage 过** | issue body / 评论无 `## 🤖 Phase 11 triage` banner 且无 `phase11-triaged` / `phase11-not-eligible` label |
+| **Author 在白名单** | 同 Phase 10:collaborator/org-member/whitelist(外部贡献者**严禁** triage,避免把任意 feature request 当 cluster 跑)|
+| **Issue 不太新** | createdAt 距今 ≥ 1h(让 author / maintainer 有时间补充) |
+| **Issue body 有最小描述** | body 长度 ≥ 100 chars(过短 issue triage 也判不出) |
+| **未在 ongoing 维护讨论** | 最近 24h 内**无** human comment(避免打断真人 maintainer 已在 reply 的 issue) |
+
+全部 yes → 加 `auto-loop-triage` label,由 `tools/refactor-loop/triage-monitor.sh` daemon 自动 spawn triage codex(已有现成 daemon,本 phase 复用)。
+
+### Triage codex 行为(已 by Phase 7 Path B 定义)
+
+不重复 — 见 Phase 7 § "Path B Triage codex"。triage codex 输出 `TRIAGE_DONE:<issue>:<accept|reject>:<reason>`:
+- **accept** → triage codex 自动 reshape issue body + 加 4 label(`auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`)+ 移除 `auto-loop-triage` → 进 Phase 9 标准链路
+- **reject** → triage codex 评论说明 "非 refactor loop 范畴(原因 X),退出 auto-loop" + 加 `phase11-not-eligible` label + 移除 `auto-loop-triage`
+
+### Bot author 必须排除
+
+Phase 11 sweep 必须 `author.login | endswith("[bot]") | not` + body prefix `## [Codecov](` / `## [Dependabot]` 排除(防把 bot 自动 issue 当 cluster)。
+
+### Cadence
+
+每次 wakeup sweep 时 Phase 11 跑一次;每次最多新加 `auto-loop-triage` label **2 个**(防一次性把所有 open issue 都拖进 pipeline 撑爆 codex)。
+
+### 反面禁止
+
+- ❌ 外部贡献者 issue 主动 triage(他们的 feature request 不该被强行 reshape 成 refactor cluster)
+- ❌ 跳过已 `phase11-not-eligible` 的 issue 再 triage(已被 reject)
+- ❌ 短于 100 chars 的 issue triage(信息不足)
+- ❌ 与 maintainer 已 ongoing 讨论的 issue 打断(等 maintainer 主动加 `auto-loop-triage`)
+
+### Phase 10 + Phase 11 共同 floor 填底
+
+floor < 5 时,优先级表插入:
+- 6.5: Phase 10 advisory review(eligible PR 池)
+- 6.5: Phase 11 triage(eligible issue 池)
+
+(原 priority 7 audit 退到 priority 8)
+
+---
+
 ## Loop control
 
 ### This is an INFINITE refactor loop — never idle on "iter done"
