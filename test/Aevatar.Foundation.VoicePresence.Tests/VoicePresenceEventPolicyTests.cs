@@ -48,6 +48,39 @@ public class VoicePresenceEventPolicyTests
     }
 
     [Fact]
+    public void Evaluate_is_pure_and_only_drops_duplicates_from_explicit_fence()
+    {
+        var policy = new VoicePresenceEventPolicy { DedupeWindow = TimeSpan.FromSeconds(2) };
+        var now = DateTimeOffset.UtcNow;
+        var envelope = MakeEnvelope("Alice", now);
+
+        var first = policy.Evaluate(envelope, now, []);
+        first.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+
+        var second = policy.Evaluate(envelope, now.AddMilliseconds(100), []);
+        second.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+
+        var fence = policy.BuildFence([], first, now);
+        policy.Evaluate(envelope, now.AddMilliseconds(100), fence)
+            .Decision
+            .ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
+    }
+
+    [Fact]
+    public void Source_should_not_restore_internal_recent_event_cache_pattern()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src",
+            "Aevatar.Foundation.VoicePresence",
+            "Events",
+            "VoicePresenceEventPolicy.cs"));
+
+        source.ShouldNotContain("_recentKeys");
+        source.ShouldNotContain("RecentEventEntry");
+        source.ShouldNotContain("LinkedList<RecentEventEntry>");
+    }
+
+    [Fact]
     public void Same_type_different_payload_is_admitted()
     {
         var policy = new VoicePresenceEventPolicy();
@@ -107,5 +140,20 @@ public class VoicePresenceEventPolicyTests
             Payload = Any.Pack(new StringValue { Value = person }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
         };
+    }
+
+    private static string FindRepositoryFile(params string[] relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not find repository file.", Path.Combine(relativePath));
     }
 }
