@@ -6,6 +6,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
@@ -38,6 +39,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        // Refactor (iter104/cluster-1): Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer. New principle: StreamingProxyGAgent typed continuation owns lifecycle; deprecated compat endpoints only normalize+dispatch typed command.
         var lifecycleEvent = new StreamingProxyChatLifecycleAcceptedEvent
         {
             SessionId = request.SessionId,
@@ -63,9 +65,59 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         // Publish topic so all SSE subscribers (user + OpenClaws) receive it
         await PublishAsync(topicEvent, TopologyAudience.Parent);
 
+        if (!string.IsNullOrWhiteSpace(lifecycleEvent.AccessToken))
+        {
+            await PublishAsync(new StreamingProxyChatLifecycleContinuationRequested
+            {
+                SessionId = request.SessionId,
+                ScopeId = request.ScopeId,
+                Prompt = request.Prompt,
+                AccessToken = lifecycleEvent.AccessToken,
+                PreferredRoute = lifecycleEvent.PreferredRoute,
+                DefaultModel = lifecycleEvent.DefaultModel,
+            }, TopologyAudience.Self);
+        }
+
         Logger.LogInformation(
             "[StreamingProxy] Topic started: {Preview}",
             request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
+    }
+
+    [EventHandler(EndpointName = "continueChatLifecycle", AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleChatLifecycleContinuationRequested(StreamingProxyChatLifecycleContinuationRequested request)
+    {
+        // Refactor (iter104/cluster-1): Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer. New principle: StreamingProxyGAgent typed continuation owns lifecycle; deprecated compat endpoints only normalize+dispatch typed command.
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return;
+
+        var coordinator = Services.GetRequiredService<StreamingProxyNyxParticipantCoordinator>();
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            request.ScopeId,
+            Id,
+            request.AccessToken,
+            CancellationToken.None,
+            request.PreferredRoute,
+            request.DefaultModel);
+        if (participants.Count == 0)
+            return;
+
+        var successfulReplies = await coordinator.GenerateRepliesAsync(
+            participants,
+            Id,
+            request.Prompt,
+            request.SessionId,
+            request.AccessToken,
+            CancellationToken.None);
+
+        var terminalState = DetermineParticipantTerminalState(successfulReplies);
+        await HandleSessionTerminalStateRequested(new StreamingProxySessionTerminalStateRequested
+        {
+            SessionId = request.SessionId,
+            Status = terminalState.Status,
+            ErrorMessage = terminalState.ErrorMessage ?? string.Empty,
+        });
     }
 
     [EventHandler(EndpointName = "postMessage")]
@@ -337,4 +389,10 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         };
         return next;
     }
+
+    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
+        int successfulReplies) =>
+        successfulReplies > 0
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 }

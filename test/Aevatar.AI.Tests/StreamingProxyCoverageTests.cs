@@ -175,7 +175,8 @@ public class StreamingProxyCoverageTests
         endpoints.Should().NotContain("Any.Pack");
         endpoints.Should().Contain("IStreamingProxyRoomCommandService");
         endpoints.Should().Contain("StreamingProxyRoomPostMessageCommand");
-        endpoints.Should().Contain("StreamingProxyChatLifecycleFacade");
+        endpoints.Should().Contain("ICommandInteractionService<StreamingProxyRoomChatCommand");
+        endpoints.Should().NotContain("[FromServices] StreamingProxyChatLifecycleFacade");
     }
 
     [Fact]
@@ -715,7 +716,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task HandleChatAsync_ShouldPublishFailedTerminalState_WhenCancelled()
+    public async Task HandleChatAsync_ShouldNotPublishEndpointOwnedTerminalState_WhenCancelled()
     {
         var context = CreateScopedHttpContext();
         context.Response.Body = new MemoryStream();
@@ -747,11 +748,7 @@ public class StreamingProxyCoverageTests
         cts.Cancel();
         await task;
 
-        roomCommandService.TerminalCommands.Should().ContainSingle(command =>
-            command.RoomId == "room-a" &&
-            command.SessionId == "session-cancel" &&
-            command.Status == StreamingProxyChatSessionTerminalStatus.Failed &&
-            command.ErrorMessage == "StreamingProxy chat was cancelled before completion.");
+        roomCommandService.TerminalCommands.Should().BeEmpty();
     }
 
     [Fact]
@@ -998,7 +995,7 @@ public class StreamingProxyCoverageTests
     [Fact]
     public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
     {
-        var method = typeof(StreamingProxyChatLifecycleFacade).GetMethod(
+        var method = typeof(StreamingProxyGAgent).GetMethod(
             "DetermineParticipantTerminalState",
             BindingFlags.NonPublic | BindingFlags.Static)!;
 
@@ -1012,37 +1009,34 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task RunChatAsync_ShouldNotPublishFacadeOwnedTerminalFallback_WhenInteractionFails()
+    public async Task HandleChatAsync_ShouldNotPublishEndpointOwnedTerminalFallback_WhenInteractionFails()
     {
-        var actor = new StubActor("room-a");
-        var runtime = new StubActorRuntime([actor]);
+        var context = CreateScopedHttpContext();
+        context.Response.Body = new MemoryStream();
         var roomCommandService = new StubRoomCommandService();
         var interactionService = new StubStreamingProxyRoomChatInteractionService
         {
             ThrowOnExecute = new InvalidOperationException("boom"),
         };
-        var facade = CreateStreamingProxyChatLifecycleFacade(
-            runtime,
-            null,
-            roomCommandService,
-            new StubRoomParticipantService(),
-            new StubTerminalQueryPort(),
-            interactionService);
 
-        Func<Task> act = async () => await facade.RunChatAsync(
-            new StreamingProxyChatLifecycleRequest(
-                "scope-a",
-                actor.Id,
-                "hello",
-                "session-123",
-                null,
-                null,
-                null),
-            (_, _) => ValueTask.CompletedTask,
+        await InvokeTaskAsync(
+            "HandleChatAsync",
+            context,
+            "scope-a",
+            "room-a",
+            new ChatTopicRequest("hello", "session-123"),
+            roomCommandService,
+            new StubGAgentActorStore(),
+            interactionService,
+            new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort()),
+            new StubRoomParticipantService(),
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>();
-
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_ERROR");
         roomCommandService.TerminalCommands.Should().BeEmpty();
     }
 
@@ -1879,85 +1873,34 @@ public class StreamingProxyCoverageTests
     private static object[] NormalizeEndpointArgs(MethodInfo method, object[] args)
     {
         var parameters = method.GetParameters();
-        if (parameters.Any(parameter => parameter.ParameterType == typeof(StreamingProxyChatLifecycleFacade)))
+        if (parameters.Length == args.Length &&
+            ParametersMatchArgs(parameters, args))
         {
-            var normalized = args.ToList();
-            var runtime = normalized.OfType<IActorRuntime>().FirstOrDefault() ?? new StubActorRuntime([new StubActor("room-a")]);
-            var roomCommandService = normalized.OfType<IStreamingProxyRoomCommandService>().FirstOrDefault() ?? new StubRoomCommandService();
-            var participantService = normalized.OfType<IStreamingProxyRoomParticipantService>().FirstOrDefault() ?? new StubRoomParticipantService();
-            var registryCommandPort = normalized.OfType<IGAgentActorRegistryCommandPort>().FirstOrDefault() ?? new StubGAgentActorStore();
-            var interactionService = normalized
-                .OfType<ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>()
-                .FirstOrDefault();
-            var terminalQueryPort = normalized.OfType<IStreamingProxyChatSessionTerminalQueryPort>().FirstOrDefault();
-            var subscriptionObservationPort = normalized.OfType<IStreamingProxyRoomSubscriptionObservationPort>().FirstOrDefault();
-            var facade = CreateStreamingProxyChatLifecycleFacade(
-                runtime,
-                registryCommandPort,
-                roomCommandService,
-                participantService,
-                terminalQueryPort,
-                interactionService,
-                subscriptionObservationPort);
-            return RebuildArgs(parameters, normalized, facade);
-        }
-
-        if (parameters.Length == args.Length)
             return args;
-
-        if (parameters.Length == args.Length + 1 && args.All(arg => arg is not IActorDispatchPort))
-        {
-            var dispatchPortIndex = Array.FindIndex(
-                parameters,
-                parameter => parameter.ParameterType == typeof(IActorDispatchPort));
-            if (dispatchPortIndex >= 0)
-            {
-                var actorRuntime = args.OfType<IActorRuntime>().FirstOrDefault()
-                    ?? throw new InvalidOperationException("Endpoint test invocation needs IActorRuntime before IActorDispatchPort can be inferred.");
-                var normalized = args.ToList();
-                normalized.Insert(dispatchPortIndex, new StubActorDispatchPort(actorRuntime));
-                return normalized.ToArray();
-            }
         }
 
-        return args;
+        return RebuildEndpointArgs(parameters, args.ToList());
     }
 
-    private static StreamingProxyChatLifecycleFacade CreateStreamingProxyChatLifecycleFacade(
-        IActorRuntime runtime,
-        IGAgentActorRegistryCommandPort? registryCommandPort,
-        IStreamingProxyRoomCommandService roomCommandService,
-        IStreamingProxyRoomParticipantService participantService,
-        IStreamingProxyChatSessionTerminalQueryPort? terminalQueryPort = null,
-        ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>? interactionService = null,
-        IStreamingProxyRoomSubscriptionObservationPort? subscriptionObservationPort = null)
+    private static bool ParametersMatchArgs(ParameterInfo[] parameters, object[] args)
     {
-        return new StreamingProxyChatLifecycleFacade(
-            runtime,
-            roomCommandService,
-            participantService,
-            interactionService ?? new StubStreamingProxyRoomChatInteractionService(),
-            registryCommandPort ?? new StubGAgentActorStore(),
-            new StreamingProxyChatDurableCompletionResolver(terminalQueryPort ?? new StubTerminalQueryPort()),
-            subscriptionObservationPort ?? new StubRoomSubscriptionObservationPort(),
-            NullLogger<StreamingProxyChatLifecycleFacade>.Instance);
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (!parameters[i].ParameterType.IsInstanceOfType(args[i]))
+                return false;
+        }
+
+        return true;
     }
 
-    private static object[] RebuildArgs(
+    private static object[] RebuildEndpointArgs(
         ParameterInfo[] parameters,
-        List<object> args,
-        object facade)
+        List<object> args)
     {
         var used = new bool[args.Count];
         var rebuilt = new List<object>(parameters.Length);
         foreach (var parameter in parameters)
         {
-            if (parameter.ParameterType.IsInstanceOfType(facade))
-            {
-                rebuilt.Add(facade);
-                continue;
-            }
-
             var index = -1;
             for (var i = 0; i < args.Count; i++)
             {
@@ -1975,9 +1918,50 @@ public class StreamingProxyCoverageTests
                 continue;
             }
 
+            if (parameter.ParameterType == typeof(IGAgentActorRegistryCommandPort) ||
+                parameter.ParameterType == typeof(IGAgentActorRegistryQueryPort) ||
+                parameter.ParameterType == typeof(IScopeResourceAdmissionPort))
+            {
+                var store = args.OfType<StubGAgentActorStore>().FirstOrDefault() ?? new StubGAgentActorStore();
+                rebuilt.Add(store);
+                continue;
+            }
+
+            if (parameter.ParameterType == typeof(IStreamingProxyRoomCommandService))
+            {
+                rebuilt.Add(args.OfType<IStreamingProxyRoomCommandService>().FirstOrDefault() ?? new StubRoomCommandService());
+                continue;
+            }
+
+            if (parameter.ParameterType == typeof(IStreamingProxyRoomParticipantService))
+            {
+                rebuilt.Add(args.OfType<IStreamingProxyRoomParticipantService>().FirstOrDefault() ?? new StubRoomParticipantService());
+                continue;
+            }
+
+            if (parameter.ParameterType == typeof(IStreamingProxyRoomSubscriptionObservationPort))
+            {
+                rebuilt.Add(args.OfType<IStreamingProxyRoomSubscriptionObservationPort>().FirstOrDefault() ?? new StubRoomSubscriptionObservationPort());
+                continue;
+            }
+
+            if (parameter.ParameterType == typeof(ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>))
+            {
+                rebuilt.Add(args
+                    .OfType<ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>()
+                    .FirstOrDefault() ?? new StubStreamingProxyRoomChatInteractionService());
+                continue;
+            }
+
+            if (parameter.ParameterType == typeof(ILoggerFactory))
+            {
+                rebuilt.Add(args.OfType<ILoggerFactory>().FirstOrDefault() ?? NullLoggerFactory.Instance);
+                continue;
+            }
+
             if (parameter.ParameterType == typeof(CancellationToken))
             {
-                rebuilt.Add(CancellationToken.None);
+                rebuilt.Add(args.OfType<CancellationToken>().FirstOrDefault());
                 continue;
             }
 
