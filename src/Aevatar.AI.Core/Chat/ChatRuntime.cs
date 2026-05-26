@@ -300,23 +300,15 @@ public sealed class ChatRuntime
         var messages = BuildMessagesWithPending(baseRequest, userMsg);
         string? finalContent = null;
         var lengthRecoveryCount = 0;
-        var skillRecoveryCount = 0;
         var hasStreamedTextContent = false;
-        var skillRecovery = baseRequest.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty;
-        if (skillRecovery.RequireInitialOrnnSearch)
+        var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest);
+        if (skillRecovery.RequiresInitialSearch)
         {
-            var recoveryExecutor = new StreamingToolExecutor(
-                _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                requestMetadata: baseRequest.Metadata,
-                toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
-            skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
-                skillRecovery,
-                skillRecoveryCount,
-                finalContent: null,
-                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
-                recoveryExecutor,
+            await skillRecovery.ApplyInitialDirectivesAsync(
+                baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
                 messages,
                 pendingHistoryMessages,
+                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
                 runToken);
         }
 
@@ -384,24 +376,15 @@ public sealed class ChatRuntime
                                        parsedTextToolCall?.ToolCalls.Count > 0);
 
                 if (!roundCallsTools &&
-                    SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
-                        skillRecovery,
-                        pendingHistoryMessages,
-                        roundResult.Content,
-                        skillRecoveryCount,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        out var recoveryDirective))
-                {
-                    streamingExecutor.Discard(streamingToolState);
-                    skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
-                        skillRecovery,
-                        skillRecoveryCount,
-                        roundResult.Content,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        streamingExecutor,
+                    await skillRecovery.TryRecoverFinalAnswerAsync(
+                        roundRequest.ToolContext,
                         messages,
                         pendingHistoryMessages,
-                        runToken);
+                        roundResult.Content,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
+                        runToken))
+                {
+                    streamingExecutor.Discard(streamingToolState);
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -520,27 +503,14 @@ public sealed class ChatRuntime
                     continue;
                 }
 
-                if (SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
-                        skillRecovery,
-                        pendingHistoryMessages,
-                        roundResult.Content,
-                        skillRecoveryCount,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        out var recoveryDirective))
-                {
-                    var recoveryExecutor = new StreamingToolExecutor(
-                        _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                        requestMetadata: baseRequest.Metadata,
-                        toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
-                    skillRecoveryCount = await ApplySkillRecoveryDirectivesAsync(
-                        skillRecovery,
-                        skillRecoveryCount,
-                        roundResult.Content,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        recoveryExecutor,
+                if (await skillRecovery.TryRecoverFinalAnswerAsync(
+                        roundRequest.ToolContext,
                         messages,
                         pendingHistoryMessages,
-                        runToken);
+                        roundResult.Content,
+                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
+                        runToken))
+                {
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -698,80 +668,15 @@ public sealed class ChatRuntime
             yield return new LLMStreamChunk { DeltaContent = runContext.Result };
     }
 
-    private static async Task ApplySkillRecoveryDirectiveAsync(
-        SkillRecoveryFinalAnswerGuard.RecoveryDirective directive,
-        StreamingToolExecutor executor,
-        List<ChatMessage> messages,
-        List<ChatMessage> pendingHistoryMessages,
-        CancellationToken ct)
-    {
-        if (directive.ToolCall is { } toolCall)
-        {
-            var assistantToolCallMessage = new ChatMessage
-            {
-                Role = "assistant",
-                Content = null,
-                ToolCalls = [toolCall],
-            };
-            messages.Add(assistantToolCallMessage);
-            pendingHistoryMessages.Add(assistantToolCallMessage);
-
-            using var state = executor.CreateExecutionState();
-            executor.AddTool(state, toolCall);
-            await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
-            {
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
-                messages.Add(toolMsg);
-                pendingHistoryMessages.Add(toolMsg);
-            }
-
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(directive.Nudge))
-        {
-            var nudge = ChatMessage.User(directive.Nudge);
-            messages.Add(nudge);
-            pendingHistoryMessages.Add(nudge);
-        }
-    }
-
-    private static async Task<int> ApplySkillRecoveryDirectivesAsync(
-        AgentSkillRecoveryContext skillRecovery,
-        int skillRecoveryCount,
-        string? finalContent,
-        string? callIdPrefix,
-        StreamingToolExecutor executor,
-        List<ChatMessage> messages,
-        List<ChatMessage> pendingHistoryMessages,
-        CancellationToken ct)
-    {
-        const int maxChainedDirectives = 4;
-        for (var i = 0; i < maxChainedDirectives; i++)
-        {
-            if (!SkillRecoveryFinalAnswerGuard.ShouldForceRecovery(
-                    skillRecovery,
-                    pendingHistoryMessages,
-                    finalContent,
-                    skillRecoveryCount,
-                    callIdPrefix,
-                    out var directive))
-            {
-                break;
-            }
-
-            await ApplySkillRecoveryDirectiveAsync(directive, executor, messages, pendingHistoryMessages, ct)
-                .ConfigureAwait(false);
-            if (directive.ConsumesOrnnSearchAttempt)
-                skillRecoveryCount++;
-
-            // A fresh tool result should determine the next chained action. Keeping the prior
-            // final failure text would make a no-match recovery search immediately re-trigger.
-            finalContent = null;
-        }
-
-        return skillRecoveryCount;
-    }
+    private SkillRecoveryOrchestrator CreateSkillRecoveryOrchestrator(LLMRequest baseRequest) =>
+        new(
+            baseRequest.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty,
+            toolContext => new StreamingToolExecutor(
+                _toolLoop.Tools,
+                _hooks,
+                _toolLoop.ToolMiddlewares,
+                requestMetadata: baseRequest.Metadata,
+                toolContext: toolContext ?? baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
 
     private async Task RunStopHookAsync(
         string? finalContent,

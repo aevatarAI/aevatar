@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.Chat;
 
-internal static class SkillRecoveryFinalAnswerGuard
+internal static class SkillRecoveryPlanner
 {
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
@@ -78,7 +78,7 @@ internal static class SkillRecoveryFinalAnswerGuard
         "unavailable",
     ];
 
-    public static bool ShouldForceRecovery(
+    public static bool TryPlanNextDirective(
         AgentSkillRecoveryContext recovery,
         IReadOnlyList<ChatMessage> messages,
         string? finalContent,
@@ -345,27 +345,6 @@ internal static class SkillRecoveryFinalAnswerGuard
         return false;
     }
 
-    private static string BuildInitialSearchNudge(AgentSkillRecoveryContext recovery)
-    {
-        var command = DescribeCommand(recovery);
-        return
-            "[System: This is an Ornn skill-backed slash command. " +
-            $"Before any final answer, call `{OrnnSearchSkillsToolName}` with the command/task `{command}` and `scope` = `mixed`, " +
-            $"then call `{UseSkillToolName}` for the best matching skill and continue the command. " +
-            "Do not explain this policy to the user.]";
-    }
-
-    private static string BuildPrimarySkillNudge(AgentSkillRecoveryContext recovery)
-    {
-        var command = DescribeCommand(recovery);
-        var skill = recovery.PrimarySkillName?.Trim();
-        return
-            "[System: This slash command must run through the Ornn skill " +
-            $"`{skill}` before any final answer. Call `{UseSkillToolName}` with `skill` = `{skill}` " +
-            $"and continue `{command}` from the loaded skill instructions. " +
-            "Do not answer from the prompt alone and do not explain this policy to the user.]";
-    }
-
     private static string BuildUseDiscoveredSkillNudge(AgentSkillRecoveryContext recovery, string searchResult)
     {
         var command = DescribeCommand(recovery);
@@ -375,21 +354,6 @@ internal static class SkillRecoveryFinalAnswerGuard
             $"Before any final answer, call `{UseSkillToolName}` for the best matching skill from this result: `{result}`. " +
             $"Then continue `{command}` from the loaded skill instructions. " +
             "Only give a concise actionable failure if the matching skill cannot be loaded.]";
-    }
-
-    private static string BuildBlockerNudge(
-        AgentSkillRecoveryContext recovery,
-        IReadOnlyList<ChatMessage> messages,
-        string? finalContent)
-    {
-        var blocker = SummarizeBlocker(messages, finalContent);
-        var command = DescribeCommand(recovery);
-        return
-            "[System: You are following a loaded skill for an Ornn skill-backed slash command, " +
-            "but you hit a blocker before completing it. " +
-            $"Before any final answer, call `{OrnnSearchSkillsToolName}` with a concrete query for this blocker: `{blocker}`. " +
-            $"Use `scope` = `mixed`, then call `{UseSkillToolName}` for the best matching skill and continue `{command}`. " +
-            "Only give a concise actionable failure if Ornn lookup/load has already been tried for this blocker and cannot recover it.]";
     }
 
     private static string ExtractCommandArguments(AgentSkillRecoveryContext recovery)

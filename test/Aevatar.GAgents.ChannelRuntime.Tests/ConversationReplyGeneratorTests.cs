@@ -260,6 +260,55 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForLarkRelayTurn_InjectsAevatarWorkflowToolsIntoLlmRequest()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("aevatar_invoke_gagent", """{"ok":true}""")),
+                new SingleToolSource(new FixedResultTool("aevatar_invoke_team", """{"ok":true}""")),
+                new SingleToolSource(new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-1"}""")),
+                new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}""")),
+                new SingleToolSource(new FixedResultTool("aevatar_query_readmodel", """{"items":[]}""")),
+            ]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-relay-msg-workflow-tools",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-workflow-tools" },
+                Content = new MessageContent { Text = "start the workflow" },
+                TransportExtras = new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxPlatformMessageId = "om_workflow_tools",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.PlatformMessageId] = "om_workflow_tools",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        request.Tools!.Select(static tool => tool.Name).Should().Contain(
+        [
+            "aevatar_invoke_gagent",
+            "aevatar_invoke_team",
+            "aevatar_start_workflow",
+            "aevatar_observe_run",
+            "aevatar_query_readmodel",
+        ]);
+        request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithStreamingSink_EmitsPlaceholderThenFinalTextAcrossToolFollowUp()
     {
         var providerFactory = new ToolCallingProviderFactory();
