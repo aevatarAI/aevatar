@@ -10,8 +10,6 @@ import {
 import {
   Button,
   Empty,
-  Input,
-  Modal,
   Space,
   Tag,
   Typography,
@@ -219,15 +217,10 @@ const executionTextareaStyle: React.CSSProperties = {
   width: '100%',
 };
 
-const observeSummaryGridStyle: React.CSSProperties = {
+const observeDetailsGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
-  gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 340px)',
-};
-
-const observeSummaryStackStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 16,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
 };
 
 const observeMetricGridStyle: React.CSSProperties = {
@@ -238,10 +231,73 @@ const observeMetricGridStyle: React.CSSProperties = {
 
 const observeMetricCardStyle: React.CSSProperties = {
   border: '1px solid #eef2f7',
-  borderRadius: 12,
+  borderRadius: 8,
   display: 'grid',
   gap: 4,
+  minWidth: 0,
   padding: 12,
+};
+
+const observeRunHeaderStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 14,
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  padding: 16,
+};
+
+const observeRunTitleStyle: React.CSSProperties = {
+  color: '#111827',
+  fontSize: 18,
+  fontWeight: 700,
+  lineHeight: '24px',
+  margin: 0,
+};
+
+const observeRunSubtitleStyle: React.CSSProperties = {
+  color: '#4b5563',
+  fontSize: 13,
+  lineHeight: '20px',
+  margin: 0,
+  overflowWrap: 'anywhere',
+};
+
+const observeRunMetricGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+};
+
+const observeRunMetricStyle: React.CSSProperties = {
+  background: '#f9fafb',
+  border: '1px solid #eef2f7',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 3,
+  minWidth: 0,
+  padding: '10px 12px',
+};
+
+const observeStageShellStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 'calc(100vh - 244px)',
+  overflow: 'hidden',
+};
+
+const observeStageBarStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 12,
+  minHeight: 42,
+  padding: '8px 16px',
 };
 
 type ObserveCompareRow = {
@@ -707,11 +763,6 @@ export type StudioExecutionPageProps = {
     readonly title: string;
     readonly description: string;
   } | null;
-  readonly savePending: boolean;
-  readonly canSaveWorkflow: boolean;
-  readonly runPending: boolean;
-  readonly canOpenRunWorkflow: boolean;
-  readonly canRunWorkflow: boolean;
   readonly executionCanStop: boolean;
   readonly executionStopPending: boolean;
   readonly runPrompt: string;
@@ -719,12 +770,6 @@ export type StudioExecutionPageProps = {
   readonly logsPopoutMode?: boolean;
   readonly logsDetached?: boolean;
   readonly onOpenExecution: (executionId: string) => void;
-  readonly onSaveDraft: () => void;
-  readonly onExportDraft: () => void;
-  readonly onSetDraftWorkflowName: (value: string) => void;
-  readonly onSetWorkflowDescription: (value: string) => void;
-  readonly onRunPromptChange: (value: string) => void;
-  readonly onStartExecution: () => void;
   readonly onResumeExecution: (
     interaction: ExecutionInteractionState,
     action: 'submit' | 'approve' | 'reject' | 'signal',
@@ -746,8 +791,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   currentImplementationLabel,
   currentImplementationKind = 'unknown',
   emptyState = null,
-  runPending,
-  canRunWorkflow,
   executionCanStop,
   executionStopPending,
   runPrompt,
@@ -755,8 +798,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   logsPopoutMode = false,
   logsDetached = false,
   onOpenExecution,
-  onRunPromptChange,
-  onStartExecution,
   onResumeExecution,
   onStopExecution,
   onPopOutLogs,
@@ -771,7 +812,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [executionActionInput, setExecutionActionInput] = React.useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
-  const [runModalOpen, setRunModalOpen] = React.useState(false);
 
   const selectedExecutionDetail = selectedExecution.data;
   const executionTrace = React.useMemo(
@@ -1076,7 +1116,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           >
             {hasRuns ? (
               <select
-                aria-label="选择测试运行"
+                aria-label="选择运行记录"
                 value={selectedExecutionDetail?.executionId || ''}
                 onChange={(event) => {
                   if (event.target.value) {
@@ -1375,7 +1415,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             <StudioCatalogEmptyPanel
               icon={<CaretRightFilled style={{ color: '#CBD5E1' }} />}
               title="暂无运行记录"
-              copy="开始一次测试运行后，这里会显示执行日志。"
+              copy="触发一次成员运行后，这里会显示执行日志。"
             />
           ) : executionTrace?.logs?.length ? (
             executionTrace.logs.map((log, index) => (
@@ -1435,7 +1475,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             <StudioCatalogEmptyPanel
               icon={<FileTextOutlined style={{ color: '#CBD5E1' }} />}
               title="还没有日志"
-              copy="选择一条测试运行后，这里会显示步骤执行和状态变化。"
+              copy="选择一条运行记录后，这里会显示步骤执行和状态变化。"
             />
           )}
         </div>
@@ -1457,7 +1497,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="选择一条测试运行后，这里会显示执行日志。"
+            description="选择一条运行记录后，这里会显示执行日志。"
           />
         )}
       </div>
@@ -1469,7 +1509,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       {executions.isError ? (
         <StudioNoticeCard
           type="error"
-          title="读取测试运行列表失败"
+          title="读取运行列表失败"
           description={describeError(executions.error)}
         />
       ) : null}
@@ -1508,318 +1548,111 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         />
       ) : null}
 
-      <div style={observeSummaryGridStyle}>
-        <div style={observeSummaryStackStyle}>
-          <AevatarPanel
-            title="Run Compare"
-            titleHelp="Observe should answer what changed between the selected run and the nearest baseline before operators dive into logs."
-            extra={
-              baselineExecution ? (
-                <Tag>{`${baselineExecution.executionId} baseline`}</Tag>
-              ) : (
-                <Tag>no baseline yet</Tag>
-              )
-            }
-          >
-            <div style={{ display: 'grid', gap: 10 }}>
-              {observeCompareRows.map((row) => (
-                <div
-                  key={row.label}
-                  style={{
-                    alignItems: 'center',
-                    borderBottom: '1px solid #f3f4f6',
-                    display: 'grid',
-                    gap: 12,
-                    gridTemplateColumns: '120px minmax(0, 1fr) minmax(0, 1fr) auto',
-                    paddingBottom: 10,
-                  }}
-                >
-                  <Typography.Text type="secondary">{row.label}</Typography.Text>
-                  <Typography.Text>{row.current}</Typography.Text>
-                  <Typography.Text type="secondary">{row.baseline}</Typography.Text>
-                  <AevatarStatusTag
-                    domain="observation"
-                    label="delta"
-                    status={row.delta}
-                  />
-                </div>
-              ))}
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Human Escalation Playback"
-            titleHelp="Keep waiting approvals, submitted answers, and recent human hand-offs visible before the operator scrolls into the raw event log."
-          >
-            {observePlaybackEntries.length > 0 ? (
-              <div style={{ display: 'grid', gap: 10 }}>
-                {observePlaybackEntries.map((entry) => (
-                  <div
-                    key={`${entry.timestamp}-${entry.label}`}
-                    style={{
-                      borderBottom: '1px solid #f3f4f6',
-                      display: 'grid',
-                      gap: 4,
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <div
-                      style={{
-                        alignItems: 'center',
-                        display: 'flex',
-                        gap: 8,
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <Typography.Text strong>{entry.label}</Typography.Text>
-                      <AevatarStatusTag
-                        domain="observation"
-                        label="playback"
-                        status={entry.status}
-                      />
-                    </div>
-                    <Typography.Text type="secondary">{entry.detail}</Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {entry.timestamp}
-                    </Typography.Text>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <StudioCatalogEmptyPanel
-                icon={<UserOutlined style={{ color: '#CBD5E1' }} />}
-                title="暂无人工介入"
-                copy="当前选择的运行还没有出现 approval、input 或 replay 片段。"
-              />
-            )}
-          </AevatarPanel>
-
-          <AevatarPanel
-            title="Member Snapshot"
-            titleHelp="Observe keeps the current member identity, active actor, and selected run provenance visible without sending operators back into Bind."
-          >
-            <div style={observeMetricGridStyle}>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Member</Typography.Text>
-                <Typography.Text strong>
-                  {selectedMemberLabel || activeWorkflowName || draftWorkflowName || 'Current member'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Implementation</Typography.Text>
-                <Typography.Text strong>
-                  {currentImplementationLabel ||
-                    activeWorkflowName ||
-                    draftWorkflowName ||
-                    'Current implementation'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Workspace</Typography.Text>
-                <Typography.Text strong>{activeDirectoryLabel || 'Workspace'}</Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Execution</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.executionId || 'No run selected'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Service</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.serviceId || 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Revision</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.revisionId || 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Actor</Typography.Text>
-                <Typography.Text strong>{selectedExecutionActorId || 'n/a'}</Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">State Version</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.stateVersion !== null &&
-                  selectedExecutionDetail?.stateVersion !== undefined
-                    ? `v${selectedExecutionDetail.stateVersion}`
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Started</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail
-                    ? formatDateTime(selectedExecutionDetail.startedAtUtc)
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Updated</Typography.Text>
-                <Typography.Text strong>
-                  {selectedExecutionDetail?.updatedAtUtc
-                    ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
-                    : 'n/a'}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Prompt</Typography.Text>
-                <Typography.Text strong>
-                  {trimObserveText(executionPromptPreview || 'No prompt yet.', 72)}
-                </Typography.Text>
-              </div>
-              <div style={observeMetricCardStyle}>
-                <Typography.Text type="secondary">Output</Typography.Text>
-                <Typography.Text strong>
-                  {trimObserveText(selectedExecutionDetail?.output || 'No output yet.', 72)}
-                </Typography.Text>
-              </div>
-            </div>
-          </AevatarPanel>
+      <section style={observeRunHeaderStyle}>
+        <div style={{ display: 'grid', gap: 10, minWidth: 0 }}>
+          <Space wrap size={[8, 8]}>
+            <AevatarStatusTag
+              domain="run"
+              label="run"
+              status={executionStatusKey || 'idle'}
+            />
+            <Tag>
+              {currentImplementationKind === 'workflow'
+                ? 'workflow'
+                : currentImplementationKind === 'script'
+                  ? 'script'
+                  : currentImplementationKind === 'gagent'
+                    ? 'gagent'
+                    : 'member'}
+            </Tag>
+            <Tag color={selectedExecutionDetail?.auditSource === 'run-audit' ? 'green' : 'default'}>
+              {selectedExecutionDetail?.auditSource === 'run-audit'
+                ? 'audit ready'
+                : 'summary only'}
+            </Tag>
+            <Tag color={baselineExecution ? 'blue' : 'default'}>
+              {baselineExecution ? 'baseline ready' : 'baseline warming'}
+            </Tag>
+          </Space>
+          <h2 style={observeRunTitleStyle}>
+            {selectedMemberLabel || activeWorkflowName || draftWorkflowName || 'Current member'}
+          </h2>
+          <p style={observeRunSubtitleStyle}>
+            {currentImplementationLabel ||
+              activeWorkflowName ||
+              draftWorkflowName ||
+              'Current implementation'}{' '}
+            · {selectedExecutionDetail?.executionId || 'No run selected'}
+            {executionDurationLabel ? ` · ${executionDurationLabel}` : ''}
+          </p>
+          {executionPromptPreview ? (
+            <Typography.Paragraph
+              ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}
+              style={{ margin: 0 }}
+              type="secondary"
+            >
+              Input: {executionPromptPreview}
+            </Typography.Paragraph>
+          ) : null}
         </div>
 
-        <div style={observeSummaryStackStyle}>
-          <AevatarPanel
-            title="Health & Trust"
-            titleHelp="Observe should quickly answer whether the current member looks healthy, whether humans are blocked, and whether the trace can be trusted."
+        {executionCanStop ? (
+          <Button
+            danger
+            loading={executionStopPending}
+            disabled={executionStopPending}
+            onClick={onStopExecution}
           >
-            <div style={{ display: 'grid', gap: 12 }}>
-              {observeHealthItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderBottom: '1px solid #f3f4f6',
-                    display: 'grid',
-                    gap: 6,
-                    paddingBottom: 10,
-                  }}
-                >
-                  <div
-                    style={{
-                      alignItems: 'center',
-                      display: 'flex',
-                      gap: 8,
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <Typography.Text type="secondary">{item.label}</Typography.Text>
-                    <AevatarStatusTag
-                      domain="observation"
-                      label="health"
-                      status={item.status}
-                    />
-                  </div>
-                  <Typography.Text strong>{item.value}</Typography.Text>
-                  <Typography.Text type="secondary">{item.note}</Typography.Text>
-                </div>
-              ))}
-            </div>
-          </AevatarPanel>
+            Stop run
+          </Button>
+        ) : null}
 
-          <AevatarPanel
-            title="Provenance"
-            titleHelp="Be explicit about what is live, what is inferred from the selected execution, and what still needs another run or baseline."
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <Space wrap size={[8, 8]}>
-                <Tag
-                  color={
-                    selectedExecutionDetail?.auditSource === 'run-audit'
-                      ? 'green'
-                      : 'default'
-                  }
-                >
-                  {selectedExecutionDetail?.auditSource === 'run-audit'
-                    ? 'run audit ready'
-                    : 'summary only'}
-                </Tag>
-                <Tag
-                  color={
-                    workflowGraphAvailable
-                      ? 'green'
-                      : currentImplementationKind === 'workflow'
-                        ? 'gold'
-                        : 'default'
-                  }
-                >
-                  {workflowGraphAvailable
-                    ? 'workflow graph ready'
-                    : currentImplementationKind === 'workflow'
-                      ? 'workflow graph unavailable'
-                      : 'workflow-only graph'}
-                </Tag>
-                <Tag color={baselineExecution ? 'blue' : 'default'}>
-                  {baselineExecution ? 'baseline available' : 'baseline warming up'}
-                </Tag>
-              </Space>
-              <div style={observeMetricGridStyle}>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Definition Actor</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.definitionActorId || 'n/a'}
-                  </Typography.Text>
-                </div>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Last Event</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.lastEventId || 'n/a'}
-                  </Typography.Text>
-                </div>
-                <div style={observeMetricCardStyle}>
-                  <Typography.Text type="secondary">Audit Updated</Typography.Text>
-                  <Typography.Text strong>
-                    {selectedExecutionDetail?.auditUpdatedAtUtc
-                      ? formatDateTime(selectedExecutionDetail.auditUpdatedAtUtc)
-                      : 'n/a'}
-                  </Typography.Text>
-                </div>
-              </div>
-              <Typography.Text type="secondary">
-                {selectedExecutionDetail
-                  ? `Selected run facts are coming from service ${trimObserveText(
-                      selectedExecutionDetail.serviceId,
-                    )}, revision ${trimObserveText(
-                      selectedExecutionDetail.revisionId,
-                    )}, actor ${trimObserveText(selectedExecutionDetail.actorId)}.`
-                  : activeWorkflowDescription ||
-                    '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {baselineExecution
-                  ? `The compare baseline is ${baselineExecution.executionId} on revision ${trimObserveText(
-                      baselineExecution.revisionId,
-                    )}, started ${formatDateTime(baselineExecution.startedAtUtc)}.`
-                  : 'Observe can compare more meaningfully after the next run lands and a baseline exists.'}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={observeRunMetricGridStyle}>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">Progress</Typography.Text>
+              <Typography.Text strong>
+                {executionExecutedSteps}/{executionTotalSteps || 0} steps
               </Typography.Text>
             </div>
-          </AevatarPanel>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">Events</Typography.Text>
+              <Typography.Text strong>{executionLogCount} logs</Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">Actor</Typography.Text>
+              <Typography.Text strong ellipsis={{ tooltip: selectedExecutionActorId || 'n/a' }}>
+                {selectedExecutionActorId || 'n/a'}
+              </Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">State Version</Typography.Text>
+              <Typography.Text strong>
+                {selectedExecutionDetail?.stateVersion !== null &&
+                selectedExecutionDetail?.stateVersion !== undefined
+                  ? `v${selectedExecutionDetail.stateVersion}`
+                  : 'n/a'}
+              </Typography.Text>
+            </div>
+            <div style={observeRunMetricStyle}>
+              <Typography.Text type="secondary">Updated</Typography.Text>
+              <Typography.Text strong>
+                {selectedExecutionDetail?.updatedAtUtc
+                  ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
+                  : 'n/a'}
+              </Typography.Text>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       <div
-        style={{
-          background: '#FFFFFF',
-          border: '1px solid #E6E3DE',
-          borderRadius: 28,
-          boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 'calc(100vh - 176px)',
-          overflow: 'hidden',
-        }}
+        style={observeStageShellStyle}
       >
         <div
           style={{
             ...executionBarStyle,
-            alignItems: 'center',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 12,
-            minHeight: 36,
-            padding: '0 16px',
+            ...observeStageBarStyle,
           }}
         >
           <span
@@ -1841,40 +1674,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             已执行 {executionExecutedSteps}/{executionTotalSteps || 0} 步骤
             {executionDurationLabel ? ` · 耗时 ${executionDurationLabel}` : ''}
           </Typography.Text>
-          {executionPromptPreview ? (
-            <Typography.Text
-              type="secondary"
-              style={{
-                marginLeft: 'auto',
-                maxWidth: 380,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              输入: "{executionPromptPreview}"
-            </Typography.Text>
-          ) : null}
-          <Button
-            type="primary"
-            size="small"
-            loading={runPending}
-            disabled={!canRunWorkflow || runPending}
-            onClick={() => setRunModalOpen(true)}
-          >
-            重新运行
-          </Button>
-          {executionCanStop ? (
-            <Button
-              danger
-              size="small"
-              loading={executionStopPending}
-              disabled={executionStopPending}
-              onClick={onStopExecution}
-            >
-              停止
-            </Button>
-          ) : null}
         </div>
 
         <div
@@ -1940,34 +1739,160 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         </div>
       </div>
 
-      <Modal
-        open={runModalOpen}
-        title="测试运行"
-        onCancel={() => setRunModalOpen(false)}
-        onOk={() => {
-          void onStartExecution();
-          setRunModalOpen(false);
-        }}
-        okText="开始运行"
-        okButtonProps={{
-          disabled: !canRunWorkflow,
-          loading: runPending,
-          icon: <CaretRightFilled />,
-        }}
-      >
-        <div style={cardStackStyle}>
-          <Typography.Text type="secondary">
-            这段输入会作为 <Typography.Text code>$input</Typography.Text> 传入当前行为定义。
-          </Typography.Text>
-          <Input.TextArea
-            aria-label="Studio execution prompt"
-            autoSize={{ minRows: 6, maxRows: 10 }}
-            placeholder="这次运行要做什么？"
-            value={runPrompt}
-            onChange={(event) => onRunPromptChange(event.target.value)}
-          />
-        </div>
-      </Modal>
+      <div style={observeDetailsGridStyle}>
+        <AevatarPanel
+          title="Run Compare"
+          titleHelp="Compare the selected run with the nearest previous run from this member."
+          extra={
+            baselineExecution ? (
+              <Tag>{`${baselineExecution.executionId} baseline`}</Tag>
+            ) : (
+              <Tag>no baseline yet</Tag>
+            )
+          }
+        >
+          <div style={{ display: 'grid', gap: 10 }}>
+            {observeCompareRows.map((row) => (
+              <div
+                key={row.label}
+                style={{
+                  alignItems: 'center',
+                  borderBottom: '1px solid #f3f4f6',
+                  display: 'grid',
+                  gap: 10,
+                  gridTemplateColumns: '104px minmax(0, 1fr) minmax(0, 1fr) auto',
+                  paddingBottom: 10,
+                }}
+              >
+                <Typography.Text type="secondary">{row.label}</Typography.Text>
+                <Typography.Text ellipsis={{ tooltip: row.current }}>
+                  {row.current}
+                </Typography.Text>
+                <Typography.Text type="secondary" ellipsis={{ tooltip: row.baseline }}>
+                  {row.baseline}
+                </Typography.Text>
+                <AevatarStatusTag
+                  domain="observation"
+                  label="delta"
+                  status={row.delta}
+                />
+              </div>
+            ))}
+          </div>
+        </AevatarPanel>
+
+        <AevatarPanel
+          title="Human Playback"
+          titleHelp="Show approvals, inputs, signals, and recent human hand-offs from the selected run."
+        >
+          {observePlaybackEntries.length > 0 ? (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {observePlaybackEntries.map((entry) => (
+                <div
+                  key={`${entry.timestamp}-${entry.label}`}
+                  style={{
+                    borderBottom: '1px solid #f3f4f6',
+                    display: 'grid',
+                    gap: 4,
+                    paddingBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 8,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text strong>{entry.label}</Typography.Text>
+                    <AevatarStatusTag
+                      domain="observation"
+                      label="playback"
+                      status={entry.status}
+                    />
+                  </div>
+                  <Typography.Text type="secondary">{entry.detail}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {entry.timestamp}
+                  </Typography.Text>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <StudioCatalogEmptyPanel
+              icon={<UserOutlined style={{ color: '#CBD5E1' }} />}
+              title="暂无人工介入"
+              copy="当前选择的运行还没有出现 approval、input 或 replay 片段。"
+            />
+          )}
+        </AevatarPanel>
+
+        <AevatarPanel
+          title="Observation Facts"
+          titleHelp="Keep identity, provenance, and trace trust visible without sending operators back to Bind."
+        >
+          <div style={{ display: 'grid', gap: 14 }}>
+            <div style={observeMetricGridStyle}>
+              {observeHealthItems.map((item) => (
+                <div key={item.label} style={observeMetricCardStyle}>
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 8,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text type="secondary">{item.label}</Typography.Text>
+                    <AevatarStatusTag
+                      domain="observation"
+                      label="health"
+                      status={item.status}
+                    />
+                  </div>
+                  <Typography.Text strong>{item.value}</Typography.Text>
+                  <Typography.Text type="secondary">{item.note}</Typography.Text>
+                </div>
+              ))}
+            </div>
+            <Space wrap size={[8, 8]}>
+              <Tag>
+                Service {selectedExecutionDetail?.serviceId || 'n/a'}
+              </Tag>
+              <Tag>
+                Revision {selectedExecutionDetail?.revisionId || 'n/a'}
+              </Tag>
+              <Tag>
+                Definition {selectedExecutionDetail?.definitionActorId || 'n/a'}
+              </Tag>
+              <Tag>
+                Last event {selectedExecutionDetail?.lastEventId || 'n/a'}
+              </Tag>
+              <Tag>
+                Workspace {activeDirectoryLabel || 'Workspace'}
+              </Tag>
+            </Space>
+            <Typography.Text type="secondary">
+              {selectedExecutionDetail
+                ? `Selected facts come from service ${trimObserveText(
+                    selectedExecutionDetail.serviceId,
+                  )}, revision ${trimObserveText(
+                    selectedExecutionDetail.revisionId,
+                  )}, actor ${trimObserveText(selectedExecutionDetail.actorId)}.`
+                : activeWorkflowDescription ||
+                  '当前 Observe 页只展示当前 member 的运行事实；契约与发布信息留在 Bind。'}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {baselineExecution
+                ? `Baseline: ${baselineExecution.executionId}, revision ${trimObserveText(
+                    baselineExecution.revisionId,
+                  )}, started ${formatDateTime(baselineExecution.startedAtUtc)}.`
+                : 'Observe can compare more meaningfully after another run lands.'}
+            </Typography.Text>
+          </div>
+        </AevatarPanel>
+      </div>
     </div>
   );
 };

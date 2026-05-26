@@ -9673,11 +9673,6 @@ const StudioPage: React.FC = () => {
         currentImplementationLabel={observeCurrentImplementationLabel}
         currentImplementationKind={observeImplementationKind}
         emptyState={observeEmptyState}
-        savePending={savePending}
-        canSaveWorkflow={canSaveWorkflow}
-        runPending={runPending}
-        canOpenRunWorkflow={canOpenRunWorkflow}
-        canRunWorkflow={canRunWorkflow}
         executionCanStop={executionCanStop}
         executionStopPending={executionStopPending}
         runPrompt={runPrompt}
@@ -9685,14 +9680,6 @@ const StudioPage: React.FC = () => {
         logsPopoutMode={logsPopoutMode === 'popout'}
         logsDetached={logsDetached}
         onOpenExecution={openExecution}
-        onSaveDraft={() => void handleSaveDraft()}
-        onExportDraft={() => void handleExportDraft()}
-        onSetDraftWorkflowName={setDraftWorkflowName}
-        onSetWorkflowDescription={(value) =>
-          void handleSetWorkflowDescription(value)
-        }
-        onRunPromptChange={setRunPrompt}
-        onStartExecution={() => void handleStartExecution()}
         onResumeExecution={handleResumeExecution}
         onStopExecution={() => void handleStopExecution()}
         onPopOutLogs={handlePopOutExecutionLogs}
