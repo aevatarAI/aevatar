@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Events;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
@@ -13,7 +14,8 @@ public class VoicePresenceEventPolicyTests
         var policy = new VoicePresenceEventPolicy();
         var now = DateTimeOffset.UtcNow;
 
-        policy.Evaluate(MakeEnvelope("Alice", now), now)
+        policy.Evaluate(MakeEnvelope("Alice", now), now, [])
+            .Decision
             .ShouldBe(VoicePresenceEventPolicyDecision.Admit);
     }
 
@@ -23,7 +25,8 @@ public class VoicePresenceEventPolicyTests
         var policy = new VoicePresenceEventPolicy { StaleAfter = TimeSpan.FromSeconds(5) };
         var now = DateTimeOffset.UtcNow;
 
-        policy.Evaluate(MakeEnvelope("Alice", now.AddSeconds(-30)), now)
+        policy.Evaluate(MakeEnvelope("Alice", now.AddSeconds(-30)), now, [])
+            .Decision
             .ShouldBe(VoicePresenceEventPolicyDecision.DropStale);
     }
 
@@ -34,9 +37,13 @@ public class VoicePresenceEventPolicyTests
         var now = DateTimeOffset.UtcNow;
         var first = MakeEnvelope("Alice", now);
         var second = MakeEnvelope("Alice", now.AddMilliseconds(500));
+        var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
-        policy.Evaluate(first, now).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
-        policy.Evaluate(second, now.AddMilliseconds(500))
+        var verdict = policy.Evaluate(first, now, fence);
+        verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        fence = policy.BuildFence(fence, verdict, now).ToList();
+        policy.Evaluate(second, now.AddMilliseconds(500), fence)
+            .Decision
             .ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
     }
 
@@ -45,10 +52,13 @@ public class VoicePresenceEventPolicyTests
     {
         var policy = new VoicePresenceEventPolicy();
         var now = DateTimeOffset.UtcNow;
+        var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
-        policy.Evaluate(MakeEnvelope("Alice", now), now)
-            .ShouldBe(VoicePresenceEventPolicyDecision.Admit);
-        policy.Evaluate(MakeEnvelope("Bob", now), now.AddMilliseconds(10))
+        var verdict = policy.Evaluate(MakeEnvelope("Alice", now), now, fence);
+        verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        fence = policy.BuildFence(fence, verdict, now).ToList();
+        policy.Evaluate(MakeEnvelope("Bob", now), now.AddMilliseconds(10), fence)
+            .Decision
             .ShouldBe(VoicePresenceEventPolicyDecision.Admit);
     }
 
@@ -59,9 +69,12 @@ public class VoicePresenceEventPolicyTests
         var now = DateTimeOffset.UtcNow;
         var first = MakeEnvelope("Alice", now);
         var later = MakeEnvelope("Alice", now.AddSeconds(5));
+        var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
-        policy.Evaluate(first, now).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
-        policy.Evaluate(later, now.AddSeconds(5)).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        var verdict = policy.Evaluate(first, now, fence);
+        verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        fence = policy.BuildFence(fence, verdict, now).ToList();
+        policy.Evaluate(later, now.AddSeconds(5), fence).Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
     }
 
     [Fact]
@@ -75,9 +88,14 @@ public class VoicePresenceEventPolicyTests
             Timestamp = Timestamp.FromDateTimeOffset(now),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
         };
+        var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
-        policy.Evaluate(envelope, now).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
-        policy.Evaluate(envelope, now.AddMilliseconds(100)).ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
+        var verdict = policy.Evaluate(envelope, now, fence);
+        verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        fence = policy.BuildFence(fence, verdict, now).ToList();
+        policy.Evaluate(envelope, now.AddMilliseconds(100), fence)
+            .Decision
+            .ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
     }
 
     private static EventEnvelope MakeEnvelope(string person, DateTimeOffset observedAt)

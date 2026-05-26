@@ -67,6 +67,11 @@ message VoiceProviderResponseBinding {
   int32 response_id = 2;
 }
 
+message VoicePresenceEventDedupeFenceEntry {
+  string key = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+}
+
 // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
 //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
 //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
@@ -90,6 +95,7 @@ message VoicePresenceRuntimeState {
   VoiceRemoteAudioSupport remote_audio_support = 17;
   string active_transport_lease_id = 18;
   string active_lease_owner_id = 19;
+  repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {

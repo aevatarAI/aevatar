@@ -74,6 +74,8 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceControlFrame));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceToolDefinition));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceEventDedupeFenceEntry));
     }
 
     [Fact]
