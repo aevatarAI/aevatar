@@ -107,7 +107,6 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton(scheduler)
             .AddSingleton<IConversationTurnRunner, SucceedingTurnRunner>()
-            .AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -115,7 +114,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
         var agent = new ConversationGAgent
         {
             Services = services,
-            EventPublisher = new NoopEventPublisher(),
+            EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
@@ -255,7 +254,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 
-    private sealed class NoopEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher
     {
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -345,9 +344,4 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
         }
     }
 
-    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
-    {
-        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
-            workItem.ExecuteAsync(ct);
-    }
 }

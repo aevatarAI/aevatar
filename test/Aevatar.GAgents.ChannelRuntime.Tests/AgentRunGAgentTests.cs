@@ -3129,7 +3129,6 @@ public sealed class AgentRunGAgentTests
         {
             _inner = new AgentRunReplyGenerationExecutor(
                 dispatchPort,
-                new ImmediateBusinessIoExecutor(),
                 replyGenerator,
                 collector,
                 relayOptions,
@@ -3240,7 +3239,6 @@ public sealed class AgentRunGAgentTests
             StepExecutor = runtime.CreateStepExecutor();
             Executor = new AgentRunReplyGenerationExecutor(
                 new RecordingActorDispatchPort(),
-                new ImmediateBusinessIoExecutor(),
                 this,
                 new AsyncLocalInteractiveReplyCollector(),
                 new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
@@ -3349,17 +3347,6 @@ public sealed class AgentRunGAgentTests
             ct.ThrowIfCancellationRequested();
             Arguments.Add(argumentsJson);
             return Task.FromResult("""{"result":"tool-ok:aevatar"}""");
-        }
-    }
-
-    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
-    {
-        public async Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct)
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            if (workItem.Timeout > TimeSpan.Zero)
-                timeoutCts.CancelAfter(workItem.Timeout);
-            await workItem.ExecuteAsync(timeoutCts.Token);
         }
     }
 

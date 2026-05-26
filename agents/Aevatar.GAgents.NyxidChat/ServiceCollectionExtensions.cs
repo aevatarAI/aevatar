@@ -41,8 +41,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.AddHttpClient();
-        services.AddOptions<LongRunningBusinessIoExecutorOptions>();
-        services.TryAddSingleton<ILongRunningBusinessIoExecutor, LongRunningBusinessIoExecutor>();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());

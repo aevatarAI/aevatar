@@ -52,9 +52,6 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(ILongRunningBusinessIoExecutor) &&
-            descriptor.ImplementationType == typeof(LongRunningBusinessIoExecutor));
-        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));

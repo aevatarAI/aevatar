@@ -18,12 +18,14 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
 //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
 //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
-    private readonly ILongRunningBusinessIoExecutor _businessIoExecutor;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -34,7 +36,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     public AgentRunReplyGenerationExecutor(
         IActorDispatchPort actorDispatchPort,
-        ILongRunningBusinessIoExecutor businessIoExecutor,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
@@ -45,7 +46,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IActorHandledDispatchPort? actorHandledDispatchPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _businessIoExecutor = businessIoExecutor ?? throw new ArgumentNullException(nameof(businessIoExecutor));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -112,17 +112,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             Request = request.Request.Clone(),
         };
-        // Refactor (iter99/cluster-596-phase-e): Old pattern: executor owned the whole multi-round LLM/tool loop.
-        // New principle: AgentRunGAgent owns per-step continuation; executor performs exactly one LLM IO step.
-        return _businessIoExecutor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:llm:{workItem.StepIndex}",
-                workItem.RunActorId,
-                "agent-run-reply-llm-step",
-                workItem.Request.CorrelationId,
-                ResolveFallbackTimeout(),
-                executorCt => ExecuteLlmStepAndReportAsync(workItem, executorCt)),
-            ct);
+        return ExecuteLlmStepAndReportAsync(workItem, ct);
     }
 
     public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
@@ -133,17 +123,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             Request = request.Request.Clone(),
         };
-        // Refactor (iter99/cluster-596-phase-e): Old pattern: tool execution stayed inside ChatRuntime's multi-round loop.
-        // New principle: a typed self-message asks for one tool IO step, then actor reconciles the result.
-        return _businessIoExecutor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:tool:{workItem.StepIndex}",
-                workItem.RunActorId,
-                "agent-run-reply-tool-step",
-                workItem.Request.CorrelationId,
-                ResolveFallbackTimeout(),
-                executorCt => ExecuteToolStepAndReportAsync(workItem, executorCt)),
-            ct);
+        return ExecuteToolStepAndReportAsync(workItem, ct);
     }
 
     private async Task ExecuteLlmStepAndReportAsync(
@@ -559,16 +539,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         return control;
-    }
-
-    private TimeSpan ResolveFallbackTimeout()
-    {
-        if (_relayOptions is null)
-            return TimeSpan.FromSeconds(AgentRunGAgent.FallbackTimeoutSecondsDefault);
-        var configured = _relayOptions.ResponseTimeoutSeconds;
-        if (configured <= 0)
-            return TimeSpan.Zero;
-        return TimeSpan.FromSeconds(configured);
     }
 
     private static string? NormalizeOptional(string? value)

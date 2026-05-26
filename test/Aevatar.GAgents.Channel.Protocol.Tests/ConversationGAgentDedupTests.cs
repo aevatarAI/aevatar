@@ -2323,8 +2323,6 @@ public sealed class ConversationGAgentDedupTests
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
-        // Refactor (iter97/cluster-098): test fixture must register ILongRunningBusinessIoExecutor
-        services.AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>();
         if (cardRunner is not null)
             services.AddSingleton(cardRunner);
         if (dispatcher is not null)
@@ -2347,6 +2345,10 @@ public sealed class ConversationGAgentDedupTests
         agent.ActivateAsync().GetAwaiter().GetResult();
         return (agent, store);
     }
+
+    private static Task<T> NextSentAsync<T>(ConversationGAgent agent)
+        where T : IMessage<T>, new() =>
+        ((RecordingEventPublisher)agent.EventPublisher).NextSentAsync<T>();
 
     private static void SetId(object agent, string id)
     {
@@ -2439,9 +2441,19 @@ public sealed class ConversationGAgentDedupTests
         ConversationGAgent agent,
         RecordingActorDispatchPort dispatchPort)
     {
-        var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
-        await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
-        return completed;
+        for (var i = 0; i < 8; i++)
+        {
+            var step = await NextSentAsync<ReplyOperationStepEvent>(agent);
+            await agent.HandleReplyOperationStepAsync(step);
+            if (step.PayloadCase != ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText)
+                continue;
+
+            var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
+            await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
+            return completed;
+        }
+
+        throw new TimeoutException("Timed out waiting for Nyx relay text operation step.");
     }
 
     private sealed class RecordingTurnRunner : IConversationTurnRunner
@@ -2567,6 +2579,8 @@ public sealed class ConversationGAgentDedupTests
     {
         public List<IMessage> Published { get; } = [];
         public List<IMessage> Sent { get; } = [];
+        private readonly Queue<IMessage> _sentQueue = new();
+        private readonly SemaphoreSlim _sentAvailable = new(0);
 
         public Task PublishAsync<T>(
             T evt,
@@ -2589,7 +2603,35 @@ public sealed class ConversationGAgentDedupTests
             where T : IMessage
         {
             Sent.Add(evt);
+            lock (_sentQueue)
+            {
+                _sentQueue.Enqueue(evt);
+            }
+            _sentAvailable.Release();
             return Task.CompletedTask;
+        }
+
+        public async Task<T> NextSentAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || !await _sentAvailable.WaitAsync(remaining))
+                    break;
+
+                IMessage message;
+                lock (_sentQueue)
+                {
+                    message = _sentQueue.Dequeue();
+                }
+
+                if (message is T typed)
+                    return typed;
+            }
+
+            throw new TimeoutException($"Timed out waiting for sent {typeof(T).Name}.");
         }
     }
 
@@ -3430,9 +3472,4 @@ public sealed class ConversationGAgentDedupTests
         }
     }
 
-    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
-    {
-        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
-            workItem.ExecuteAsync(ct);
-    }
 }
