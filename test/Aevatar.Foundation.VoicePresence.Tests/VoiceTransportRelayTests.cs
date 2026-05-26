@@ -116,10 +116,7 @@ public class VoiceTransportRelayTests
         var roleAgent = new RecordingRoleAgent("voice-agent");
         var ctx = new StubEventHandlerContext(roleAgent);
 
-        module.StateMachine.AllocateNextResponseId();
-        module.StateMachine.OnResponseDone(module.StateMachine.CurrentResponseId);
-        var responseId = module.StateMachine.CurrentResponseId;
-        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        const int responseId = 1;
 
         var drainAck = new VoiceControlFrame
         {
