@@ -19,6 +19,7 @@ import type {
 } from '@/shared/models/runtime/scopeServices';
 import type {
   ServiceCatalogSnapshot,
+  ServiceEndpointSnapshot,
 } from '@/shared/models/services';
 import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import {
@@ -59,8 +60,8 @@ type StudioMemberBindPanelProps = {
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
   readonly postBindEntryActions?: {
     readonly busy?: boolean;
+    readonly isEntryMember?: boolean;
     readonly memberId: string;
-    readonly onSetEntry: () => void;
     readonly onSetEntryAndTest: () => void;
   } | null;
   readonly onSelectionChange?: (selection: {
@@ -258,30 +259,61 @@ const sourceControlStackStyle: React.CSSProperties = {
 };
 
 const endpointChoiceRowStyle: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 6,
+  display: 'grid',
+  gap: 8,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))',
 };
 
 const endpointChoiceButtonStyle: React.CSSProperties = {
-  alignItems: 'center',
+  alignItems: 'flex-start',
   background: '#ffffff',
   border: '1px solid #d9e2ef',
-  borderRadius: 999,
+  borderRadius: 8,
   color: '#334155',
   cursor: 'pointer',
-  display: 'inline-flex',
+  display: 'grid',
   fontSize: 12,
-  fontWeight: 700,
-  minHeight: 30,
-  padding: '0 10px',
+  gap: 6,
+  minHeight: 94,
+  padding: '10px 12px',
+  textAlign: 'left',
+  width: '100%',
 };
 
 const endpointChoiceButtonActiveStyle: React.CSSProperties = {
   ...endpointChoiceButtonStyle,
-  background: '#111827',
-  border: '1px solid #111827',
+  background: '#0f172a',
+  border: '1px solid #0f172a',
   color: '#ffffff',
+};
+
+const endpointChoiceTitleStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  justifyContent: 'space-between',
+  minWidth: 0,
+};
+
+const endpointChoiceNameStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  lineHeight: 1.25,
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+};
+
+const endpointChoiceMetaStyle: React.CSSProperties = {
+  fontFamily: monoFontFamily,
+  fontSize: 11,
+  lineHeight: 1.35,
+  overflowWrap: 'anywhere',
+};
+
+const endpointChoiceDescriptionStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
 };
 
 const parameterGridStyle: React.CSSProperties = {
@@ -347,6 +379,14 @@ const snippetPreviewStyle: React.CSSProperties = {
 const workflowSectionStyle: React.CSSProperties = {
   display: 'grid',
   gap: 12,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const smokeFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  minWidth: 0,
 };
 
 const listColumnStyle: React.CSSProperties = {
@@ -363,7 +403,24 @@ const compactCardStyle: React.CSSProperties = {
 };
 
 const smokeInputStyle: React.CSSProperties = {
+  boxSizing: 'border-box',
   fontFamily: monoFontFamily,
+  maxWidth: '100%',
+  minWidth: 0,
+  width: '100%',
+};
+
+const smokeTypedPayloadDescriptionStyle: React.CSSProperties = {
+  lineHeight: 1.45,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
+
+const smokeActionStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  minWidth: 0,
+  width: '100%',
 };
 
 const contractUrlCardStyle: React.CSSProperties = {
@@ -447,6 +504,56 @@ function copyText(value: string): Promise<void> | void {
 
 function buildBindingSectionTitle(count: number): string {
   return count === 1 ? 'Bound dependency' : `Bound dependencies (${count})`;
+}
+
+function describeEndpointKind(endpoint: ServiceEndpointSnapshot): string {
+  return isChatServiceEndpoint(endpoint) ? '默认测试' : '高级输入';
+}
+
+function describeEndpointPurpose(endpoint: ServiceEndpointSnapshot): string {
+  if (isChatServiceEndpoint(endpoint)) {
+    return '输入一句话，快速确认成员能不能正常响应。';
+  }
+
+  return '给需要固定输入格式的 API/SDK 调用场景使用。';
+}
+
+function renderPostBindEntryAction(
+  postBindEntryActions: NonNullable<StudioMemberBindPanelProps['postBindEntryActions']>,
+) {
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      {postBindEntryActions.isEntryMember ? (
+        <>
+          <Typography.Text>
+            当前成员已经是团队入口。可以直接返回 Team 页面测试完整链路。
+          </Typography.Text>
+          <Button
+            loading={postBindEntryActions.busy}
+            onClick={postBindEntryActions.onSetEntryAndTest}
+            size="small"
+            type="primary"
+          >
+            测试 Team
+          </Button>
+        </>
+      ) : (
+        <>
+          <Typography.Text>
+            Bind 已完成。下一步建议设为团队入口，并返回 Team 页面测试完整链路。
+          </Typography.Text>
+          <Button
+            loading={postBindEntryActions.busy}
+            onClick={postBindEntryActions.onSetEntryAndTest}
+            size="small"
+            type="primary"
+          >
+            设为入口并测试 Team
+          </Button>
+        </>
+      )}
+    </Space>
+  );
 }
 
 const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
@@ -935,29 +1042,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   type="success"
-                  message="This member can be the Team entry."
-                  description={
-                    <Space wrap size={8}>
-                      <Typography.Text>
-                        Bind 已完成，可以将当前成员设为 Team entry。
-                      </Typography.Text>
-                      <Button
-                        loading={postBindEntryActions.busy}
-                        onClick={postBindEntryActions.onSetEntry}
-                        size="small"
-                      >
-                        Set as Team entry
-                      </Button>
-                      <Button
-                        loading={postBindEntryActions.busy}
-                        onClick={postBindEntryActions.onSetEntryAndTest}
-                        size="small"
-                        type="primary"
-                      >
-                        Set as Team entry and Test Team
-                      </Button>
-                    </Space>
+                  message={
+                    postBindEntryActions.isEntryMember
+                      ? 'This member is the Team entry.'
+                      : 'This member can be the Team entry.'
                   }
+                  description={renderPostBindEntryAction(postBindEntryActions)}
                 />
               ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
@@ -1010,29 +1100,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             <Alert
               showIcon
               type="success"
-              message="This member can be the Team entry."
-              description={
-                <Space wrap size={8}>
-                  <Typography.Text>
-                    当前成员已发布，可以设为 Team entry 后返回 Team Detail 继续测试。
-                  </Typography.Text>
-                  <Button
-                    loading={postBindEntryActions.busy}
-                    onClick={postBindEntryActions.onSetEntry}
-                    size="small"
-                  >
-                    Set as Team entry
-                  </Button>
-                  <Button
-                    loading={postBindEntryActions.busy}
-                    onClick={postBindEntryActions.onSetEntryAndTest}
-                    size="small"
-                    type="primary"
-                  >
-                    Set as Team entry and Test Team
-                  </Button>
-                </Space>
+              message={
+                postBindEntryActions.isEntryMember
+                  ? 'This member is the Team entry.'
+                  : 'This member can be the Team entry.'
               }
+              description={renderPostBindEntryAction(postBindEntryActions)}
             />
           ) : null}
           <div style={sourcePanelStyle}>
@@ -1076,11 +1149,21 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 </div>
               </div>
               <div style={sourceControlStackStyle}>
-                <Typography.Text type="secondary">Endpoint</Typography.Text>
+                <Space direction="vertical" size={2}>
+                  <Typography.Text type="secondary">Test mode</Typography.Text>
+                  <Typography.Text type="secondary">
+                    普通测试直接输入一句话即可；需要固定格式时再选高级输入。
+                  </Typography.Text>
+                </Space>
                 {selectedService && hasEndpointOptions ? (
                   <div style={endpointChoiceRowStyle}>
                     {selectedService.endpoints.map((endpoint) => {
                       const active = endpoint.endpointId === selectedEndpointId;
+                      const label = endpoint.displayName || endpoint.endpointId;
+                      const foregroundColor = active ? '#ffffff' : '#0f172a';
+                      const secondaryColor = active
+                        ? 'rgba(255, 255, 255, 0.74)'
+                        : '#64748b';
                       return (
                         <button
                           aria-pressed={active}
@@ -1094,7 +1177,39 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                           }
                           onClick={() => setSelectedEndpointId(endpoint.endpointId)}
                         >
-                          {endpoint.displayName || endpoint.endpointId}
+                          <span style={endpointChoiceTitleStyle}>
+                            <span
+                              style={{
+                                ...endpointChoiceNameStyle,
+                                color: foregroundColor,
+                              }}
+                            >
+                              {label}
+                            </span>
+                            <Tag
+                              color={isChatServiceEndpoint(endpoint) ? 'geekblue' : 'default'}
+                              style={{ marginInlineEnd: 0 }}
+                            >
+                              {describeEndpointKind(endpoint)}
+                            </Tag>
+                          </span>
+                          <span
+                            style={{
+                              ...endpointChoiceMetaStyle,
+                              color: secondaryColor,
+                            }}
+                          >
+                            id · {endpoint.endpointId}
+                          </span>
+                          <span
+                            style={{
+                              ...endpointChoiceDescriptionStyle,
+                              color: secondaryColor,
+                            }}
+                          >
+                            {trimOptional(endpoint.description) ||
+                              describeEndpointPurpose(endpoint)}
+                          </span>
                         </button>
                       );
                     })}
@@ -1222,7 +1337,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </Space>
                 ) : null}
               </div>
-              <div style={{ display: 'grid', gap: 8 }}>
+              <div style={smokeFieldStyle}>
                 <Typography.Text strong>
                   {runsCurrentWorkflowDraft ||
                   (selectedEndpoint && isChatServiceEndpoint(selectedEndpoint))
@@ -1249,12 +1364,19 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               !isChatServiceEndpoint(selectedEndpoint) ? (
                 <Alert
                   showIcon
-                  message="Typed payload endpoint"
-                  description={`Request type: ${bindContract.requestTypeUrl}. Use Invoke when you need a custom protobuf payload.`}
+                  message="固定格式输入"
+                  description={
+                    <Typography.Text style={smokeTypedPayloadDescriptionStyle}>
+                      这个入口主要给 API/SDK 调用。当前输入会作为简单文本发送；
+                      需要调试完整固定格式输入时，请继续到 Invoke。
+                      <br />
+                      Request type: {bindContract.requestTypeUrl}
+                    </Typography.Text>
+                  }
                   type="warning"
                 />
               ) : null}
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <div style={smokeActionStackStyle}>
                 <Button
                   block
                   icon={<CheckCircleOutlined />}
@@ -1285,7 +1407,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 >
                   Continue to Invoke
                 </Button>
-              </Space>
+              </div>
               {smokeTestResult.status === 'success' ? (
                 <Alert
                   showIcon
