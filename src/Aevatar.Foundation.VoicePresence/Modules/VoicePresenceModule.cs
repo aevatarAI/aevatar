@@ -484,9 +484,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         if (request.ProviderEvent == null)
             return;
 
-        if (request.ProviderEvent.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived)
-            await SendProviderAudioToCurrentTransportAsync(request, ct);
-
         await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
     }
 
@@ -510,13 +507,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
         await providerSession.SendAudioAsync(request.Pcm16.Memory, ct);
-    }
-
-    private async Task SendProviderAudioToCurrentTransportAsync(
-        VoiceProviderEventReceived request,
-        CancellationToken ct)
-    {
-        await Task.CompletedTask;
     }
 
     private async Task HandleTransportAttachRequestedAsync(
