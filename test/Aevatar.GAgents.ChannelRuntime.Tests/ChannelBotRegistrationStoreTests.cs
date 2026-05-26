@@ -1,9 +1,11 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -24,6 +26,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
+        services.AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>();
 
         _serviceProvider = services.BuildServiceProvider();
 
@@ -300,7 +303,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRebuildProjection_PersistsRefreshEvent_WithoutMutatingState()
+    public async Task RebuildProjectionInboxSignal_PersistsRefreshEvent_WithoutMutatingState()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
@@ -314,13 +317,47 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         var beforeState = _agent.State.Clone();
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;
 
-        await _agent.HandleRebuildProjection(new ChannelBotRebuildProjectionCommand
+        // Refactor (iter101/cluster-104): Rebuild is no longer a directly callable public handler; tests exercise the actor inbox path used by startup refresh.
+        await _agent.HandleEventAsync(new EventEnvelope
         {
-            Reason = "test-rebuild",
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ChannelBotRebuildProjectionCommand
+            {
+                Reason = "test-rebuild",
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                "test",
+                ChannelBotRegistrationGAgent.WellKnownId),
         });
 
         _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
         _agent.State.Should().BeEquivalentTo(beforeState);
+    }
+
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                0,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                0,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class InMemoryEventStore : IEventStore
