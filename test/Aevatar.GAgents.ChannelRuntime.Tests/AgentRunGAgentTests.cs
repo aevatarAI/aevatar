@@ -3129,7 +3129,6 @@ public sealed class AgentRunGAgentTests
         {
             _inner = new AgentRunReplyGenerationExecutor(
                 dispatchPort,
-                new DisposableProviderIoLeaseFactory(),
                 replyGenerator,
                 collector,
                 relayOptions,
@@ -3240,7 +3239,6 @@ public sealed class AgentRunGAgentTests
             StepExecutor = runtime.CreateStepExecutor();
             Executor = new AgentRunReplyGenerationExecutor(
                 new RecordingActorDispatchPort(),
-                new DisposableProviderIoLeaseFactory(),
                 this,
                 new AsyncLocalInteractiveReplyCollector(),
                 new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions

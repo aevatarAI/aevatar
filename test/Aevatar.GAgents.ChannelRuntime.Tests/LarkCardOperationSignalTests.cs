@@ -218,7 +218,6 @@ public sealed class LarkCardOperationSignalTests
             .AddSingleton(dispatch)
             .AddSingleton(cardRunner)
             .AddSingleton(callbackScheduler ?? new NoopCallbackScheduler())
-            .AddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();

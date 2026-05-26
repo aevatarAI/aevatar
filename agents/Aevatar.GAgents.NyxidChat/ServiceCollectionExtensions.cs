@@ -41,7 +41,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.AddHttpClient();
-        services.TryAddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());

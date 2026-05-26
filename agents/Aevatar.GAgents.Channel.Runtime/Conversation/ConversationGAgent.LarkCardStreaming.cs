@@ -10,9 +10,6 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
-    // Refactor (iter107/cluster-107-channel-business-io-process-queue):
-    //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
-    //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
     // Refactor (iter20/cluster-004):
     //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
     //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
@@ -400,9 +397,6 @@ public sealed partial class ConversationGAgent
         ConversationTurnRuntimeContext runtimeContext)
     {
         var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Create, sequence, generation);
-        // Refactor (iter107/cluster-107-channel-business-io-process-queue):
-        //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
-        //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
         return PublishReplyOperationStepAsync(
             workItemId,
             "lark-card-create",
@@ -674,9 +668,6 @@ public sealed partial class ConversationGAgent
             .ConfigureAwait(false);
     }
 
-    // Refactor (iter107/cluster-107-channel-business-io-process-queue):
-    //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
-    //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
     private async Task ExecuteLarkCardOperationStepAsync(
         ReplyOperationStepEvent evt,
         LarkCardOperationStepPayload step)
@@ -693,7 +684,6 @@ public sealed partial class ConversationGAgent
             return;
         }
 
-        using var lease = ResolveProviderIoLeaseFactory().Acquire(Id, evt.OperationName, correlationId);
         var runtimeContext = step.Operation == LarkCardOperationPhase.Finalize
             ? BuildNyxRelayRuntimeContext(
                 correlationId,

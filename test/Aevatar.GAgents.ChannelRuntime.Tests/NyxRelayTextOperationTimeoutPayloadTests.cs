@@ -107,7 +107,6 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton(scheduler)
             .AddSingleton<IConversationTurnRunner, SucceedingTurnRunner>()
-            .AddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();

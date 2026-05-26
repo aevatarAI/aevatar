@@ -2323,7 +2323,6 @@ public sealed class ConversationGAgentDedupTests
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IConversationTurnRunner>(runner);
-        services.AddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>();
         if (cardRunner is not null)
             services.AddSingleton(cardRunner);
         if (dispatcher is not null)

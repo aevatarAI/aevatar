@@ -321,9 +321,6 @@ message LarkCardOperationTimeoutFiredEvent {
   int64 fired_at_unix_ms = 12;
 }
 
-// Refactor (iter107/cluster-107-channel-business-io-process-queue):
-//   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
-//   New principle: owner actor consumes typed self-continuation steps; provider IO is a disposable lease, not a process-local fact source.
 message ReplyOperationStepEvent {
   string operation_id = 1;
   string operation_name = 2;

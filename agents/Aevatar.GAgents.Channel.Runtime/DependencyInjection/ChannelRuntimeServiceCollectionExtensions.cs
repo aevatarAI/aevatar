@@ -53,7 +53,6 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<TracingMiddleware>();
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
         services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
-        services.TryAddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>();
 
         // ─── Tombstone compaction options + materialized watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
