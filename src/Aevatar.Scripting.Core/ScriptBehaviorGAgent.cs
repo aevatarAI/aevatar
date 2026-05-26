@@ -23,17 +23,20 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IProtobufMessageCodec _codec;
+    private readonly IScriptCommandOutcomePublisher _outcomePublisher;
 
     public ScriptBehaviorGAgent(
         IScriptBehaviorDispatcher dispatcher,
         IScriptBehaviorRuntimeCapabilityFactory capabilityFactory,
         IScriptBehaviorArtifactResolver artifactResolver,
-        IProtobufMessageCodec codec)
+        IProtobufMessageCodec codec,
+        IScriptCommandOutcomePublisher? outcomePublisher = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+        _outcomePublisher = outcomePublisher ?? NoOpScriptCommandOutcomePublisher.Instance;
         InitializeId();
     }
 
@@ -74,25 +77,21 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         }
 
         if (IsSameBinding(evt))
-            return;
-
-        await PersistDomainEventAsync(new ScriptBehaviorBoundEvent
         {
-            DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
-            ScriptId = evt.ScriptId ?? string.Empty,
-            Revision = evt.Revision ?? string.Empty,
-            SourceHash = evt.SourceHash ?? string.Empty,
-            StateTypeUrl = evt.StateTypeUrl ?? string.Empty,
-            ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty,
-            ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty,
-            ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty,
-            ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
-            ProtocolDescriptorSet = evt.ProtocolDescriptorSet,
-            StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
-            ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
-            RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
-            ScopeId = evt.ScopeId ?? string.Empty,
-        }, ct);
+            await _outcomePublisher.PublishBoundAsync(
+                evt.CommandId ?? string.Empty,
+                CreateBoundEvent(evt),
+                ct);
+            return;
+        }
+
+        var bound = CreateBoundEvent(evt);
+
+        await PersistDomainEventAsync(bound, ct);
+        await _outcomePublisher.PublishBoundAsync(
+            bound.CommandId ?? string.Empty,
+            bound,
+            ct);
     }
 
     private async Task DispatchBehaviorAsync(
@@ -165,6 +164,14 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             return;
 
         await PersistDomainEventsAsync(facts, ct);
+        var outcomeCommandId = ResolveOutcomeCommandId(ActiveInboundEnvelope);
+        foreach (var fact in facts)
+        {
+            await _outcomePublisher.PublishCommittedFactAsync(
+                outcomeCommandId,
+                fact,
+                ct);
+        }
     }
 
     private static ScriptBehaviorState ApplyBound(
@@ -264,6 +271,28 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                string.Equals(State.ScopeId ?? string.Empty, evt.ScopeId ?? string.Empty, StringComparison.Ordinal);
     }
 
+    private static ScriptBehaviorBoundEvent CreateBoundEvent(BindScriptBehaviorRequestedEvent evt)
+    {
+        return new ScriptBehaviorBoundEvent
+        {
+            DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
+            ScriptId = evt.ScriptId ?? string.Empty,
+            Revision = evt.Revision ?? string.Empty,
+            SourceHash = evt.SourceHash ?? string.Empty,
+            StateTypeUrl = evt.StateTypeUrl ?? string.Empty,
+            ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty,
+            ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty,
+            ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty,
+            ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+            ProtocolDescriptorSet = evt.ProtocolDescriptorSet,
+            StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
+            ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
+            RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+            ScopeId = evt.ScopeId ?? string.Empty,
+            CommandId = evt.CommandId ?? string.Empty,
+        };
+    }
+
     private static void ValidateBinding(BindScriptBehaviorRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -300,6 +329,18 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             return envelope.Payload.Unpack<RunScriptRequestedEvent>().RunId ?? string.Empty;
 
         return envelope.Id ?? string.Empty;
+    }
+
+    private static string ResolveOutcomeCommandId(EventEnvelope? envelope)
+    {
+        if (envelope?.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true)
+        {
+            var run = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            if (!string.IsNullOrWhiteSpace(run.CommandId))
+                return run.CommandId;
+        }
+
+        return envelope?.Id ?? string.Empty;
     }
 
     private static string ResolveCorrelationId(EventEnvelope envelope)

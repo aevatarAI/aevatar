@@ -18,7 +18,7 @@ public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        return ScriptingActorRequestEnvelopeFactory.Create(
+        var envelope = ScriptingActorRequestEnvelopeFactory.Create(
             context.TargetId,
             context.CorrelationId,
             new BindScriptBehaviorRequestedEvent
@@ -37,6 +37,8 @@ public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
                 ReadModelDescriptorFullName = command.DefinitionSnapshot.ReadModelDescriptorFullName,
                 RuntimeSemantics = command.DefinitionSnapshot.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
                 ScopeId = command.ScopeId ?? command.DefinitionSnapshot.ScopeId ?? string.Empty,
+                CommandId = context.CommandId ?? string.Empty,
             });
+        return envelope;
     }
 }

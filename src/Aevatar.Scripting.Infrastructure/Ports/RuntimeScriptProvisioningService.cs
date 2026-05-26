@@ -1,20 +1,27 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
-// Refactor (iter111/cluster-111-handled-dispatch-contract):
-//   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
-//   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
     private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
+    private readonly ICommandOutcomeDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError, ScriptBehaviorBoundEvent>? _outcomeDispatchService;
 
     public RuntimeScriptProvisioningService(
         ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
+        : this(dispatchService, outcomeDispatchService: null)
+    {
+    }
+
+    public RuntimeScriptProvisioningService(
+        ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
+        ICommandOutcomeDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError, ScriptBehaviorBoundEvent>? outcomeDispatchService)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
+        _outcomeDispatchService = outcomeDispatchService;
     }
 
     public async Task<string> EnsureRuntimeAsync(
@@ -59,12 +66,27 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
             runtimeActorId,
             definitionSnapshot,
             scopeId);
-        var result = await _dispatchService.DispatchAsync(command, ct);
+        var result = _outcomeDispatchService == null
+            ? await _dispatchService.DispatchAsync(command, ct)
+            : await DispatchAndAwaitOutcomeAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");
 
         var receipt = result.Receipt
             ?? throw new InvalidOperationException("Script runtime provisioning did not produce a receipt.");
         return receipt.ActorId;
+    }
+
+    private async Task<CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>> DispatchAndAwaitOutcomeAsync(
+        ProvisionScriptRuntimeCommand command,
+        CancellationToken ct)
+    {
+        var result = await _outcomeDispatchService!.DispatchAndAwaitOutcomeAsync(command, ct);
+        if (!result.Succeeded)
+            return CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Failure(result.Error);
+
+        var receipt = result.Receipt
+            ?? throw new InvalidOperationException("Script runtime provisioning did not produce a receipt.");
+        return CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(receipt);
     }
 }

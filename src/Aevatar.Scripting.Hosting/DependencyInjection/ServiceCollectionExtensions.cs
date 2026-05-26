@@ -56,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptReadModelQueryApplicationService, ScriptReadModelQueryApplicationService>();
         services.TryAddSingleton<IScriptBehaviorDispatcher, ScriptBehaviorDispatcher>();
         services.TryAddSingleton<IScriptBehaviorRuntimeCapabilityFactory, ScriptBehaviorRuntimeCapabilityFactory>();
+        services.TryAddSingleton<IScriptCommandOutcomePublisher, ScriptCommandOutcomePublisher>();
         services.TryAddSingleton<IScriptEvolutionPolicyEvaluator, DefaultScriptEvolutionPolicyEvaluator>();
         services.TryAddSingleton<IScriptEvolutionValidationService, RuntimeScriptEvolutionValidationService>();
         services.TryAddSingleton<IScriptCatalogBaselineReader, RuntimeScriptCatalogBaselineReader>();
@@ -88,6 +89,8 @@ public static class ServiceCollectionExtensions
         AddSimpleScriptingCommandDispatch<UpsertScriptDefinitionCommand, UpsertScriptDefinitionCommandTargetResolver, UpsertScriptDefinitionCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<ProvisionScriptRuntimeCommand, ProvisionScriptRuntimeCommandTargetResolver, ProvisionScriptRuntimeCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<RunScriptRuntimeCommand, RunScriptRuntimeCommandTargetResolver, RunScriptRuntimeCommandEnvelopeFactory>(services);
+        AddScriptingCommandOutcomeDispatch<ProvisionScriptRuntimeCommand, ScriptBehaviorBoundEvent>(services);
+        AddScriptingCommandOutcomeDispatch<RunScriptRuntimeCommand, ScriptDomainFactCommitted>(services);
         AddSimpleScriptingCommandDispatch<PromoteScriptCatalogRevisionCommand, PromoteScriptCatalogRevisionCommandTargetResolver, PromoteScriptCatalogRevisionCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<RollbackScriptCatalogRevisionCommand, RollbackScriptCatalogRevisionCommandTargetResolver, RollbackScriptCatalogRevisionCommandEnvelopeFactory>(services);
         services.TryAddSingleton<RuntimeScriptEvolutionInteractionService>();
@@ -125,6 +128,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandEnvelopeFactory<TCommand>, TEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
+    }
+
+    private static void AddScriptingCommandOutcomeDispatch<TCommand, TOutcome>(
+        IServiceCollection services)
+        where TCommand : class
+        where TOutcome : Google.Protobuf.IMessage, new()
+    {
+        services.TryAddSingleton<
+            ICommandOutcomeDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError, TOutcome>,
+            DefaultCommandOutcomeDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError, TOutcome>>();
     }
 
     public sealed class ScriptCapabilityRegistrationsMarker;

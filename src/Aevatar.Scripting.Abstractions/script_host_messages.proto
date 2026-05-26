@@ -290,6 +290,7 @@ message BindScriptBehaviorRequestedEvent {
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
   string scope_id = 15;
+  string command_id = 16;
 }
 
 message ScriptBehaviorBoundEvent {
@@ -309,6 +310,7 @@ message ScriptBehaviorBoundEvent {
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
   string scope_id = 15;
+  string command_id = 16;
 }
 
 message ScriptNativeDocumentProjection {
