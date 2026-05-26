@@ -823,6 +823,7 @@ public sealed class ScopeWorkflowEndpointsTests
         {
             var serviceKey = ServiceKeys.Build(identity);
             var revisions = _revisionCatalog
+                .Where(x => x.Key.StartsWith(serviceKey + ":", StringComparison.Ordinal))
                 .Select(x => x.Value)
                 .Select(artifact => new ServiceRevisionSnapshot(
                     artifact.RevisionId,
