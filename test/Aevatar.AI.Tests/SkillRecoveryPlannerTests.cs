@@ -361,6 +361,44 @@ public sealed class SkillRecoveryPlannerTests
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
     }
 
+    [Theory]
+    [InlineData("{\"error\":true,\"status\":404,\"body\":\"...\"}")]
+    [InlineData("NyxID API request failed: GET https://nyx-api.example/api/v1/skills/chrono-ai-daily/files -> 404")]
+    [InlineData("Upstream returned 403 forbidden while listing repository contents")]
+    [InlineData("Unauthorized: token missing required scope")]
+    [InlineData("Bad Request: parameter team_id was rejected")]
+    public void TryPlanNextDirective_WhenToolResultCarriesHttpStatusBlocker_ShouldBuildBlockerSearch(string toolResult)
+    {
+        // /daily wandering after use_skill is the actual prod symptom we are guarding
+        // against: nyxid_proxy tool results come back as 404/401/403/500 envelopes and
+        // the LLM keeps trying alternate paths instead of re-searching Ornn. The planner
+        // should treat these envelopes as blockers so the next recovery directive fires
+        // a fresh ornn_search_skills with the upstream failure as the query.
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("/daily alice"),
+            AssistantToolCall("search-1", "ornn_search_skills", """{"query":"chrono-ai-daily"}"""),
+            ChatMessage.Tool("search-1", "Found 1 skill\n- **chrono-ai-daily**: daily plan"),
+            AssistantToolCall("use-1", "use_skill", """{"skill":"chrono-ai-daily"}"""),
+            ChatMessage.Tool("use-1", "loaded"),
+            AssistantToolCall("proxy-1", "nyxid_proxy", """{"slug":"ornn-api","path":"/api/v1/skills/chrono-ai-daily/files"}"""),
+            ChatMessage.Tool("proxy-1", toolResult),
+        };
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(primarySkillName: "chrono-ai-daily", maxAttempts: 2),
+            messages,
+            finalContent: "Following the loaded skill, but proxy call failed.",
+            recoveryAttempts: 1,
+            callIdPrefix: "req-http-blocker",
+            out var directive);
+
+        forced.Should().BeTrue();
+        directive.ConsumesOrnnSearchAttempt.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+    }
+
     [Fact]
     public void TryPlanNextDirective_WhenBlockerSearchAttemptsExhausted_ShouldReturnFalse()
     {

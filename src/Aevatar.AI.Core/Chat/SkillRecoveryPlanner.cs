@@ -40,6 +40,23 @@ internal static class SkillRecoveryPlanner
         "skipped due to prior tool error",
         "tool execution was discarded",
         "backend unavailable",
+        // HTTP-style upstream failures surfaced through nyxid_proxy / Ornn / chrono-storage
+        // tool envelopes — treat them as concrete blockers so the planner can fire a fresh
+        // ornn_search_skills round instead of letting the LLM keep guessing repo/storage
+        // paths after every 4xx/5xx.
+        "\"status\":404",
+        "\"status\":401",
+        "\"status\":403",
+        "\"status\":500",
+        "\"status\":502",
+        "\"status\":503",
+        " 404",
+        " 401",
+        " 403",
+        " 500",
+        "bad request",
+        "forbidden",
+        "unauthorized",
     ];
 
     private static readonly string[] FinalFailurePhrases =

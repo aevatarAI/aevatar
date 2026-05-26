@@ -1671,11 +1671,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
         prompt =
             "The user invoked the Lark `/daily` shortcut.\n" +
-            $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `ornn_search_skills` with `query` = `{DailySkillName}` and `scope` = `mixed`, then call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            $"Aevatar has already executed `ornn_search_skills` and `use_skill` for `{DailySkillName}` before this turn (their tool results are in the messages above); the loaded skill's instructions are the only source of truth for `/daily`.\n" +
+            $"Follow those skill instructions exactly, with `args` = {argsJson}, until the final daily report is ready.\n" +
+            "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery against GitHub or chrono-storage when the loaded skill did not point you there.\n" +
+            "If a workflow step, source layout, API contract, or required capability is still ambiguous after following the loaded skill, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching result before any further proxy attempts.\n" +
+            "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed daily report or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";
         return true;
@@ -1706,12 +1706,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             $"The user invoked the Lark `/{normalizedCommand}` shortcut.\n" +
             "This slash command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            $"First call `ornn_search_skills` with `query` = {queryJson} and `scope` = `mixed`.\n" +
-            $"Then call `use_skill` for the best matching skill and pass `args` = {argsJson}. Prefer an exact or near-exact command/skill name match when available.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the command's final result is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If no matching skill is found, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
+            $"Aevatar has already executed `ornn_search_skills` (query = {queryJson}) and `use_skill` for the best matching skill before this turn (their tool results are in the messages above); the loaded skill's instructions are the only source of truth for this command.\n" +
+            $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
+            "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
+            "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
             "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";
         return true;
