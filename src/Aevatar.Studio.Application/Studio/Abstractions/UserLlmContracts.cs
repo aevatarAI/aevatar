@@ -140,4 +140,9 @@ public interface IUserLlmCatalogPort
 public interface IUserLlmPreferenceService
 {
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
+
+    Task<UserLlmSettingsView> BuildSettingsViewAsync(
+        UserConfig config,
+        string? bearerToken,
+        CancellationToken ct);
 }

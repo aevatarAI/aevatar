@@ -110,14 +110,14 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            await _userConfigService.SaveLlmPreferenceAsync(
+            var next = await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
                 new SaveUserLlmPreferenceCommand(
                     RouteValue: request.RouteValue,
                     Model: request.Model),
                 cancellationToken).ConfigureAwait(false);
             return Ok(await _llmPreferenceService
-                .GetSettingsAsync(ExtractBearerToken(), cancellationToken)
+                .BuildSettingsViewAsync(next, ExtractBearerToken(), cancellationToken)
                 .ConfigureAwait(false));
         }
         catch (InvalidOperationException exception)

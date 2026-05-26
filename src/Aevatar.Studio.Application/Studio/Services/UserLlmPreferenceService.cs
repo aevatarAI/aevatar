@@ -27,6 +27,16 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     public async Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct)
     {
         var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
+        return await BuildSettingsViewAsync(config, bearerToken, ct).ConfigureAwait(false);
+    }
+
+    public async Task<UserLlmSettingsView> BuildSettingsViewAsync(
+        UserConfig config,
+        string? bearerToken,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
         var savedRoute = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
         var defaultModel = NormalizeModel(config.DefaultModel);
 

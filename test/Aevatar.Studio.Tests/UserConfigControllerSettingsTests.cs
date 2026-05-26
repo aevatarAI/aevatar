@@ -103,8 +103,9 @@ public sealed class UserConfigControllerSettingsTests
     public async Task SaveLlmSettings_WithGatewayRoute_ShouldPersistEmptyRoute()
     {
         var commandService = new RecordingUserConfigCommandService();
+        var queryPort = new StubUserConfigQueryPort(new UserConfig("old-model", "/api/v1/proxy/s/old"));
         var controller = CreateController(
-            current: new UserConfig("old-model", "/api/v1/proxy/s/old"),
+            queryPort: queryPort,
             commandService: commandService,
             httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
             bearerToken: "user-token-1");
@@ -113,11 +114,16 @@ public sealed class UserConfigControllerSettingsTests
             new SaveUserLlmSettingsCommand(RouteValue: string.Empty, Model: " gpt-5.4 "),
             CancellationToken.None);
 
-        response.Result.Should().BeOfType<OkObjectResult>();
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.SavedRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        payload.DefaultModel.Should().Be("gpt-5.4");
         commandService.Saved.Should().ContainSingle()
             .Which.Should().Match<UserConfig>(config =>
                 config.PreferredLlmRoute == UserConfigLlmRouteDefaults.Gateway &&
                 config.DefaultModel == "gpt-5.4");
+        queryPort.ReadCount.Should().Be(1);
     }
 
     [Fact]
@@ -157,13 +163,14 @@ public sealed class UserConfigControllerSettingsTests
 
     private static UserConfigController CreateController(
         UserConfig? current = null,
+        StubUserConfigQueryPort? queryPort = null,
         RecordingUserConfigCommandService? commandService = null,
         RecordingHttpHandler? httpHandler = null,
         string? bearerToken = null,
         UserLlmSettingsOptions? llmSettingsOptions = null)
     {
         commandService ??= new RecordingUserConfigCommandService();
-        var queryPort = new StubUserConfigQueryPort(current ?? new UserConfig(string.Empty));
+        queryPort ??= new StubUserConfigQueryPort(current ?? new UserConfig(string.Empty));
         var catalogPort = new NyxIdLlmCatalogHttpClient(
             new StubHttpClientFactory(httpHandler ?? new RecordingHttpHandler("""{"services":[]}""")),
             BuildNyxIdConfiguration(),
@@ -220,9 +227,19 @@ public sealed class UserConfigControllerSettingsTests
 
     private sealed class StubUserConfigQueryPort(UserConfig config) : IUserConfigQueryPort
     {
-        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
+        public int ReadCount { get; private set; }
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => Task.FromResult(config);
+        public Task<UserConfig> GetAsync(CancellationToken ct = default)
+        {
+            ReadCount++;
+            return Task.FromResult(config);
+        }
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            ReadCount++;
+            return Task.FromResult(config);
+        }
     }
 
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
