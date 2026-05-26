@@ -18,9 +18,9 @@ public sealed class VoicePresenceSession
     private const bool ActorOwnedLeaseTransportAttached = false;
     private readonly Func<bool> _isInitialized;
     private readonly Func<bool> _isTransportAttached;
-    private readonly Func<IVoiceTransport, CancellationToken, Task> _attachTransportAsync;
+    private readonly Func<IVoiceTransport, CancellationToken, Task<VoiceTransportLifetimeCompleted?>> _attachTransportAsync;
     private readonly Func<IVoiceTransport?, CancellationToken, Task> _detachTransportAsync;
-    private readonly Func<IVoiceTransport, CancellationToken, Task> _completeTransportLifetimeAsync;
+    private readonly Func<VoiceTransportLifetimeCompleted?, CancellationToken, Task> _completeTransportLifetimeAsync;
     private readonly VoicePresenceSessionLeaseHandle? _leaseHandle;
 
     public VoicePresenceSession(
@@ -55,16 +55,8 @@ public sealed class VoicePresenceSession
                 leaseHandle == null ? null : Timestamp.FromDateTimeOffset(leaseHandle.ExpiresAtUtc),
                 _);
         _detachTransportAsync = (expectedTransport, _) => module.DetachTransportAsync(expectedTransport);
-        _completeTransportLifetimeAsync = async (expectedTransport, ct) =>
-        {
-            var completed = module.TryBuildTransportLifetimeCompleted(expectedTransport);
-            if (completed != null)
-            {
-                await selfEventDispatcher(completed, ct);
-            }
-
-            await module.DisposeVolatileTransportAsync(expectedTransport);
-        };
+        _completeTransportLifetimeAsync = (completed, ct) =>
+            completed == null ? Task.CompletedTask : selfEventDispatcher(completed, ct);
     }
 
     // Refactor (iter51/issue-888-voice-presence-lease-ack-snapshot):
@@ -88,21 +80,29 @@ public sealed class VoicePresenceSession
         _leaseHandle = leaseHandle;
         _isInitialized = static () => ActorOwnedLeaseInitializedForAttach;
         _isTransportAttached = static () => ActorOwnedLeaseTransportAttached;
-        _attachTransportAsync = (transport, ct) =>
-            transportAttachmentPort.AttachAsync(leaseHandle, transport, ct);
+        _attachTransportAsync = async (transport, ct) =>
+        {
+            await transportAttachmentPort.AttachAsync(leaseHandle, transport, ct);
+            return null;
+        };
         _detachTransportAsync = async (expectedTransport, ct) =>
         {
             await transportAttachmentPort.DetachAsync(leaseHandle, expectedTransport, ct);
             await leasePort.ReleaseAsync(leaseHandle, DetachedReason, ct);
         };
-        _completeTransportLifetimeAsync = (_, ct) =>
-            string.IsNullOrWhiteSpace(leaseHandle.ActiveTransportLeaseId)
+        _completeTransportLifetimeAsync = (completed, ct) =>
+        {
+            var transportLeaseId = string.IsNullOrWhiteSpace(completed?.TransportLeaseId)
+                ? leaseHandle.ActiveTransportLeaseId
+                : completed.TransportLeaseId;
+            return string.IsNullOrWhiteSpace(transportLeaseId)
                 ? Task.CompletedTask
                 : leasePort.CompleteTransportLifetimeAsync(
                     leaseHandle,
-                    leaseHandle.ActiveTransportLeaseId,
+                    transportLeaseId,
                     CompletedReason,
                     ct);
+        };
     }
 
     internal static VoicePresenceSession CreateAttachedForDetach(
@@ -126,14 +126,19 @@ public sealed class VoicePresenceSession
                 await leasePort.ReleaseAsync(leaseHandle, DetachedReason, ct);
             },
             capability.PcmSampleRateHz,
-            completeTransportLifetimeAsync: (_, ct) =>
-                string.IsNullOrWhiteSpace(leaseHandle.ActiveTransportLeaseId)
+            completeTransportLifetimeAsync: (completed, ct) =>
+            {
+                var transportLeaseId = string.IsNullOrWhiteSpace(completed?.TransportLeaseId)
+                    ? leaseHandle.ActiveTransportLeaseId
+                    : completed.TransportLeaseId;
+                return string.IsNullOrWhiteSpace(transportLeaseId)
                     ? Task.CompletedTask
                     : leasePort.CompleteTransportLifetimeAsync(
                         leaseHandle,
-                        leaseHandle.ActiveTransportLeaseId,
+                        transportLeaseId,
                         CompletedReason,
-                        ct));
+                        ct);
+            });
     }
 
     public VoicePresenceSession(
@@ -144,37 +149,22 @@ public sealed class VoicePresenceSession
         int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz,
         VoicePresenceModule? module = null,
         Func<IMessage, CancellationToken, Task>? selfEventDispatcher = null,
-        Func<IVoiceTransport, CancellationToken, Task>? completeTransportLifetimeAsync = null)
+        Func<VoiceTransportLifetimeCompleted?, CancellationToken, Task>? completeTransportLifetimeAsync = null,
+        Func<IVoiceTransport, CancellationToken, Task<VoiceTransportLifetimeCompleted?>>? attachTransportAndBuildLifetimeAsync = null)
     {
         _isInitialized = isInitialized ?? throw new ArgumentNullException(nameof(isInitialized));
         _isTransportAttached = isTransportAttached ?? throw new ArgumentNullException(nameof(isTransportAttached));
-        _attachTransportAsync = attachTransportAsync ?? throw new ArgumentNullException(nameof(attachTransportAsync));
-        _detachTransportAsync = detachTransportAsync ?? throw new ArgumentNullException(nameof(detachTransportAsync));
-        _completeTransportLifetimeAsync = completeTransportLifetimeAsync ?? ((expectedTransport, _) =>
+        ArgumentNullException.ThrowIfNull(attachTransportAsync);
+        _attachTransportAsync = attachTransportAndBuildLifetimeAsync ?? (async (transport, ct) =>
         {
-            var completed = module?.TryBuildTransportLifetimeCompleted(expectedTransport);
-            if (completed == null)
-                return module?.DisposeVolatileTransportAsync(expectedTransport) ?? expectedTransport.DisposeAsync().AsTask();
-
-            return DispatchCompletedAndDisposeAsync(completed, expectedTransport);
-
-            async Task DispatchCompletedAndDisposeAsync(VoiceTransportLifetimeCompleted signal, IVoiceTransport transport)
-            {
-                if (selfEventDispatcher != null)
-                {
-                    await selfEventDispatcher(signal, CancellationToken.None);
-                }
-
-                if (module != null)
-                {
-                    await module.DisposeVolatileTransportAsync(transport);
-                }
-                else
-                {
-                    await transport.DisposeAsync();
-                }
-            }
+            await attachTransportAsync(transport, ct);
+            return null;
         });
+        _detachTransportAsync = detachTransportAsync ?? throw new ArgumentNullException(nameof(detachTransportAsync));
+        _completeTransportLifetimeAsync = completeTransportLifetimeAsync ?? ((completed, ct) =>
+            completed == null || selfEventDispatcher == null
+                ? Task.CompletedTask
+                : selfEventDispatcher(completed, ct));
         PcmSampleRateHz = pcmSampleRateHz;
         Module = module;
         SelfEventDispatcher = selfEventDispatcher;
@@ -192,7 +182,7 @@ public sealed class VoicePresenceSession
 
     public bool IsTransportAttached => _isTransportAttached();
 
-    public Task AttachTransportAsync(IVoiceTransport transport, CancellationToken ct = default)
+    public Task<VoiceTransportLifetimeCompleted?> AttachTransportAsync(IVoiceTransport transport, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(transport);
         return _attachTransportAsync(transport, ct);
@@ -201,9 +191,14 @@ public sealed class VoicePresenceSession
     public Task DetachTransportAsync(IVoiceTransport? expectedTransport = null, CancellationToken ct = default) =>
         _detachTransportAsync(expectedTransport, ct);
 
+    internal Task CompleteTransportLifetimeAsync(VoiceTransportLifetimeCompleted? completed, CancellationToken ct = default)
+    {
+        return _completeTransportLifetimeAsync(completed, ct);
+    }
+
     internal Task CompleteTransportLifetimeAsync(IVoiceTransport expectedTransport, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(expectedTransport);
-        return _completeTransportLifetimeAsync(expectedTransport, ct);
+        return _completeTransportLifetimeAsync(null, ct);
     }
 }

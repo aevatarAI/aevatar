@@ -228,7 +228,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             leaseExpiresAt: null);
     }
 
-    public Task AttachTransportAsync(
+    public Task<VoiceTransportLifetimeCompleted?> AttachTransportAsync(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         string? sessionId,
@@ -251,7 +251,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         StartTransportRelay(pump);
     }
 
-    private async Task AttachTransportAndObserveDispatchAsync(
+    private async Task<VoiceTransportLifetimeCompleted?> AttachTransportAndObserveDispatchAsync(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         string? sessionId,
@@ -263,7 +263,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         if (string.IsNullOrWhiteSpace(sessionId))
         {
             StartTransportRelay(pump);
-            return;
+            return null;
         }
 
         try
@@ -277,6 +277,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
 
         StartTransportRelay(pump);
+        return BuildTransportLifetimeCompleted(pump.Key);
     }
 
     private VoiceTransportRelayPump AttachTransportCore(
@@ -324,26 +325,15 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             LeaseExpiresAt = key.LeaseExpiresAt?.Clone(),
         };
 
-    internal VoiceTransportLifetimeCompleted? TryBuildTransportLifetimeCompleted(IVoiceTransport expectedTransport) =>
-        _transportPump is { } pump && ReferenceEquals(expectedTransport, pump.Transport)
-            ? new VoiceTransportLifetimeCompleted
-            {
-                SessionId = pump.Key.SessionId,
-                OwnerId = pump.Key.OwnerId,
-                TransportLeaseId = pump.Key.TransportLeaseId,
-                LeaseExpiresAt = pump.Key.LeaseExpiresAt?.Clone(),
-                Reason = "host_transport_completed",
-            }
-            : null;
-
-    internal async Task DisposeVolatileTransportAsync(IVoiceTransport expectedTransport)
-    {
-        var pump = _transportPump;
-        if (pump == null || !ReferenceEquals(expectedTransport, pump.Transport))
-            return;
-
-        await DisposeTransportPumpAsync();
-    }
+    private static VoiceTransportLifetimeCompleted BuildTransportLifetimeCompleted(VoiceTransportRelayKey key) =>
+        new()
+        {
+            SessionId = key.SessionId,
+            OwnerId = key.OwnerId,
+            TransportLeaseId = key.TransportLeaseId,
+            LeaseExpiresAt = key.LeaseExpiresAt?.Clone(),
+            Reason = "host_transport_completed",
+        };
 
     /// <summary>
     /// Detaches the current transport and stops the relay loops.
@@ -999,6 +989,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.LeaseExpiresAt))
             return;
 
+        await DisposeTransportPumpAsync();
         ClearTransportLeaseState(state);
         state.ActiveSessionId = string.Empty;
         state.LeaseExpiresAt = null;

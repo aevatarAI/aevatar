@@ -1,9 +1,14 @@
 using System.Text;
+using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Transport;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -45,7 +50,7 @@ public class VoicePresenceWhipEndpointsTests
         resolver.Requests.ShouldContain(static request => string.Equals(request.ModuleName, null, StringComparison.Ordinal));
 
         completion.SetResult();
-        await transport.DisposedTask.Task;
+        transport.Disposed.ShouldBeFalse();
     }
 
     [Fact]
@@ -82,7 +87,7 @@ public class VoicePresenceWhipEndpointsTests
             string.Equals(request.ModuleName, "voice_presence_minicpm", StringComparison.Ordinal));
 
         completion.SetResult();
-        await transport.DisposedTask.Task;
+        transport.Disposed.ShouldBeFalse();
     }
 
     [Fact]
@@ -154,10 +159,12 @@ public class VoicePresenceWhipEndpointsTests
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "v=0\r\nanswer", completion.Task));
         var dispatched = new List<IMessage>();
+        var lifetimeCompleted = Channel.CreateUnbounded<VoiceTransportLifetimeCompleted>();
         var session = CreateTrackingSession(
             module,
             selfSignals: dispatched,
-            pcmSampleRateHz: 16000);
+            pcmSampleRateHz: 16000,
+            lifetimeCompleted.Writer);
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
         var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -175,10 +182,14 @@ public class VoicePresenceWhipEndpointsTests
         transport.Disposed.ShouldBeFalse();
 
         completion.SetResult();
-        await transport.DisposedTask.Task;
+        var completed = await lifetimeCompleted.Reader.ReadAsync();
+        module.HasVolatileTransportLease.ShouldBeTrue();
+        transport.Disposed.ShouldBeFalse();
+
+        await ReconcileTransportLifetimeCompletedAsync(module, completed);
+
         module.HasVolatileTransportLease.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
-        dispatched.OfType<VoiceTransportLifetimeCompleted>().ShouldHaveSingleItem();
         dispatched.OfType<VoiceTransportDetachRequested>().ShouldBeEmpty();
     }
 
@@ -349,9 +360,11 @@ public class VoicePresenceWhipEndpointsTests
             new WebRtcVoiceTransportSession(transport1, "answer-1", completion1.Task),
             new WebRtcVoiceTransportSession(transport2, "answer-2", completion2.Task));
         var dispatched = new List<IMessage>();
+        var lifetimeCompleted = Channel.CreateUnbounded<VoiceTransportLifetimeCompleted>();
         var session = CreateTrackingSession(
             module,
-            selfSignals: dispatched);
+            selfSignals: dispatched,
+            lifetimeCompleted: lifetimeCompleted.Writer);
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
 
         var post1 = CreateContext(app, HttpMethods.Post, "offer-1");
@@ -370,26 +383,35 @@ public class VoicePresenceWhipEndpointsTests
         transport2.Disposed.ShouldBeFalse();
 
         completion1.SetResult();
-        await transport1.DisposedTask.Task;
+        var staleCompleted = await lifetimeCompleted.Reader.ReadAsync();
 
         module.HasVolatileTransportLease.ShouldBeTrue();
         transport2.Disposed.ShouldBeFalse();
         dispatched.OfType<VoiceTransportLifetimeCompleted>()
             .Count(static signal => signal.SessionId == "lease-1")
-            .ShouldBe(0);
+            .ShouldBe(1);
+        var activeAttach = dispatched.OfType<VoiceTransportAttachRequested>()
+            .Single(static signal => signal.SessionId == "lease-2");
+        await ReconcileTransportLifetimeCompletedAsync(
+            module,
+            staleCompleted,
+            activeAttach);
+        module.HasVolatileTransportLease.ShouldBeTrue();
+        transport2.Disposed.ShouldBeFalse();
 
         completion2.SetResult();
-        await transport2.DisposedTask.Task;
+        var activeCompleted = await lifetimeCompleted.Reader.ReadAsync();
+        activeCompleted.SessionId.ShouldBe("lease-2");
+        await ReconcileTransportLifetimeCompletedAsync(module, activeCompleted);
         module.HasVolatileTransportLease.ShouldBeFalse();
-        dispatched.OfType<VoiceTransportLifetimeCompleted>()
-            .Count(static signal => signal.SessionId == "lease-2")
-            .ShouldBe(1);
+        transport2.Disposed.ShouldBeTrue();
     }
 
     private static VoicePresenceSession CreateTrackingSession(
         VoicePresenceModule module,
         List<IMessage> selfSignals,
-        int pcmSampleRateHz = 24000) =>
+        int pcmSampleRateHz = 24000,
+        ChannelWriter<VoiceTransportLifetimeCompleted>? lifetimeCompleted = null) =>
         new(
             isInitialized: () => module.IsInitialized,
             isTransportAttached: () => module.HasVolatileTransportLease,
@@ -400,6 +422,8 @@ public class VoicePresenceWhipEndpointsTests
                     (message, _) =>
                     {
                         selfSignals.Add(message);
+                        if (message is VoiceTransportLifetimeCompleted completed)
+                            lifetimeCompleted?.TryWrite(completed);
                         return Task.CompletedTask;
                     },
                     $"lease-{selfSignals.OfType<VoiceTransportAttachRequested>().Count() + 1}",
@@ -416,8 +440,62 @@ public class VoicePresenceWhipEndpointsTests
             (message, _) =>
             {
                 selfSignals.Add(message);
+                if (message is VoiceTransportLifetimeCompleted completed)
+                    lifetimeCompleted?.TryWrite(completed);
                 return Task.CompletedTask;
-            });
+            },
+            attachTransportAndBuildLifetimeAsync: (transport, ct) =>
+                module.AttachTransportAsync(
+                    transport,
+                    (message, _) =>
+                    {
+                        selfSignals.Add(message);
+                        return Task.CompletedTask;
+                    },
+                    $"lease-{selfSignals.OfType<VoiceTransportAttachRequested>().Count() + 1}",
+                    "host-1",
+                    Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+                    ct));
+
+    private static Task ReconcileTransportLifetimeCompletedAsync(
+        VoicePresenceModule module,
+        VoiceTransportLifetimeCompleted completed,
+        VoiceTransportAttachRequested? activeAttach = null)
+    {
+        var activeSessionId = activeAttach?.SessionId ?? completed.SessionId;
+        var activeOwnerId = activeAttach?.OwnerId ?? completed.OwnerId;
+        var activeTransportLeaseId = activeAttach?.TransportLeaseId ?? completed.TransportLeaseId;
+        var activeLeaseExpiresAt = activeAttach?.LeaseExpiresAt?.Clone() ?? completed.LeaseExpiresAt?.Clone();
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = activeSessionId,
+            ActiveLeaseOwnerId = activeOwnerId,
+            LeaseExpiresAt = activeLeaseExpiresAt,
+            TransportAttached = true,
+            ActiveTransportLeaseId = activeTransportLeaseId,
+            Status = VoicePresenceRuntimeStatus.Idle,
+            CurrentResponseId = 0,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        var ctx = new StubEventHandlerContext(roleAgent);
+        return module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLifetimeCompleted = completed,
+        }), ctx, CancellationToken.None);
+    }
+
+    private static EventEnvelope CreateEnvelope(IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
+        };
 
     private static WebApplication CreateApp(
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession,
@@ -574,6 +652,128 @@ public class VoicePresenceWhipEndpointsTests
             RequestedActorIds.Add(request.ActorId);
             return Task.FromResult(_resolution);
         }
+    }
+
+    private sealed class StubEventHandlerContext(IAgent? agent = null) : IEventHandlerContext
+    {
+        public EventEnvelope InboundEnvelope { get; } = new();
+
+        public string AgentId => "voice-agent";
+
+        public IServiceProvider Services { get; } = new ServiceCollection().BuildServiceProvider();
+
+        public Microsoft.Extensions.Logging.ILogger Logger { get; } = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+        public IAgent Agent { get; } = agent ?? new StubAgent();
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = evt;
+            _ = audience;
+            _ = ct;
+            _ = options;
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = evt;
+            _ = ct;
+            _ = options;
+            return Task.CompletedTask;
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubAgent : IAgent
+    {
+        public string Id => "voice-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(Id);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleAgent(string id) : IAgent, IVoicePresenceRuntimeStateOwner
+    {
+        public string Id => id;
+
+        public RecordingRoleState State { get; } = new();
+
+        public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+        {
+            if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+            {
+                runtimeState = stored.Clone();
+                return true;
+            }
+
+            runtimeState = new VoicePresenceRuntimeState();
+            return false;
+        }
+
+        public Task PersistVoicePresenceRuntimeStateAsync(
+            string moduleName,
+            VoicePresenceRuntimeState runtimeState,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            State.VoicePresence[moduleName] = runtimeState.Clone();
+            return Task.CompletedTask;
+        }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(id);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleState
+    {
+        public Dictionary<string, VoicePresenceRuntimeState> VoicePresence { get; } = [];
     }
 
     private sealed class StubVoiceTransport : IVoiceTransport
