@@ -434,6 +434,30 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
+    public void ScriptBehaviorRuntimeCapabilities_must_not_reintroduce_snapshot_side_read_or_cache()
+    {
+        var repoRoot = FindRepoRoot();
+        var path = Path.Combine(
+            repoRoot,
+            "src",
+            "Aevatar.Scripting.Application",
+            "Runtime",
+            "ScriptBehaviorRuntimeCapabilities.cs");
+        File.Exists(path).Should().BeTrue("source regression test needs the runtime capabilities source file: {0}", path);
+
+        var source = File.ReadAllText(path);
+        source.Should().NotContain(
+            "IScriptDefinitionSnapshotPort",
+            "deleted per iter113/cluster-2 - command directly carries typed ScriptDefinitionSnapshot");
+        source.Should().NotContain(
+            "ResolveDefinitionSnapshotAsync",
+            "side-read deleted; runtime trusts command-supplied snapshot");
+        source.Should().NotContain(
+            "IScriptDefinitionSnapshotFactory",
+            "factory injection deleted per Phase 9 r2 consensus");
+    }
+
+    [Fact]
     public async Task PromoteAndRollback_ShouldNormalizeBlankCatalogActorId()
     {
         var catalogCommandPort = new RecordingCatalogCommandPort();
@@ -512,6 +536,21 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             runtimeProvisioningPort: runtimeProvisioningPort ?? new RecordingRuntimeProvisioningPort(),
             runtimeCommandPort: runtimeCommandPort ?? new RecordingRuntimeCommandPort(),
             catalogCommandPort: catalogCommandPort ?? new RecordingCatalogCommandPort());
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var marker = Path.Combine(dir.FullName, "aevatar.slnx");
+            if (File.Exists(marker))
+                return dir.FullName;
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Cannot locate repository root from test base directory.");
     }
 
     private static ScriptDefinitionBindingSpec CreateDefinitionBindingSpec(string revision) =>
