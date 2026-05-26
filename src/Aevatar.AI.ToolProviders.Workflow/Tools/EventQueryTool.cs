@@ -23,6 +23,9 @@ public sealed class EventQueryTool : IAgentTool
 
     public string Name => "event_query";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string Description =>
         "Query committed events for a workflow run. " +
         "Shows the chronological timeline of execution: " +
@@ -30,9 +33,9 @@ public sealed class EventQueryTool : IAgentTool
         "Optionally filter by stage or event type. " +
         "Use 'edges' action to see workflow run graph export edges.";
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: event_query required actor_id for workflow history and graph lookups.
-    //   New principle: workflow_run_id is the artifact/export identity, while actor_id is a deprecated compatibility alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -45,10 +48,6 @@ public sealed class EventQueryTool : IAgentTool
             "workflow_run_id": {
               "type": "string",
               "description": "Workflow run ID to query"
-            },
-            "actor_id": {
-              "type": "string",
-              "description": "Deprecated alias for workflow_run_id"
             },
             "stage_filter": {
               "type": "string",
@@ -68,10 +67,7 @@ public sealed class EventQueryTool : IAgentTool
               "description": "Max events to return (default: 50, max: 200)"
             }
           },
-          "anyOf": [
-            { "required": ["workflow_run_id"] },
-            { "required": ["actor_id"] }
-          ]
+          "required": ["workflow_run_id"]
         }
         """;
 
@@ -88,7 +84,7 @@ public sealed class EventQueryTool : IAgentTool
         try
         {
             var args = ToolArgs.Parse(argumentsJson);
-            var workflowRunId = GetWorkflowRunId(args);
+            var workflowRunId = args.Str("workflow_run_id");
             if (string.IsNullOrWhiteSpace(workflowRunId))
                 return """{"error":"'workflow_run_id' is required"}""";
 
@@ -106,9 +102,9 @@ public sealed class EventQueryTool : IAgentTool
         }
     }
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: event_query exposed workflow timeline as an actor timeline readmodel query keyed by actor_id.
-    //   New principle: timeline data is a workflow-run timeline export artifact; actor_id remains only as a deprecated caller alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetTimelineAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? _options.MaxTimelineItems, 1, 200);
@@ -138,9 +134,9 @@ public sealed class EventQueryTool : IAgentTool
         }, s_json);
     }
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: event_query exposed graph edges as an actor graph readmodel query keyed by actor_id.
-    //   New principle: graph edges are workflow-run graph export artifact data; actor_id remains only as a deprecated caller alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetEdgesAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
@@ -170,12 +166,6 @@ public sealed class EventQueryTool : IAgentTool
 
     private static string? NullIfEmpty(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s;
-
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow tool calls treated actor_id as the artifact query identity.
-    //   New principle: workflow_run_id is the artifact identity; actor_id is accepted only for transitional tool compatibility.
-    private static string GetWorkflowRunId(ToolArgs args) =>
-        args.Str("workflow_run_id") ?? args.Str("actor_id") ?? string.Empty;
 
     private static Dictionary<string, string> TruncateData(IDictionary<string, string> data) =>
         data.ToDictionary(kv => kv.Key, kv => kv.Value.Length > 200 ? kv.Value[..200] + "..." : kv.Value);

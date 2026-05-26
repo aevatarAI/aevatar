@@ -217,11 +217,11 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     {
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
         {
-            Enabled = false,
-            EnableActorQueryEndpoints = true,
+            Enabled = true,
+            WorkflowArtifactQueryEnabled = false,
         });
 
-        harness.ArtifactPort.EnableActorQueryEndpoints.Should().BeFalse();
+        harness.ArtifactPort.WorkflowArtifactQueryEnabled.Should().BeFalse();
         (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
         (await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
         harness.CurrentStateReader.GetCalls.Should().Be(0);
@@ -236,7 +236,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
         });
 
         (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("   ")).Should().BeEmpty();
@@ -256,7 +256,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
         });
 
         var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync(null!);
@@ -351,7 +351,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new WorkflowExecutionProjectionOptions
             {
                 Enabled = true,
-                EnableActorQueryEndpoints = true,
+                WorkflowArtifactQueryEnabled = true,
             },
             reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
             {
@@ -401,7 +401,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = false,
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
         });
         (await disabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-1")).Should().BeEmpty();
         disabled.ReportReader.GetCalls.Should().Be(0);
@@ -409,7 +409,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var enabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
         });
         (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("   ")).Should().BeEmpty();
         (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-404")).Should().BeEmpty();
@@ -424,7 +424,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new WorkflowExecutionProjectionOptions
             {
                 Enabled = true,
-                EnableActorQueryEndpoints = true,
+                WorkflowArtifactQueryEnabled = true,
             },
             graphStore: new RecordingProjectionGraphStore
             {
@@ -496,7 +496,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
         });
 
         var options = new WorkflowRunGraphExportQueryOptions
