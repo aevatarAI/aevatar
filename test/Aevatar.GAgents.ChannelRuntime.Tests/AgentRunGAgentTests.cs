@@ -629,10 +629,156 @@ public sealed class AgentRunGAgentTests
             Attempt = 1,
             StepIndex = 2,
             Request = request.Clone(),
-            StepState = NewStepState(request, nextStepIndex: 2, pendingTool: true),
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                ToolCalls =
+                {
+                    new AgentRunToolCall { Id = "tool-call-1", Name = "lookup", ArgumentsJson = "{}" },
+                },
+            },
         });
 
         generationExecutor.ToolSteps.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleNextLlmStepAsync_WhenTypedResultIdentityIsStale_ShouldIgnoreBeforePersisting()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new RecordingStepGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: new DispatchingEventPublisher(actorRuntime) { DeliverSelf = false });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-typed-result",
+            RunId = "run-stale-typed-result",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale-typed-result",
+        };
+
+        await runtime.HandleStartAsync(request);
+        var before = runtime.State.GenerationStep!.Clone();
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = request.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = 2,
+            StepIndex = 2,
+            Request = request.Clone(),
+            LlmStepResult = new AgentRunLlmStepResult { AccumulatedText = "stale reply" },
+        });
+
+        runtime.State.GenerationStep.Should().BeEquivalentTo(before);
+        runtime.State.ProducedReplyText.Should().BeEmpty();
+        generationExecutor.ToolSteps.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleNextLlmAndToolStepAsync_ShouldReconcileTypedResultsInsideActor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var generationExecutor = new RecordingStepGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: new DispatchingEventPublisher(actorRuntime) { DeliverSelf = false });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-typed-reconcile",
+            RunId = "run-typed-reconcile",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-typed-reconcile",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = request.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = 1,
+            StepIndex = 2,
+            Request = request.Clone(),
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = "partial",
+                Content = "call lookup",
+                FinishReason = "tool_calls",
+                Usage = new AgentRunReplyTokenUsage
+                {
+                    PromptTokens = 1,
+                    CompletionTokens = 2,
+                    TotalTokens = 3,
+                },
+                ToolCalls =
+                {
+                    new AgentRunToolCall { Id = "tool-call-typed", Name = "lookup", ArgumentsJson = "{}" },
+                },
+            },
+        });
+
+        runtime.State.GenerationStep!.NextStepIndex.Should().Be(2);
+        runtime.State.GenerationStep.PendingToolCalls.Should().ContainSingle(t => t.Id == "tool-call-typed");
+        runtime.State.GenerationStep.Messages.Should().Contain(message =>
+            message.Role == "assistant" &&
+            message.Content == "call lookup" &&
+            message.ToolCalls.Any(tool => tool.Id == "tool-call-typed"));
+        runtime.State.GenerationStep.AggregatedUsage!.TotalTokens.Should().Be(3);
+        generationExecutor.ToolSteps.Should().ContainSingle();
+
+        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = request.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = 1,
+            StepIndex = 3,
+            Request = request.Clone(),
+            ToolStepResult = new AgentRunToolStepResult
+            {
+                AdvanceRound = true,
+                ResultMessages =
+                {
+                    new AgentRunChatMessage
+                    {
+                        Role = "tool",
+                        ToolCallId = "tool-call-typed",
+                        Content = """{"result":"ok"}""",
+                    },
+                },
+            },
+        });
+
+        runtime.State.GenerationStep!.NextStepIndex.Should().Be(3);
+        runtime.State.GenerationStep.Round.Should().Be(1);
+        runtime.State.GenerationStep.PendingToolCalls.Should().BeEmpty();
+        runtime.State.GenerationStep.Messages.Should().Contain(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "tool-call-typed" &&
+            message.Content == """{"result":"ok"}""");
+        generationExecutor.LlmSteps.Should().ContainSingle(step => step.StepIndex == 3);
     }
 
     [Fact]
@@ -688,15 +834,9 @@ public sealed class AgentRunGAgentTests
             Attempt = generationExecutor.InitialSteps.Single().Attempt,
             Request = generationExecutor.InitialSteps.Single().Request.Clone(),
             StepIndex = 2,
-            StepState = new AgentRunReplyStepState
+            LlmStepResult = new AgentRunLlmStepResult
             {
-                RunId = "run-generation-timeout-race",
-                CorrelationId = "corr-generation-timeout-race",
-                TargetActorId = "actor-1",
-                Attempt = generationExecutor.InitialSteps.Single().Attempt,
-                NextStepIndex = 2,
                 AccumulatedText = "late executor reply",
-                MaxToolRounds = 40,
             },
         });
 
@@ -2823,7 +2963,7 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
+                LlmStepResult = new AgentRunLlmStepResult(),
             });
 
         public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
@@ -2837,7 +2977,7 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
+                ToolStepResult = new AgentRunToolStepResult { AdvanceRound = true },
             });
     }
 
@@ -2887,7 +3027,7 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
+                LlmStepResult = new AgentRunLlmStepResult(),
             });
 
         public virtual Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
@@ -2901,7 +3041,7 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
+                ToolStepResult = new AgentRunToolStepResult { AdvanceRound = true },
             });
     }
 
@@ -2915,21 +3055,11 @@ public sealed class AgentRunGAgentTests
         {
             await base.ExecuteLlmStepAsync(request, ct);
             var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
-            var nextState = request.StepState.Clone();
-            nextState.NextStepIndex = request.StepIndex + 1;
-            nextState.PendingToolCalls.Clear();
+            var result = new AgentRunLlmStepResult();
 
             if (LlmSteps.Count == 1)
             {
-                nextState.Messages.Add(new AgentRunChatMessage
-                {
-                    Role = "assistant",
-                    ToolCalls =
-                    {
-                        new AgentRunToolCall { Id = "tool-call-1", Name = "lookup", ArgumentsJson = "{}" },
-                    },
-                });
-                nextState.PendingToolCalls.Add(new AgentRunToolCall
+                result.ToolCalls.Add(new AgentRunToolCall
                 {
                     Id = "tool-call-1",
                     Name = "lookup",
@@ -2938,12 +3068,8 @@ public sealed class AgentRunGAgentTests
             }
             else
             {
-                nextState.AccumulatedText = "final answer after tool";
-                nextState.Messages.Add(new AgentRunChatMessage
-                {
-                    Role = "assistant",
-                    Content = "final answer after tool",
-                });
+                result.AccumulatedText = "final answer after tool";
+                result.Content = "final answer after tool";
             }
 
             await agent.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
@@ -2954,7 +3080,7 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = nextState,
+                LlmStepResult = result,
             });
         }
 
@@ -2962,16 +3088,6 @@ public sealed class AgentRunGAgentTests
         {
             await base.ExecuteToolStepAsync(request, ct);
             var agent = _agent ?? throw new InvalidOperationException("AgentRunGAgent test executor was not bound.");
-            var nextState = request.StepState.Clone();
-            nextState.NextStepIndex = request.StepIndex + 1;
-            nextState.Round++;
-            nextState.PendingToolCalls.Clear();
-            nextState.Messages.Add(new AgentRunChatMessage
-            {
-                Role = "tool",
-                ToolCallId = "tool-call-1",
-                Content = """{"result":"tool-ok"}""",
-            });
 
             await agent.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
             {
@@ -2981,7 +3097,19 @@ public sealed class AgentRunGAgentTests
                 Attempt = request.Attempt,
                 StepIndex = request.StepIndex + 1,
                 Request = request.Request.Clone(),
-                StepState = nextState,
+                ToolStepResult = new AgentRunToolStepResult
+                {
+                    AdvanceRound = true,
+                    ResultMessages =
+                    {
+                        new AgentRunChatMessage
+                        {
+                            Role = "tool",
+                            ToolCallId = "tool-call-1",
+                            Content = """{"result":"tool-ok"}""",
+                        },
+                    },
+                },
             });
         }
     }

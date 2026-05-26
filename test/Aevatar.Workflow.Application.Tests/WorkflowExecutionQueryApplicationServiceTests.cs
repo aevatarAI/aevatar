@@ -14,7 +14,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     {
         var calls = new List<string>();
         var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = false };
-        var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = false };
+        var artifactPort = new FakeArtifactQueryPort(calls) { WorkflowArtifactQueryEnabled = false };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog(["direct", "auto"]),
             currentStatePort,
@@ -38,7 +38,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     {
         var calls = new List<string>();
         var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = true };
-        var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = true };
+        var artifactPort = new FakeArtifactQueryPort(calls) { WorkflowArtifactQueryEnabled = true };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog([]),
             currentStatePort,
@@ -91,7 +91,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         };
         var artifactPort = new FakeArtifactQueryPort(calls)
         {
-            EnableActorQueryEndpoints = true,
+            WorkflowArtifactQueryEnabled = true,
             Timeline = timeline,
             Edges = edges,
             Subgraph = subgraph,
@@ -133,7 +133,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog([]),
             new FakeCurrentStateQueryPort([]) { EnableActorQueryEndpoints = false },
-            new FakeArtifactQueryPort([]) { EnableActorQueryEndpoints = false },
+            new FakeArtifactQueryPort([]) { WorkflowArtifactQueryEnabled = false },
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
         using var cts = new CancellationTokenSource();
@@ -326,7 +326,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
     private sealed class FakeArtifactQueryPort(List<string> calls) : IWorkflowExecutionArtifactQueryPort
     {
-        public bool EnableActorQueryEndpoints { get; set; }
+        public bool WorkflowArtifactQueryEnabled { get; set; }
         public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> Edges { get; init; } = [];
