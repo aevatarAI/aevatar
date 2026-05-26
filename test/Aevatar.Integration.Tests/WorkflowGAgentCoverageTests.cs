@@ -332,7 +332,7 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
         var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_valid",
@@ -340,7 +340,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
         runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
@@ -421,7 +421,7 @@ public class WorkflowGAgentCoverageTests
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_replay",
             runId: "run-replay");
-        SeedRuntimeContext(agent1);
+        await SeedRuntimeContextAsync(agent1);
         await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_replay",
@@ -450,6 +450,57 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_ReplayContract_ShouldRestoreExecutionContextAfterChatStart()
+    {
+        var eventStore = new InMemoryEventStore();
+        var runtime = new RecordingActorRuntime();
+        var agent1 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+        SetAgentId(agent1, "workflow-run-context-replay");
+
+        await agent1.ActivateAsync();
+        await agent1.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_context_replay",
+            runId: "run-context-replay");
+
+        await agent1.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "s1",
+            Metadata =
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer secret ",
+                ["trace-id"] = " trace-abc ",
+            },
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: " token-123 ",
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: null,
+                ModelOverride: " model-main ",
+                NyxIdRoutePreference: " route-fast ",
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null).ToPayload(),
+        });
+
+        agent1.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent1.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token-123");
+        await agent1.DeactivateAsync();
+
+        var persisted = await eventStore.GetEventsAsync(agent1.Id);
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal));
+
+        var agent2 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+        SetAgentId(agent2, "workflow-run-context-replay");
+        await agent2.ActivateAsync();
+
+        agent2.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent2.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token-123");
+        agent2.State.ExecutionContext.Llm.ModelOverride.Should().Be("model-main");
+        agent2.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route-fast");
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_CommittedObservation_ShouldRedactExecutionContextAndCapturedSecrets()
     {
         var eventStore = new InMemoryEventStore();
@@ -466,13 +517,13 @@ public class WorkflowGAgentCoverageTests
             "wf_redaction",
             runId: "run-redaction");
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             agent,
             new Dictionary<string, string>
             {
                 [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             agent,
             AgentToolExecutionContext.Empty with
             {
@@ -533,6 +584,19 @@ public class WorkflowGAgentCoverageTests
         observedEvent.State.Unpack<SecureInputModuleState>()
             .Captured["run-redaction::api_key"]
             .Value.Should().BeEmpty();
+
+        var observedContextEvent = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Select(x => x.StateEvent.EventData)
+            .Where(x => x.Is(WorkflowRunExecutionContextUpdatedEvent.Descriptor))
+            .Select(x => x.Unpack<WorkflowRunExecutionContextUpdatedEvent>())
+            .ToList();
+        observedContextEvent.Should().HaveCount(2);
+        observedContextEvent[0].ExecutionContextDelta.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedContextEvent[1].ExecutionContextDelta.Llm!.NyxidAccessToken.Should().BeEmpty();
+        observedContextEvent[1].ExecutionContextDelta.Llm.ModelOverride.Should().Be("model");
+        observedContextEvent[1].ExecutionContextDelta.Llm.NyxidRoutePreference.Should().Be("route");
     }
 
     [Fact]
@@ -1239,7 +1303,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -1281,7 +1345,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop-async");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -1658,27 +1722,33 @@ public class WorkflowGAgentCoverageTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
-    private static void SeedRuntimeContext(WorkflowRunGAgent agent)
+    private static async Task SeedRuntimeContextAsync(WorkflowRunGAgent agent)
     {
         var host = (IWorkflowExecutionStateHost)agent;
-        host.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
-        {
-            NyxidAccessToken = "token",
-            ModelOverride = "model",
-            NyxidRoutePreference = "route",
-        };
-        host.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
-        {
-            HttpAuthorization = "Bearer secret",
-        };
+        await host.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
+            {
+                ClearLlm = true,
+                ClearConnector = true,
+                Llm = new WorkflowRunLlmExecutionContextDelta
+                {
+                    NyxidAccessToken = "token",
+                    ModelOverride = "model",
+                    NyxidRoutePreference = "route",
+                },
+                Connector = new WorkflowRunConnectorExecutionContextDelta
+                {
+                    HttpAuthorization = "Bearer secret",
+                },
+            });
         host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
     }
 
     private static void AssertRuntimeContextCleared(WorkflowRunGAgent agent)
     {
         var host = (IWorkflowExecutionStateHost)agent;
-        host.ExecutionContextState.Llm.Should().BeNull();
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextSnapshot.Llm.Should().BeNull();
+        host.ExecutionContextSnapshot.Connector.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 

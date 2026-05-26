@@ -12,36 +12,47 @@ internal static class WorkflowRunExecutionContextStateAccess
     public static WorkflowRunExecutionContextState Get(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        return stateHost.ExecutionContextState;
+        return stateHost.ExecutionContextSnapshot;
     }
 
     public static WorkflowRunExecutionContextState Get(IWorkflowExecutionContext ctx)
     {
         ArgumentNullException.ThrowIfNull(ctx);
         if (ctx is IWorkflowExecutionStateHost stateHost)
-            return stateHost.ExecutionContextState;
+            return stateHost.ExecutionContextSnapshot;
         if (ctx is IWorkflowExecutionStateHostAccessor stateHostAccessor)
-            return stateHostAccessor.StateHost.ExecutionContextState;
+            return stateHostAccessor.StateHost.ExecutionContextSnapshot;
 
         return new WorkflowRunExecutionContextState();
     }
 
-    public static void Clear(IWorkflowExecutionStateHost stateHost)
+    public static Task ClearAsync(
+        IWorkflowExecutionStateHost stateHost,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.ExecutionContextState.Llm = null;
-        stateHost.ExecutionContextState.Connector = null;
+        return stateHost.ClearExecutionContextAsync(ct);
     }
 
-    public static void ApplyRequestMetadata(
+    public static Task ApplyRequestMetadataAsync(
         IWorkflowExecutionStateHost stateHost,
-        IReadOnlyDictionary<string, string>? metadata)
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.ExecutionContextState.Connector = null;
+        var delta = BuildRequestMetadataDelta(metadata);
+        return stateHost.UpdateExecutionContextAsync(delta, ct);
+    }
 
+    public static WorkflowRunExecutionContextDelta BuildRequestMetadataDelta(
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        var delta = new WorkflowRunExecutionContextDelta
+        {
+            ClearConnector = true,
+        };
         if (metadata == null || metadata.Count == 0)
-            return;
+            return delta;
 
         foreach (var pair in metadata)
         {
@@ -52,33 +63,52 @@ internal static class WorkflowRunExecutionContextStateAccess
 
             if (string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal))
             {
-                EnsureConnector(stateHost.ExecutionContextState).HttpAuthorization = value;
+                delta.Connector = new WorkflowRunConnectorExecutionContextDelta
+                {
+                    HttpAuthorization = value,
+                };
                 continue;
             }
         }
+
+        return delta;
     }
 
-    public static void ApplyToolContext(
+    public static Task ApplyToolContextAsync(
         IWorkflowExecutionStateHost stateHost,
-        AgentToolExecutionContext? toolContext)
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.ExecutionContextState.Llm = null;
+        var delta = BuildToolContextDelta(toolContext);
+        return stateHost.UpdateExecutionContextAsync(delta, ct);
+    }
 
+    public static WorkflowRunExecutionContextDelta BuildToolContextDelta(AgentToolExecutionContext? toolContext)
+    {
+        var delta = new WorkflowRunExecutionContextDelta
+        {
+            ClearLlm = true,
+        };
         if (toolContext == null)
-            return;
+            return delta;
 
-        var llm = EnsureLlm(stateHost.ExecutionContextState);
-        llm.NyxidAccessToken = Normalize(toolContext.Credentials.NyxIdAccessToken);
-        llm.ModelOverride = Normalize(toolContext.Routing.ModelOverride);
-        llm.NyxidRoutePreference = Normalize(toolContext.Routing.NyxIdRoutePreference);
+        var llm = new WorkflowRunLlmExecutionContextDelta
+        {
+            NyxidAccessToken = Normalize(toolContext.Credentials.NyxIdAccessToken),
+            ModelOverride = Normalize(toolContext.Routing.ModelOverride),
+            NyxidRoutePreference = Normalize(toolContext.Routing.NyxIdRoutePreference),
+        };
 
         if (string.IsNullOrWhiteSpace(llm.NyxidAccessToken) &&
             string.IsNullOrWhiteSpace(llm.ModelOverride) &&
             string.IsNullOrWhiteSpace(llm.NyxidRoutePreference))
         {
-            stateHost.ExecutionContextState.Llm = null;
+            return delta;
         }
+
+        delta.Llm = llm;
+        return delta;
     }
 
     public static bool TryGetConnectorAuthorization(
@@ -104,18 +134,6 @@ internal static class WorkflowRunExecutionContextStateAccess
         return !string.IsNullOrWhiteSpace(llm.NyxidAccessToken) ||
                !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
                !string.IsNullOrWhiteSpace(llm.NyxidRoutePreference);
-    }
-
-    public static WorkflowLlmExecutionContextState EnsureLlm(WorkflowRunExecutionContextState state)
-    {
-        state.Llm ??= new WorkflowLlmExecutionContextState();
-        return state.Llm;
-    }
-
-    public static WorkflowConnectorExecutionContextState EnsureConnector(WorkflowRunExecutionContextState state)
-    {
-        state.Connector ??= new WorkflowConnectorExecutionContextState();
-        return state.Connector;
     }
 
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)

@@ -32,6 +32,20 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
             }
         }
 
+        if (context.Published.StateEvent?.EventData?.Is(WorkflowRunExecutionStartedEvent.Descriptor) == true)
+        {
+            var startedEvent = context.Published.StateEvent.EventData.Unpack<WorkflowRunExecutionStartedEvent>();
+            RedactExecutionContextDelta(startedEvent.ExecutionContextDelta);
+            context.Published.StateEvent.EventData = Any.Pack(startedEvent);
+        }
+
+        if (context.Published.StateEvent?.EventData?.Is(WorkflowRunExecutionContextUpdatedEvent.Descriptor) == true)
+        {
+            var updateEvent = context.Published.StateEvent.EventData.Unpack<WorkflowRunExecutionContextUpdatedEvent>();
+            RedactExecutionContextDelta(updateEvent.ExecutionContextDelta);
+            context.Published.StateEvent.EventData = Any.Pack(updateEvent);
+        }
+
         var state = context.Published.StateRoot.Unpack<WorkflowRunState>() ?? new WorkflowRunState();
         state.ExecutionContext = WorkflowRunExecutionContextStateAccess.RedactedClone(state.ExecutionContext);
         RedactSecureInputExecutionState(state);
@@ -58,5 +72,16 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         foreach (var captured in redacted.Captured.Values)
             captured.Value = string.Empty;
         return redacted;
+    }
+
+    private static void RedactExecutionContextDelta(WorkflowRunExecutionContextDelta? delta)
+    {
+        if (delta == null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(delta.Llm?.NyxidAccessToken))
+            delta.Llm.NyxidAccessToken = string.Empty;
+        if (!string.IsNullOrWhiteSpace(delta.Connector?.HttpAuthorization))
+            delta.Connector.HttpAuthorization = string.Empty;
     }
 }

@@ -15,21 +15,23 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
     //                under `workflow.request.metadata` in the item bag.
     //   New principle: request metadata writes promote known control keys into
     //                  typed runtime sections and keep only passthrough values.
-    public static void SetRequestMetadata(
+    public static async Task SetRequestMetadataAsync(
         IWorkflowExecutionStateHost stateHost,
-        IReadOnlyDictionary<string, string>? metadata)
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        WorkflowRunExecutionContextStateAccess.ApplyRequestMetadata(stateHost, metadata);
+        await WorkflowRunExecutionContextStateAccess.ApplyRequestMetadataAsync(stateHost, metadata, ct);
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
     }
 
-    public static void SetToolContext(
+    public static Task SetToolContextAsync(
         IWorkflowExecutionStateHost stateHost,
-        AgentToolExecutionContext? toolContext)
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        WorkflowRunExecutionContextStateAccess.ApplyToolContext(stateHost, toolContext);
+        return WorkflowRunExecutionContextStateAccess.ApplyToolContextAsync(stateHost, toolContext, ct);
     }
 
     // Refactor (iter16/cluster-031):
@@ -37,10 +39,12 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
     //                `workflow.request.metadata` item.
     //   New principle: request metadata cleanup clears the typed LLM,
     //                  connector, and passthrough runtime sections.
-    public static void RemoveRequestMetadata(IWorkflowExecutionStateHost stateHost)
+    public static async Task RemoveRequestMetadataAsync(
+        IWorkflowExecutionStateHost stateHost,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        WorkflowRunExecutionContextStateAccess.Clear(stateHost);
+        await WorkflowRunExecutionContextStateAccess.ClearAsync(stateHost, ct);
         stateHost.RuntimeContext.ApplyRequestMetadata(null);
     }
 

@@ -13,7 +13,13 @@ internal interface IWorkflowExecutionStateHost
 
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
 
-    WorkflowRunExecutionContextState ExecutionContextState { get; }
+    WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }
+
+    Task UpdateExecutionContextAsync(
+        WorkflowRunExecutionContextDelta delta,
+        CancellationToken ct = default);
+
+    Task ClearExecutionContextAsync(CancellationToken ct = default);
 
     Any? GetExecutionState(string scopeKey);
 

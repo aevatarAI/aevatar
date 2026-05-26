@@ -282,6 +282,21 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
+    public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+    {
+        WorkflowExecutionContextTestState.ApplyDelta(ExecutionContextState, delta);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearExecutionContextAsync(CancellationToken ct = default)
+    {
+        ExecutionContextState.Llm = null;
+        ExecutionContextState.Connector = null;
+        return Task.CompletedTask;
+    }
+
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -331,6 +346,21 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
 
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
+    public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+    {
+        WorkflowExecutionContextTestState.ApplyDelta(ExecutionContextState, delta);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearExecutionContextAsync(CancellationToken ct = default)
+    {
+        ExecutionContextState.Llm = null;
+        ExecutionContextState.Connector = null;
+        return Task.CompletedTask;
+    }
+
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -366,4 +396,34 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+}
+
+internal static class WorkflowExecutionContextTestState
+{
+    public static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                ModelOverride = delta.Llm.ModelOverride,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
+    }
 }

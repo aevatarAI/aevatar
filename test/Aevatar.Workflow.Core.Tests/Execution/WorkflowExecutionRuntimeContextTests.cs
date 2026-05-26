@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
@@ -16,11 +17,11 @@ namespace Aevatar.Workflow.Core.Tests.Execution;
 public sealed class WorkflowExecutionRuntimeContextTests
 {
     [Fact]
-    public void SetRequestMetadata_ShouldPromoteControlValuesToTypedState_AndGuardPassthrough()
+    public async Task SetRequestMetadata_ShouldPromoteControlValuesToTypedState_AndGuardPassthrough()
     {
         var host = new RecordingStateHost();
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
@@ -44,11 +45,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void SetToolContext_ShouldPromoteLlmValuesToTypedState()
+    public async Task SetToolContext_ShouldPromoteLlmValuesToTypedState()
     {
         var host = new RecordingStateHost();
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             host,
             AgentToolExecutionContext.Empty with
             {
@@ -69,10 +70,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void SetRequestMetadata_ShouldClearTypedConnectorAndPassthroughWhenMetadataIsNullEmptyOrInvalid()
+    public async Task SetRequestMetadata_ShouldClearTypedConnectorAndPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
@@ -80,12 +81,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(host, null);
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
         host.ExecutionContextState.Connector.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
@@ -97,57 +98,57 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void RemoveRequestMetadata_ShouldValidateAndClearTypedExecutionContext()
+    public async Task RemoveRequestMetadata_ShouldValidateAndClearTypedExecutionContext()
     {
         var host = new RecordingStateHost();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
                 [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             host,
             AgentToolExecutionContext.Empty with
             {
                 Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token" },
             });
 
-        WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadata(host);
+        await WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(host);
 
         host.ExecutionContextState.Llm.Should().BeNull();
         host.ExecutionContextState.Connector.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
-        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadata(null!))
+        await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(null!))
             .Should()
-            .Throw<ArgumentNullException>();
+            .ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
-    public void ConnectorAuthorizationRuntimeAccess_ShouldTrimSetAndClearTypedState()
+    public async Task ConnectorAuthorizationRuntimeAccess_ShouldTrimSetAndClearTypedState()
     {
         var host = new RecordingStateHost();
 
-        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, " Bearer secret ");
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " Bearer secret ");
 
         host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer secret");
 
-        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, " ");
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " ");
 
         host.ExecutionContextState.Connector.Should().BeNull();
 
-        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, "Bearer secret");
-        ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorization(host);
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer secret");
+        await ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(host);
 
         host.ExecutionContextState.Connector.Should().BeNull();
-        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(null!, "secret"))
+        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(null!, "secret"))
             .Should()
-            .Throw<ArgumentNullException>();
-        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorization(null!))
+            .ThrowAsync<ArgumentNullException>();
+        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(null!))
             .Should()
-            .Throw<ArgumentNullException>();
+            .ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
@@ -217,7 +218,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void CopyRequestMetadata_ShouldValidateArguments()
+    public async Task CopyRequestMetadata_ShouldValidateArguments()
     {
         var context = new RecordingWorkflowExecutionContext();
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -228,9 +229,9 @@ public sealed class WorkflowExecutionRuntimeContextTests
         FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(context, null!))
             .Should()
             .Throw<ArgumentNullException>();
-        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(null!, target))
+        await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(null!, target))
             .Should()
-            .Throw<ArgumentNullException>();
+            .ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
@@ -278,6 +279,23 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(
+            WorkflowRunExecutionContextDelta delta,
+            CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Any? GetExecutionState(string scopeKey) =>
             _states.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -306,6 +324,8 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
 
         public SecureInputModuleState SecureInputState =>
             _states.TryGetValue(SecureInputStateAccess.ModuleStateKey, out var state) &&
@@ -360,6 +380,48 @@ public sealed class WorkflowExecutionRuntimeContextTests
         {
             _states.Remove(scopeKey);
             return Task.CompletedTask;
+        }
+
+        public Task UpdateExecutionContextAsync(
+            WorkflowRunExecutionContextDelta delta,
+            CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                ModelOverride = delta.Llm.ModelOverride,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
         }
     }
 

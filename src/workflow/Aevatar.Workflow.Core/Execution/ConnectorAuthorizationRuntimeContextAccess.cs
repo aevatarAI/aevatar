@@ -15,30 +15,49 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
     //                `http.authorization` string key.
     //   New principle: authorization writes update the typed connector section
     //                  of WorkflowExecutionRuntimeContext.
-    public static void SetAuthorization(
+    public static Task SetAuthorizationAsync(
         IWorkflowExecutionStateHost stateHost,
-        string? authorization)
+        string? authorization,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         if (string.IsNullOrWhiteSpace(authorization))
         {
-            stateHost.ExecutionContextState.Connector = null;
-            return;
+            return stateHost.UpdateExecutionContextAsync(
+                new WorkflowRunExecutionContextDelta
+                {
+                    ClearConnector = true,
+                },
+                ct);
         }
 
-        WorkflowRunExecutionContextStateAccess
-            .EnsureConnector(stateHost.ExecutionContextState)
-            .HttpAuthorization = authorization.Trim();
+        return stateHost.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
+            {
+                ClearConnector = true,
+                Connector = new WorkflowRunConnectorExecutionContextDelta
+                {
+                    HttpAuthorization = authorization.Trim(),
+                },
+            },
+            ct);
     }
 
     // Refactor (iter16/cluster-031):
     //   Old pattern: clearing authorization removed a value from the generic
     //                execution item bag by string key.
     //   New principle: clearing authorization nulls the typed connector field.
-    public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
+    public static Task RemoveAuthorizationAsync(
+        IWorkflowExecutionStateHost stateHost,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.ExecutionContextState.Connector = null;
+        return stateHost.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
+            {
+                ClearConnector = true,
+            },
+            ct);
     }
 
     // Refactor (iter16/cluster-031):

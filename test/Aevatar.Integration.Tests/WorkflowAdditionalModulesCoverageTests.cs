@@ -1998,13 +1998,13 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
                 ["trace-id"] = " trace-abc ",
             });
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             AgentToolExecutionContext.Empty with
             {
@@ -2043,7 +2043,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
