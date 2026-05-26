@@ -160,8 +160,8 @@ public sealed class ScopeWorkflowEndpointsTests
             {
                 ["child"] = "name: child\nsteps: []\n",
             });
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             "tenant-a:workflow-app:user:token:approval",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -185,7 +185,7 @@ public sealed class ScopeWorkflowEndpointsTests
             "approval",
             BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
             bindingReader,
-            artifactStore,
+            revisionCatalog,
             Options.Create(new ScopeWorkflowCapabilityOptions()),
             CancellationToken.None);
 
@@ -809,26 +809,20 @@ public sealed class ScopeWorkflowEndpointsTests
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
-        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
 
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
+        public Task UpsertRevisionAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
             var clone = artifact.Clone();
             clone.RevisionId = revisionId;
-            _artifacts[$"{serviceKey}:{revisionId}"] = clone;
+            _revisionCatalog[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
-        }
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
-        {
-            _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
-            return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
         }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             var serviceKey = ServiceKeys.Build(identity);
-            var revisions = _artifacts
+            var revisions = _revisionCatalog
                 .Select(x => x.Value)
                 .Select(artifact => new ServiceRevisionSnapshot(
                     artifact.RevisionId,

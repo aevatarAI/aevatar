@@ -64,6 +64,7 @@ public sealed class ServiceInvocationResolutionService
 
         var selectedTarget = SelectTarget(endpointView.Targets, request, serviceKey);
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(request.Identity, ct);
+        // Refactor (iter100/cluster-100): Old invocation resolved artifacts from a process-local store. / New invocation resolves prepared artifacts from the revision readmodel catalog.
         var artifact = revisionCatalog.GetRequiredPreparedArtifact(request.Identity, selectedTarget.RevisionId);
         var endpoint = artifact.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));

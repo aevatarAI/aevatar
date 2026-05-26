@@ -164,14 +164,14 @@ public sealed class ApplicationServiceGuardTests
             new NoOpCatalogQueryReader(),
             null!,
             new FakeServiceRevisionCatalogQueryReader());
-        Action nullArtifactStore = () => new ActivationCapabilityViewAssembler(
+        Action nullRevisionCatalog = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
             new NoOpConfigurationQueryReader(),
             null!);
 
         nullCatalogReader.Should().Throw<ArgumentNullException>();
         nullConfigurationReader.Should().Throw<ArgumentNullException>();
-        nullArtifactStore.Should().Throw<ArgumentNullException>();
+        nullRevisionCatalog.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]

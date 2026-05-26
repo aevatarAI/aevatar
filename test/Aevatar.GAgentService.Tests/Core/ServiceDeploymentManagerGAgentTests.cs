@@ -19,16 +19,16 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldPersistAndReplayDeploymentRecord()
     {
         var eventStore = new InMemoryEventStore();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         var identity = GAgentServiceTestKit.CreateIdentity();
-        await artifactStore.SaveAsync(
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         var actorId = ServiceActorIds.Deployment(identity);
-        var agent = CreateAgent(eventStore, artifactStore, activator, actorId);
+        var agent = CreateAgent(eventStore, revisionCatalog, activator, actorId);
         await agent.ActivateAsync();
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
@@ -43,7 +43,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         await agent.DeactivateAsync();
 
-        var replayed = CreateAgent(eventStore, artifactStore, activator, actorId);
+        var replayed = CreateAgent(eventStore, revisionCatalog, activator, actorId);
         await replayed.ActivateAsync();
         replayed.State.Deployments.Should().ContainKey("dep-r1");
         replayed.State.Deployments["dep-r1"].PrimaryActorId.Should().Be("actor-r1");
@@ -53,8 +53,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldDispatchResolvedServingTargetsAfterActivation()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -64,7 +64,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         var dispatchPort = new RecordingDispatchPort();
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity), dispatchPort);
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity), dispatchPort);
         await agent.ActivateAsync();
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
@@ -86,8 +86,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldDispatchResolvedServingTargets_WhenRevisionIsAlreadyActive()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -97,7 +97,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         var dispatchPort = new RecordingDispatchPort();
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity), dispatchPort);
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity), dispatchPort);
         await agent.ActivateAsync();
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
@@ -119,13 +119,13 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldKeepMultipleActiveDeploymentsForDifferentRevisions()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r2", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r2"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r2", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r2"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r2", "actor-r2", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity));
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -148,11 +148,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldBeIdempotentForActiveRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity));
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -193,11 +193,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleDeactivateAsync_ShouldDeactivateSpecificActiveDeployment()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity));
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -218,11 +218,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleDeactivateAsync_ShouldIgnoreUnknownOrInactiveDeployment_WhenStateAlreadyExists()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity));
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
 
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -295,11 +295,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var otherIdentity = GAgentServiceTestKit.CreateIdentity(serviceId: "svc-other");
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
-        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity));
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, ServiceActorIds.Deployment(identity));
         await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
@@ -318,7 +318,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
     private static ServiceDeploymentManagerGAgent CreateAgent(
         InMemoryEventStore eventStore,
-        FakeServiceRevisionCatalogQueryReader artifactStore,
+        FakeServiceRevisionCatalogQueryReader revisionCatalog,
         RecordingRuntimeActivator activator,
         string actorId,
         RecordingDispatchPort? dispatchPort = null)
@@ -328,7 +328,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             actorId,
             () => new ServiceDeploymentManagerGAgent(
                 dispatchPort ?? new RecordingDispatchPort(),
-                artifactStore,
+                revisionCatalog,
                 new AlwaysReadyCapabilityViewReader(),
                 new AllowActivationAdmissionEvaluator(),
                 activator));

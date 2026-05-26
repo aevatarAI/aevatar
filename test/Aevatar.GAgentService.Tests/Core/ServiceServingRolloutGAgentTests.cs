@@ -520,8 +520,8 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceServingSetManager_ShouldResolveTargetsFromDeploymentAndArtifact()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -540,7 +540,7 @@ public sealed class ServiceServingRolloutGAgentTests
         var agent = CreateServingSetAgent(
             new InMemoryEventStore(),
             ServiceActorIds.ServingSet(identity),
-            new DefaultServiceServingTargetResolver(deploymentQueryReader, artifactStore));
+            new DefaultServiceServingTargetResolver(deploymentQueryReader, revisionCatalog));
         await agent.ActivateAsync();
 
         await agent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -603,12 +603,12 @@ public sealed class ServiceServingRolloutGAgentTests
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var serviceKey = ServiceKeys.Build(identity);
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
 
         var missingRevisionAgent = CreateServingSetAgent(
             new InMemoryEventStore(),
             ServiceActorIds.ServingSet(identity),
-            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), artifactStore));
+            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), revisionCatalog));
         await missingRevisionAgent.ActivateAsync();
 
         await FluentActions.Invoking(() => missingRevisionAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -625,7 +625,7 @@ public sealed class ServiceServingRolloutGAgentTests
         var missingDeploymentAgent = CreateServingSetAgent(
             new InMemoryEventStore(),
             ServiceActorIds.ServingSet(identity),
-            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), artifactStore));
+            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), revisionCatalog));
         await missingDeploymentAgent.ActivateAsync();
 
         await FluentActions.Invoking(() => missingDeploymentAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -655,7 +655,7 @@ public sealed class ServiceServingRolloutGAgentTests
                         ],
                         DateTimeOffset.UtcNow),
                 },
-                artifactStore));
+                revisionCatalog));
         await inactiveDeploymentAgent.ActivateAsync();
 
         await FluentActions.Invoking(() => inactiveDeploymentAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -685,7 +685,7 @@ public sealed class ServiceServingRolloutGAgentTests
                         ],
                         DateTimeOffset.UtcNow),
                 },
-                artifactStore));
+                revisionCatalog));
         await missingArtifactAgent.ActivateAsync();
 
         await FluentActions.Invoking(() => missingArtifactAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -707,8 +707,8 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceServingSetManager_ShouldPreserveExplicitServingFieldsDuringResolution()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -729,7 +729,7 @@ public sealed class ServiceServingRolloutGAgentTests
                         ],
                         DateTimeOffset.UtcNow),
                 },
-                artifactStore));
+                revisionCatalog));
         await agent.ActivateAsync();
 
         await agent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
@@ -758,15 +758,15 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldResolvePlanAndExplicitBaselineTargets()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-base",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
                 identity,
                 "rev-base",
                 GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run")));
-        await artifactStore.SaveAsync(
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -786,7 +786,7 @@ public sealed class ServiceServingRolloutGAgentTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            artifactStore);
+            revisionCatalog);
         var agent = CreateRolloutAgent(new InMemoryEventStore(), dispatchPort, identity, resolver);
         await agent.ActivateAsync();
 
@@ -841,8 +841,8 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldUseServingSnapshotBaselineWhenExplicitBaselineMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -874,7 +874,7 @@ public sealed class ServiceServingRolloutGAgentTests
                         ],
                         DateTimeOffset.UtcNow),
                 },
-                artifactStore),
+                revisionCatalog),
             servingSetQueryReader);
         await agent.ActivateAsync();
 
@@ -913,8 +913,8 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceRolloutManager_ShouldUseEmptyBaselineWhenServingSnapshotMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "rev-2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -936,7 +936,7 @@ public sealed class ServiceServingRolloutGAgentTests
                         ],
                         DateTimeOffset.UtcNow),
                 },
-                artifactStore),
+                revisionCatalog),
             servingSetQueryReader);
         await agent.ActivateAsync();
 

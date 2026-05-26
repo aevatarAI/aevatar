@@ -7,9 +7,9 @@ namespace Aevatar.GAgentService.Tests.TestSupport;
 
 internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
 {
-    private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
 
-    public Task SaveAsync(
+    public Task UpsertRevisionAsync(
         string serviceKey,
         string revisionId,
         PreparedServiceRevisionArtifact artifact,
@@ -17,17 +17,8 @@ internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCa
     {
         var clone = artifact.Clone();
         clone.RevisionId = revisionId;
-        _artifacts[BuildKey(serviceKey, revisionId)] = clone;
+        _revisionCatalog[BuildKey(serviceKey, revisionId)] = clone;
         return Task.CompletedTask;
-    }
-
-    public Task<PreparedServiceRevisionArtifact?> GetAsync(
-        string serviceKey,
-        string revisionId,
-        CancellationToken ct = default)
-    {
-        _artifacts.TryGetValue(BuildKey(serviceKey, revisionId), out var artifact);
-        return Task.FromResult(artifact?.Clone());
     }
 
     public Task<ServiceRevisionCatalogSnapshot?> GetAsync(
@@ -35,7 +26,7 @@ internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCa
         CancellationToken ct = default)
     {
         var serviceKey = ServiceKeys.Build(identity);
-        var revisions = _artifacts
+        var revisions = _revisionCatalog
             .Where(x => x.Key.StartsWith(serviceKey + ":", StringComparison.Ordinal))
             .Select(x => x.Value)
             .OrderBy(x => x.RevisionId, StringComparer.Ordinal)
@@ -65,7 +56,7 @@ internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCa
             revisions,
             DateTimeOffset.UtcNow,
             revisions.Count,
-            revisions.Count == 0 ? string.Empty : $"{serviceKey}:test-artifacts"));
+            revisions.Count == 0 ? string.Empty : $"{serviceKey}:test-revisions"));
     }
 
     private static string BuildKey(string serviceKey, string revisionId) => $"{serviceKey}:{revisionId}";

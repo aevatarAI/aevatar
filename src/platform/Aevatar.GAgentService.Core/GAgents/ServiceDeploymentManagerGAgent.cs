@@ -45,8 +45,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (string.IsNullOrWhiteSpace(command.RevisionId))
             throw new InvalidOperationException("revision_id is required.");
 
-        var serviceKey = ServiceKeys.Build(command.Identity);
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(command.Identity, CancellationToken.None);
+        // Refactor (iter100/cluster-100): Old activation read prepared artifacts from a process-local store. / New activation consumes the projected revision readmodel catalog.
         var artifact = revisionCatalog.GetRequiredPreparedArtifact(command.Identity, command.RevisionId);
         var currentState = State.Clone();
         var capabilityView = await _capabilityViewReader.GetAsync(command.Identity, command.RevisionId, CancellationToken.None);

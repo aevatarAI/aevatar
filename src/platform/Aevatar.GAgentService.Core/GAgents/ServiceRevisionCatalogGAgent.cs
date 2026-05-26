@@ -72,7 +72,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 ArtifactHash = assembled.ArtifactHash ?? string.Empty,
                 Endpoints = { assembled.Endpoints.Select(x => x.Clone()) },
                 PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                // Old: callers rehydrated this from a process-local artifact store. New: the committed prepared event is the artifact authority.
+                // Refactor (iter100/cluster-100): Old callers rehydrated this from a process-local artifact store. / New the committed prepared event is the artifact authority.
                 PreparedArtifact = assembled.Clone(),
             });
         }
@@ -156,7 +156,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         record.ArtifactHash = evt.ArtifactHash ?? string.Empty;
         record.Endpoints.Clear();
         record.Endpoints.Add(evt.Endpoints.Select(x => x.Clone()));
-        // Old: prepared artifacts lived beside the actor in a singleton. New: replay restores them from committed catalog state.
+        // Refactor (iter100/cluster-100): Old prepared artifacts lived beside the actor in a singleton. / New replay restores them from committed catalog state.
         record.PreparedArtifact = evt.PreparedArtifact?.Clone() ?? new PreparedServiceRevisionArtifact();
         record.PreparedAt = evt.PreparedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
         record.FailureReason = string.Empty;

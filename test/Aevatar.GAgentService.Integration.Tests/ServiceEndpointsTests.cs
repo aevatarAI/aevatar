@@ -632,7 +632,7 @@ public sealed class ServiceEndpointsTests
             Endpoints: [],
             PolicyIds: [],
             UpdatedAt: DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "tenant:app:ns:orders",
             "rev-active",
             new PreparedServiceRevisionArtifact
@@ -663,7 +663,7 @@ public sealed class ServiceEndpointsTests
     public async Task InvokeAsync_WithPayloadJsonAndExplicitRevision_ShouldUseRequestedRevision()
     {
         await using var host = await EndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "tenant:app:ns:orders",
             "rev-explicit",
             new PreparedServiceRevisionArtifact
@@ -711,7 +711,7 @@ public sealed class ServiceEndpointsTests
     public async Task InvokeAsync_WithPayloadJson_ShouldReturnBadRequest_WhenTypeUrlNotInRevision()
     {
         await using var host = await EndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "tenant:app:ns:orders",
             "rev-active",
             new PreparedServiceRevisionArtifact
@@ -740,7 +740,7 @@ public sealed class ServiceEndpointsTests
     public async Task InvokeAsync_WithPayloadJson_ShouldReturnBadRequest_WhenJsonIsMalformed()
     {
         await using var host = await EndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "tenant:app:ns:orders",
             "rev-active",
             new PreparedServiceRevisionArtifact
@@ -1188,7 +1188,7 @@ public sealed class ServiceEndpointsTests
             RecordingServiceQueryPort queryPort,
             RecordingServiceInvocationPort invocationPort,
             FakeServiceCatalogQueryReader catalogReader,
-            FakeServiceRevisionCatalogQueryReader artifactStore)
+            FakeServiceRevisionCatalogQueryReader revisionCatalog)
         {
             _app = app;
             Client = client;
@@ -1196,7 +1196,7 @@ public sealed class ServiceEndpointsTests
             QueryPort = queryPort;
             InvocationPort = invocationPort;
             CatalogReader = catalogReader;
-            ArtifactStore = artifactStore;
+            RevisionCatalog = revisionCatalog;
         }
 
         public HttpClient Client { get; }
@@ -1209,7 +1209,7 @@ public sealed class ServiceEndpointsTests
 
         public FakeServiceCatalogQueryReader CatalogReader { get; }
 
-        public FakeServiceRevisionCatalogQueryReader ArtifactStore { get; }
+        public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
         public static async Task<EndpointTestHost> StartAsync()
         {
@@ -1223,14 +1223,14 @@ public sealed class ServiceEndpointsTests
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
             var catalogReader = new FakeServiceCatalogQueryReader();
-            var artifactStore = new FakeServiceRevisionCatalogQueryReader();
+            var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
-            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(artifactStore);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
             var app = builder.Build();
@@ -1263,7 +1263,7 @@ public sealed class ServiceEndpointsTests
                 BaseAddress = new Uri(address),
             };
 
-            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, artifactStore);
+            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, revisionCatalog);
         }
 
         public async ValueTask DisposeAsync()
@@ -1530,26 +1530,20 @@ public sealed class ServiceEndpointsTests
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
-        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
 
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
+        public Task UpsertRevisionAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
             var clone = artifact.Clone();
             clone.RevisionId = revisionId;
-            _artifacts[$"{serviceKey}:{revisionId}"] = clone;
+            _revisionCatalog[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
-        }
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
-        {
-            _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
-            return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
         }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             var serviceKey = ServiceKeys.Build(identity);
-            var revisions = _artifacts
+            var revisions = _revisionCatalog
                 .Select(x => x.Value)
                 .Select(artifact => new ServiceRevisionSnapshot(
                     artifact.RevisionId,

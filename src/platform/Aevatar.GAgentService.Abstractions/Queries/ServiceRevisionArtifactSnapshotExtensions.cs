@@ -4,7 +4,7 @@ namespace Aevatar.GAgentService.Abstractions.Queries;
 
 public static class ServiceRevisionArtifactSnapshotExtensions
 {
-    // Old: artifact lookup used a process-local store keyed by service/revision. New: callers resolve it from the revision readmodel.
+    // Refactor (iter100/cluster-100): Old artifact lookup used a process-local store keyed by service/revision. / New callers resolve it from the revision readmodel.
     public static PreparedServiceRevisionArtifact GetRequiredPreparedArtifact(
         this ServiceRevisionCatalogSnapshot? catalog,
         ServiceIdentity identity,

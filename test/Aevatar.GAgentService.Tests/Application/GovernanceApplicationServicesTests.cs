@@ -22,8 +22,8 @@ public sealed class GovernanceApplicationServicesTests
     public async Task ActivationCapabilityViewAssembler_ShouldComposeConfigurationAndArtifactFallback()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -82,7 +82,7 @@ public sealed class GovernanceApplicationServicesTests
                         CreatePolicySnapshot("policy-endpoint"),
                     ]),
             },
-            artifactStore);
+            revisionCatalog);
 
         var view = await assembler.GetAsync(identity, "r1");
 

@@ -290,13 +290,13 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         RecordingGAgentDraftRunInteractionService interaction,
         RecordingServiceRunRegistrationPort registration)
     {
-        var artifactStore = new FakeServiceRevisionCatalogQueryReader();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
 
         var resolutionService = new ServiceInvocationResolutionService(
             new CatalogQueryReader(identity),
             new TrafficViewQueryReader(identity),
-            artifactStore);
+            revisionCatalog);
 
         return new StaticGAgentStreamInvocationApplicationService(
             resolutionService,
