@@ -302,6 +302,29 @@ public sealed class ChatRuntime
         var lengthRecoveryCount = 0;
         var hasStreamedTextContent = false;
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest);
+
+        // First-token UX: when this turn is a slash command (skill recovery context carries
+        // CommandName), eagerly yield a code-synthesized status chunk BEFORE the orchestrator
+        // runs ornn_search_skills + use_skill (each ~600ms of upstream HTTP through NyxID).
+        // Without this, the user sees an empty card placeholder for the full orchestrator
+        // pre-execution + the LLM's first tool-call-only round — typically several seconds
+        // of dead-air. The synthetic chunk triggers downstream card creation immediately
+        // with a "正在处理 /<command>…" status; the streaming sink's finalize step replaces
+        // it with the LLM's actual final answer, so this only affects in-flight rendering,
+        // not the final user-visible reply.
+        var recoveryContext = baseRequest.ToolContext?.SkillRecovery;
+        if (skillRecovery.RequiresInitialSearch &&
+            !string.IsNullOrWhiteSpace(recoveryContext?.CommandName))
+        {
+            var commandLabel = recoveryContext.CommandName.Trim().TrimStart('/');
+            wroteOutput = true;
+            hasStreamedTextContent = true;
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = $"⏳ 正在处理 `/{commandLabel}`,加载技能并扫描数据中……\n\n",
+            };
+        }
+
         if (skillRecovery.RequiresInitialSearch)
         {
             await skillRecovery.ApplyInitialDirectivesAsync(
