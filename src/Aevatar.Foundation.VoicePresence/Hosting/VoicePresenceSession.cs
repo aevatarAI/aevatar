@@ -1,8 +1,5 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
-using Aevatar.Foundation.VoicePresence.Modules;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.VoicePresence.Transport;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
@@ -10,6 +7,9 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// <summary>
 /// Host-side voice session contract used by WebSocket and WebRTC transports.
 /// </summary>
+// Refactor (iter114/cluster-114-voice-presence-session-runtime-state):
+//   Old pattern: VoicePresenceModule stores transport pump, provider session, provider key, dispatcher delegate, and mutable lease epoch in process-local module fields.
+//   New principle: Delete direct VoicePresenceModule attach bridge and route attach through existing actor-owned attachment port; default DI returns honest unsupported.
 public sealed class VoicePresenceSession
 {
     private const string DetachedReason = "host_transport_detached";
@@ -22,42 +22,6 @@ public sealed class VoicePresenceSession
     private readonly Func<IVoiceTransport?, CancellationToken, Task> _detachTransportAsync;
     private readonly Func<VoiceTransportLifetimeCompleted?, CancellationToken, Task> _completeTransportLifetimeAsync;
     private readonly VoicePresenceSessionLeaseHandle? _leaseHandle;
-
-    public VoicePresenceSession(
-        VoicePresenceModule module,
-        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
-        int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz)
-        : this(module, selfEventDispatcher, null, pcmSampleRateHz)
-    {
-    }
-
-    public VoicePresenceSession(
-        VoicePresenceModule module,
-        Func<IMessage, CancellationToken, Task> selfEventDispatcher,
-        VoicePresenceSessionLeaseHandle? leaseHandle,
-        int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz)
-    {
-        ArgumentNullException.ThrowIfNull(module);
-        ArgumentNullException.ThrowIfNull(selfEventDispatcher);
-
-        Module = module;
-        SelfEventDispatcher = selfEventDispatcher;
-        PcmSampleRateHz = pcmSampleRateHz;
-        _leaseHandle = leaseHandle;
-        _isInitialized = () => module.IsInitialized;
-        _isTransportAttached = () => module.HasVolatileTransportLease;
-        _attachTransportAsync = (transport, _) =>
-            module.AttachTransportAsync(
-                transport,
-                selfEventDispatcher,
-                leaseHandle?.SessionId,
-                leaseHandle?.OwnerId,
-                leaseHandle == null ? null : Timestamp.FromDateTimeOffset(leaseHandle.ExpiresAtUtc),
-                _);
-        _detachTransportAsync = (expectedTransport, _) => module.DetachTransportAsync(expectedTransport);
-        _completeTransportLifetimeAsync = (completed, ct) =>
-            completed == null ? Task.CompletedTask : selfEventDispatcher(completed, ct);
-    }
 
     // Refactor (iter51/issue-888-voice-presence-lease-ack-snapshot):
     //   Old pattern: lease ACK returned VoicePresenceSession bound to pre-lease capability snapshot; endpoint accept/reject closed over stale transport facts.
@@ -147,8 +111,6 @@ public sealed class VoicePresenceSession
         Func<IVoiceTransport, CancellationToken, Task> attachTransportAsync,
         Func<IVoiceTransport?, CancellationToken, Task> detachTransportAsync,
         int pcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz,
-        VoicePresenceModule? module = null,
-        Func<IMessage, CancellationToken, Task>? selfEventDispatcher = null,
         Func<VoiceTransportLifetimeCompleted?, CancellationToken, Task>? completeTransportLifetimeAsync = null,
         Func<IVoiceTransport, CancellationToken, Task<VoiceTransportLifetimeCompleted?>>? attachTransportAndBuildLifetimeAsync = null)
     {
@@ -161,18 +123,9 @@ public sealed class VoicePresenceSession
             return null;
         });
         _detachTransportAsync = detachTransportAsync ?? throw new ArgumentNullException(nameof(detachTransportAsync));
-        _completeTransportLifetimeAsync = completeTransportLifetimeAsync ?? ((completed, ct) =>
-            completed == null || selfEventDispatcher == null
-                ? Task.CompletedTask
-                : selfEventDispatcher(completed, ct));
+        _completeTransportLifetimeAsync = completeTransportLifetimeAsync ?? ((_, _) => Task.CompletedTask);
         PcmSampleRateHz = pcmSampleRateHz;
-        Module = module;
-        SelfEventDispatcher = selfEventDispatcher;
     }
-
-    public VoicePresenceModule? Module { get; }
-
-    public Func<IMessage, CancellationToken, Task>? SelfEventDispatcher { get; }
 
     public VoicePresenceSessionLeaseHandle? LeaseHandle => _leaseHandle;
 
