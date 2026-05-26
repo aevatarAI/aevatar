@@ -44,6 +44,7 @@ internal static class VoicePresenceCapabilityReadModelMapper
             RemoteAudioSupport = state.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified
                 ? VoiceRemoteAudioSupport.LocalOnly
                 : state.RemoteAudioSupport,
+            ActiveTransportLeaseId = state.ActiveTransportLeaseId ?? string.Empty,
         };
     }
 
@@ -66,7 +67,8 @@ internal static class VoicePresenceCapabilityReadModelMapper
             readModel.LeaseExpiresAt?.ToDateTimeOffset(),
             readModel.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified
                 ? VoiceRemoteAudioSupport.LocalOnly
-                : readModel.RemoteAudioSupport);
+                : readModel.RemoteAudioSupport,
+            string.IsNullOrWhiteSpace(readModel.ActiveTransportLeaseId) ? null : readModel.ActiveTransportLeaseId);
     }
 
     public static string NormalizeModuleName(string? moduleName) =>

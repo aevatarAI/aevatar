@@ -166,6 +166,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.TransportRelayStopped:
                 await HandleTransportRelayStoppedAsync(signal.TransportRelayStopped, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted:
+                await HandleTransportLifetimeCompletedAsync(signal.TransportLifetimeCompleted, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
                 await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
                 break;
@@ -225,7 +228,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             leaseExpiresAt: null);
     }
 
-    public Task AttachTransportAsync(
+    public Task<VoiceTransportLifetimeCompleted?> AttachTransportAsync(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         string? sessionId,
@@ -248,7 +251,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         StartTransportRelay(pump);
     }
 
-    private async Task AttachTransportAndObserveDispatchAsync(
+    private async Task<VoiceTransportLifetimeCompleted?> AttachTransportAndObserveDispatchAsync(
         IVoiceTransport userTransport,
         Func<IMessage, CancellationToken, Task> selfEventDispatcher,
         string? sessionId,
@@ -260,7 +263,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         if (string.IsNullOrWhiteSpace(sessionId))
         {
             StartTransportRelay(pump);
-            return;
+            return null;
         }
 
         try
@@ -274,6 +277,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
 
         StartTransportRelay(pump);
+        return BuildTransportLifetimeCompleted(pump.Key);
     }
 
     private VoiceTransportRelayPump AttachTransportCore(
@@ -319,6 +323,16 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             OwnerId = key.OwnerId,
             TransportLeaseId = key.TransportLeaseId,
             LeaseExpiresAt = key.LeaseExpiresAt?.Clone(),
+        };
+
+    private static VoiceTransportLifetimeCompleted BuildTransportLifetimeCompleted(VoiceTransportRelayKey key) =>
+        new()
+        {
+            SessionId = key.SessionId,
+            OwnerId = key.OwnerId,
+            TransportLeaseId = key.TransportLeaseId,
+            LeaseExpiresAt = key.LeaseExpiresAt?.Clone(),
+            Reason = "host_transport_completed",
         };
 
     /// <summary>
@@ -956,6 +970,30 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
 
         ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
+    private async Task HandleTransportLifetimeCompletedAsync(
+        VoiceTransportLifetimeCompleted request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        EnsureVolatileSelfSignalDispatcher(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
+            return;
+
+        await DisposeTransportPumpAsync();
+        ClearTransportLeaseState(state);
+        state.ActiveSessionId = string.Empty;
+        state.LeaseExpiresAt = null;
+        state.ActiveLeaseOwnerId = string.Empty;
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
