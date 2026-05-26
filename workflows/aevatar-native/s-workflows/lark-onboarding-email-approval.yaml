@@ -1,0 +1,60 @@
+name: lark-onboarding-email-approval
+description: |
+  Aevatar-native Lark onboarding email approval workflow.
+  NyxID owns the HTTP ingress endpoint, Lark credential injection, proxy approval policy,
+  and callback or channel delivery. Aevatar owns workflow runtime state and orchestration.
+  Ornn supplies the skill binding used to normalize onboarding input and construct the Lark approval payload.
+
+roles: []
+
+steps:
+  - id: capture_nyxid_ingress
+    type: assign
+    parameters:
+      target: onboarding_event
+      value: "$input"
+    next: load_onboarding_payload_skill
+
+  - id: load_onboarding_payload_skill
+    type: tool_call
+    parameters:
+      tool: use_skill
+      skill_binding: lark-onboarding-email-approval.payload-builder
+      binding_ref: lark-onboarding-email-approval/lark-approval-payload
+      required_for: payload_construction
+    next: build_lark_approval_payload
+
+  - id: build_lark_approval_payload
+    type: connector_call
+    parameters:
+      connector: aevatar_native_payload_builder
+      operation: lark_onboarding_email_approval_payload
+      method: POST
+      path: /workflow-payloads/lark-onboarding-email-approval/approval-instance
+      stdin_mode: input
+      content_type: application/json
+      timeout_ms: "30000"
+      skill_binding: lark-onboarding-email-approval.payload-builder
+    next: request_lark_email_approval
+
+  - id: request_lark_email_approval
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_approval_proxy
+      operation: create_email_approval_instance
+      method: POST
+      path: /open-apis/approval/v4/instances
+      stdin_mode: input
+      content_type: application/json
+      timeout_ms: "45000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: publish_onboarding_approval_receipt
+
+  - id: publish_onboarding_approval_receipt
+    type: emit
+    parameters:
+      event_type: lark_onboarding.email_approval_requested
+      payload_source: input

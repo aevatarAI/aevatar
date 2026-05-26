@@ -1,0 +1,116 @@
+name: budget-monitoring
+description: |
+  Aevatar-native weekly budget variance workflow.
+  NyxID owns ingress, Lark proxying, credentials, approvals, and outbound delivery.
+  Aevatar owns the workflow run, state, ordering, retries, and orchestration.
+  Ornn supplies the skill binding used to build the variance payload.
+
+roles: []
+
+steps:
+  - id: capture_nyxid_ingress
+    type: assign
+    parameters:
+      target: ingress_event
+      value: "$input"
+    next: read_core_budget
+
+  - id: read_core_budget
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_bitable_proxy
+      operation: read_core_budget
+      method: GET
+      path: /open-apis/bitable/v1/apps/${BUDGET_LARK_APP_TOKEN}/tables/${BUDGET_CORE_BUDGET_TABLE_ID}/records?page_size=500
+      timeout_ms: "30000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: read_core_actual
+
+  - id: read_core_actual
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_bitable_proxy
+      operation: read_core_actual
+      method: GET
+      path: /open-apis/bitable/v1/apps/${BUDGET_LARK_APP_TOKEN}/tables/${BUDGET_CORE_ACTUAL_TABLE_ID}/records?page_size=500
+      timeout_ms: "30000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: read_aelf_budget
+
+  - id: read_aelf_budget
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_bitable_proxy
+      operation: read_aelf_budget
+      method: GET
+      path: /open-apis/bitable/v1/apps/${BUDGET_LARK_APP_TOKEN}/tables/${BUDGET_AELF_BUDGET_TABLE_ID}/records?page_size=500
+      timeout_ms: "30000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: read_aelf_actual
+
+  - id: read_aelf_actual
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_bitable_proxy
+      operation: read_aelf_actual
+      method: GET
+      path: /open-apis/bitable/v1/apps/${BUDGET_LARK_APP_TOKEN}/tables/${BUDGET_AELF_ACTUAL_TABLE_ID}/records?page_size=500
+      timeout_ms: "30000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: load_budget_variance_skill
+
+  - id: load_budget_variance_skill
+    type: tool_call
+    parameters:
+      tool: use_skill
+      skill_binding: budget-monitoring.variance-payload-builder
+      binding_ref: budget-monitoring/budget-variance-payload
+      required_for: payload_construction
+    next: build_variance_payload
+
+  - id: build_variance_payload
+    type: connector_call
+    parameters:
+      connector: aevatar_native_payload_builder
+      operation: budget_variance_payload
+      method: POST
+      path: /workflow-payloads/budget-monitoring/variance
+      stdin_mode: input
+      content_type: application/json
+      timeout_ms: "30000"
+      skill_binding: budget-monitoring.variance-payload-builder
+    next: post_weekly_variance_alert
+
+  - id: post_weekly_variance_alert
+    type: connector_call
+    parameters:
+      connector: nyxid_lark_channel_bot
+      operation: send_budget_variance_alert
+      method: POST
+      path: /open-apis/bot/v2/hook/${BUDGET_ALERT_CHANNEL_ROUTE}
+      stdin_mode: input
+      content_type: application/json
+      timeout_ms: "30000"
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    next: publish_budget_monitoring_receipt
+
+  - id: publish_budget_monitoring_receipt
+    type: emit
+    parameters:
+      event_type: budget_monitoring.weekly_variance_alert_requested
+      payload_source: input
