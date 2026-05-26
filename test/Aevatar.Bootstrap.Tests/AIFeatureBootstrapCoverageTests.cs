@@ -10,6 +10,7 @@ using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
@@ -124,18 +125,21 @@ public class AIFeatureBootstrapCoverageTests
     {
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }));
 
         services.AddAevatarAIFeatures(config, options =>
         {
             options.EnableMEAIProviders = false;
             options.EnableSkills = true;
             options.EnableOrnnSkills = true;
-            options.OrnnBaseUrl = "https://ornn.example.com";
+            options.OrnnNyxIdSlug = "custom-ornn-api";
         });
 
         using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<IRemoteSkillFetcher>().Should().BeOfType<OrnnRemoteSkillFetcher>();
+        provider.GetRequiredService<OrnnOptions>().NyxIdSlug.Should().Be("custom-ornn-api");
 
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().ContainSingle(x => x is SkillsAgentToolSource);
