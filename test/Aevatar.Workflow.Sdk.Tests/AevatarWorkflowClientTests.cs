@@ -16,11 +16,11 @@ public sealed class AevatarWorkflowClientTests
     public async Task RunToCompletionAsync_WhenRunErrorFramePresent_ShouldThrowRunFailedException()
     {
         const string ssePayload = """
-data: {"type":"RUN_STARTED","threadId":"actor-1"}
+data: {"runStarted":{"threadId":"actor-1","runId":"run-1"}}
 
-data: {"type":"RUN_ERROR","code":"EXECUTION_FAILED","message":"Workflow execution failed."}
+data: {"runError":{"code":"EXECUTION_FAILED","message":"Workflow execution failed."}}
 
-data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionCompleted":false}}
+data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowProjectionStateSnapshotPayload","actorId":"actor-1","projectionCompleted":false}}}
 
 """;
 
