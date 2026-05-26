@@ -16,7 +16,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ResponsesCommandFacadeTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldRegisterSession_AndExecuteRoutedNonStreamingRequest()
+    public async Task CreateAsync_ShouldRegisterSession_AndReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -35,20 +35,17 @@ public sealed class ResponsesCommandFacadeTests
             []), "token");
 
         result.Error.Should().BeNull();
-        result.Completed.Should().NotBeNull();
-        result.Completed!.Completion.OutputText.Should().Be("done");
+        result.Accepted.Should().NotBeNull();
+        result.Completed.Should().BeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.OutputText.Should().Be("done");
+        sessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenCompletionIsCommittedButNotObserved_ShouldReturnServiceUnavailable()
+    public async Task CreateAsync_WhenDispatchAccepted_ShouldNotReadCompletionReadModel()
     {
-        var sessions = new RecordingSessionPort
-        {
-            ObserveCompletionInQueryPort = false,
-        };
+        var sessions = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessions);
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
@@ -61,13 +58,10 @@ public sealed class ResponsesCommandFacadeTests
             null,
             []), "token");
 
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.OutputText.Should().Be("done");
+        sessions.RecordedCompletions.Should().BeEmpty();
         result.Completed.Should().BeNull();
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            503,
-            "response_completion_not_observed",
-            "Response completion was committed but is not yet visible in the read model."));
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
     }
 
     [Fact]
@@ -205,86 +199,17 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnAuthenticationError_AndMarkSessionFailed()
+    public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
-        sessions.NextDispatchCompletion = Failure("authentication_required", "NyxID authentication required for provider 'test-provider'. Please sign in.");
-        var facade = CreateFacade(sessionPort: sessions);
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            401,
-            "authentication_required",
-            "NyxID authentication required for provider 'test-provider'. Please sign in."));
-        sessions.UpdatedStatuses.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldRecordCompletionFact_AndReturnSessionCompletion()
-    {
-        var sessions = new RecordingSessionPort();
-        sessions.NextDispatchCompletion = Completion("stream done", new TokenUsage(4, 5, 9));
-        sessions.QueryPort.Snapshot = BuildSnapshot("resp_stream", "scope-1");
         var facade = CreateFacade(sessionPort: sessions);
 
         var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
 
         result.Error.Should().BeNull();
-        result.Completion!.OutputText.Should().Be("stream done");
-        result.Completion.Usage.Should().Be(new TokenUsage(4, 5, 9));
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.OutputText.Should().Be("stream done");
-        sessions.UpdatedStatuses.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
-    {
-        var sessions = new RecordingSessionPort();
-        sessions.NextDispatchCompletion = Failure("ratelimited", "rate limited");
-        var facade = CreateFacade(sessionPort: sessions);
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            429,
-            "ratelimited",
-            "rate limited"));
-        sessions.UpdatedStatuses.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldReturnTimeout_AndMarkSessionCancelled()
-    {
-        var sessions = new RecordingSessionPort();
-        sessions.NextDispatchCompletion = Failure("request_timeout", "Request timed out.");
-        var facade = CreateFacade(sessionPort: sessions);
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask, cts.Token);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            408,
-            "request_timeout",
-            "Request timed out."));
-        sessions.UpdatedStatuses.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldReturnApiError_AndMarkSessionFailed()
-    {
-        var sessions = new RecordingSessionPort();
-        sessions.NextDispatchCompletion = Failure("api_error", "Internal server error.");
-        var facade = CreateFacade(sessionPort: sessions);
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            500,
-            "api_error",
-            "Internal server error."));
+        result.Accepted.Should().NotBeNull();
+        result.Completion.Should().BeNull();
+        sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
@@ -385,7 +310,7 @@ public sealed class ResponsesCommandFacadeTests
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
-        var dispatch = new RecordingActorDispatchPort(effectiveSessionPort as RecordingSessionPort);
+        var dispatch = new RecordingActorDispatchPort();
         return new ResponsesCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
@@ -521,24 +446,13 @@ public sealed class ResponsesCommandFacadeTests
             });
     }
 
-    private sealed class RecordingActorDispatchPort(RecordingSessionPort? sessions) : IActorDispatchPort
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            if (sessions is not null && envelope.Payload.Is(LlmRunRequested.Descriptor))
-            {
-                var command = envelope.Payload.Unpack<LlmRunRequested>();
-                sessions.RecordCompletionAsync(
-                    actorId,
-                    command.ResponseId,
-                    sessions.NextDispatchCompletion?.Clone()
-                    ?? Completion("done", new TokenUsage(1, 2, 3)),
-                    ct);
-            }
-
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
@@ -554,10 +468,6 @@ public sealed class ResponsesCommandFacadeTests
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
         public Exception? UpdateStatusException { get; init; }
-
-        public bool ObserveCompletionInQueryPort { get; init; } = true;
-
-        public LlmSessionCompletion? NextDispatchCompletion { get; set; }
 
         public RecordingSessionQueryPort QueryPort { get; } = new();
 
@@ -607,11 +517,7 @@ public sealed class ResponsesCommandFacadeTests
         {
             RecordedCompletions.Add(completion.Clone());
             var current = QueryPort.Snapshot;
-            current ??= BuildSnapshot(responseId, "scope-1") with
-            {
-                ActorId = sessionActorId,
-            };
-            if (current is not null && ObserveCompletionInQueryPort)
+            if (current is not null)
             {
                 QueryPort.Snapshot = current with
                 {
@@ -661,29 +567,6 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }
-
-    private static LlmSessionCompletion Completion(string outputText, TokenUsage? usage = null) =>
-        new()
-        {
-            OutputText = outputText,
-            CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            Usage = usage is null
-                ? null
-                : new LlmSessionTokenUsage
-                {
-                    PromptTokens = usage.PromptTokens,
-                    CompletionTokens = usage.CompletionTokens,
-                    TotalTokens = usage.TotalTokens,
-                },
-        };
-
-    private static LlmSessionCompletion Failure(string code, string message) =>
-        new()
-        {
-            FailureCode = code,
-            FailureMessage = message,
-            CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-        };
 
     private sealed class RecordingSessionQueryPort : ILlmSessionQueryPort
     {

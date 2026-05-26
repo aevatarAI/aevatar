@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -370,6 +371,128 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldForwardDeclaredClientToolInsideActorLoop()
+    {
+        var eventStore = new InMemoryEventStore();
+        var provider = new RecordingLlmProvider([
+            new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call_weather",
+                    Name = "get_weather",
+                    ArgumentsJson = """{"city":"Singapore"}""",
+                },
+                IsLast = true,
+                Usage = new TokenUsage(7, 11, 18),
+            },
+        ]);
+        var actor = CreateActor("resp_1", services =>
+            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var command = BuildRunRequested("resp_1");
+        command.ToolSelection.ForwardedTools.Add(new LlmSessionRuntimeToolDeclaration
+        {
+            ToolName = "get_weather",
+            Description = "Weather client tool",
+            ParametersJson = """{"type":"object","properties":{"city":{"type":"string"}}}""",
+            SchemaHash = "schema-weather",
+        });
+
+        await actor.HandleLlmRunRequestedAsync(command);
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.CallId.Should().Be("call_weather");
+        forwarded.ToolName.Should().Be("get_weather");
+        forwarded.SchemaHash.Should().Be("schema-weather");
+        ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
+        forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
+        actor.State.Completion!.ToolCalls.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new
+            {
+                CallId = "call_weather",
+                ToolName = "get_weather",
+            });
+        ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
+            .Should()
+            .Be("""{"city":"Singapore"}""");
+        actor.State.ActiveRun!.Status.Should().Be(2);
+
+        var events = await eventStore.GetEventsAsync("response-session-actor-resp_1");
+        var toolObserved = events
+            .Where(static evt => evt.EventData.Is(LlmToolCallObserved.Descriptor))
+            .Select(static evt => evt.EventData.Unpack<LlmToolCallObserved>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        toolObserved.Forwarded.Should().BeTrue();
+        toolObserved.ToolCall!.CallId.Should().Be("call_weather");
+        events.Should().Contain(evt => evt.EventData.Is(LlmSessionForwardedToolCallEmittedEvent.Descriptor));
+        events.Should().Contain(evt => evt.EventData.Is(LlmRunCompleted.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderFails_ShouldRecordFailedStateAndTypedEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var provider = new ThrowingLlmProvider(new InvalidOperationException("provider exploded"));
+        var actor = CreateActor("resp_1", services =>
+            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.Completion!.FailureCode.Should().Be("execution_failed");
+        actor.State.Completion.FailureMessage.Should().Be("provider exploded");
+
+        var failed = (await eventStore.GetEventsAsync("response-session-actor-resp_1"))
+            .Where(static evt => evt.EventData.Is(LlmRunFailed.Descriptor))
+            .Select(static evt => evt.EventData.Unpack<LlmRunFailed>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailureCode.Should().Be("execution_failed");
+        failed.FailureMessage.Should().Be("provider exploded");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderCancels_ShouldRecordCancelledStateAndTypedEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var provider = new ThrowingLlmProvider(new OperationCanceledException("provider cancelled"));
+        var actor = CreateActor("resp_1", services =>
+            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
+        actor.State.ActiveRun!.Status.Should().Be(4);
+        actor.State.Completion!.FailureCode.Should().Be("request_cancelled");
+        actor.State.Completion.FailureMessage.Should().Be("LLM run was cancelled.");
+
+        var cancelled = (await eventStore.GetEventsAsync("response-session-actor-resp_1"))
+            .Where(static evt => evt.EventData.Is(LlmRunCancelled.Descriptor))
+            .Select(static evt => evt.EventData.Unpack<LlmRunCancelled>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        cancelled.RunId.Should().Be("resp_1:llm-run");
+    }
+
+    [Fact]
     public async Task HandleRecordCompletionAsync_ShouldRecordFailureFact()
     {
         var actor = CreateActor("resp_1");
@@ -532,9 +655,10 @@ public sealed class LlmSessionGAgentTests
 
     private static LlmSessionGAgent CreateActor(
         string responseId,
-        Action<IServiceCollection>? configureServices = null) =>
+        Action<IServiceCollection>? configureServices = null,
+        InMemoryEventStore? eventStore = null) =>
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
-            new InMemoryEventStore(),
+            eventStore ?? new InMemoryEventStore(),
             "response-session-actor-" + responseId,
             static () => new LlmSessionGAgent(),
             configureServices);
@@ -629,6 +753,28 @@ public sealed class LlmSessionGAgentTests
                 yield return chunk;
                 await Task.Yield();
             }
+        }
+    }
+
+    private sealed class ThrowingLlmProvider(Exception exception) : ILLMProvider, ILLMProviderFactory
+    {
+        public string Name => "throwing";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            throw exception;
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
         }
     }
 

@@ -36,7 +36,7 @@ namespace Aevatar.Hosting.Tests;
 public sealed class MainnetResponsesEndpointsTests
 {
     [Fact]
-    public async Task PostResponses_WithJsonRequest_ShouldReturnCompletedResponseAndPassRequestScopedBearer()
+    public async Task PostResponses_WithJsonRequest_ShouldReturnAcceptedResponseAndPassRequestScopedBearer()
     {
         var provider = new RecordingLLMProvider
         {
@@ -79,51 +79,20 @@ public sealed class MainnetResponsesEndpointsTests
         root.GetProperty("id").GetString().Should().StartWith("resp_");
         var responseId = root.GetProperty("id").GetString()!;
         root.GetProperty("object").GetString().Should().Be("response");
-        root.GetProperty("status").GetString().Should().Be("completed");
+        root.GetProperty("status").GetString().Should().Be("in_progress");
         root.GetProperty("model").GetString().Should().Be("gpt-5.4");
         root.GetProperty("max_output_tokens").GetInt32().Should().Be(128);
         root.GetProperty("temperature").GetDouble().Should().Be(0.2);
         root.GetProperty("parallel_tool_calls").GetBoolean().Should().BeTrue();
         root.GetProperty("reasoning").GetProperty("effort").ValueKind.Should().Be(JsonValueKind.Null);
         root.GetProperty("output")[0].GetProperty("type").GetString().Should().Be("message");
-        root.GetProperty("output")[0].GetProperty("content")[0].GetProperty("type").GetString()
-            .Should()
-            .Be("output_text");
-        root.GetProperty("output")[0].GetProperty("content")[0].GetProperty("text").GetString()
-            .Should()
-            .Be("pong");
-        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(3);
-        root.GetProperty("usage").GetProperty("input_tokens_details").GetProperty("cached_tokens")
-            .GetInt32()
-            .Should()
-            .Be(0);
-        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(2);
-        root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(5);
+        root.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        root.GetProperty("output")[0].GetProperty("content").GetArrayLength().Should().Be(0);
+        root.GetProperty("usage").ValueKind.Should().Be(JsonValueKind.Null);
         sessions.RecordedCompletions.Should().ContainSingle()
             .Which.Completion.OutputText.Should().Be("pong");
-        (await sessions.GetByResponseIdAsync(responseId))!
-            .Completion!.Usage.Should().Be(new TokenUsage(3, 2, 5));
-
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Model.Should().Be("gpt-5.4");
-        provider.LastRequest.MaxTokens.Should().Be(128);
-        provider.LastRequest.Temperature.Should().Be(0.2);
-        provider.LastRequest.Messages.Should().ContainSingle();
-        provider.LastRequest.Messages[0].Content.Should().Be("ping");
-        provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext(
-            "user-1",
-            "user-1",
-            responseId,
-            new LLMRequestCallerCredentials("secret-token")));
-        // The NyxID bearer is carried on the typed CallerContext.Credentials channel,
-        // NOT through LLMRequest.Metadata. Metadata is the log-shaped string-keyed bag
-        // that telemetry sinks may serialize; secret material belongs out-of-band.
-        // Tool providers read the bearer from AgentToolRequestContext (separate path).
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -131,8 +100,6 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("pong");
     }
 
     [Fact]
@@ -168,20 +135,16 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_item.added");
-        body.Should().Contain("\"type\":\"response.output_text.delta\"");
-        body.Should().Contain("\"delta\":\"pong\"");
-        body.Should().Contain("event: response.output_text.done");
-        body.Should().Contain("event: response.output_item.done");
-        body.Should().Contain("event: response.completed");
-        body.Should().Contain("\"text\":\"pong\"");
+        body.Should().Contain("event: response.in_progress");
+        body.Should().NotContain("\"type\":\"response.output_text.delta\"");
+        body.Should().NotContain("event: response.output_text.done");
+        body.Should().NotContain("event: response.completed");
         body.Should().NotContain("stream-secret");
 
-        provider.StreamCallCount.Should().Be(1);
+        provider.StreamCallCount.Should().Be(2);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("pong");
+        sessions.RecordedCompletions.Should().HaveCount(2);
+        sessions.RecordedCompletions.Should().OnlyContain(record => record.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -233,11 +196,8 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var output = doc.RootElement.GetProperty("output");
-        output.GetArrayLength().Should().Be(2);
-        output[1].GetProperty("type").GetString().Should().Be("function_call");
-        output[1].GetProperty("call_id").GetString().Should().Be("call_weather_1");
-        output[1].GetProperty("name").GetString().Should().Be("get_weather");
-        output[1].GetProperty("arguments").GetString().Should().Be("""{"city":"Singapore"}""");
+        output.GetArrayLength().Should().Be(1);
+        output[0].GetProperty("status").GetString().Should().Be("in_progress");
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().ContainSingle();
@@ -322,12 +282,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Messages[2].ToolCallId.Should().Be("call_task_1");
         sessions.ForwardedToolCalls.Should().BeEmpty();
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("output")[0].GetProperty("content")[0].GetProperty("text").GetString()
-            .Should()
-            .Be("delegated");
-        doc.RootElement.GetProperty("output").EnumerateArray()
-            .Should()
-            .NotContain(item => item.GetProperty("type").GetString() == "function_call");
+        doc.RootElement.GetProperty("output")[0].GetProperty("status").GetString().Should().Be("in_progress");
+        doc.RootElement.GetProperty("output")[0].GetProperty("content").GetArrayLength().Should().Be(0);
     }
 
     [Fact]

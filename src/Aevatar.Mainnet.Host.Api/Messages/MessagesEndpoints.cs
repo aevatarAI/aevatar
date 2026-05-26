@@ -70,6 +70,14 @@ internal static partial class MessagesApiEndpoints
             return Results.Empty;
         }
 
+        if (result.Accepted is not null)
+        {
+            return Results.Json(
+                BuildAcceptedMessage(result.Accepted.Normalized),
+                JsonOptions,
+                statusCode: StatusCodes.Status200OK);
+        }
+
         if (result.Completed is not null)
         {
             return Results.Json(
@@ -147,6 +155,29 @@ internal static partial class MessagesApiEndpoints
             return;
         }
 
+        if (completion.Accepted is not null)
+        {
+            await WriteSseFrameAsync(response, "message_delta", new
+            {
+                type = "message_delta",
+                delta = new
+                {
+                    stop_reason = (string?)null,
+                    stop_sequence = (string?)null,
+                },
+                usage = new
+                {
+                    output_tokens = 0,
+                },
+            }, CancellationToken.None);
+
+            await WriteSseFrameAsync(response, "message_stop", new
+            {
+                type = "message_stop",
+            }, CancellationToken.None);
+            return;
+        }
+
         if (textStarted)
         {
             await WriteSseFrameAsync(response, "content_block_stop", new
@@ -211,6 +242,23 @@ internal static partial class MessagesApiEndpoints
             type = "message_stop",
         }, ct);
     }
+
+    private static object BuildAcceptedMessage(NormalizedMessagesRequest normalized) =>
+        new
+        {
+            id = normalized.MessageId,
+            type = "message",
+            role = "assistant",
+            model = normalized.Model,
+            content = Array.Empty<object>(),
+            stop_reason = (string?)null,
+            stop_sequence = (string?)null,
+            usage = new
+            {
+                input_tokens = 0,
+                output_tokens = 0,
+            },
+        };
 
     private static object BuildCompletedMessage(
         NormalizedMessagesRequest normalized,

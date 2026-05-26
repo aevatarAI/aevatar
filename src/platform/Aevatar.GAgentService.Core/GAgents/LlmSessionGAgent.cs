@@ -268,7 +268,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         });
     }
 
-    // Refactor (iter103/cluster-1): Old pattern: Application facade ran LLM stream loop + tool execution + accumulation locally. New principle: Application dispatches LlmRunRequested command; LlmSessionGAgent owns run progression via typed events (stream/tool/completion).
+    // Refactor (iter103/cluster-1):
+    //   Old pattern: Application facade ran LLM stream loop, tool execution, and accumulation locally.
+    //   New principle: Application dispatches LlmRunRequested; LlmSessionGAgent owns run progression through typed events.
     [EventHandler]
     public async Task HandleLlmRunRequestedAsync(LlmRunRequested command)
     {
@@ -556,6 +558,14 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         next.Record.Status = LlmSessionStatus.Cancelled;
         next.Record.CancelledAt = cancelledAt.Clone();
         next.Record.UpdatedAt = cancelledAt.Clone();
+        next.Completion = new LlmSessionCompletion
+        {
+            OutputText = run.OutputText ?? string.Empty,
+            FailureCode = "request_cancelled",
+            FailureMessage = "LLM run was cancelled.",
+            CompletedAt = cancelledAt.Clone(),
+            Usage = run.Usage?.Clone(),
+        };
         MarkOpenToolCalls(next, LlmSessionForwardedToolCallStatus.Cancelled);
         Bump(next, $"{evt.ResponseId}:run:{evt.RunId}:cancelled");
         return next;
@@ -575,11 +585,11 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         for (var round = 0; round < MaxToolRounds; round++)
         {
-                var roundRequest = new LLMRequest
-                {
-                    Messages = [.. messages],
-                    RequestId = command.ResponseId,
-                    Metadata = BuildProviderMetadata(command),
+            var roundRequest = new LLMRequest
+            {
+                Messages = [.. messages],
+                RequestId = command.ResponseId,
+                Metadata = BuildProviderMetadata(command),
                 CallerContext = new LLMRequestCallerContext(
                     command.ScopeId,
                     command.OwnerSubject,

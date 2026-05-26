@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,7 +21,6 @@ public sealed class MessagesCommandFacade(
     IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
-    ILlmSessionQueryPort sessionQueryPort,
     IActorDispatchPort dispatchPort,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
@@ -89,24 +87,8 @@ public sealed class MessagesCommandFacade(
 
         try
         {
-            await DispatchRunAsync(plan, ct);
-            var completionResult = await ReadObservedCompletionAsync(plan.Session, ct);
-            if (completionResult.Error is not null)
-                return ResponsesStreamCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            if (TryMapCompletionFailure(completionResult.Completion!, out var failure))
-                return ResponsesStreamCommandResult.FromError(
-                    failure.StatusCode,
-                    failure.Code,
-                    failure.Message);
-
-            if (!string.IsNullOrEmpty(completionResult.Completion!.OutputText))
-                await onTextDelta(completionResult.Completion.OutputText, ct);
-
-            return ResponsesStreamCommandResult.FromCompleted(completionResult.Completion);
+            var admission = await DispatchRunAsync(plan, ct);
+            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -253,23 +235,11 @@ public sealed class MessagesCommandFacade(
     {
         try
         {
-            await DispatchRunAsync(plan, ct);
-            var completionResult = await ReadObservedCompletionAsync(plan.Session, ct);
-            if (completionResult.Error is not null)
-                return MessagesCreateCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            if (TryMapCompletionFailure(completionResult.Completion!, out var failure))
-                return MessagesCreateCommandResult.FromError(
-                    failure.StatusCode,
-                    failure.Code,
-                    failure.Message);
-
-            return MessagesCreateCommandResult.FromCompleted(new MessagesCreateCompletedCommandResult(
+            var admission = await DispatchRunAsync(plan, ct);
+            return MessagesCreateCommandResult.FromAccepted(new MessagesCreateAcceptedCommandResult(
                 plan.Normalized,
-                completionResult.Completion!));
+                plan.Session,
+                admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -448,61 +418,10 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
-        LlmSessionRegistrationResult session,
-        LlmSessionCompletion completion,
-        CancellationToken ct)
-    {
-        try
-        {
-            await sessionRegistrationPort.RecordCompletionAsync(
-                session.ActorId,
-                session.ResponseId,
-                completion,
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to record llm session completion for message {MessageId}", session.ResponseId);
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                500,
-                "response_completion_record_failed",
-                "Failed to record response completion."));
-        }
-
-        var snapshot = await sessionQueryPort.GetByResponseIdAsync(session.ResponseId, ct);
-        if (snapshot?.Completion is null)
-        {
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                503,
-                "response_completion_not_observed",
-                "Response completion was committed but is not yet visible in the read model."));
-        }
-
-        return CompletionRecordResult.FromCompletion(snapshot.Completion);
-    }
-
-    private async Task<CompletionRecordResult> ReadObservedCompletionAsync(
-        LlmSessionRegistrationResult session,
-        CancellationToken ct)
-    {
-        var snapshot = await sessionQueryPort.GetByResponseIdAsync(session.ResponseId, ct);
-        if (snapshot?.Completion is null)
-        {
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                503,
-                "response_completion_not_observed",
-                "Response completion was committed but is not yet visible in the read model."));
-        }
-
-        return CompletionRecordResult.FromCompletion(snapshot.Completion);
-    }
-
-    private Task DispatchRunAsync(
+    // Refactor (iter103/cluster-1 r2):
+    //   Old pattern: dispatch was followed by an immediate readmodel completion read, upgrading accepted ACK into observed completion.
+    //   New principle: this method returns only DispatchAdmission; completion must arrive through an explicit observation/readmodel path.
+    private Task<DispatchAdmission> DispatchRunAsync(
         MessagesCreateCommandPlan plan,
         CancellationToken ct)
     {
@@ -576,74 +495,6 @@ public sealed class MessagesCommandFacade(
         return selection;
     }
 
-    private static LlmSessionCompletion BuildSessionCompletion(
-        string outputText,
-        IReadOnlyList<ToolCall> forwardedToolCalls,
-        TokenUsage? usage,
-        DateTimeOffset completedAt)
-    {
-        var completion = new LlmSessionCompletion
-        {
-            OutputText = outputText,
-            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
-        };
-
-        if (usage is not null)
-        {
-            completion.Usage = new LlmSessionTokenUsage
-            {
-                PromptTokens = usage.PromptTokens,
-                CompletionTokens = usage.CompletionTokens,
-                TotalTokens = usage.TotalTokens,
-            };
-        }
-
-        foreach (var toolCall in forwardedToolCalls)
-        {
-            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
-            {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                Result = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
-            });
-        }
-
-        return completion;
-    }
-
-    private static bool TryMapCompletionFailure(
-        LlmSessionCompletionSnapshot completion,
-        out ResponsesCommandError error)
-    {
-        var code = completion.FailureCode;
-        if (string.IsNullOrWhiteSpace(code))
-        {
-            error = default!;
-            return false;
-        }
-
-        var status = code switch
-        {
-            "authentication_required" => 401,
-            "authentication_error" => 401,
-            "ratelimited" => 429,
-            "rate_limited" => 429,
-            "client_closed_request" => 499,
-            "request_timeout" => 408,
-            "serviceunavailable" => 502,
-            "service_unavailable" => 502,
-            _ => 500,
-        };
-        error = new ResponsesCommandError(
-            status,
-            code == "authentication_required" ? "authentication_error" : code,
-            string.IsNullOrWhiteSpace(completion.FailureMessage)
-                ? "LLM run failed."
-                : completion.FailureMessage!);
-        return true;
-    }
-
     private sealed record CallerScopeResult(
         ResponsesCallerScope? Scope,
         ResponsesCommandError? Error);
@@ -662,12 +513,4 @@ public sealed class MessagesCommandFacade(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
 
-    private sealed record CompletionRecordResult(
-        ResponsesCommandError? Error,
-        LlmSessionCompletionSnapshot? Completion)
-    {
-        public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
-
-        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
-    }
 }
