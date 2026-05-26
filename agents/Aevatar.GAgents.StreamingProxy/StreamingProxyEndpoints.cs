@@ -238,7 +238,9 @@ public static class StreamingProxyEndpoints
             var accessToken = ExtractBearerToken(http);
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
-            // Refactor (iter104/cluster-1): Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer. New principle: StreamingProxyGAgent typed continuation owns lifecycle; deprecated compat endpoints only normalize+dispatch typed command.
+            // Refactor (iter104/cluster-1):
+            //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
+            //   New principle: StreamingProxyGAgent owns typed lifecycle facts; deprecated compat endpoints only normalize and dispatch typed commands.
             var result = await interactionService.ExecuteAsync(
                 new StreamingProxyRoomChatCommand(
                     roomId,

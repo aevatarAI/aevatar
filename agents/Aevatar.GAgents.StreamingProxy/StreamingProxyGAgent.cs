@@ -6,7 +6,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
@@ -22,6 +21,8 @@ namespace Aevatar.GAgents.StreamingProxy;
 // External Nyx streaming I/O stays outside actor turns.
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
+    internal const string ChatLifecycleContinuationRunnerStreamId = "streaming-proxy:chat-lifecycle-continuation-runner";
+
     public static string ProjectionKind => StreamingProxyProjectionKinds.CurrentState;
 
     [EventHandler(EndpointName = "initializeRoom")]
@@ -39,11 +40,16 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
-        // Refactor (iter104/cluster-1): Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer. New principle: StreamingProxyGAgent typed continuation owns lifecycle; deprecated compat endpoints only normalize+dispatch typed command.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
+        //   New principle: StreamingProxyGAgent owns typed lifecycle facts; host-side runner performs external Nyx I/O outside actor turns.
+        var sessionId = request.SessionId?.Trim() ?? string.Empty;
+        var scopeId = request.ScopeId?.Trim() ?? string.Empty;
+        var prompt = request.Prompt?.Trim() ?? string.Empty;
         var lifecycleEvent = new StreamingProxyChatLifecycleAcceptedEvent
         {
-            SessionId = request.SessionId,
-            ScopeId = request.ScopeId,
+            SessionId = sessionId,
+            ScopeId = scopeId,
         };
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
         if (!string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken))
@@ -55,8 +61,8 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
         var topicEvent = new GroupChatTopicEvent
         {
-            Prompt = request.Prompt,
-            SessionId = request.SessionId,
+            Prompt = prompt,
+            SessionId = sessionId,
         };
 
         await PersistDomainEventAsync(lifecycleEvent);
@@ -67,57 +73,40 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
         if (!string.IsNullOrWhiteSpace(lifecycleEvent.AccessToken))
         {
-            await PublishAsync(new StreamingProxyChatLifecycleContinuationRequested
-            {
-                SessionId = request.SessionId,
-                ScopeId = request.ScopeId,
-                Prompt = request.Prompt,
-                AccessToken = lifecycleEvent.AccessToken,
-                PreferredRoute = lifecycleEvent.PreferredRoute,
-                DefaultModel = lifecycleEvent.DefaultModel,
-            }, TopologyAudience.Self);
+            await SendToAsync(
+                ChatLifecycleContinuationRunnerStreamId,
+                new StreamingProxyChatLifecycleContinuationRequested
+                {
+                    RoomId = Id,
+                    SessionId = sessionId,
+                    ScopeId = scopeId,
+                    Prompt = prompt,
+                    AccessToken = lifecycleEvent.AccessToken,
+                    PreferredRoute = lifecycleEvent.PreferredRoute,
+                    DefaultModel = lifecycleEvent.DefaultModel,
+                });
         }
 
         Logger.LogInformation(
             "[StreamingProxy] Topic started: {Preview}",
-            request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
+            prompt.Length > 100 ? prompt[..100] + "..." : prompt);
     }
 
-    [EventHandler(EndpointName = "continueChatLifecycle", AllowSelfHandling = true, OnlySelfHandling = true)]
+    [EventHandler(EndpointName = "continueChatLifecycle")]
     public async Task HandleChatLifecycleContinuationRequested(StreamingProxyChatLifecycleContinuationRequested request)
     {
-        // Refactor (iter104/cluster-1): Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer. New principle: StreamingProxyGAgent typed continuation owns lifecycle; deprecated compat endpoints only normalize+dispatch typed command.
+        // Refactor (iter104/cluster-1 r2):
+        //   Old pattern: this actor handler awaited StreamingProxyNyxParticipantCoordinator and ran Nyx/LLM streaming I/O in the actor turn.
+        //   New principle: External Nyx streaming I/O stays outside actor turns; this compatibility endpoint only republishes the typed request to the host runner.
         ArgumentNullException.ThrowIfNull(request);
 
         if (string.IsNullOrWhiteSpace(request.AccessToken))
             return;
 
-        var coordinator = Services.GetRequiredService<StreamingProxyNyxParticipantCoordinator>();
-        var participants = await coordinator.EnsureParticipantsJoinedAsync(
-            request.ScopeId,
-            Id,
-            request.AccessToken,
-            CancellationToken.None,
-            request.PreferredRoute,
-            request.DefaultModel);
-        if (participants.Count == 0)
-            return;
+        if (string.IsNullOrWhiteSpace(request.RoomId))
+            request.RoomId = Id;
 
-        var successfulReplies = await coordinator.GenerateRepliesAsync(
-            participants,
-            Id,
-            request.Prompt,
-            request.SessionId,
-            request.AccessToken,
-            CancellationToken.None);
-
-        var terminalState = DetermineParticipantTerminalState(successfulReplies);
-        await HandleSessionTerminalStateRequested(new StreamingProxySessionTerminalStateRequested
-        {
-            SessionId = request.SessionId,
-            Status = terminalState.Status,
-            ErrorMessage = terminalState.ErrorMessage ?? string.Empty,
-        });
+        await SendToAsync(ChatLifecycleContinuationRunnerStreamId, request);
     }
 
     [EventHandler(EndpointName = "postMessage")]

@@ -78,6 +78,7 @@ message StreamingProxyChatLifecycleContinuationRequested {
   string access_token = 4;
   string preferred_route = 5;
   string default_model = 6;
+  string room_id = 7;
 }
 
 // ─── Events ───
