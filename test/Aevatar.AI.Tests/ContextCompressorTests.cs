@@ -8,6 +8,9 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
+// Refactor (iter39/cluster-039-public-chatasync-adapter):
+//   Old pattern: ChatRuntime 暴露 public ChatAsync 方法作为 non-streaming adapter,callers 可以选 non-streaming conversation API。
+//   New principle: Public runtime surface 仅暴露 ChatStreamAsync;explicit offline aggregation 放到 narrowly named offline/test adapter(明确不能与 realtime chat 混淆)。Provider contract stream-only。
 public class ContextCompressorTests
 {
     // ═══════════════════════════════════════════════════════════
@@ -373,7 +376,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(1);
         hook.CompactEndCount.Should().Be(1);
@@ -674,7 +679,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);
         hook.CompactEndCount.Should().Be(0);
@@ -705,7 +712,9 @@ public class ContextCompressorTests
             },
             compressionConfig: compressionConfig);
 
-        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+        await ChatStreamContentAggregator.AggregateContentAsync(
+            chat.ChatStreamAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None),
+            ct: CancellationToken.None);
 
         hook.CompactStartCount.Should().Be(0);
     }
@@ -774,19 +783,29 @@ public class ContextCompressorTests
 
         public string Name => "queue";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 
@@ -815,15 +834,23 @@ public class ContextCompressorTests
     {
         public string Name => "capturing";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(handler(request));
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
+            var response = handler(request);
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 

@@ -1,9 +1,11 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Core;
@@ -21,6 +23,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class WorkflowHostingExtensionsCoverageTests
 {
     [Fact]
@@ -39,6 +42,11 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             EnvironmentName = Environments.Development,
         });
 
+        builder.Services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example";
+        });
+
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
@@ -46,6 +54,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             {
                 aiOptions.EnableMCPTools = false;
                 aiOptions.EnableSkills = false;
+                aiOptions.EnableOrnnSkills = false;
                 aiOptions.ApiKey = "demo-key";
                 aiOptions.DefaultProvider = "openai";
             };
@@ -53,7 +62,9 @@ public sealed class WorkflowHostingExtensionsCoverageTests
 
         builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowDefinitionParser)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>)).Should().BeTrue();
         builder.Services
@@ -358,6 +369,53 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         services.Count.Should().Be(afterFirstRegistration);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldFillMissingReadersWhenPartialRegistrationExists()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
+        services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>)).Should().Be(1);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldRejectPartialRegistrationFromDifferentProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+
+        var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*WorkflowExecutionCurrentStateDocument*different provider*");
     }
 
     [Fact]

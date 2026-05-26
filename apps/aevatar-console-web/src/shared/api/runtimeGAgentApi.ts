@@ -29,6 +29,7 @@ export type RuntimeGAgentDraftRunRequest = {
   actorTypeName: string;
   prompt: string;
   preferredActorId?: string;
+  timeoutMs?: number;
 };
 
 export type RuntimeScopeGAgentBindingRequest = {
@@ -69,6 +70,16 @@ function decodeGAgentActorGroup(
     ),
     actorIds: readStringArray(record, ["actorIds", "ActorIds"], `${label}.actorIds`),
   };
+}
+
+function decodeGAgentActorGroupsResponse(value: unknown): RuntimeGAgentActorGroup[] {
+  const record = expectRecord(value, "RuntimeGAgentActorSnapshot");
+  const groups = record.groups;
+  return expectArray(
+    groups,
+    "RuntimeGAgentActorSnapshot.groups",
+    decodeGAgentActorGroup
+  );
 }
 
 function readImplementationKindValue(
@@ -271,8 +282,7 @@ export const runtimeGAgentApi = {
   listActors(scopeId: string): Promise<RuntimeGAgentActorGroup[]> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors`,
-      (value) =>
-        expectArray(value, "RuntimeGAgentActorGroup[]", decodeGAgentActorGroup)
+      decodeGAgentActorGroupsResponse
     );
   },
 
@@ -281,6 +291,10 @@ export const runtimeGAgentApi = {
       `/api/scopes/${encodeURIComponent(scopeId)}/binding`,
       decodeBindingStatus
     );
+  },
+
+  getDefaultRouteTarget(scopeId: string): Promise<RuntimeGAgentBindingStatus> {
+    return this.getScopeBinding(scopeId);
   },
 
   bindScopeGAgent(
@@ -335,6 +349,13 @@ export const runtimeGAgentApi = {
     );
   },
 
+  activateMemberBindingRevision(
+    scopeId: string,
+    revisionId: string
+  ): Promise<RuntimeGAgentBindingActivationResult> {
+    return this.activateScopeBindingRevision(scopeId, revisionId);
+  },
+
   retireScopeBindingRevision(
     scopeId: string,
     revisionId: string
@@ -353,29 +374,11 @@ export const runtimeGAgentApi = {
     );
   },
 
-  async addActor(
+  retireMemberBindingRevision(
     scopeId: string,
-    gAgentType: string,
-    actorId: string
-  ): Promise<void> {
-    const response = await authFetch(
-      `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          gagentType: gAgentType.trim(),
-          actorId: actorId.trim(),
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(await readResponseError(response));
-    }
+    revisionId: string
+  ): Promise<RuntimeGAgentBindingRetirementResult> {
+    return this.retireScopeBindingRevision(scopeId, revisionId);
   },
 
   async removeActor(
@@ -415,6 +418,7 @@ export const runtimeGAgentApi = {
           actorTypeName: request.actorTypeName.trim(),
           prompt: request.prompt.trim(),
           preferredActorId: request.preferredActorId?.trim() || undefined,
+          timeoutMs: request.timeoutMs,
         }),
         signal,
       }

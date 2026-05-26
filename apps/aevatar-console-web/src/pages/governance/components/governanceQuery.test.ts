@@ -62,10 +62,11 @@ describe('governanceQuery', () => {
     );
   });
 
-  it('defaults the workbench view to audit when the query is missing or invalid', () => {
-    expect(readGovernanceWorkbenchView('')).toBe('audit');
+  it('defaults the workbench view to overview when the query is missing or invalid', () => {
+    expect(readGovernanceWorkbenchView('')).toBe('overview');
     expect(readGovernanceWorkbenchView('?view=bindings')).toBe('bindings');
-    expect(readGovernanceWorkbenchView('?view=unknown')).toBe('audit');
+    expect(readGovernanceWorkbenchView('?view=audit')).toBe('changes');
+    expect(readGovernanceWorkbenchView('?view=unknown')).toBe('overview');
   });
 
   it('builds service picker options and applies their identity to the draft', () => {

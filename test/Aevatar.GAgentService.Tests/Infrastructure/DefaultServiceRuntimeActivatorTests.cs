@@ -71,7 +71,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         result.PrimaryActorId.Should().Be("workflow-definition-1:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
-        workflowPort.CreateDefinitionCalls.Should().BeEmpty();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
+        workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
     }
 
     [Fact]
@@ -202,6 +203,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         result.PrimaryActorId.Should().Be("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -244,18 +246,20 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.BindCalls[0].inlineWorkflowYamls.Should().ContainKey("child");
         workflowPort.BindCalls[0].inlineWorkflowYamls["child"].Should().Be("name: child");
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ActivateAsync_ShouldRejectMissingWorkflowDefinitionActor_WhenRuntimeClaimsItExists()
+    public async Task ActivateAsync_ShouldUseWorkflowProvisioning_WhenRuntimeClaimsDefinitionExists()
     {
         var runtime = new RecordingActorRuntime();
         runtime.MarkExistsWithoutActor("workflow-definition-1:deployment-actor:r1");
+        var workflowPort = new RecordingWorkflowRunActorPort();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
             new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
-            new RecordingWorkflowRunActorPort());
+            workflowPort);
         var artifact = new PreparedServiceRevisionArtifact
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
@@ -272,15 +276,17 @@ public sealed class DefaultServiceRuntimeActivatorTests
             },
         };
 
-        var act = () => activator.ActivateAsync(
+        var result = await activator.ActivateAsync(
             new ServiceRuntimeActivationRequest(
                 GAgentServiceTestKit.CreateIdentity(),
                 artifact,
                 "r1",
                 "deployment-actor"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*was not found*");
+        result.PrimaryActorId.Should().Be("workflow-definition-1:deployment-actor:r1");
+        workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
+        workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -301,9 +307,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "r2",
                 "deployment-actor"));
 
-        await act.Should().ThrowAsync<Exception>()
-            .Where(ex => ex is FileNotFoundException &&
-                         ex.Message.Contains("Missing.Assembly", StringComparison.Ordinal));
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Missing.StaticActor, Missing.Assembly*was not found*");
     }
 
     [Fact]
@@ -445,18 +450,30 @@ public sealed class DefaultServiceRuntimeActivatorTests
         }
     }
 
-    private sealed class RecordingWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string?> CreateDefinitionCalls { get; } = [];
         public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> BindCalls { get; } = [];
+        public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> ExplicitBindCalls { get; } = [];
 
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default)
+        public Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
+            WorkflowDefinitionBinding definition,
+            string? preferredActorId = null,
+            CancellationToken ct = default)
         {
-            CreateDefinitionCalls.Add(actorId);
-            return Task.FromResult<IActor>(new RecordingActor(actorId ?? "created-definition"));
+            CreateDefinitionCalls.Add(preferredActorId);
+            RecordBind(
+                preferredActorId ?? definition.DefinitionActorId,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                BindCalls);
+            return Task.FromResult(new WorkflowDefinitionProvisioningReceipt(
+                preferredActorId ?? definition.DefinitionActorId,
+                CreatedNow: true));
         }
 
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
@@ -465,19 +482,34 @@ public sealed class DefaultServiceRuntimeActivatorTests
             Task.CompletedTask;
 
         public Task BindWorkflowDefinitionAsync(
-            IActor actor,
+            string actorId,
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             string? scopeId = null,
             CancellationToken ct = default)
         {
-            BindCalls.Add((actor.Id, workflowName, workflowYaml, inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal) ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+            RecordBind(actorId, workflowYaml, workflowName, inlineWorkflowYamls, ExplicitBindCalls);
             return Task.CompletedTask;
         }
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             Task.FromResult(WorkflowYamlParseResult.Success("workflow"));
+
+        private static void RecordBind(
+            string actorId,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> target)
+        {
+            target.Add((
+                actorId,
+                workflowName,
+                workflowYaml,
+                inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)
+                ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+        }
     }
 
     private sealed class RecordingActor : IActor

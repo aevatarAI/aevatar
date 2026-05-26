@@ -114,7 +114,22 @@ export interface AevatarMetricVisual extends AevatarStatusVisual {
 export const aevatarThemeConfig: ThemeConfig = {
   components: {
     Menu: {
-      itemBorderRadius: AEVATAR_GLOBAL_UI_SPEC.tokens.borderRadius,
+      activeBarHeight: 0,
+      activeBarWidth: 0,
+      fontSize: 14,
+      groupTitleColor: '#667085',
+      itemBg: 'transparent',
+      itemBorderRadius: 16,
+      itemColor: '#475467',
+      itemHeight: 54,
+      itemHoverBg: '#f5f7fb',
+      itemHoverColor: '#1d2129',
+      itemMarginBlock: 6,
+      itemMarginInline: 16,
+      itemPaddingInline: 16,
+      itemSelectedBg: '#eef2f6',
+      itemSelectedColor: '#1d2129',
+      subMenuItemBg: 'transparent',
     },
   },
   token: {
@@ -186,11 +201,16 @@ export function resolveAevatarSemanticTone(
       return "success";
     }
 
-    if (normalized === "delayed" || normalized === "disconnected") {
+    if (normalized === "unavailable" || normalized === "disconnected") {
       return "error";
     }
 
-    if (normalized === "snapshot_available") {
+    if (
+      normalized === "delayed" ||
+      normalized === "partial" ||
+      normalized === "seeded" ||
+      normalized === "snapshot_available"
+    ) {
       return "warning";
     }
 

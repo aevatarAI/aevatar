@@ -5,10 +5,12 @@ import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ScopeQueryDraft } from './scopeQuery';
 
 type ScopeQueryCardProps = {
+  activeScopeId?: string | null;
   draft: ScopeQueryDraft;
   onChange: (draft: ScopeQueryDraft) => void;
   onLoad: () => void;
   onReset?: () => void;
+  resetDisabled?: boolean;
   loadLabel?: string;
   resolvedScopeId?: string | null;
   resolvedScopeSource?: string | null;
@@ -16,21 +18,32 @@ type ScopeQueryCardProps = {
 };
 
 const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
+  activeScopeId,
   draft,
   onChange,
   onLoad,
   onReset,
-  loadLabel = 'Load scope',
+  resetDisabled,
+  loadLabel = 'Load workspace',
   resolvedScopeId,
   resolvedScopeSource,
   onUseResolvedScope,
 }) => {
+  const normalizedDraftScopeId = draft.scopeId.trim();
+  const normalizedActiveScopeId = activeScopeId?.trim() ?? '';
   const normalizedResolvedScopeId = resolvedScopeId?.trim() ?? '';
   const normalizedResolvedScopeSource = resolvedScopeSource?.trim() ?? '';
   const canUseResolvedScope =
     normalizedResolvedScopeId.length > 0 &&
-    draft.scopeId.trim() !== normalizedResolvedScopeId &&
+    normalizedDraftScopeId !== normalizedResolvedScopeId &&
     onUseResolvedScope;
+  const loadIsNoOp =
+    normalizedDraftScopeId.length > 0 &&
+    normalizedDraftScopeId === normalizedActiveScopeId;
+  const computedResetDisabled =
+    normalizedDraftScopeId === normalizedResolvedScopeId &&
+    normalizedActiveScopeId === normalizedResolvedScopeId;
+  const resetIsNoOp = (resetDisabled ?? computedResetDisabled) === true;
   const { token } = theme.useToken();
   const helperLabelStyle = {
     color: token.colorTextSecondary,
@@ -68,7 +81,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       >
         <Input
           allowClear
-          placeholder="Enter project scopeId"
+          placeholder="输入工作空间 ID"
           style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
@@ -78,10 +91,14 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
           }
           onPressEnter={onLoad}
         />
-        <Button type="primary" onClick={onLoad}>
+        <Button disabled={!normalizedDraftScopeId || loadIsNoOp} type="primary" onClick={onLoad}>
           {loadLabel}
         </Button>
-        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
+        {onReset ? (
+          <Button disabled={resetDisabled ?? computedResetDisabled} onClick={onReset}>
+            重置
+          </Button>
+        ) : null}
       </div>
       <div
         style={{
@@ -94,7 +111,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         {normalizedResolvedScopeId ? (
           <>
             <Typography.Text style={helperLabelStyle}>
-              Resolved project
+              已解析工作空间
             </Typography.Text>
             <Typography.Paragraph
               copyable={{ text: normalizedResolvedScopeId }}
@@ -113,13 +130,23 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
                   wordBreak: 'break-word',
                 }}
               >
-                Resolved from the current session via {normalizedResolvedScopeSource}
+                当前会话已通过 {normalizedResolvedScopeSource} 解析出这个工作空间
+              </Typography.Text>
+            ) : null}
+            {loadIsNoOp ? (
+              <Typography.Text style={helperCopyStyle}>
+                当前已加载这个工作空间，所以“{loadLabel}”不会再触发变化。
+              </Typography.Text>
+            ) : null}
+            {resetIsNoOp ? (
+              <Typography.Text style={helperCopyStyle}>
+                当前已经回到会话解析出的工作空间，所以“重置”不会再触发变化。
               </Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
               <div>
                 <Button size="small" onClick={onUseResolvedScope}>
-                  Use resolved project
+                  使用会话工作空间
                 </Button>
               </div>
             ) : null}
@@ -135,9 +162,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
               wordBreak: 'break-word',
             }}
           >
-            No project scope was resolved from the current session. Enter a
-            scopeId manually. tenantId and appId stay platform-managed and
-            hidden in this flow.
+            当前会话里没有自动解析出工作空间。请手动输入一个工作空间 ID。
           </Typography.Text>
         )}
       </div>

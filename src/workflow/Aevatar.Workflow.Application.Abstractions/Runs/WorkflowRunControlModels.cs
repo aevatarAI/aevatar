@@ -82,7 +82,9 @@ public sealed record WorkflowResumeCommand(
     string? CommandId,
     bool Approved,
     string? UserInput,
-    IReadOnlyDictionary<string, string>? Metadata = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    string? EditedContent = null,
+    string? Feedback = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
 
 public sealed record WorkflowSignalCommand(
     string ActorId,

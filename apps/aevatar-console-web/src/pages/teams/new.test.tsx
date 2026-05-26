@@ -1,0 +1,201 @@
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { message } from 'antd';
+import React from 'react';
+import { studioApi } from '@/shared/studio/api';
+import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
+import TeamCreatePage from './new';
+
+jest.mock('antd', () => {
+  const actual = jest.requireActual('antd');
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
+
+describe('TeamCreatePage', () => {
+  const teamResponse = {
+    teamId: 't-alpha',
+    scopeId: 'scope-a',
+    displayName: '订单助手团队',
+    description: '处理订单异常',
+    lifecycleStage: 'active',
+    memberCount: 0,
+    entryMemberId: null,
+    createdAt: '2026-05-06T08:00:00Z',
+    updatedAt: '2026-05-06T08:00:00Z',
+  };
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/teams/new?scopeId=scope-a');
+    jest.clearAllMocks();
+    fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+  });
+
+  it('renders the simplified Team create page', async () => {
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Create Team' })).toBeTruthy();
+    expect(screen.getByText('团队信息')).toBeTruthy();
+    expect(screen.getByLabelText('Team name')).toBeTruthy();
+    expect(screen.getByLabelText('Team description')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Create Team' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();
+    expect(screen.queryByText('工作空间上下文')).toBeNull();
+    expect(screen.queryByText('StudioTeam')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue in Studio' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'View Behaviors' })).toBeNull();
+    expect(screen.queryByText('Saved Draft')).toBeNull();
+  });
+
+  it('creates a backend StudioTeam and routes to team focus', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => teamResponse,
+    } as Response);
+
+    const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.change(await screen.findByLabelText('Team name'), {
+      target: { value: '订单助手团队' },
+    });
+    fireEvent.change(screen.getByLabelText('Team description'), {
+      target: { value: '处理订单异常' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: '订单助手团队',
+            description: '处理订单异常',
+          }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/teams/scope-a/t-alpha');
+    });
+    expect(
+      queryClient.getQueryData(['teams', 'team-summary', 'scope-a', 't-alpha']),
+    ).toEqual(teamResponse);
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('scopeId')).toBeNull();
+    expect(params.get('teamId')).toBeNull();
+    expect(message.success).toHaveBeenCalledWith('已创建 Team。');
+  });
+
+  it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
+    window.history.replaceState({}, '', '/teams/new?scopeId=new&teamName=test');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        ...teamResponse,
+        displayName: 'test',
+        description: 'test',
+      }),
+    } as Response);
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByLabelText('Team name')).toHaveValue('test');
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+        'scope-a',
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Team description'), {
+      target: { value: 'test' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: 'test',
+            description: 'test',
+          }),
+        }),
+      );
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/scopes/new/teams',
+      expect.anything(),
+    );
+  });
+
+  it('drops legacy draft recovery params from old create links', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+    );
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+        'scope-a',
+      );
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/teams/new');
+    expect(params.get('teamName')).toBe('订单助手团队');
+    expect(params.get('entryName')).toBeNull();
+    expect(params.get('teamDraftWorkflowId')).toBeNull();
+    expect(params.get('teamDraftWorkflowName')).toBeNull();
+    expect(screen.queryByText('Saved Draft')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue Draft' })).toBeNull();
+  });
+});

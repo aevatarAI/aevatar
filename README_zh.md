@@ -304,7 +304,7 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ### 3. 发送 Chat 请求
 
 ```bash
-curl -X POST http://localhost:5000/api/chat \
+curl -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"prompt": "分析微服务架构的优缺点", "workflow": "simple_qa"}'
@@ -375,7 +375,7 @@ src/
 ├── Aevatar.Mainnet.Host.Api      # 生产统一宿主
 └── Aevatar.Hosting               # 共享宿主基础设施
 test/                             # 单元、集成和 API 测试
-workflows/                        # YAML 工作流定义
+apps/aevatar-console-web/          # 前端控制台
 docs/                             # 架构文档
 ```
 
@@ -392,9 +392,6 @@ dotnet test aevatar.slnx --nologo
 # 按域构建
 dotnet build aevatar.foundation.slnf
 dotnet build aevatar.workflow.slnf
-
-# CI 架构门禁
-bash tools/ci/architecture_guards.sh
 ```
 
 ---

@@ -5,6 +5,7 @@ import type {
   RuntimeStepInfo,
   RuntimeToolCallInfo,
 } from "./runtimeEventSemantics";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 function renderInline(text: string): React.ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
@@ -244,6 +245,7 @@ function ToolCallIndicator({
   return (
     <div style={{ padding: "4px 0" }}>
       <button
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onClick={() => tool.result && setOpen((value) => !value)}
         style={{
           alignItems: "center",
@@ -343,6 +345,7 @@ function ThinkingBlock({
   return (
     <div style={{ marginBottom: 10 }}>
       <button
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onClick={() => setOpen((value) => !value)}
         style={{
           alignItems: "center",
@@ -483,6 +486,7 @@ export function RuntimeAssistantOutput({
           {hasSteps || hasTools ? (
             <div style={{ marginBottom: 6 }}>
               <button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={() => setActionsOpen((value) => !value)}
                 style={{
                   alignItems: "center",

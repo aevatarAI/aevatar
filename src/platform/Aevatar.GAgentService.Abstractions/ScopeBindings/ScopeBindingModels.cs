@@ -36,7 +36,9 @@ public sealed record ScopeBindingUpsertRequest(
     string? DisplayName = null,
     string? RevisionId = null,
     string? AppId = null,
-    string? ServiceId = null);
+    string? ServiceId = null,
+    bool AllowExistingRevisionReplay = false,
+    string? ReplayRevisionId = null);
 
 public sealed record ScopeBindingWorkflowResult(
     string WorkflowName,
@@ -45,7 +47,10 @@ public sealed record ScopeBindingWorkflowResult(
 public sealed record ScopeBindingScriptResult(
     string ScriptId,
     string ScriptRevision,
-    string DefinitionActorId);
+    string DefinitionActorId)
+{
+    public IReadOnlyList<string> EndpointIds { get; init; } = [];
+}
 
 public sealed record ScopeBindingGAgentResult(
     string ActorTypeName);
@@ -57,8 +62,11 @@ public sealed record ScopeBindingUpsertResult(
     string RevisionId,
     ScopeBindingImplementationKind ImplementationKind,
     string ExpectedActorId,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating",
     string WorkflowName = "",
     string DefinitionActorIdPrefix = "",
     ScopeBindingWorkflowResult? Workflow = null,
     ScopeBindingScriptResult? Script = null,
-    ScopeBindingGAgentResult? GAgent = null);
+    ScopeBindingGAgentResult? GAgent = null,
+    string ExpectedDeploymentId = "");

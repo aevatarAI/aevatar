@@ -1,0 +1,134 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core;
+
+namespace Aevatar.Scripting.Projection.Orchestration;
+
+/// <summary>
+/// Maps scripting authority committed state events to the durable authority readmodel projection scope.
+/// </summary>
+// Refactor (iter49/issue-882-script-command-readmodel-activation):
+//   Old pattern: ScopeScriptCommandApplicationService.UpsertAsync explicitly activated definition/catalog readmodels via ActivateAsync before write commands.
+//   New principle: Command service dispatches accepted-only write commands; readmodel activation is owned by scripting committed-state projection activation plan provider.
+public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IProjectionActivationPlanProvider
+{
+    public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (context.Published.StateEvent?.EventData == null)
+            yield break;
+
+        if (context.ActorType == typeof(ScriptBehaviorGAgent) &&
+            context.Published.StateEvent.EventData.Is(ScriptDomainFactCommitted.Descriptor))
+        {
+            yield return DurableExecutionPlan(context.ActorId);
+            yield break;
+        }
+
+        if (context.ActorType == typeof(ScriptEvolutionSessionGAgent) &&
+            IsEvolutionSessionMutation(context.Published.StateEvent.EventData))
+        {
+            yield return DurableEvolutionPlan(context.ActorId);
+            yield break;
+        }
+
+        if (context.ActorType == typeof(ScriptDefinitionGAgent) &&
+            context.Published.StateEvent.EventData.Is(ScriptDefinitionUpsertedEvent.Descriptor))
+        {
+            yield return DurableAuthorityPlan(context.ActorId);
+            yield break;
+        }
+
+        if (context.ActorType != typeof(ScriptCatalogGAgent) ||
+            !IsCatalogAuthorityMutation(context.Published.StateEvent.EventData))
+        {
+            yield break;
+        }
+
+        yield return DurableAuthorityPlan(context.ActorId);
+    }
+
+    private static ProjectionActivationPlan DurableExecutionPlan(string actorId) =>
+        new()
+        {
+            LeaseType = typeof(ScriptExecutionMaterializationRuntimeLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.ExecutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
+
+    private static ProjectionActivationPlan DurableEvolutionPlan(string actorId) =>
+        new()
+        {
+            LeaseType = typeof(ScriptEvolutionMaterializationRuntimeLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.EvolutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
+
+    private static ProjectionActivationPlan DurableAuthorityPlan(string actorId) =>
+        new()
+        {
+            LeaseType = typeof(ScriptAuthorityRuntimeLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ScriptProjectionKinds.AuthorityMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
+
+    private static bool IsCatalogAuthorityMutation(Google.Protobuf.WellKnownTypes.Any eventData)
+    {
+        if (eventData.Is(ScriptCatalogRevisionPromotedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptCatalogRollbackRequestedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptCatalogRolledBackEvent.Descriptor))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsEvolutionSessionMutation(Google.Protobuf.WellKnownTypes.Any eventData)
+    {
+        if (eventData.Is(ScriptEvolutionSessionStartedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionProposedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionBuildRequestedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionValidatedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRejectedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionPromotedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRollbackRequestedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionRolledBackEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+            return true;
+
+        return false;
+    }
+}

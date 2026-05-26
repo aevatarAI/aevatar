@@ -104,7 +104,8 @@ describe('auth session storage', () => {
   });
 
   it('accepts only safe in-app redirect targets', () => {
-    expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runs?tab=active');
+    expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runtime/runs?tab=active');
+    expect(sanitizeReturnTo('/gagents?scopeId=scope-a')).toBe('/runtime/gagents?scopeId=scope-a');
     expect(sanitizeReturnTo('https://example.com')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('/login?redirect=/overview')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('//evil.example.com')).toBe(CONSOLE_HOME_ROUTE);

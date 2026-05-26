@@ -20,7 +20,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_ShouldInvokeRegisteredConnector_AndPublishMetadata()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("fake_connector", "echo://done"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("fake_connector", "echo://done")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -80,7 +80,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenConnectorFailsAndContinue_ShouldKeepInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeFailConnector("unstable_connector"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeFailConnector("unstable_connector")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -109,7 +109,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorInList_ShouldSucceed()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("allowed_connector", "ok"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("allowed_connector", "ok")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """
@@ -140,7 +140,7 @@ public class ConnectorCallIntegrationTests
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorNotInList_ShouldFailStep()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FakeConnector("other_connector", "ok"));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FakeConnector("other_connector", "ok")));
         await using var env = BuildEnvironment(registry);
 
         const string yaml = """

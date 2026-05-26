@@ -1,0 +1,445 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Infrastructure.Artifacts;
+using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Presentation.AGUI;
+using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.GAgentService.Tests.Application;
+
+public sealed class StaticGAgentStreamInvocationApplicationServiceTests
+{
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenResolvedServiceIsNotStatic()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Workflow),
+            interaction,
+            registration);
+
+        var act = () => service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Only static GAgent services support stream invocation*");
+        interaction.Commands.Should().BeEmpty();
+        registration.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldRegisterStaticRunWithGAgentCommandId()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var receipt = new GAgentDraftRunAcceptedReceipt(
+            ActorId: "gagent-actor-1",
+            ActorTypeName: typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+            CommandId: "cmd-gagent-1",
+            CorrelationId: "corr-gagent-1");
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Receipt = receipt,
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        StaticGAgentStreamAcceptedReceipt? accepted = null;
+
+        var result = await service.InvokeAsync(
+            NewRequest(
+                identity,
+                input: new StaticGAgentStreamInvocationInput(
+                    Prompt: "  hello static  ",
+                    PreferredActorId: "  preferred-actor  ",
+                    SessionId: "session-1",
+                    Headers: new Dictionary<string, string>
+                    {
+                        ["x-trace"] = "trace-1",
+                    },
+                    InputParts:
+                    [
+                        new GAgentDraftRunInputPart
+                        {
+                            Kind = GAgentDraftRunInputPartKind.Text,
+                            Text = "part-1",
+                        },
+                    ])),
+            (_, _) => ValueTask.CompletedTask,
+            (receipt, _) =>
+            {
+                accepted = receipt;
+                return ValueTask.CompletedTask;
+            });
+
+        result.Succeeded.Should().BeTrue();
+        result.Accepted.Should().BeSameAs(accepted);
+        result.CompletionStatus.Should().Be(GAgentDraftRunCompletionStatus.RunFinished);
+        result.CompletionObserved.Should().BeTrue();
+
+        registration.Records.Should().ContainSingle();
+        var record = registration.Records[0];
+        record.ScopeId.Should().Be(identity.TenantId);
+        record.ServiceId.Should().Be(identity.ServiceId);
+        record.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        record.RunId.Should().Be(receipt.CommandId);
+        record.CommandId.Should().Be(receipt.CommandId);
+        record.CorrelationId.Should().Be(receipt.CorrelationId);
+        record.TargetActorId.Should().Be(receipt.ActorId);
+        record.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
+        record.Status.Should().Be(ServiceRunStatus.Accepted);
+        record.Identity.Should().BeEquivalentTo(identity);
+
+        accepted.Should().NotBeNull();
+        accepted!.ServiceReceipt.CommandId.Should().Be(receipt.CommandId);
+        accepted.ServiceReceipt.CorrelationId.Should().Be(receipt.CorrelationId);
+        accepted.ServiceReceipt.TargetActorId.Should().Be(receipt.ActorId);
+        accepted.GAgentReceipt.Should().Be(receipt);
+
+        interaction.Commands.Should().ContainSingle();
+        var command = interaction.Commands[0];
+        command.ScopeId.Should().Be(identity.TenantId);
+        command.Prompt.Should().Be("hello static");
+        command.PreferredActorId.Should().Be("preferred-actor");
+        command.SessionId.Should().Be("session-1");
+        command.Headers.Should().Contain("x-trace", "trace-1");
+        command.InputParts.Should().ContainSingle()
+            .Which.Text.Should().Be("part-1");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldForwardAGUIFramesThroughEmitCallback()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var frame = new AGUIEvent
+        {
+            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            {
+                MessageId = "msg-1",
+                Delta = "hello",
+            },
+        };
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Frames = [frame],
+        };
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            new RecordingServiceRunRegistrationPort());
+
+        var emitted = new List<AGUIEvent>();
+
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (aguiEvent, _) =>
+            {
+                emitted.Add(aguiEvent);
+                return ValueTask.CompletedTask;
+            });
+
+        result.Succeeded.Should().BeTrue();
+        emitted.Should().ContainSingle()
+            .Which.TextMessageContent.Delta.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldReturnStartError_WhenGAgentInteractionFailsBeforeAccepted()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Failure = GAgentDraftRunStartError.UnknownActorType,
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Accepted.Should().BeNull();
+        result.StartError.Should().Be(GAgentDraftRunStartError.UnknownActorType);
+        registration.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenResolvedEndpointIsNotChat()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(
+                identity,
+                ServiceImplementationKind.Static,
+                endpointKind: ServiceEndpointKind.Command,
+                requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl),
+            interaction,
+            registration);
+
+        var act = () => service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Only chat endpoints support static GAgent stream invocation*");
+        interaction.Commands.Should().BeEmpty();
+        registration.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenEndpointRequestTypeDoesNotMatchChatPayload()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(
+                identity,
+                ServiceImplementationKind.Static,
+                requestTypeUrl: "type.googleapis.com/test.other"),
+            interaction,
+            registration);
+
+        var act = () => service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*expects payload 'type.googleapis.com/test.other'*");
+        interaction.Commands.Should().BeEmpty();
+        registration.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenStaticPlanHasNoActorType()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var artifact = CreateArtifact(identity, ServiceImplementationKind.Static);
+        artifact.DeploymentPlan.StaticPlan!.ActorTypeName = " ";
+        var service = await CreateServiceAsync(
+            identity,
+            artifact,
+            interaction,
+            registration);
+
+        var act = () => service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Static GAgent service has no actor type configured*");
+        interaction.Commands.Should().BeEmpty();
+        registration.Records.Should().BeEmpty();
+    }
+
+    private static async Task<StaticGAgentStreamInvocationApplicationService> CreateServiceAsync(
+        ServiceIdentity identity,
+        PreparedServiceRevisionArtifact artifact,
+        RecordingGAgentDraftRunInteractionService interaction,
+        RecordingServiceRunRegistrationPort registration)
+    {
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
+
+        var resolutionService = new ServiceInvocationResolutionService(
+            new CatalogQueryReader(identity),
+            new TrafficViewQueryReader(identity),
+            artifactStore);
+
+        return new StaticGAgentStreamInvocationApplicationService(
+            resolutionService,
+            new NoOpInvokeAdmissionAuthorizer(),
+            registration,
+            interaction);
+    }
+
+    private static StaticGAgentStreamInvocationRequest NewRequest(
+        ServiceIdentity identity,
+        StaticGAgentStreamInvocationInput? input = null) =>
+        new(
+            identity.Clone(),
+            "chat",
+            input ?? new StaticGAgentStreamInvocationInput("hello"));
+
+    private static PreparedServiceRevisionArtifact CreateArtifact(
+        ServiceIdentity identity,
+        ServiceImplementationKind implementationKind,
+        ServiceEndpointKind endpointKind = ServiceEndpointKind.Chat,
+        string? requestTypeUrl = null)
+    {
+        var endpoint = GAgentServiceTestKit.CreateEndpointDescriptor(
+            endpointId: "chat",
+            kind: endpointKind,
+            requestTypeUrl: requestTypeUrl ?? Any.Pack(new ChatRequestEvent()).TypeUrl);
+
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1", endpoint);
+        artifact.ImplementationKind = implementationKind;
+        if (implementationKind == ServiceImplementationKind.Workflow)
+        {
+            artifact.DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "wf",
+                    WorkflowYaml = "name: wf",
+                    DefinitionActorId = "workflow-definition-1",
+                },
+            };
+        }
+
+        return artifact;
+    }
+
+    private sealed class CatalogQueryReader(ServiceIdentity identity) : IServiceCatalogQueryReader
+    {
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity requestedIdentity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceCatalogSnapshot?>(new ServiceCatalogSnapshot(
+                ServiceKeys.Build(identity),
+                identity.TenantId,
+                identity.AppId,
+                identity.Namespace,
+                identity.ServiceId,
+                "Static Service",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                ServiceDeploymentStatus.Active.ToString(),
+                [],
+                [],
+                DateTimeOffset.UtcNow));
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+    }
+
+    private sealed class TrafficViewQueryReader(ServiceIdentity identity) : IServiceTrafficViewQueryReader
+    {
+        public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity requestedIdentity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(new ServiceTrafficViewSnapshot(
+                ServiceKeys.Build(identity),
+                1,
+                string.Empty,
+                [
+                    new ServiceTrafficEndpointSnapshot(
+                        "chat",
+                        [
+                            new ServiceTrafficTargetSnapshot(
+                                "dep-1",
+                                "r1",
+                                "primary-actor-1",
+                                100,
+                                ServiceServingState.Active.ToString()),
+                        ]),
+                ],
+                DateTimeOffset.UtcNow));
+    }
+
+    private sealed class NoOpInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
+    {
+        public Task AuthorizeAsync(
+            string serviceKey,
+            string deploymentId,
+            PreparedServiceRevisionArtifact artifact,
+            ServiceEndpointDescriptor endpoint,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
+    {
+        public List<ServiceRunRecord> Records { get; } = [];
+
+        public Task<ServiceRunRegistrationResult> RegisterAsync(
+            ServiceRunRecord record,
+            CancellationToken ct = default)
+        {
+            Records.Add(record.Clone());
+            return Task.FromResult(new ServiceRunRegistrationResult("service-run-actor", record.RunId));
+        }
+
+        public Task UpdateStatusAsync(
+            string runActorId,
+            string runId,
+            ServiceRunStatus status,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingGAgentDraftRunInteractionService
+        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
+    {
+        public List<GAgentDraftRunCommand> Commands { get; } = [];
+
+        public IReadOnlyList<AGUIEvent> Frames { get; init; } = [];
+
+        public GAgentDraftRunAcceptedReceipt Receipt { get; init; } = new(
+            "gagent-actor-default",
+            typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+            "cmd-default",
+            "corr-default");
+
+        public GAgentDraftRunStartError? Failure { get; init; }
+
+        public async Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
+            GAgentDraftRunCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            if (Failure.HasValue)
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
+                    .Failure(Failure.Value);
+
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(Receipt, ct);
+
+            foreach (var frame in Frames)
+                await emitAsync(frame, ct);
+
+            return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
+                .Success(
+                    Receipt,
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.RunFinished,
+                        true));
+        }
+    }
+}

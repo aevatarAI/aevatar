@@ -1,4 +1,6 @@
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -17,9 +19,18 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         IActorDispatchPort dispatchPort,
         Func<ProjectionScopeStartRequest, TContext> contextFactory,
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
-        IAgentTypeVerifier? agentTypeVerifier = null)
+        IAgentTypeVerifier? agentTypeVerifier = null,
+        IStreamPubSubMaintenance? streamPubSubMaintenance = null,
+        ILoggerFactory? loggerFactory = null,
+        IStreamProvider? streams = null)
     {
-        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(runtime, dispatchPort, agentTypeVerifier);
+        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
+            runtime,
+            dispatchPort,
+            agentTypeVerifier,
+            streamPubSubMaintenance,
+            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>(),
+            streams);
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
     }
@@ -28,6 +39,10 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
 
@@ -39,6 +54,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
+        await _scopeRuntime.EnsureObservationRelayAsync(scopeKey, ct).ConfigureAwait(false);
         await _scopeRuntime.DispatchAsync(
             scopeKey,
             new EnsureProjectionScopeCommand

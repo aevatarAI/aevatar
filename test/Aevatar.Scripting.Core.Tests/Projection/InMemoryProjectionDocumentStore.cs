@@ -20,6 +20,17 @@ internal sealed class InMemoryProjectionDocumentStore<TReadModel>
         return Task.FromResult(ProjectionWriteResult.Applied());
     }
 
+    public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        ct.ThrowIfCancellationRequested();
+        var removed = _items.Remove(id);
+        return Task.FromResult(removed
+            ? ProjectionWriteResult.Applied()
+            : ProjectionWriteResult.Duplicate());
+    }
+
     public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);

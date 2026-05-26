@@ -11,7 +11,4 @@ public interface IScriptExecutionProjectionLease
 public interface IScriptExecutionProjectionPort
     : IEventSinkProjectionLifecyclePort<IScriptExecutionProjectionLease, EventEnvelope>
 {
-    Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
-        string actorId,
-        CancellationToken ct = default);
 }

@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────
-// MEAILLMProvider — 基于 Microsoft.Extensions.AI 的 LLM 提供者
+// MEAILLMProvider — LLM provider based on Microsoft.Extensions.AI
 //
-// 将 MEAI 的 IChatClient 桥接到 Aevatar 的 ILLMProvider。
-// 支持 OpenAI / Azure OpenAI / 任何兼容 OpenAI API 的提供者
-// （DeepSeek、Moonshot、通义千问等通过 baseUrl 配置）。
+// Bridges MEAI's IChatClient to Aevatar's ILLMProvider.
+// Supports OpenAI / Azure OpenAI / any provider compatible with the OpenAI API
+// (DeepSeek, Moonshot, Tongyi Qianwen, etc. configured via baseUrl).
 // ─────────────────────────────────────────────────────────────
 
 using System.Runtime.CompilerServices;
@@ -13,12 +13,15 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OpenAIAssistantChatMessage = OpenAI.Chat.AssistantChatMessage;
+using OpenAIChatMessageContentPart = OpenAI.Chat.ChatMessageContentPart;
+using OpenAIChatToolCall = OpenAI.Chat.ChatToolCall;
 
 namespace Aevatar.AI.LLMProviders.MEAI;
 
 /// <summary>
-/// 基于 MEAI IChatClient 的 ILLMProvider 实现。
-/// 支持 OpenAI、Azure OpenAI、以及任何兼容 OpenAI API 的提供者。
+/// ILLMProvider implementation based on the MEAI IChatClient.
+/// Supports OpenAI, Azure OpenAI, and any provider compatible with the OpenAI API.
 /// </summary>
 public sealed class MEAILLMProvider : ILLMProvider
 {
@@ -46,17 +49,17 @@ public sealed class MEAILLMProvider : ILLMProvider
     private readonly IChatClient _client;
     private readonly ILogger _logger;
 
-    /// <summary>提供者名称。</summary>
+    /// <summary>Provider name.</summary>
     public string Name { get; }
 
     public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     /// <summary>
-    /// 创建 MEAI LLM Provider。
+    /// Creates the MEAI LLM Provider.
     /// </summary>
-    /// <param name="name">提供者名称（如 "openai", "deepseek"）。</param>
-    /// <param name="client">MEAI 的 IChatClient 实例。</param>
-    /// <param name="logger">日志记录器。</param>
+    /// <param name="name">Provider name (for example "openai", "deepseek").</param>
+    /// <param name="client">MEAI IChatClient instance.</param>
+    /// <param name="logger">Logger.</param>
     public MEAILLMProvider(string name, IChatClient client, ILogger? logger = null)
     {
         Name = name;
@@ -64,25 +67,12 @@ public sealed class MEAILLMProvider : ILLMProvider
         _logger = logger ?? NullLogger.Instance;
     }
 
-    // ─── ILLMProvider.ChatAsync ───
-
-    /// <summary>单轮 LLM 调用。将 Aevatar 的 LLMRequest 转为 MEAI 的 ChatMessage 列表。</summary>
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var messages = ConvertMessages(request.Messages);
-        var options = BuildOptions(request);
-
-        _logger.LogDebug("MEAI ChatAsync: {MessageCount} 条消息, model={Model}",
-            messages.Count, options?.ModelId);
-
-        var response = await _client.GetResponseAsync(messages, options, ct);
-
-        return ConvertResponse(response);
-    }
-
     // ─── ILLMProvider.ChatStreamAsync ───
 
-    /// <summary>流式 LLM 调用。返回异步枚举的流式 chunk。</summary>
+    /// <summary>Streaming LLM call. Returns an async-enumerable stream of chunks.</summary>
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -90,7 +80,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         var messages = ConvertMessages(request.Messages);
         var options = BuildOptions(request);
 
-        _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
+        _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
         var emittedStreamChunk = false;
         string? lastFinishReason = null;
 
@@ -165,50 +155,44 @@ public sealed class MEAILLMProvider : ILLMProvider
                 Name);
 
             var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
-            if (!string.IsNullOrEmpty(fallback.Content))
-            {
-                yield return new LLMStreamChunk
-                {
-                    DeltaContent = fallback.Content,
-                };
-            }
-
-            if (fallback.ContentParts is { Count: > 0 })
-            {
-                foreach (var contentPart in fallback.ContentParts)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaContentPart = contentPart,
-                    };
-                }
-            }
-
-            if (fallback.ToolCalls is { Count: > 0 })
-            {
-                foreach (var toolCall in fallback.ToolCalls)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaToolCall = toolCall,
-                    };
-                }
-            }
-
-            yield return new LLMStreamChunk
-            {
-                IsLast = true,
-                Usage = fallback.Usage,
-                FinishReason = fallback.FinishReason,
-            };
+            foreach (var fallbackChunk in MapResponseToStreamChunks(fallback))
+                yield return fallbackChunk;
             yield break;
         }
 
-        // 最后一个 chunk 标记结束
+        // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
     }
 
-    // ─── 转换：Aevatar → MEAI ───
+    private static IEnumerable<LLMStreamChunk> MapResponseToStreamChunks(LLMResponse fallback)
+    {
+        // Refactor (iter18/cluster-001):
+        //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+        //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+        if (!string.IsNullOrEmpty(fallback.Content))
+            yield return new LLMStreamChunk { DeltaContent = fallback.Content };
+
+        if (fallback.ContentParts is { Count: > 0 })
+        {
+            foreach (var contentPart in fallback.ContentParts)
+                yield return new LLMStreamChunk { DeltaContentPart = contentPart };
+        }
+
+        if (fallback.ToolCalls is { Count: > 0 })
+        {
+            foreach (var toolCall in fallback.ToolCalls)
+                yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+        }
+
+        yield return new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = fallback.Usage,
+            FinishReason = fallback.FinishReason,
+        };
+    }
+
+    // ─── Conversion: Aevatar -> MEAI ───
 
     private static List<Microsoft.Extensions.AI.ChatMessage> ConvertMessages(
         IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages)
@@ -235,17 +219,22 @@ public sealed class MEAILLMProvider : ILLMProvider
                     meaiMsg.Contents.Add(new TextContent(msg.Content));
             }
 
-            // 处理 Tool Call 结果
+            // Handle tool call results
             if (msg.Role == "tool" && msg.ToolCallId != null)
             {
                 meaiMsg.Contents.Clear();
                 meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
-            // 处理 Assistant 的 Tool Calls
+            if (msg.Role == "assistant" && !string.IsNullOrEmpty(msg.ReasoningContent))
+                meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
+
+            // Handle assistant tool calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
+                if (!string.IsNullOrEmpty(msg.ReasoningContent))
+                    meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
                 if (msg.ContentParts is { Count: > 0 })
                     AppendContentParts(meaiMsg, msg.ContentParts);
                 else if (msg.Content != null)
@@ -253,7 +242,7 @@ public sealed class MEAILLMProvider : ILLMProvider
 
                 foreach (var tc in msg.ToolCalls)
                 {
-                    // 解析 JSON 参数为字典
+                    // Parse JSON arguments into a dictionary
                     Dictionary<string, object?>? args = null;
                     if (!string.IsNullOrEmpty(tc.ArgumentsJson))
                     {
@@ -261,17 +250,154 @@ public sealed class MEAILLMProvider : ILLMProvider
                         {
                             args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                         }
-                        catch { /* 解析失败则不传参数 */ }
+                        catch { /* If parsing fails, do not pass arguments */ }
                     }
 
                     meaiMsg.Contents.Add(new FunctionCallContent(tc.Id, tc.Name, args));
                 }
             }
 
+            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg);
             result.Add(meaiMsg);
         }
 
         return result;
+    }
+
+    private static void AttachOpenAIRawRepresentationForReasoning(
+        Microsoft.Extensions.AI.ChatMessage meaiMessage,
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
+            return;
+        if (!HasOpenAIAssistantWireContent(sourceMessage))
+            return;
+
+        var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
+
+        // OpenAI SDK currently exposes no typed reasoning_content property for
+        // assistant history messages, so we fall back to its experimental Patch
+        // API to inject the field into the serialized payload. The Patch surface
+        // is marked SCME0001 (model serialization may evolve), and the
+        // reasoning_content field name is also undocumented — any future SDK
+        // bump that renames the field, drops Patch, or changes its serializer
+        // shape would silently strip reasoning context from request history.
+        //
+        // Mitigations layered here:
+        //   1. SDK version is pinned in Directory.Packages.props
+        //      (`OpenAI Version="2.9.1"`) so an unintentional minor/major bump
+        //      cannot land without an explicit dependency-bump PR.
+        //   2. AIComponentCoverageTests asserts the serialized JSON contains
+        //      `"reasoning_content":"..."` after ConvertMessages — that integration
+        //      test fails the build the moment the patch stops landing in the
+        //      payload, which is the only signal that survives an SDK bump.
+        //   3. The try/catch below degrades a wire-format break into "no
+        //      reasoning replay" rather than crashing the entire chat call.
+        //
+        // Long-term: when the OpenAI SDK exposes a typed reasoning_content
+        // property (tracked at github.com/openai/openai-dotnet — file an issue
+        // referencing this code path before bumping), retire the Patch hack
+        // and remove the SCME0001 suppression.
+        try
+        {
+#pragma warning disable SCME0001
+            rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
+#pragma warning restore SCME0001
+            meaiMessage.RawRepresentation = rawMessage;
+        }
+        catch (Exception)
+        {
+            // Reasoning continuity is best-effort; on a SDK contract break we
+            // proceed without it rather than throwing. The source message's
+            // ReasoningContent stays in our own state and can be re-rendered
+            // through other paths if needed.
+        }
+    }
+
+    private static OpenAIAssistantChatMessage BuildOpenAIAssistantMessage(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = BuildOpenAITextContentParts(sourceMessage);
+        var toolCalls = BuildOpenAIToolCalls(sourceMessage);
+
+        OpenAIAssistantChatMessage rawMessage;
+        if (contentParts.Count > 0)
+        {
+            rawMessage = new OpenAIAssistantChatMessage(contentParts);
+            foreach (var toolCall in toolCalls)
+                rawMessage.ToolCalls.Add(toolCall);
+            return rawMessage;
+        }
+
+        rawMessage = toolCalls.Count > 0
+            ? new OpenAIAssistantChatMessage(toolCalls)
+            : new OpenAIAssistantChatMessage(string.Empty);
+        return rawMessage;
+    }
+
+    private static List<OpenAIChatMessageContentPart> BuildOpenAITextContentParts(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = new List<OpenAIChatMessageContentPart>();
+        if (sourceMessage.ContentParts is { Count: > 0 })
+        {
+            foreach (var part in sourceMessage.ContentParts)
+            {
+                if (part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text))
+                    contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(part.Text));
+            }
+        }
+
+        if (contentParts.Count == 0 && !string.IsNullOrEmpty(sourceMessage.Content))
+            contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(sourceMessage.Content));
+
+        return contentParts;
+    }
+
+    private static bool HasOpenAIAssistantWireContent(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.ToolCalls is { Count: > 0 })
+            return true;
+        if (!string.IsNullOrEmpty(sourceMessage.Content))
+            return true;
+        return sourceMessage.ContentParts is { Count: > 0 }
+               && sourceMessage.ContentParts.Any(static part =>
+                   part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text));
+    }
+
+    private static List<OpenAIChatToolCall> BuildOpenAIToolCalls(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var toolCalls = new List<OpenAIChatToolCall>();
+        if (sourceMessage.ToolCalls is not { Count: > 0 })
+            return toolCalls;
+
+        foreach (var toolCall in sourceMessage.ToolCalls)
+        {
+            toolCalls.Add(OpenAIChatToolCall.CreateFunctionToolCall(
+                toolCall.Id,
+                toolCall.Name,
+                BinaryData.FromString(NormalizeToolArgumentsJson(toolCall.ArgumentsJson))));
+        }
+
+        return toolCalls;
+    }
+
+    private static string NormalizeToolArgumentsJson(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "{}";
+
+        try
+        {
+            using var _ = JsonDocument.Parse(argumentsJson);
+            return argumentsJson;
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
     }
 
     private static void AppendContentParts(
@@ -385,7 +511,25 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
-        // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
+        // Map ResponseFormat
+        if (request.ResponseFormat is not null)
+        {
+            options.ResponseFormat = request.ResponseFormat.Kind switch
+            {
+                LLMResponseFormatKind.Text => ChatResponseFormat.Text,
+                LLMResponseFormatKind.JsonObject => ChatResponseFormat.Json,
+                LLMResponseFormatKind.JsonSchema when request.ResponseFormat is LLMResponseFormatJsonSchema jsonSchema =>
+                    ChatResponseFormat.ForJsonSchema(
+                        jsonSchema.Schema,
+                        jsonSchema.SchemaName,
+                        jsonSchema.SchemaDescription),
+                _ => null,
+            };
+            if (options.ResponseFormat != null)
+                hasOptions = true;
+        }
+
+        // Register tools — use each tool's own ParametersSchema so the LLM sees the real parameter structure
         if (request.Tools is { Count: > 0 })
         {
             options.Tools = [];
@@ -415,17 +559,18 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new AdditionalPropertiesDictionary(properties);
     }
 
-    // ─── 转换：MEAI → Aevatar ───
+    // ─── Conversion: MEAI -> Aevatar ───
 
     private static LLMResponse ConvertResponse(Microsoft.Extensions.AI.ChatResponse response)
     {
-        // ChatResponse.Messages 包含所有回复消息
+        // ChatResponse.Messages contains all reply messages
         var lastMessage = response.Messages.LastOrDefault();
-        var content = lastMessage?.Text;
+        var content = ExtractMessageText(lastMessage);
+        var reasoningContent = ExtractReasoningContent(lastMessage);
         List<ToolCall>? toolCalls = null;
         List<ContentPart>? contentParts = null;
 
-        // 检查是否有 Tool Calls
+        // Check whether there are tool calls
         if (lastMessage != null)
         {
             foreach (var part in lastMessage.Contents)
@@ -460,11 +605,50 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new LLMResponse
         {
             Content = content,
+            ReasoningContent = reasoningContent,
             ContentParts = contentParts,
             ToolCalls = toolCalls,
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
         };
+    }
+
+    private static string? ExtractMessageText(Microsoft.Extensions.AI.ChatMessage? message)
+    {
+        if (message == null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(message.Text))
+            return message.Text;
+
+        if (message.Contents is not { Count: > 0 })
+            return message.Text;
+
+        var textParts = message.Contents
+            .OfType<TextContent>()
+            .Select(part => part.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        return textParts.Count == 0
+            ? message.Text
+            : string.Concat(textParts);
+    }
+
+    private static string? ExtractReasoningContent(Microsoft.Extensions.AI.ChatMessage? message)
+    {
+        if (message?.Contents is not { Count: > 0 })
+            return null;
+
+        var reasoningParts = message.Contents
+            .OfType<TextReasoningContent>()
+            .Select(part => part.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        return reasoningParts.Count == 0
+            ? null
+            : string.Concat(reasoningParts);
     }
 
     private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)

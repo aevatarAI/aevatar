@@ -3,10 +3,16 @@ test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyInteg
 test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
+test/Aevatar.GAgentService.Integration.Tests/ScopeScriptSaveObservationRuntimeTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs
-# Short delays for timestamp distinctness, async settling, and TTL verification
-test/Aevatar.Tools.Cli.Tests/ChronoStorageUserMemoryStoreTests.cs
-test/Aevatar.Tools.Cli.Tests/ChronoStorageChatHistoryStoreTests.cs
-test/Aevatar.AI.Tests/StreamingToolExecutorTests.cs
+# Kafka persistent-provider redelivery harness (Channel RFC §9.5.6): verifying the
+# ABSENCE of redelivery in the return-path test requires waiting past the
+# provider's commit horizon. No deterministic completion signal exists for
+# "nothing redelivered" — that's exactly the contract under validation.
+test/Aevatar.Foundation.Runtime.Hosting.Tests/KafkaPersistentStreamProviderRedeliveryValidationTests.cs
+# Fake voice transport uses Task.Delay(Infinite, ct) to keep receive loop alive until relay teardown cancels it
+test/Aevatar.Foundation.VoicePresence.Tests/VoiceTransportRelayTests.cs
+# HangingReplyGenerator test double uses Task.Delay(Infinite, ct) to verify runtime cancels reply generation on timeout
+test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelLlmReplyInboxRuntimeTests.cs

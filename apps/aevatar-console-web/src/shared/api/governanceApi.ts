@@ -499,6 +499,7 @@ function decodeActivationCapabilityView(
 function buildIdentityQuery(query: ServiceIdentityQuery) {
   return {
     tenantId: query.tenantId?.trim(),
+    appId: query.appId?.trim(),
     namespace: query.namespace?.trim(),
   };
 }

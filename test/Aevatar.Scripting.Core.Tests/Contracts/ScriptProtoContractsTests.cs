@@ -12,8 +12,8 @@ public class ScriptProtoContractsTests
         {
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = "return 1;",
             SourceHash = "hash-1",
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("return 1;"),
             ReadModelSchemaVersion = "2",
             ReadModelSchema = Any.Pack(new ScriptReadModelSchemaSpec
             {
@@ -28,7 +28,7 @@ public class ScriptProtoContractsTests
 
         state.ScriptId.Should().Be("script-1");
         state.Revision.Should().Be("rev-1");
-        state.SourceText.Should().Be("return 1;");
+        state.ScriptPackage.GetPrimaryCSharpSource().Should().Be("return 1;");
         state.SourceHash.Should().Be("hash-1");
         state.ReadModelSchemaVersion.Should().Be("2");
         state.ReadModelSchema.Should().NotBeNull();
@@ -84,8 +84,8 @@ public class ScriptProtoContractsTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = "public sealed class Behavior {}",
             SourceHash = "hash-1",
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class Behavior {}"),
             StateTypeUrl = "type.googleapis.com/example.State",
             ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
             ReadModelSchemaVersion = "2",
@@ -113,8 +113,8 @@ public class ScriptProtoContractsTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = "public sealed class Behavior {}",
             SourceHash = "hash-1",
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class Behavior {}"),
             StateTypeUrl = "type.googleapis.com/example.State",
             ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
             ReadModelSchemaVersion = "2",

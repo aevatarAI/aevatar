@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -135,6 +136,7 @@ public sealed class InMemoryStreamCoverageTests
 
         await stream.ProduceAsync(new PingEvent { Message = "first" });
         await firstDispatchObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await GetDispatchLoop(stream).WaitAsync(TimeSpan.FromSeconds(2));
 
         Func<Task> act = async () => await stream.ProduceAsync(new PingEvent { Message = "second" });
         await act.Should().ThrowAsync<Exception>();
@@ -249,5 +251,14 @@ public sealed class InMemoryStreamCoverageTests
         Action act = () => provider.GetStream("actor-best-effort");
         act.Should().NotThrow();
         called.Should().BeTrue();
+    }
+
+    private static Task GetDispatchLoop(InMemoryStream stream)
+    {
+        var field = typeof(InMemoryStream).GetField("_dispatchLoop", BindingFlags.Instance | BindingFlags.NonPublic);
+        field.Should().NotBeNull();
+        var dispatchLoop = field!.GetValue(stream);
+        dispatchLoop.Should().BeAssignableTo<Task>();
+        return (Task)dispatchLoop!;
     }
 }

@@ -21,6 +21,7 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from '@/shared/ui/aevatarWorkbench';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 
 export type AevatarLayoutMode = 'viewport' | 'document';
 
@@ -28,6 +29,7 @@ const AevatarLayoutModeContext =
   React.createContext<AevatarLayoutMode>('viewport');
 
 type AevatarPageShellProps = {
+  breadcrumbRender?: false;
   children: React.ReactNode;
   content?: React.ReactNode;
   extra?: React.ReactNode;
@@ -62,6 +64,7 @@ type AevatarPanelProps = {
   layoutMode?: AevatarLayoutMode;
   minHeight?: number | string;
   padding?: number | string;
+  style?: React.CSSProperties;
   title?: React.ReactNode;
   titleHelp?: React.ReactNode;
 };
@@ -128,6 +131,11 @@ const pageContainerChildrenDocumentStyle: React.CSSProperties = {
   height: 'auto',
   minHeight: 'fit-content',
   width: '100%',
+};
+
+const compactPageContainerChildrenDocumentStyle: React.CSSProperties = {
+  ...pageContainerChildrenDocumentStyle,
+  paddingInline: 0,
 };
 
 const panelInnerViewportStyle: React.CSSProperties = {
@@ -205,6 +213,7 @@ export const AevatarHelpTooltip: React.FC<{
     >
       <button
         aria-label="Show help"
+        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         style={{ ...helpTriggerButtonStyle, color: token.colorTextDescription }}
         type="button"
       >
@@ -225,6 +234,7 @@ export const AevatarTitleWithHelp: React.FC<{
 );
 
 export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
+  breadcrumbRender,
   children,
   content,
   extra,
@@ -233,48 +243,56 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
   pageHeaderRender,
   title,
   titleHelp,
-}) => (
-  <AevatarLayoutModeContext.Provider value={layoutMode}>
-    <PageContainer
-      className={
-        layoutMode === 'document'
-          ? 'aevatar-page-shell aevatar-page-shell-document'
-          : 'aevatar-page-shell aevatar-page-shell-viewport'
-      }
-      childrenContentStyle={
-        layoutMode === 'document'
-          ? pageContainerChildrenDocumentStyle
-          : pageContainerChildrenViewportStyle
-      }
-      content={content}
-      extra={extra ? [extra] : undefined}
-      onBack={onBack}
-      pageHeaderRender={pageHeaderRender}
-      style={
-        layoutMode === 'document'
-          ? pageContainerDocumentStyle
-          : pageContainerViewportStyle
-      }
-      title={
-        titleHelp ? (
-          <AevatarTitleWithHelp help={titleHelp} title={title} />
-        ) : (
-          title
-        )
-      }
-    >
-      <div
+}) => {
+  const screens = Grid.useBreakpoint();
+  const useCompactDocumentPadding = layoutMode === 'document' && !screens.md;
+
+  return (
+    <AevatarLayoutModeContext.Provider value={layoutMode}>
+      <PageContainer
+        breadcrumbRender={breadcrumbRender}
+        className={
+          layoutMode === 'document'
+            ? 'aevatar-page-shell aevatar-page-shell-document'
+            : 'aevatar-page-shell aevatar-page-shell-viewport'
+        }
+        childrenContentStyle={
+          layoutMode === 'document'
+            ? useCompactDocumentPadding
+              ? compactPageContainerChildrenDocumentStyle
+              : pageContainerChildrenDocumentStyle
+            : pageContainerChildrenViewportStyle
+        }
+        content={content}
+        extra={extra}
+        onBack={onBack}
+        pageHeaderRender={pageHeaderRender}
         style={
           layoutMode === 'document'
-            ? pageContentDocumentStyle
-            : pageContentViewportStyle
+            ? pageContainerDocumentStyle
+            : pageContainerViewportStyle
+        }
+        title={
+          titleHelp ? (
+            <AevatarTitleWithHelp help={titleHelp} title={title} />
+          ) : (
+            title
+          )
         }
       >
-        {children}
-      </div>
-    </PageContainer>
-  </AevatarLayoutModeContext.Provider>
-);
+        <div
+          style={
+            layoutMode === 'document'
+              ? pageContentDocumentStyle
+              : pageContentViewportStyle
+          }
+        >
+          {children}
+        </div>
+      </PageContainer>
+    </AevatarLayoutModeContext.Provider>
+  );
+};
 
 // Default console layout: keep one navigator rail and one primary stage.
 export const AevatarTwoPaneLayout: React.FC<AevatarTwoPaneLayoutProps> = ({
@@ -362,6 +380,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
   layoutMode,
   minHeight,
   padding = 16,
+  style,
   title,
   titleHelp,
 }) => {
@@ -394,19 +413,22 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
       style={
         ghost
           ? undefined
-          : buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
-              minHeight: resolvedPanelMinHeight,
-              overflow:
-                resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
-              padding,
-            })
+          : {
+              ...buildAevatarPanelStyle(token as AevatarThemeSurfaceToken, {
+                minHeight: resolvedPanelMinHeight,
+                overflow:
+                  resolvedLayoutMode === 'document' ? 'visible' : 'hidden',
+                padding,
+              }),
+              ...style,
+            }
       }
     >
       <div style={panelInnerStyle}>
         {title || description || extra ? (
           <div style={sectionHeaderStyle}>
             <Space
-              direction="vertical"
+              orientation="vertical"
               size={4}
               style={{ flex: 1, minWidth: 0 }}
             >
@@ -465,7 +487,7 @@ export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
       }
       styles={{ body: aevatarDrawerBodyStyle }}
       title={
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>
           {subtitle ? (
             <Typography.Text style={{ color: token.colorTextSecondary }}>
@@ -503,22 +525,35 @@ export const AevatarStatusTag: React.FC<AevatarStatusTagProps> = ({
 };
 
 export const AevatarInspectorEmpty: React.FC<{
+  compact?: boolean;
   description: React.ReactNode;
   title?: React.ReactNode;
-}> = ({ description, title = 'Select an item' }) => {
+}> = ({ compact = false, description, title = 'Select an item' }) => {
   const { token } = theme.useToken();
+  const emptyStyles = compact
+    ? {
+        image: { height: 32, marginBottom: 4 },
+        root: { marginBlock: 4 },
+      }
+    : undefined;
 
   return (
     <Empty
       description={
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={compact ? 2 : 4}>
           <Typography.Text strong>{title}</Typography.Text>
-          <Typography.Text style={{ color: token.colorTextSecondary }}>
+          <Typography.Text
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: compact ? 13 : undefined,
+            }}
+          >
             {description}
           </Typography.Text>
         </Space>
       }
       image={Empty.PRESENTED_IMAGE_SIMPLE}
+      styles={emptyStyles}
     />
   );
 };

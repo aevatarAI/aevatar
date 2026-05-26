@@ -131,6 +131,15 @@ public sealed class WorkflowActorBindingProjectorTests
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var removed = Documents.Remove(id);
+            return Task.FromResult(removed
+                ? ProjectionWriteResult.Applied()
+                : ProjectionWriteResult.Duplicate());
+        }
+
         public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

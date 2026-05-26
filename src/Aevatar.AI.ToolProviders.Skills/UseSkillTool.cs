@@ -15,14 +15,17 @@ namespace Aevatar.AI.ToolProviders.Skills;
 /// 统一技能调用工具。替代散装的 skill_xxx 工具和 ornn_use_skill 工具。
 /// LLM 调用 use_skill(skill="名称") → 返回技能指令内容。
 /// </summary>
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class UseSkillTool : IAgentTool
 {
-    private readonly SkillRegistry _registry;
+    private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
 
-    public UseSkillTool(SkillRegistry registry, IRemoteSkillFetcher? remoteFetcher = null)
+    public UseSkillTool(LocalSkillCatalog localCatalog, IRemoteSkillFetcher? remoteFetcher = null)
     {
-        _registry = registry;
+        _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
     }
 
@@ -67,27 +70,25 @@ public sealed class UseSkillTool : IAgentTool
         // ─── 查找技能 ───
         SkillDefinition? skill = null;
 
-        // 1. 从注册表查找（本地 + 已缓存的远程）
-        if (_registry.TryGet(skillName, out skill) && skill != null)
+        // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+        //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+        //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+        if (_localCatalog.TryGet(skillName, out skill) && skill != null)
             return BuildSkillResponse(skill, args);
 
-        // 2. 尝试从远程拉取
         if (_remoteFetcher != null)
         {
-            var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+            var token = AgentToolRequestContext.NyxIdAccessToken;
             if (!string.IsNullOrWhiteSpace(token))
             {
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    // 缓存到注册表，后续调用不再远程拉取
-                    _registry.Register(skill);
                     return BuildSkillResponse(skill, args);
                 }
             }
         }
 
-        // 3. 均未找到
         return BuildErrorWithAvailableSkills($"Skill '{skillName}' not found.");
     }
 
@@ -118,6 +119,11 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine("## Instructions");
         sb.AppendLine();
         sb.AppendLine(instructions);
+        sb.AppendLine();
+        sb.AppendLine("## Skill Continuation");
+        sb.AppendLine();
+        sb.AppendLine(
+            "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })
@@ -145,7 +151,7 @@ public sealed class UseSkillTool : IAgentTool
         var sb = new StringBuilder();
         sb.AppendLine(errorMessage);
 
-        var skills = _registry.GetModelInvocable();
+        var skills = _localCatalog.GetModelInvocable();
         if (skills.Count > 0)
         {
             sb.AppendLine();

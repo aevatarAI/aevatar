@@ -52,10 +52,30 @@ public sealed class OrleansActorRuntime : IActorRuntime
         return new OrleansActor(actorId, grain, _streams);
     }
 
+    /// <summary>Creates actor by stable agent kind through Orleans grain activation.</summary>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    public async Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
+        ct.ThrowIfCancellationRequested();
+
+        var actorId = id ?? $"{agentKind.Trim()}:{Guid.NewGuid():N}";
+        var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+        var initialized = await grain.InitializeAgentByKindAsync(agentKind.Trim());
+        if (!initialized)
+            throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId} for kind '{agentKind}'.");
+
+        _logger.LogInformation("Actor {Id} ({Kind}) created via Orleans runtime", actorId, agentKind);
+        return new OrleansActor(actorId, grain, _streams);
+    }
+
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         await _callbackScheduler.PurgeActorAsync(id, ct);
+        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
 
         var parentId = await grain.GetParentAsync();
@@ -113,6 +133,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task UnlinkAsync(string childId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
         var parentId = await child.GetParentAsync();
         if (!string.IsNullOrWhiteSpace(parentId))

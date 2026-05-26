@@ -11,7 +11,7 @@ import {
   decodeWorkflowSignalResponseBody,
 } from "./runtimeDecoders";
 import { requestJson, withQuery } from "./http/client";
-import { readResponseError } from "./http/error";
+import { readResponseError, readResponseErrorDetails } from "./http/error";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -25,6 +25,18 @@ const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
+
+export class RuntimeRunsApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "RuntimeRunsApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 function trimOptional(value?: string): string | undefined {
   const normalized = value?.trim();
@@ -45,64 +57,94 @@ function buildScopePath(scopeId: string): string {
   return `/api/scopes/${encodeSegment(scopeId)}`;
 }
 
+function buildScopedMemberPath(scopeId: string, memberId: string): string {
+  return `/api/scopes/${encodeSegment(scopeId)}/members/${encodeSegment(
+    memberId
+  )}`;
+}
+
 function buildScopedServicePath(scopeId: string, serviceId: string): string {
   return `/api/scopes/${encodeSegment(scopeId)}/services/${encodeSegment(
     serviceId
   )}`;
 }
 
+function buildScopedTeamPath(scopeId: string, teamId: string): string {
+  return `/api/scopes/${encodeSegment(scopeId)}/teams/${encodeSegment(teamId)}`;
+}
+
+type RuntimeRouteTarget = {
+  memberId?: string;
+  serviceId?: string;
+  teamId?: string;
+};
+
+function buildInvocationBasePath(
+  scopeId: string,
+  options?: RuntimeRouteTarget
+): string {
+  const teamId = trimOptional(options?.teamId);
+  if (teamId) {
+    return buildScopedTeamPath(scopeId, teamId);
+  }
+
+  const memberId = trimOptional(options?.memberId);
+  if (memberId) {
+    return buildScopedMemberPath(scopeId, memberId);
+  }
+
+  const serviceId = trimOptional(options?.serviceId);
+  return serviceId
+    ? buildScopedServicePath(scopeId, serviceId)
+    : buildScopePath(scopeId);
+}
+
 function buildInvokeEndpointPath(
   scopeId: string,
   endpointId: string,
-  serviceId?: string
+  options?: RuntimeRouteTarget
 ): string {
   const encodedEndpointId = encodeSegment(endpointId);
-  return serviceId?.trim()
-    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/${encodedEndpointId}`
-    : `${buildScopePath(scopeId)}/invoke/${encodedEndpointId}`;
+  return `${buildInvocationBasePath(scopeId, options)}/invoke/${encodedEndpointId}`;
 }
 
 function buildInvokeEndpointStreamPath(
   scopeId: string,
   endpointId: string,
-  serviceId?: string
+  options?: RuntimeRouteTarget
 ): string {
   const encodedEndpointId = encodeSegment(endpointId);
-  return serviceId?.trim()
-    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/${encodedEndpointId}:stream`
-    : `${buildScopePath(scopeId)}/invoke/${encodedEndpointId}:stream`;
+  return `${buildInvocationBasePath(scopeId, options)}/invoke/${encodedEndpointId}:stream`;
 }
 
 function buildInvokeChatStreamPath(
   scopeId: string,
-  serviceId?: string
+  options?: RuntimeRouteTarget
 ): string {
-  return serviceId?.trim()
-    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/chat:stream`
-    : `${buildScopePath(scopeId)}/invoke/chat:stream`;
+  return `${buildInvocationBasePath(scopeId, options)}/invoke/chat:stream`;
+}
+
+function buildTeamInvokeChatStreamPath(scopeId: string, teamId: string): string {
+  return `${buildScopedTeamPath(scopeId, teamId)}/invoke/chat:stream`;
 }
 
 function buildRunControlPath(
   scopeId: string,
   runId: string,
   action: "resume" | "signal" | "stop",
-  serviceId?: string
+  options?: RuntimeRouteTarget
 ): string {
   const encodedRunId = encodeSegment(runId);
-  return serviceId?.trim()
-    ? `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodedRunId}:${action}`
-    : `${buildScopePath(scopeId)}/runs/${encodedRunId}:${action}`;
+  return `${buildInvocationBasePath(scopeId, options)}/runs/${encodedRunId}:${action}`;
 }
 
 function buildRunPath(
   scopeId: string,
   runId: string,
-  serviceId?: string
+  options?: RuntimeRouteTarget
 ): string {
   const encodedRunId = encodeSegment(runId);
-  return serviceId?.trim()
-    ? `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodedRunId}`
-    : `${buildScopePath(scopeId)}/runs/${encodedRunId}`;
+  return `${buildInvocationBasePath(scopeId, options)}/runs/${encodedRunId}`;
 }
 
 function createClientCommandId(): string {
@@ -199,15 +241,13 @@ export const runtimeRunsApi = {
     scopeId: string,
     request: ChatRunRequest,
     signal: AbortSignal,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<Response> {
     const sessionId = trimOptional(
       (request as ChatRunRequest & { sessionId?: string }).sessionId
     );
     const response = await authFetch(
-      buildInvokeChatStreamPath(scopeId, options?.serviceId),
+      buildInvokeChatStreamPath(scopeId, options),
       {
         method: "POST",
         headers: {
@@ -232,6 +272,46 @@ export const runtimeRunsApi = {
     return response;
   },
 
+  async streamTeamChat(
+    scopeId: string,
+    teamId: string,
+    request: ChatRunRequest,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const sessionId = trimOptional(
+      (request as ChatRunRequest & { sessionId?: string }).sessionId
+    );
+    const response = await authFetch(
+      buildTeamInvokeChatStreamPath(scopeId, teamId),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(
+          compactObject({
+            prompt: request.prompt.trim(),
+            sessionId,
+            headers: request.metadata,
+          })
+        ),
+        signal,
+      }
+    );
+
+    if (!response.ok) {
+      const details = await readResponseErrorDetails(response);
+      throw new RuntimeRunsApiError(
+        details.message,
+        response.status,
+        details.code,
+      );
+    }
+
+    return response;
+  },
+
   async streamDraftRun(
     scopeId: string,
     request: ChatRunRequest,
@@ -245,6 +325,7 @@ export const runtimeRunsApi = {
       },
       body: JSON.stringify(
         compactObject({
+          eventFormat: "agui",
           prompt: request.prompt.trim(),
           workflowYamls:
             request.workflowYamls && request.workflowYamls.length > 0
@@ -268,11 +349,12 @@ export const runtimeRunsApi = {
     runId: string,
     options?: {
       actorId?: string;
+      memberId?: string;
       serviceId?: string;
     }
   ): Promise<WorkflowRunSummary> {
     return requestJson(
-      withQuery(buildRunPath(scopeId, runId, options?.serviceId), {
+      withQuery(buildRunPath(scopeId, runId, options), {
         actorId: trimOptional(options?.actorId),
       }),
       (value) => value as WorkflowRunSummary,
@@ -288,9 +370,7 @@ export const runtimeRunsApi = {
   async invokeEndpoint(
     scopeId: string,
     request: EndpointInvokeRequest,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<Record<string, unknown>> {
     const normalizedPrompt = request.prompt?.trim() ?? "";
     const payloadTypeUrl = inferPayloadTypeUrl(
@@ -312,7 +392,7 @@ export const runtimeRunsApi = {
       trimOptional(request.correlationId) || resolvedCommandId;
 
     return requestJson(
-      buildInvokeEndpointPath(scopeId, request.endpointId, options?.serviceId),
+      buildInvokeEndpointPath(scopeId, request.endpointId, options),
       (value) => value as Record<string, unknown>,
       {
         method: "POST",
@@ -333,16 +413,10 @@ export const runtimeRunsApi = {
     scopeId: string,
     request: StreamEndpointInvokeRequest,
     signal: AbortSignal,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<Response> {
     const response = await authFetch(
-      buildInvokeEndpointStreamPath(
-        scopeId,
-        request.endpointId,
-        options?.serviceId
-      ),
+      buildInvokeEndpointStreamPath(scopeId, request.endpointId, options),
       {
         method: "POST",
         headers: {
@@ -371,12 +445,10 @@ export const runtimeRunsApi = {
   resume(
     scopeId: string,
     request: WorkflowResumeRequest,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<WorkflowResumeResponse> {
     return requestJson(
-      buildRunControlPath(scopeId, request.runId, "resume", options?.serviceId),
+      buildRunControlPath(scopeId, request.runId, "resume", options),
       decodeWorkflowResumeResponseBody,
       {
         method: "POST",
@@ -399,12 +471,10 @@ export const runtimeRunsApi = {
   signal(
     scopeId: string,
     request: WorkflowSignalRequest,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<WorkflowSignalResponse> {
     return requestJson(
-      buildRunControlPath(scopeId, request.runId, "signal", options?.serviceId),
+      buildRunControlPath(scopeId, request.runId, "signal", options),
       decodeWorkflowSignalResponseBody,
       {
         method: "POST",
@@ -426,12 +496,10 @@ export const runtimeRunsApi = {
   async stop(
     scopeId: string,
     request: WorkflowStopRequest,
-    options?: {
-      serviceId?: string;
-    }
+    options?: RuntimeRouteTarget
   ): Promise<WorkflowStopResponse> {
     const response = await authFetch(
-      buildRunControlPath(scopeId, request.runId, "stop", options?.serviceId),
+      buildRunControlPath(scopeId, request.runId, "stop", options),
       {
         method: "POST",
         headers: JSON_HEADERS,

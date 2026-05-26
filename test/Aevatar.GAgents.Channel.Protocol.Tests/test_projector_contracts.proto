@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.protocol.tests;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Protocol.Tests";
+
+import "google/protobuf/timestamp.proto";
+
+message TestProjectorEntry {
+  string id = 1;
+  string value = 2;
+  bool is_deleted = 3;
+}
+
+message TestProjectorState {
+  repeated TestProjectorEntry entries = 1;
+}
+
+message TestProjectorDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  string value = 6;
+}

@@ -13,6 +13,7 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 export type GovernanceAuditEventTargetKind =
   | "service"
@@ -106,7 +107,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         }}
       >
         <Empty
-          description="Governance activity will appear here after a service is selected."
+          description="暂无变更记录"
           style={{ margin: "auto" }}
         />
       </div>
@@ -124,22 +125,15 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
       }}
     >
       <Space
-        direction="vertical"
+        orientation="vertical"
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
-        <div>
-          <Typography.Text strong>Governance Audit Timeline</Typography.Text>
-          <Typography.Paragraph style={{ margin: "6px 0 0" }} type="secondary">
-            Compiled from live governance catalogs, revision lifecycle state,
-            and activation diagnostics so operators can follow who changed the
-            surface, when it happened, and which capability was affected.
-          </Typography.Paragraph>
-        </div>
+        <Typography.Text strong>变更记录</Typography.Text>
 
         <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
           <Timeline
-            pending={loading ? "Synchronizing governance activity..." : null}
+            pending={loading ? "加载中..." : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
               dot: (
@@ -157,6 +151,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
               ),
               children: (
                 <button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   onClick={() => onSelect?.(event)}
                   style={{
                     background: "transparent",
@@ -180,7 +175,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   >
                     <Space
                       align="start"
-                      direction="vertical"
+                      orientation="vertical"
                       size={10}
                       style={{ display: "flex" }}
                     >
@@ -215,10 +210,10 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
 
                       <Space size={[8, 8]} wrap>
                         <Typography.Text type="secondary">
-                          Actor: {event.actor}
+                          来源: {event.actor}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Target: {event.targetLabel}
+                          对象: {event.targetLabel}
                         </Typography.Text>
                       </Space>
                     </Space>

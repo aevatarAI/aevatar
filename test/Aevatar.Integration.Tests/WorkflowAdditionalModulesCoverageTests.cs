@@ -1,8 +1,13 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -468,6 +473,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new CacheModule();
         var ctx = CreateContext();
+        ctx.UtcNow = DateTimeOffset.Parse("2026-05-20T10:00:00Z");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -492,6 +498,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         childDispatch.TargetRole.Should().Be("worker");
         var childStepId = childDispatch.StepId;
         ctx.Published.Clear();
+        ctx.UtcNow = ctx.UtcNow.AddMinutes(30);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -538,6 +545,25 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-value");
         hitCompletion.Annotations["cache.hit"].Should().Be("true");
+
+        ctx.Published.Clear();
+        ctx.UtcNow = DateTimeOffset.Parse("2026-05-20T11:30:01Z");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-4",
+                StepType = "cache",
+                Input = "after-expiry",
+                Parameters =
+                {
+                    ["cache_key"] = "k1",
+                    ["child_step_type"] = "transform",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Should().ContainSingle(x => x.StepId.StartsWith("cache-4_cached_", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -632,6 +658,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "approve?",
                     ["timeout"] = "90",
+                    ["delivery_target_id"] = "agent-approval-1",
                 },
             }),
             ctx,
@@ -640,6 +667,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.StepId.Should().Be("approval-1");
         suspended.SuspensionType.Should().Be("human_approval");
+        suspended.Content.Should().Be("original");
+        suspended.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -648,7 +677,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-1",
                 StepId = "approval-1",
                 Approved = true,
-                UserInput = "approved-output",
+                UserInput = "legacy-approved-output",
+                EditedContent = "approved-output",
+                Feedback = "looks good",
             }),
             ctx,
             CancellationToken.None);
@@ -658,6 +689,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         approved.RunId.Should().Be("run-1");
         approved.Success.Should().BeTrue();
         approved.Output.Should().Be("approved-output");
+        var approvalResolved = ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Single();
+        approvalResolved.RunId.Should().Be("run-1");
+        approvalResolved.StepId.Should().Be("approval-1");
+        approvalResolved.Approved.Should().BeTrue();
+        approvalResolved.UserInput.Should().Be("legacy-approved-output");
+        approvalResolved.EditedContent.Should().Be("approved-output");
+        approvalResolved.Feedback.Should().Be("looks good");
+        approvalResolved.DeliveryTargetId.Should().Be("agent-approval-1");
+        approvalResolved.ResolvedContent.Should().Be("approved-output");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -688,6 +728,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         rejected.Success.Should().BeTrue();
         rejected.Output.Should().Be("keep-me");
         rejected.Error.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Should().BeEmpty();
     }
 
     [Fact]
@@ -800,6 +841,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "please type",
                     ["variable"] = "answer",
+                    ["deliveryTargetId"] = "agent-input-1",
                 },
             }),
             ctx,
@@ -807,6 +849,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.VariableName.Should().Be("answer");
+        suspended.Content.Should().Be("fallback");
+        suspended.DeliveryTargetId.Should().Be("agent-input-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -880,6 +924,195 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var timeoutFail = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutFail.Success.Should().BeFalse();
         timeoutFail.Error.Should().Be("Human input timed out");
+    }
+
+    [Fact]
+    public async Task WorkflowModules_ShouldRedactRawContentInInformationLogs()
+    {
+        const string sensitiveAssignValue = "customer secret assigned value";
+        const string sensitiveHumanPrompt = "customer secret human prompt";
+        const string sensitiveApprovalPrompt = "customer secret approval prompt";
+        const string sensitiveFanoutInput = "customer secret fanout input";
+        const string sensitiveLlmPrompt = "customer secret llm prompt";
+        const string sensitiveLlmOutput = "customer secret llm output";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+
+        await new AssignModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "assign-log-redaction",
+                StepType = "assign",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["target"] = "answer",
+                    ["value"] = sensitiveAssignValue,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new HumanInputModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "human-log-redaction",
+                StepType = "human_input",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["prompt"] = sensitiveHumanPrompt,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new HumanApprovalModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-log-redaction",
+                StepType = "human_approval",
+                RunId = "run-log-redaction",
+                Parameters =
+                {
+                    ["prompt"] = sensitiveApprovalPrompt,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await new ParallelFanOutModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "parallel-log-redaction",
+                StepType = "parallel",
+                RunId = "run-log-redaction",
+                Input = sensitiveFanoutInput,
+                Parameters =
+                {
+                    ["workers"] = "[\"worker_a\",\"worker_b\"]",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var llmCall = new LLMCallModule();
+        await llmCall.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-log-redaction",
+                StepType = "llm_call",
+                RunId = "run-log-redaction",
+                Input = sensitiveLlmPrompt,
+                TargetRole = "worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
+        var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        await llmCall.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = llmSessionId,
+                Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("value_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"value_len={sensitiveAssignValue.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveHumanPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveApprovalPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("input_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"input_len={sensitiveFanoutInput.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("prompt_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"prompt_len={sensitiveLlmPrompt.Length}", StringComparison.Ordinal));
+        messages.Should().Contain(message =>
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveAssignValue, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveHumanPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveApprovalPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveFanoutInput, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmOutput, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SwitchModule_ShouldRedactSensitiveSwitchInputInInformationLogs()
+    {
+        const string sensitiveSwitchInput = "customer secret switch input route-blue";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+
+        await new SwitchModule().HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "switch-log-redaction",
+                StepType = "switch",
+                RunId = "run-switch-log-redaction",
+                Parameters =
+                {
+                    ["on"] = sensitiveSwitchInput,
+                    ["branch.blue"] = "blue-step",
+                    ["branch._default"] = "fallback-step",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("value_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"value_len={sensitiveSwitchInput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveSwitchInput, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldRedactNonStreamingChatResponseInInformationLogs()
+    {
+        const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
+        const string sensitiveLlmOutput = "customer secret llm non streaming output";
+        var logger = new RecordingLogger();
+        var ctx = CreateContext(logger: logger);
+        var module = new LLMCallModule();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-non-stream-log-redaction",
+                StepType = "llm_call",
+                RunId = "run-llm-non-stream-log-redaction",
+                Input = sensitiveLlmPrompt,
+                TargetRole = "worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
+        messages.Should().Contain(message =>
+            message.Contains("status=completed_non_streaming", StringComparison.Ordinal) &&
+            message.Contains("output_redacted=true", StringComparison.Ordinal) &&
+            message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
+        messages.Should().NotContain(message => message.Contains(sensitiveLlmOutput, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -992,6 +1225,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "provide secret",
                     ["variable"] = "api_key",
+                    ["redacted_output"] = "[api key captured]",
+                    ["delivery_target_id"] = "agent-secure-1",
                 },
             }),
             ctx,
@@ -999,8 +1234,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.SuspensionType.Should().Be("secure_input");
-        suspended.Metadata["secure"].Should().Be("true");
-        suspended.Metadata["variable"].Should().Be("api_key");
+        suspended.VariableName.Should().Be("api_key");
+        suspended.Secure.Should().BeTrue();
+        suspended.RedactedOutput.Should().Be("[api key captured]");
+        suspended.Metadata.Should().NotContainKey("secure");
+        suspended.Metadata.Should().NotContainKey("variable");
+        suspended.Metadata.Should().NotContainKey("input_mode");
+        suspended.Metadata.Should().NotContainKey("redacted_output");
+        suspended.Content.Should().BeEmpty();
+        suspended.DeliveryTargetId.Should().Be("agent-secure-1");
         ctx.Published.Clear();
 
         var persistedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
@@ -1025,15 +1267,18 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var completed = resumedCtx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("[secure input captured]");
+        completed.Output.Should().Be("[api key captured]");
         completed.Annotations["secure.input"].Should().Be("true");
         completed.Annotations["secure.variable"].Should().Be("api_key");
+        completed.Annotations["secure.redacted_output"].Should().Be("[api key captured]");
 
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();
         resumedState.Captured.Should().BeEmpty();
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
-        ((Dictionary<string, string>)capturedItems!).Should().Contain(new KeyValuePair<string, string>("run-secure::api_key", "top-secret-value"));
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
+            new KeyValuePair<CapturedSecureInputKey, string>(
+                new CapturedSecureInputKey("run-secure", "api_key"),
+                "top-secret-value"));
 
         await resumedModule.HandleAsync(
             Envelope(new WorkflowCompletedEvent
@@ -1044,7 +1289,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     [Fact]
@@ -1081,9 +1326,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
-        ((Dictionary<string, string>)capturedItems!).Should().Contain(
-            new KeyValuePair<string, string>("run-secure-recapture::api_key", "old-secret"));
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
+            new KeyValuePair<CapturedSecureInputKey, string>(
+                new CapturedSecureInputKey("run-secure-recapture", "api_key"),
+                "old-secret"));
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1100,7 +1346,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1116,7 +1362,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         failed.Success.Should().BeFalse();
         failed.Error.Should().Contain("timed out");
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     [Fact]
@@ -1709,36 +1955,32 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldDispatchViaAgentTypeAndForwardStepParametersAsMetadata()
+    public async Task LlmCallModule_ShouldDispatchViaTargetRoleAndPromoteTelegramParameters()
     {
-        var runtime = new RecordingActorRuntimeForAgentType();
-        var services = new ServiceCollection()
-            .AddSingleton<IActorRuntime>(runtime)
-            .AddAevatarWorkflow()
-            .BuildServiceProvider();
         var module = new LLMCallModule();
-        var ctx = CreateContext(services);
+        var ctx = CreateContext();
 
         var request = new StepRequestEvent
         {
-            StepId = "llm-agent-type",
+            StepId = "llm-target-role",
             StepType = "llm_call",
-            RunId = "run-agent-type",
+            RunId = "run-target-role",
             Input = "hello bridge",
-            TargetRole = "legacy-role",
+            TargetRole = "telegram_user_bridge",
         };
-        request.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
-        request.Parameters["agent_id"] = "bridge:telegram:prod";
         request.Parameters["chat_id"] = "10001";
         request.Parameters["llm_timeout_ms"] = "120000";
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         ctx.Sent.Should().ContainSingle();
-        ctx.Sent[0].targetActorId.Should().Be("bridge:telegram:prod");
+        ctx.Sent[0].targetActorId.Should().Be($"{ctx.AgentId}:telegram_user_bridge");
         var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        chatRequest.Headers["chat_id"].Should().Be("10001");
-        runtime.Created.Should().ContainSingle(x => x.actorId == "bridge:telegram:prod");
+        chatRequest.Telegram.ChatId.Should().Be("10001");
+        chatRequest.Telegram.RunId.Should().Be("run-target-role");
+        chatRequest.Telegram.StepId.Should().Be("llm-target-role");
+        chatRequest.Metadata.Should().NotContainKey("chat_id");
+        chatRequest.Metadata.Should().NotContainKey("llm_timeout_ms");
 
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
@@ -1750,38 +1992,112 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        completed.StepId.Should().Be("llm-agent-type");
+        completed.StepId.Should().Be("llm-target-role");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("telegram-ack");
     }
 
     [Fact]
-    public async Task EvaluateAndReflectModules_ShouldDispatchViaAgentType()
+    public async Task LlmCallModule_ShouldForwardTypedRuntimeContextOverrides()
     {
-        var runtime = new RecordingActorRuntimeForAgentType();
-        var services = new ServiceCollection()
-            .AddSingleton<IActorRuntime>(runtime)
-            .AddAevatarWorkflow()
-            .BuildServiceProvider();
-        var ctx = CreateContext(services);
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = " trace-abc ",
+            });
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = " token-123 ",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = " model-main ",
+                    NyxIdRoutePreference = " route-fast ",
+                },
+            });
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-runtime-metadata",
+                StepType = "llm_call",
+                RunId = "run-runtime-metadata",
+                Input = "hello metadata",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chatRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        chatRequest.LlmControl.NyxIdAccessToken.Should().Be("token-123");
+        chatRequest.LlmControl.ModelOverride.Should().Be("model-main");
+        chatRequest.LlmControl.NyxIdRoutePreference.Should().Be("route-fast");
+        chatRequest.Metadata["trace-id"].Should().Be("trace-abc");
+    }
+
+    [Fact]
+    public async Task ConnectorCallModule_ShouldForwardTypedRuntimeAuthorizationToConnectorRequest()
+    {
+        var connector = new RecordingConnector("runtime-auth");
+        var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
+        var ctx = CreateContext();
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer token-123 ",
+            });
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "connector-runtime-auth",
+                StepType = "connector_call",
+                RunId = "run-runtime-auth",
+                Input = "payload",
+                Parameters =
+                {
+                    ["connector"] = "runtime-auth",
+                    ["operation"] = "invoke",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        connector.LastRequest.Should().NotBeNull();
+        connector.LastRequest!.Metadata.Should().Contain(
+            ConnectorRequest.HttpAuthorizationMetadataKey,
+            "Bearer token-123");
+    }
+
+    [Fact]
+    public async Task EvaluateAndReflectModules_ShouldDispatchViaTargetRole()
+    {
+        var ctx = CreateContext();
 
         var evaluate = new EvaluateModule();
         var evaluateRequest = new StepRequestEvent
         {
-            StepId = "eval-agent-type",
+            StepId = "eval-target-role",
             StepType = "evaluate",
-            RunId = "run-eval-agent-type",
+            RunId = "run-eval-target-role",
             Input = "draft",
+            TargetRole = "judge",
         };
-        evaluateRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
-        evaluateRequest.Parameters["agent_id"] = "agent:evaluate";
         evaluateRequest.Parameters["chat_id"] = "chat-eval";
         evaluateRequest.Parameters["threshold"] = "2";
         await evaluate.HandleAsync(Envelope(evaluateRequest), ctx, CancellationToken.None);
 
-        ctx.Sent.Should().ContainSingle(x => x.targetActorId == "agent:evaluate");
+        ctx.Sent.Should().ContainSingle(x => x.targetActorId == $"{ctx.AgentId}:judge");
         var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        evaluateChat.Headers["chat_id"].Should().Be("chat-eval");
+        evaluateChat.Telegram.ChatId.Should().Be("chat-eval");
+        evaluateChat.Headers.Should().NotContainKey("chat_id");
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
@@ -1793,27 +2109,27 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
         ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
-            .Single(x => x.StepId == "eval-agent-type")
+            .Single(x => x.StepId == "eval-target-role")
             .Success.Should().BeTrue();
         ctx.Published.Clear();
 
         var reflect = new ReflectModule();
         var reflectRequest = new StepRequestEvent
         {
-            StepId = "reflect-agent-type",
+            StepId = "reflect-target-role",
             StepType = "reflect",
-            RunId = "run-reflect-agent-type",
+            RunId = "run-reflect-target-role",
             Input = "draft-reflect",
+            TargetRole = "reviewer",
         };
-        reflectRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
-        reflectRequest.Parameters["agent_id"] = "agent:reflect";
         reflectRequest.Parameters["chat_id"] = "chat-reflect";
         reflectRequest.Parameters["max_rounds"] = "1";
         await reflect.HandleAsync(Envelope(reflectRequest), ctx, CancellationToken.None);
 
-        ctx.Sent.Should().Contain(x => x.targetActorId == "agent:reflect");
+        ctx.Sent.Should().Contain(x => x.targetActorId == $"{ctx.AgentId}:reviewer");
         var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        reflectChat.Headers["chat_id"].Should().Be("chat-reflect");
+        reflectChat.Telegram.ChatId.Should().Be("chat-reflect");
+        reflectChat.Headers.Should().NotContainKey("chat_id");
         ctx.Published.Clear();
 
         await reflect.HandleAsync(
@@ -1825,7 +2141,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
         ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
-            .Single(x => x.StepId == "reflect-agent-type")
+            .Single(x => x.StepId == "reflect-target-role")
             .Success.Should().BeTrue();
     }
 
@@ -2003,7 +2319,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-1",
                 StepId = "branch-approve",
                 Approved = true,
-                UserInput = "looks good",
+                UserInput = "legacy-approved",
+                EditedContent = "looks good",
+                Feedback = "approved as edited",
             }),
             ctx,
             CancellationToken.None);
@@ -2039,7 +2357,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-2",
                 StepId = "branch-reject",
                 Approved = false,
-                UserInput = "change the model to gpt-4",
+                UserInput = "legacy-reject",
+                EditedContent = "edited but rejected",
+                Feedback = "change the model to gpt-4",
             }),
             ctx,
             CancellationToken.None);
@@ -2293,71 +2613,46 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completed.Error.Should().Contain("dynamic_workflow");
     }
 
-    private sealed class RecordingActorRuntimeForAgentType : IActorRuntime
+    private sealed class FixedWorkflowConnectorResolver(IConnector connector) : IWorkflowConnectorResolver
     {
-        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
-        public List<(System.Type agentType, string actorId)> Created { get; } = [];
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
-
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        public ValueTask<IConnector?> ResolveAsync(
+            IWorkflowExecutionContext context,
+            string connectorName,
+            CancellationToken ct = default)
         {
-            var actorId = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id;
-            var agent = (IAgent)Activator.CreateInstance(agentType, actorId)!;
-            var actor = new RecordingRuntimeActor(actorId, agent);
-            _actors[actorId] = actor;
-            Created.Add((agentType, actorId));
-            return Task.FromResult<IActor>(actor);
+            _ = context;
+            _ = connectorName;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IConnector?>(connector);
         }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default)
-        {
-            _actors.Remove(id);
-            return Task.CompletedTask;
-        }
-
-        public Task<IActor?> GetAsync(string id)
-        {
-            _actors.TryGetValue(id, out var actor);
-            return Task.FromResult(actor);
-        }
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingRuntimeActor(string id, IAgent agent) : IActor
+    private sealed class RecordingConnector(string name) : IConnector
     {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = agent;
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        public string Name { get; } = name;
+
+        public string Type => "test";
+
+        public ConnectorRequest? LastRequest { get; private set; }
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = ct;
+            LastRequest = request;
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = "ok",
+            });
+        }
     }
 
-    private sealed class AgentTypeDispatchTargetAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("agent-type-target");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)
+    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null, ILogger? logger = null)
     {
         return new TestEventHandlerContext(
             services ?? new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider(),
             new TestAgent("workflow-advanced-module-test-agent"),
-            NullLogger.Instance);
+            logger ?? NullLogger.Instance);
     }
 
     private static EventEnvelope Envelope(IMessage evt, string? publisherId = null)
@@ -2369,6 +2664,28 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Information)
+                Messages.Add(formatter(state, exception));
+        }
     }
 
 }

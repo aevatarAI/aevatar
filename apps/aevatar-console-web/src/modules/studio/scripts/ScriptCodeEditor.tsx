@@ -4,8 +4,12 @@ import Editor, {
   type OnMount,
 } from '@monaco-editor/react';
 import React from 'react';
-import * as monacoEditor from 'monaco-editor';
 import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
+import type * as MonacoEditorNamespace from 'monaco-editor';
+
+const monacoEditor = require(
+  'monaco-editor/esm/vs/editor/editor.api.js',
+) as typeof MonacoEditorNamespace;
 
 export type ScriptEditorMarker = {
   startLineNumber: number;
@@ -39,7 +43,7 @@ const editorShellStyle: React.CSSProperties = {
 
 function toMonacoSeverity(
   severity: ScriptEditorMarker['severity'],
-): monacoEditor.MarkerSeverity {
+): MonacoEditorNamespace.MarkerSeverity {
   switch (severity) {
     case 'error':
       return monacoEditor.MarkerSeverity.Error;
@@ -67,7 +71,7 @@ const ScriptCodeEditor: React.FC<ScriptCodeEditorProps> = ({
   markers,
   onChange,
 }) => {
-  const editorRef = React.useRef<monacoEditor.editor.IStandaloneCodeEditor | null>(
+  const editorRef = React.useRef<MonacoEditorNamespace.editor.IStandaloneCodeEditor | null>(
     null,
   );
 

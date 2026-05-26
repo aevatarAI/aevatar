@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -49,14 +48,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
             {
-                SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
+                SecureInputRuntimeContextAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
             }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            SecureInputRuntimeItemsAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            SecureInputRuntimeContextAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
             return;
         }
 
@@ -116,7 +115,12 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             }
         }
 
-        var sw = Stopwatch.StartNew();
+        // Refactor (iter89/cluster-089-workflow-module-clock-state):
+        //   Old: Connector elapsed metadata used Stopwatch directly inside
+        //        the module.
+        //   New: Connector duration is measured through the workflow context
+        //        monotonic elapsed API.
+        var startedAt = ctx.GetTimestamp();
         var attempts = Math.Max(1, retry + 1);
         ConnectorResponse? response = null;
         Exception? lastError = null;
@@ -166,7 +170,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             }
         }
 
-        sw.Stop();
+        var durationMs = ctx.GetElapsedTime(startedAt).TotalMilliseconds;
         if (response is { Success: true })
         {
             var resolvedOutput = response.Output ?? string.Empty;
@@ -186,7 +190,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 Success = true,
                 Output = resolvedOutput,
             };
-            AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
+            AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, durationMs);
             foreach (var (key, value) in response.Metadata)
                 ok.Annotations[key] = value;
             await ctx.PublishAsync(ok, TopologyAudience.Self, ct);
@@ -210,7 +214,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 Success = true,
                 Output = request.Input,
             };
-            AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
+            AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, durationMs);
             continued.Annotations["connector.continued_on_error"] = "true";
             continued.Annotations["connector.error"] = errorText ?? "";
             await ctx.PublishAsync(continued, TopologyAudience.Self, ct);
@@ -224,7 +228,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Success = false,
             Error = errorText ?? "connector call failed",
         };
-        AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
+        AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, durationMs);
         await ctx.PublishAsync(failed, TopologyAudience.Self, ct);
     }
 
@@ -322,7 +326,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (SecureInputRuntimeItemsAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
+        if (SecureInputRuntimeContextAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
         {
             return value;
         }
@@ -489,7 +493,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
         IWorkflowExecutionContext ctx)
     {
-        if (ConnectorAuthorizationRuntimeItemsAccess.TryGetAuthorization(ctx, out var authorization) &&
+        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
             !string.IsNullOrWhiteSpace(authorization))
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

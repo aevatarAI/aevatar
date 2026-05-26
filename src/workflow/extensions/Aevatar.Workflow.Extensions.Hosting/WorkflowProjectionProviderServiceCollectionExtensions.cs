@@ -1,6 +1,7 @@
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -19,29 +20,18 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>)))
-            return services;
-
         EnsureLegacyProviderOptionsNotUsed(configuration);
 
-        var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
+        var documentProvider = ProjectionDocumentProviderConfiguration.Resolve(configuration, "Workflow");
         var enableNeo4jGraph = ResolveNeo4jGraphEnabled(configuration);
-        var enableInMemoryDocument = ResolveOptionalBool(
-            configuration["Projection:Document:Providers:InMemory:Enabled"],
-            fallbackValue: !enableElasticsearchDocument);
         var enableInMemoryGraph = ResolveOptionalBool(
             configuration["Projection:Graph:Providers:InMemory:Enabled"],
             fallbackValue: !enableNeo4jGraph);
 
-        EnforceDocumentProviderPolicy(configuration, enableInMemoryDocument);
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
-        var documentProviderCount = (enableElasticsearchDocument ? 1 : 0) + (enableInMemoryDocument ? 1 : 0);
-        if (documentProviderCount != 1)
-        {
-            throw new InvalidOperationException(
-                "Exactly one document projection provider must be enabled. Configure either Projection:Document:Providers:Elasticsearch:Enabled=true or Projection:Document:Providers:InMemory:Enabled=true.");
-        }
+        if (HasAllWorkflowDocumentReaders(services, documentProvider.Kind))
+            return services;
 
         var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
         if (graphProviderCount != 1)
@@ -50,7 +40,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
         }
 
-        if (enableElasticsearchDocument)
+        if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchDocumentStores(services, configuration);
         }
@@ -76,49 +66,127 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
-            keySelector: static document => document.RootActorId,
-            keyFormatter: static key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
-            keySelector: static document => document.RootActorId,
-            keyFormatter: static key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
-            keySelector: static report => report.RootActorId,
-            keyFormatter: static key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
-            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>>().Metadata,
-            keySelector: static document => document.Id,
-            keyFormatter: static key => key);
+        TryAddElasticsearchDocumentStore<WorkflowExecutionCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.RootActorId);
+        TryAddElasticsearchDocumentStore<WorkflowRunInsightReportDocument>(
+            services,
+            configuration,
+            static report => report.RootActorId);
+        TryAddElasticsearchDocumentStore<WorkflowActorBindingDocument>(
+            services,
+            configuration,
+            static document => document.Id);
+        TryAddElasticsearchDocumentStore<WorkflowCatalogCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.Id);
+        TryAddElasticsearchDocumentStore<WorkflowCapabilitiesStartupArtifact>(
+            services,
+            configuration,
+            static document => document.Id);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
-        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
-            keySelector: static document => document.RootActorId,
+        TryAddInMemoryDocumentStore<WorkflowExecutionCurrentStateDocument>(
+            services,
+            static document => document.RootActorId,
+            static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowRunInsightReportDocument>(
+            services,
+            static report => report.RootActorId,
+            static report => report.CreatedAt);
+        TryAddInMemoryDocumentStore<WorkflowActorBindingDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowCatalogCurrentStateDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowCapabilitiesStartupArtifact>(
+            services,
+            static document => document.Id,
+            static document => document.GeneratedAtUtc);
+    }
+
+    private static bool HasAllWorkflowDocumentReaders(
+        IServiceCollection services,
+        ProjectionDocumentProviderKind providerKind)
+    {
+        return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowCapabilitiesStartupArtifact>(services, providerKind);
+    }
+
+    private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        return services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<TDocument, string>));
+    }
+
+    private static bool HasDocumentReaderForProvider<TDocument>(
+        IServiceCollection services,
+        ProjectionDocumentProviderKind providerKind)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        return providerKind switch
+        {
+            ProjectionDocumentProviderKind.Elasticsearch => services.Any(x => x.ServiceType == typeof(ElasticsearchProjectionDocumentStore<TDocument, string>)),
+            ProjectionDocumentProviderKind.InMemory => services.Any(x => x.ServiceType == typeof(InMemoryProjectionDocumentStore<TDocument, string>)),
+            _ => false,
+        };
+    }
+
+    private static void EnsureCompatibleDocumentReaderProvider<TDocument>(
+        IServiceCollection services,
+        ProjectionDocumentProviderKind providerKind)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        if (!HasAnyDocumentReader<TDocument>(services))
+            return;
+        if (HasDocumentReaderForProvider<TDocument>(services, providerKind))
+            return;
+
+        throw new InvalidOperationException(
+            $"Projection document reader for {typeof(TDocument).Name} is already registered with a different provider.");
+    }
+
+    private static void TryAddElasticsearchDocumentStore<TDocument>(
+        IServiceCollection services,
+        IConfiguration configuration,
+        Func<TDocument, string> keySelector)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, ProjectionDocumentProviderKind.Elasticsearch);
+        if (HasDocumentReaderForProvider<TDocument>(services, ProjectionDocumentProviderKind.Elasticsearch))
+            return;
+
+        services.AddElasticsearchDocumentProjectionStore<TDocument, string>(
+            optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDocument>>().Metadata,
+            keySelector: keySelector,
+            keyFormatter: static key => key);
+    }
+
+    private static void TryAddInMemoryDocumentStore<TDocument>(
+        IServiceCollection services,
+        Func<TDocument, string> keySelector,
+        Func<TDocument, object?> defaultSortSelector)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        EnsureCompatibleDocumentReaderProvider<TDocument>(services, ProjectionDocumentProviderKind.InMemory);
+        if (HasDocumentReaderForProvider<TDocument>(services, ProjectionDocumentProviderKind.InMemory))
+            return;
+
+        services.AddInMemoryDocumentProjectionStore<TDocument, string>(
+            keySelector: keySelector,
             keyFormatter: static key => key,
-            defaultSortSelector: static document => document.UpdatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
-            keySelector: static document => document.RootActorId,
-            keyFormatter: static key => key,
-            defaultSortSelector: static document => document.UpdatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
-            keySelector: static report => report.RootActorId,
-            keyFormatter: static key => key,
-            defaultSortSelector: static report => report.CreatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
-            keySelector: static document => document.Id,
-            keyFormatter: static key => key,
-            defaultSortSelector: static document => document.UpdatedAt,
+            defaultSortSelector: defaultSortSelector,
             queryTakeMax: 200);
     }
 
@@ -135,19 +203,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         }
     }
 
-    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
-    {
-        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
-        var explicitEnabled = section["Enabled"];
-        var hasEndpoints = section
-            .GetSection("Endpoints")
-            .GetChildren()
-            .Select(x => x.Value?.Trim() ?? "")
-            .Any(x => x.Length > 0);
-
-        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
-    }
-
     private static bool ResolveNeo4jGraphEnabled(IConfiguration configuration)
     {
         var section = configuration.GetSection("Projection:Graph:Providers:Neo4j");
@@ -155,20 +210,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
 
         return ResolveOptionalBool(explicitEnabled, hasUri);
-    }
-
-    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
-        IConfiguration configuration)
-    {
-        var options = new ElasticsearchProjectionDocumentStoreOptions();
-        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
-        if (options.Endpoints.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
-        }
-
-        return options;
     }
 
     private static Neo4jProjectionGraphStoreOptions BuildNeo4jGraphOptions(IConfiguration configuration)
@@ -179,6 +220,13 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "Projection:Graph:Providers:Neo4j is enabled but Uri is empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.Password))
+        {
+            throw new InvalidOperationException(
+                "Projection:Graph:Providers:Neo4j is enabled but Password is empty. " +
+                "Inject it via environment variable AEVATAR_Projection__Graph__Providers__Neo4j__Password.");
         }
 
         return options;
@@ -199,24 +247,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             throw new InvalidOperationException(
                 "InMemory graph provider is not allowed by projection policy. " +
                 "Disable Projection:Graph:Providers:InMemory:Enabled and configure Neo4j.");
-        }
-    }
-
-    private static void EnforceDocumentProviderPolicy(
-        IConfiguration configuration,
-        bool enableInMemoryDocumentProvider)
-    {
-        var denyInMemoryDocumentProvider = ResolveOptionalBool(
-            configuration["Projection:Policies:DenyInMemoryDocumentReadStore"],
-            fallbackValue: false);
-        var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
-        var production = IsProductionEnvironment(environment);
-
-        if ((denyInMemoryDocumentProvider || production) && enableInMemoryDocumentProvider)
-        {
-            throw new InvalidOperationException(
-                "InMemory document provider is not allowed by projection policy. " +
-                "Disable Projection:Document:Providers:InMemory:Enabled and configure Elasticsearch.");
         }
     }
 
@@ -248,4 +278,5 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         return parsed;
     }
+
 }

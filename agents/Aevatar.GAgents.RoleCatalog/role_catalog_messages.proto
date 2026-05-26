@@ -1,0 +1,45 @@
+syntax = "proto3";
+package aevatar.gagents.role_catalog;
+option csharp_namespace = "Aevatar.GAgents.RoleCatalog";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message RoleDefinitionEntry {
+  string id = 1;
+  string name = 2;
+  string system_prompt = 3;
+  string provider = 4;
+  string model = 5;
+  repeated string connectors = 6;
+}
+
+message RoleDraftEntry {
+  RoleDefinitionEntry draft = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+}
+
+message RoleCatalogState {
+  repeated RoleDefinitionEntry roles = 1;
+  RoleDraftEntry draft = 2;  // null when no draft exists
+  int64 last_applied_event_version = 3;
+}
+
+// ─── Events ───
+
+message RoleCatalogSavedEvent {
+  repeated RoleDefinitionEntry roles = 1;
+  optional int64 expected_version = 2;  // unset = skip optimistic concurrency check
+}
+
+message RoleDraftSavedEvent {
+  RoleDefinitionEntry draft = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+  optional int64 expected_version = 3;  // unset = skip optimistic concurrency check
+}
+
+message RoleDraftDeletedEvent {
+  optional int64 expected_version = 1;  // unset = skip optimistic concurrency check
+}
+

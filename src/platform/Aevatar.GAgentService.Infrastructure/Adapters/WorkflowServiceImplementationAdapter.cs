@@ -7,11 +7,11 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
 public sealed class WorkflowServiceImplementationAdapter : IServiceImplementationAdapter
 {
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
 
-    public WorkflowServiceImplementationAdapter(IWorkflowRunActorPort workflowRunActorPort)
+    public WorkflowServiceImplementationAdapter(IWorkflowDefinitionParser workflowDefinitionParser)
     {
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
     }
 
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Workflow;
@@ -29,7 +29,7 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         var resolvedWorkflowName = spec.WorkflowName;
         if (string.IsNullOrWhiteSpace(resolvedWorkflowName))
         {
-            var parse = await _workflowRunActorPort.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

@@ -38,6 +38,7 @@ type InspectorNoticeLike = {
 type StudioInspectorPaneProps = {
   readonly draftYaml: string;
   readonly inspectorTab: StudioInspectorTab;
+  readonly showTabSwitcher?: boolean;
   readonly workflowRoleIds: string[];
   readonly workflowStepIds: string[];
   readonly workflowRoles: StudioGraphRole[];
@@ -467,6 +468,7 @@ function renderValidationState(
 const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
   draftYaml,
   inspectorTab,
+  showTabSwitcher = true,
   workflowRoleIds,
   workflowStepIds,
   workflowRoles,
@@ -1000,10 +1002,22 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         </div>
       </div>
     ) : (
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Select a role or step in the workflow graph."
-      />
+      <div
+        style={{
+          alignItems: 'center',
+          color: '#8C8C8C',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          justifyContent: 'center',
+          minHeight: 180,
+          textAlign: 'center',
+        }}
+      >
+        <Typography.Text type="secondary">
+          请先在画布里选择一个步骤或角色。
+        </Typography.Text>
+      </div>
     );
 
   const rolesInspectorContent =
@@ -1359,36 +1373,38 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         ))}
       </datalist>
 
-      <div style={sectionPanelStyle}>
-        <SectionHeader
-          title="Inspector views"
-          help="Switch between node edits, reusable roles, and the underlying YAML without leaving the current drawer."
-        />
-        <Space wrap size={[8, 8]}>
-          <Button
-            type={inspectorTab === 'node' ? 'primary' : 'default'}
-            disabled={!hasSelectedNode}
-            onClick={() => onSetInspectorTab('node')}
-          >
-            Node
-          </Button>
-          <Button
-            type={inspectorTab === 'roles' ? 'primary' : 'default'}
-            onClick={() => onSetInspectorTab('roles')}
-          >
-            Roles
-          </Button>
-          <Button
-            type={inspectorTab === 'yaml' ? 'primary' : 'default'}
-            onClick={() => onSetInspectorTab('yaml')}
-          >
-            YAML
-          </Button>
-          <Tag color={hasSelectedNode ? 'processing' : 'default'}>
-            {selectedNodeLabel}
-          </Tag>
-        </Space>
-      </div>
+      {showTabSwitcher ? (
+        <div style={sectionPanelStyle}>
+          <SectionHeader
+            title="Inspector views"
+            help="Switch between node edits, reusable roles, and the underlying YAML without leaving the current drawer."
+          />
+          <Space wrap size={[8, 8]}>
+            <Button
+              type={inspectorTab === 'node' ? 'primary' : 'default'}
+              disabled={!hasSelectedNode}
+              onClick={() => onSetInspectorTab('node')}
+            >
+              Node
+            </Button>
+            <Button
+              type={inspectorTab === 'roles' ? 'primary' : 'default'}
+              onClick={() => onSetInspectorTab('roles')}
+            >
+              Roles
+            </Button>
+            <Button
+              type={inspectorTab === 'yaml' ? 'primary' : 'default'}
+              onClick={() => onSetInspectorTab('yaml')}
+            >
+              YAML
+            </Button>
+            <Tag color={hasSelectedNode ? 'processing' : 'default'}>
+              {selectedNodeLabel}
+            </Tag>
+          </Space>
+        </div>
+      ) : null}
 
       {inspectorTab === 'node'
         ? nodeInspectorContent

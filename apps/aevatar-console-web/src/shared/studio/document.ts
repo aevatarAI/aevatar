@@ -199,6 +199,16 @@ function listRoleIds(document: StudioWorkflowDocument): string[] {
     : [];
 }
 
+function resolvePreferredGraphNodeId(document: StudioWorkflowDocument): string {
+  const firstStepId = listStepIds(document)[0];
+  if (firstStepId) {
+    return `step:${firstStepId}`;
+  }
+
+  const firstRoleId = listRoleIds(document)[0];
+  return firstRoleId ? `role:${firstRoleId}` : '';
+}
+
 function createUniqueRoleId(
   document: StudioWorkflowDocument,
   preferredBase: string,
@@ -464,12 +474,7 @@ export function removeStep(
   if (currentIndex < 0) {
     return {
       document,
-      nodeId:
-        steps[0]?.id
-          ? `step:${normalizeString(steps[0].id)}`
-          : roles[0]?.id
-            ? `role:${normalizeString(roles[0].id)}`
-            : '',
+      nodeId: resolvePreferredGraphNodeId(document),
     };
   }
 
@@ -514,6 +519,41 @@ export function removeStep(
         ? `role:${fallbackRoleId}`
         : '',
   };
+}
+
+export function removeSteps(
+  document: StudioWorkflowDocument,
+  stepIds: readonly string[],
+): { document: StudioWorkflowDocument; nodeId: string } {
+  const normalizedStepIds = Array.from(
+    new Set(stepIds.map((stepId) => normalizeString(stepId)).filter(Boolean)),
+  );
+  if (normalizedStepIds.length === 0) {
+    return {
+      document,
+      nodeId: resolvePreferredGraphNodeId(document),
+    };
+  }
+
+  const stepIdSet = new Set(normalizedStepIds);
+  const orderedStepIds = listStepIds(document).filter((stepId) => stepIdSet.has(stepId));
+  if (orderedStepIds.length === 0) {
+    return {
+      document,
+      nodeId: resolvePreferredGraphNodeId(document),
+    };
+  }
+
+  let nextResult: { document: StudioWorkflowDocument; nodeId: string } = {
+    document,
+    nodeId: resolvePreferredGraphNodeId(document),
+  };
+
+  for (const stepId of orderedStepIds) {
+    nextResult = removeStep(nextResult.document, stepId);
+  }
+
+  return nextResult;
 }
 
 export function suggestBranchLabelForStep(

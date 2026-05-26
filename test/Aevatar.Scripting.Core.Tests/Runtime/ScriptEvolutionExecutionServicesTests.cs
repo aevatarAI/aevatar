@@ -308,7 +308,7 @@ public class ScriptEvolutionExecutionServicesTests
     {
         public List<RollbackCall> RollbackCalls { get; } = [];
 
-        public Task PromoteCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -326,10 +326,13 @@ public class ScriptEvolutionExecutionServicesTests
             _ = sourceHash;
             _ = proposalId;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-created",
+                "catalog-command-1",
+                proposalId));
         }
 
-        public Task PromoteCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -349,7 +352,7 @@ public class ScriptEvolutionExecutionServicesTests
                 proposalId,
                 ct);
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -365,10 +368,13 @@ public class ScriptEvolutionExecutionServicesTests
                 targetRevision,
                 expectedCurrentRevision,
                 string.Empty));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-created",
+                "catalog-rollback-command-1",
+                proposalId));
         }
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -387,7 +393,10 @@ public class ScriptEvolutionExecutionServicesTests
                 targetRevision,
                 expectedCurrentRevision,
                 scopeId ?? string.Empty));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-created",
+                "catalog-rollback-command-1",
+                proposalId));
         }
     }
 

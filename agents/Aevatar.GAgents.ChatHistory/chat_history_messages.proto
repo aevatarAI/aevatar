@@ -1,0 +1,64 @@
+syntax = "proto3";
+package aevatar.gagents.chathistory;
+option csharp_namespace = "Aevatar.GAgents.ChatHistory";
+
+// ─── Shared Types ───
+
+message StoredChatMessageProto {
+  string id = 1;
+  string role = 2;
+  string content = 3;
+  int64 timestamp = 4;
+  string status = 5;
+  string error = 6;
+  string thinking = 7;
+}
+
+message ConversationMetaProto {
+  string id = 1;
+  string title = 2;
+  string service_id = 3;
+  string service_kind = 4;
+  int64 created_at_ms = 5;
+  int64 updated_at_ms = 6;
+  int32 message_count = 7;
+  string llm_route = 8;
+  string llm_model = 9;
+}
+
+// ─── ChatConversationGAgent State ───
+
+message ChatConversationState {
+  repeated StoredChatMessageProto messages = 1;
+  ConversationMetaProto meta = 2;
+}
+
+// ─── ChatConversationGAgent Events ───
+
+message MessagesReplacedEvent {
+  repeated StoredChatMessageProto messages = 1;
+  ConversationMetaProto meta = 2;
+  string scope_id = 3;
+}
+
+message ConversationDeletedEvent {
+  string conversation_id = 1;
+  string scope_id = 2;
+}
+
+// ─── ChatHistoryIndexGAgent State ───
+
+message ChatHistoryIndexState {
+  repeated ConversationMetaProto conversations = 1;
+}
+
+// ─── ChatHistoryIndexGAgent Events ───
+
+message ConversationUpsertedEvent {
+  ConversationMetaProto meta = 1;
+}
+
+message ConversationRemovedEvent {
+  string conversation_id = 1;
+}
+

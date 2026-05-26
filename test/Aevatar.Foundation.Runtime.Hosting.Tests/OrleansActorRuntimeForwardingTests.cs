@@ -17,6 +17,37 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansActorRuntimeForwardingTests
 {
     [Fact]
+    public async Task CreateByKindAsync_WithExplicitId_ShouldInitializeTrimmedKindAndReturnOrleansActor()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+
+        var actor = await runtime.CreateByKindAsync("  workflow.assistant-role  ", "role:assistant");
+
+        actor.Should().BeOfType<OrleansActor>();
+        actor.Id.Should().Be("role:assistant");
+        grains.Should().ContainKey("role:assistant");
+        grains["role:assistant"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.assistant-role");
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenInitializationFails_ShouldThrow()
+    {
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.ExistsAsync("role:assistant");
+        grains["role:assistant"].InitializeAgentByKindResult = false;
+
+        var act = () => runtime.CreateByKindAsync("workflow.assistant-role", "role:assistant");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Failed to initialize Orleans actor role:assistant for kind 'workflow.assistant-role'.*");
+        grains["role:assistant"].InitializedKinds.Should()
+            .ContainSingle()
+            .Which.Should().Be("workflow.assistant-role");
+    }
+
+    [Fact]
     public async Task LinkAsync_ShouldRegisterForwardingBinding_AndUpdateTopology()
     {
         var runtime = CreateRuntime(out var registry, out var grains, out _);
@@ -51,6 +82,22 @@ public sealed class OrleansActorRuntimeForwardingTests
         var runtime = CreateRuntime(out _, out var grains, out _);
 
         await runtime.LinkAsync("parent", "child");
+
+        grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        RequestContext.ReentrancyId.Should().Be(Guid.Empty);
+    }
+
+    [Fact]
+    public async Task UnlinkAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
+    {
+        RequestContext.Clear();
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.LinkAsync("parent", "child");
+        grains["parent"].ObservedReentrancyIds.Clear();
+        grains["child"].ObservedReentrancyIds.Clear();
+
+        await runtime.UnlinkAsync("child");
 
         grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
         grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
@@ -128,6 +175,25 @@ public sealed class OrleansActorRuntimeForwardingTests
         await runtime.DestroyAsync("actor-1");
 
         callbackSchedulerGrains["actor-1"].PurgeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
+    {
+        RequestContext.Clear();
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.LinkAsync("parent", "middle");
+        await runtime.LinkAsync("middle", "child");
+        grains["parent"].ObservedReentrancyIds.Clear();
+        grains["middle"].ObservedReentrancyIds.Clear();
+        grains["child"].ObservedReentrancyIds.Clear();
+
+        await runtime.DestroyAsync("middle");
+
+        grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["middle"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        RequestContext.ReentrancyId.Should().Be(Guid.Empty);
     }
 
     private static OrleansActorRuntime CreateRuntime(
@@ -213,8 +279,11 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public bool Initialized { get; set; } = true;
 
+        public bool InitializeAgentByKindResult { get; set; } = true;
+
         public List<string> Calls { get; } = [];
         public List<Guid> ObservedReentrancyIds { get; } = [];
+        public List<string> InitializedKinds { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
 
@@ -223,6 +292,13 @@ public sealed class OrleansActorRuntimeForwardingTests
             _ = agentTypeName;
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             return Task.FromResult(true);
+        }
+
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            InitializedKinds.Add(kind);
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return Task.FromResult(InitializeAgentByKindResult);
         }
 
         public Task<bool> IsInitializedAsync()
@@ -285,6 +361,9 @@ public sealed class OrleansActorRuntimeForwardingTests
         public Task<string> GetAgentTypeNameAsync() =>
             Task.FromResult(string.Empty);
 
+        public Task<string> GetAgentKindAsync() =>
+            Task.FromResult(string.Empty);
+
         public Task DeactivateAsync()
         {
             Calls.Add("Deactivate");
@@ -316,12 +395,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = deliveryMode;
             throw new NotSupportedException();
@@ -329,23 +408,27 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task<long> ScheduleTimerAsync(
             string callbackId,
-            byte[] envelopeBytes,
+            EventEnvelope triggerEnvelope,
             int dueTimeMs,
             int periodMs,
             RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
+            _ = triggerEnvelope;
             _ = dueTimeMs;
             _ = periodMs;
             _ = deliveryMode;
             throw new NotSupportedException();
         }
 
-        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        public Task CancelAsync(
+            string callbackId,
+            long expectedGeneration = 0,
+            int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
         {
             _ = callbackId;
             _ = expectedGeneration;
+            _ = expectedSlotEpoch;
             return Task.CompletedTask;
         }
 

@@ -111,7 +111,7 @@ const LoginPage: React.FC = () => {
     <div style={pageStyle}>
       <Card style={cardStyle}>
         <Space
-          direction="vertical"
+          orientation="vertical"
           size={24}
           style={{ width: '100%', textAlign: 'center' }}
         >
@@ -121,7 +121,7 @@ const LoginPage: React.FC = () => {
               Aevatar Console
             </Typography.Title>
           </div>
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
             <Typography.Title level={4} style={{ marginBottom: 0 }}>
               Sign in with NyxID
             </Typography.Title>

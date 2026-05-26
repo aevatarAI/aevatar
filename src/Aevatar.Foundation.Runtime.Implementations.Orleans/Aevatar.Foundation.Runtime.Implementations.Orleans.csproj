@@ -31,4 +31,7 @@
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
     <PackageReference Include="Google.Protobuf" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Foundation.Runtime.Hosting.Tests" />
+  </ItemGroup>
 </Project>

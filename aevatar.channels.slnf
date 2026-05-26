@@ -1,0 +1,12 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "agents\\Aevatar.GAgents.Channel.Abstractions\\Aevatar.GAgents.Channel.Abstractions.csproj",
+      "agents\\channels\\Aevatar.GAgents.Channel.NyxIdRelay\\Aevatar.GAgents.Channel.NyxIdRelay.csproj",
+      "agents\\Aevatar.GAgents.Channel.Runtime\\Aevatar.GAgents.Channel.Runtime.csproj",
+      "test\\Aevatar.GAgents.Channel.Testing\\Aevatar.GAgents.Channel.Testing.csproj",
+      "test\\Aevatar.GAgents.Channel.Protocol.Tests\\Aevatar.GAgents.Channel.Protocol.Tests.csproj"
+    ]
+  }
+}

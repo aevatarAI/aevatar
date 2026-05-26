@@ -1,5 +1,5 @@
 import type { ServiceBindingSnapshot } from "@/shared/models/governance";
-import type { StudioScopeBindingRevision } from "@/shared/studio/models";
+import type { StudioMemberBindingRevision } from "@/shared/studio/models";
 
 export interface ScopeServiceBindingInput {
   readonly bindingId: string;
@@ -32,7 +32,7 @@ export interface ScopeServiceRevisionCatalogSnapshot {
   readonly catalogStateVersion: number;
   readonly catalogLastEventId: string;
   readonly updatedAt: string | null;
-  readonly revisions: readonly StudioScopeBindingRevision[];
+  readonly revisions: readonly StudioMemberBindingRevision[];
 }
 
 export interface ScopeServiceRevisionActionResult {
@@ -40,6 +40,32 @@ export interface ScopeServiceRevisionActionResult {
   readonly serviceId: string;
   readonly revisionId: string;
   readonly status: string;
+}
+
+export interface ScopeServiceEndpointContract {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly memberId?: string;
+  readonly publishedServiceId?: string;
+  readonly endpointId: string;
+  readonly invokePath: string;
+  readonly method: string;
+  readonly requestContentType: string;
+  readonly responseContentType: string;
+  readonly requestTypeUrl: string;
+  readonly responseTypeUrl: string;
+  readonly supportsSse: boolean;
+  readonly supportsWebSocket: boolean;
+  readonly supportsAguiFrames: boolean;
+  readonly streamFrameFormat: string | null;
+  readonly smokeTestSupported: boolean;
+  readonly defaultSmokeInputMode: "prompt" | "typed-payload";
+  readonly defaultSmokePrompt: string | null;
+  readonly sampleRequestJson: string | null;
+  readonly deploymentStatus: string;
+  readonly revisionId: string;
+  readonly curlExample: string | null;
+  readonly fetchExample: string | null;
 }
 
 export interface ScopeServiceRunSummary {
@@ -165,7 +191,7 @@ export type ScopeServiceBindingCatalogSnapshot = {
 
 export function getScopeServiceCurrentRevision(
   catalog: ScopeServiceRevisionCatalogSnapshot | null | undefined,
-): StudioScopeBindingRevision | null {
+): StudioMemberBindingRevision | null {
   if (!catalog?.revisions.length) {
     return null;
   }

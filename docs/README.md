@@ -6,17 +6,26 @@
 
 Authoritative architecture and developer guides. Each covers one topic.
 
+- [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
+- [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
+- [/daily Command Pipeline — Test Reference](canon/daily-command-pipeline.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
+- [Aevatar 前端设计基线](canon/frontend-design.md)
+- [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
+- [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
+- [NyxID Responses 直连](canon/nyxid-responses-direct.md)
+- [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
+- [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -24,13 +33,29 @@ Authoritative architecture and developer guides. Each covers one topic.
 
 Immutable records of architectural choices and their rationale.
 
-- [Aevatar 项目拆分策略（2026-02-21）](decisions/0001-project-split-strategy.md)
-- [Aevatar Mainnet 架构说明](decisions/0002-mainnet-architecture.md)
-- [Orleans Kafka Provider Backend Architecture](decisions/0003-kafka-transport.md)
-- [基于当前代码现状的 Aevatar AI App 平台组织建议（2026-03-25）](decisions/0004-platform-organization.md)
-- [Aevatar User-Scoped Service 极简架构草案（2026-03-26）](decisions/0005-user-scoped-service.md)
-- [Workflow 调度 Actor 化 & 多智能体协作演进方案](decisions/0006-multi-agent-evolution.md)
-- [Aevatar Stream Forward 架构说明（2026-02-22）](decisions/0007-stream-forward.md)
+- [Aevatar 项目拆分策略（2026-02-21）](adr/0001-project-split-strategy.md)
+- [Aevatar Mainnet 架构说明](adr/0002-mainnet-architecture.md)
+- [Orleans Kafka Provider Backend Architecture](adr/0003-kafka-transport.md)
+- [Workflow 调度 Actor 化 & 多智能体协作演进方案](adr/0006-multi-agent-evolution.md)
+- [Aevatar Stream Forward 架构说明（2026-02-22）](adr/0007-stream-forward.md)
+- [Channel Runtime Multi-Token Credential Routing](adr/0008-channel-runtime-multi-token-routing.md)
+- [Channel Bot Callback Architecture — Lessons from Lark Integration](adr/0009-channel-bot-callback-architecture.md)
+- [Channel Phase 0 Persistent Provider Validation Result](adr/0010-channel-phase0-provider-validation.md)
+- [Lark Nyx Relay Webhook Topology](adr/0011-lark-nyx-relay-webhook.md)
+- [Channel Runtime Credential Boundary](adr/0012-channel-runtime-credential-boundary.md)
+- [Unified Channel Inbound Backbone](adr/0013-unified-channel-inbound-backbone.md)
+- [Channel Interactive Reply Abstraction](adr/0014-interactive-reply-abstraction.md)
+- [AGUI / SSE Projection Session Pipeline](adr/0015-agui-sse-projection-session-pipeline.md)
+- [Studio Member-First Published Service Identity](adr/0016-studio-member-first-published-service.md)
+- [Studio Team as First-Class Aggregate Under Scope](adr/0017-studio-team-first-class-aggregate.md)
+- [Per-User NyxID Binding via OAuth Broker](adr/0018-per-user-nyxid-binding-via-oauth-broker.md)
+- [0019 — Stable AgentKind identity replaces CLR-name actor identity](adr/0019-stable-agent-kind-identity.md)
+- [0020 — Actor state schema version lives on the runtime envelope](adr/0020-actor-state-version-placement.md)
+- [Lark Reply Chain Completion Semantics](adr/0021-lark-reply-chain-completion-semantics.md)
+- [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
+- [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
+- [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
+- [Voice Router Integration - Policy-Aware WebSocket Boundary](adr/0025-voice-router-integration.md)
 
 ## History
 
@@ -39,22 +64,34 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ### 2026-03
 
 - [chatbot-3rd-party-spec](history/2026-03/chatbot-3rd-party-spec.md)
-- [console-design-system](history/2026-03/console-design-system.md)
 - [external-link-framework](history/2026-03/external-link-framework.md)
 - [maf-integration](history/2026-03/maf-integration.md)
-- [projection-links-analysis](history/2026-03/projection-links-analysis.md)
-- [readmodel-protobuf-refactor](history/2026-03/readmodel-protobuf-refactor.md)
-- [studio-boundary-separation](history/2026-03/studio-boundary-separation.md)
 - [workflow-call-refactor](history/2026-03/workflow-call-refactor.md)
 
 ### 2026-04
 
+- [2026-04-09-scripting-authority-write-path-cqrs-closure](history/2026-04/2026-04-09-scripting-authority-write-path-cqrs-closure.md)
+- [2026-04-17-issue-204-agui-sse-projection-session-design](history/2026-04/2026-04-17-issue-204-agui-sse-projection-session-design.md)
+- [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
+- [2026-04-27-registry-ownership-ports-design](history/2026-04/2026-04-27-registry-ownership-ports-design.md)
+- [2026-04-30-studio-member-bind-async-protocol-design](history/2026-04/2026-04-30-studio-member-bind-async-protocol-design.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
 
+### 2026-05
+
+- [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
+- [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
+- [2026-05-19-issue-616-binding-readiness-observation-design](history/2026-05/2026-05-19-issue-616-binding-readiness-observation-design.md)
+
 ## Audit Scorecard
 
-- [TEMPLATE.md](audit-scorecard/TEMPLATE.md)
+- [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
+- [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
+- [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
+- [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
+- [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
+- [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates
 

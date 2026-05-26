@@ -2,8 +2,10 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -13,7 +15,14 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
+using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +30,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Bootstrap.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class AIFeatureBootstrapCoverageTests
 {
     [Fact]
@@ -98,6 +108,7 @@ public class AIFeatureBootstrapCoverageTests
 
         using var provider = services.BuildServiceProvider();
         provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
+        provider.GetService<IVoiceToolInvoker>().Should().NotBeNull();
 
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
         llmFactory.GetDefault().Name.Should().Be("deepseek");
@@ -125,6 +136,98 @@ public class AIFeatureBootstrapCoverageTests
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
 
         llmFactory.Should().BeOfType<FailoverLLMProviderFactory>();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenVoicePresenceOpenAIConfigured_ShouldRegisterVoicePresenceModuleFactory()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.OpenAIProvider = new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                ApiKey = "voice-openai-key",
+            };
+            options.VoicePresence.OpenAISession = new VoiceSessionConfig
+            {
+                Voice = "alloy",
+                SampleRateHz = 24000,
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+        provider.GetRequiredService<IVoiceToolCatalog>()
+            .Should().BeOfType<AgentToolVoiceCatalog>();
+        provider.GetRequiredService<IVoicePresenceSessionResolver>()
+            .Should().BeOfType<ActorOwnedVoicePresenceSessionResolver>();
+        provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
+            .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
+            .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceTransportAttachmentPort>()
+            .Should().BeOfType<UnavailableVoicePresenceTransportAttachmentPort>();
+
+        factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
+        defaultModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeTrue();
+        openAIModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_minicpm", out var miniCpmModule).Should().BeFalse();
+        miniCpmModule.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenVoicePresenceMiniCpmConfiguredAsDefault_ShouldCreateDefaultAlias()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["OPENAI_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.DefaultProvider = "minicpm-o";
+            options.VoicePresence.MiniCPMProvider = new VoiceProviderConfig
+            {
+                ProviderName = "minicpm-o",
+                Endpoint = "https://minicpm.example.com",
+            };
+            options.VoicePresence.MiniCPMSession = new VoiceSessionConfig
+            {
+                SampleRateHz = 16000,
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
+        defaultModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_minicpm_o", out var miniCpmModule).Should().BeTrue();
+        miniCpmModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeFalse();
+        openAIModule.Should().BeNull();
     }
 
     [Fact]
@@ -299,6 +402,37 @@ public class AIFeatureBootstrapCoverageTests
 
         llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("nyxid");
         llmFactory.GetDefault().Name.Should().Be("nyxid");
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenSecretsStoreOptionAbsent_ShouldUseDIRegisteredStore()
+    {
+        // Mainnet path: a host registers IAevatarSecretsStore (e.g. the
+        // read-only EnvironmentSecretsStore) into DI but does not pass
+        // options.SecretsStore. Before the fix, AddAevatarAIFeatures fell
+        // back to `new AevatarSecretsStore()` which re-opens secrets.json
+        // from disk. This asserts that the DI-registered store is honored.
+        var diRegistered = new InMemorySecretsStore(new Dictionary<string, string>
+        {
+            ["LLMProviders:Providers:deepseek:ApiKey"] = "from-di-registered-store",
+            ["LLMProviders:Providers:deepseek:ProviderType"] = "deepseek",
+            ["LLMProviders:Default"] = "deepseek",
+        });
+        var services = new ServiceCollection();
+        services.AddSingleton<IAevatarSecretsStore>(diRegistered);
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = false;
+            // intentionally leave options.SecretsStore = null
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("deepseek");
+        llmFactory.GetDefault().Name.Should().Be("deepseek");
     }
 
     [Fact]
@@ -514,5 +648,23 @@ public class AIFeatureBootstrapCoverageTests
         var json = JsonSerializer.Serialize(values);
         File.WriteAllText(path, json);
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+    }
+
+    private sealed class NoOpActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class EmptyVoicePresenceCapabilityReader
+        : IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>
+    {
+        public Task<VoicePresenceCapabilityReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<VoicePresenceCapabilityReadModel?>(null);
+
+        public Task<ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionDocumentQueryResult<VoicePresenceCapabilityReadModel>.Empty);
     }
 }

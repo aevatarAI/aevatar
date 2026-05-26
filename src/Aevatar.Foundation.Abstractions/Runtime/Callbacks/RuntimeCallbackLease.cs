@@ -4,4 +4,7 @@ public sealed record RuntimeCallbackLease(
     string ActorId,
     string CallbackId,
     long Generation,
-    RuntimeCallbackBackend Backend);
+    RuntimeCallbackBackend Backend)
+{
+    public int SlotEpoch { get; init; }
+}

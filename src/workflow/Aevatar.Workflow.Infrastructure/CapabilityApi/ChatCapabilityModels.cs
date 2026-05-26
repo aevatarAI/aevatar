@@ -13,16 +13,12 @@ public sealed record ChatInput
     /// <summary>Structured multimodal input parts for this chat run.</summary>
     public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
 
-    /// <summary>
-    /// Workflow identifier lookup (built-ins and file-loaded workflows).
-    /// This field does not accept inline YAML semantics.
-    /// </summary>
+    public WorkflowChatSourceInput? Source { get; init; }
+
+    /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
     public string? Workflow { get; init; }
 
-    /// <summary>
-    /// Existing workflow definition source actor id for a new run.
-    /// Resume/signal APIs must target the returned run actor id instead.
-    /// </summary>
+    /// <summary>Legacy workflow definition source actor id. Prefer <see cref="Source"/>.</summary>
     public string? AgentId { get; init; }
 
     /// Optional client-controlled session identifier for downstream chat correlation.
@@ -45,14 +41,38 @@ public sealed record ChatInput
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
 
     /// <summary>
-    /// Optional workflow scope identifier. Prefer this typed field over metadata keys.
+    /// Optional workflow scope identifier.
     /// </summary>
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     public string? ScopeId { get; init; }
 
     /// <summary>
     /// Optional run metadata passthrough for internal bridge integrations.
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
+
+    public ChatLlmControlInput? LlmControl { get; init; }
+}
+
+public sealed record ChatLlmControlInput
+{
+    public string? NyxIdAccessToken { get; init; }
+    public string? NyxIdOrgToken { get; init; }
+    public string? SenderNyxIdAccessToken { get; init; }
+    public string? ModelOverride { get; init; }
+    public string? NyxIdRoutePreference { get; init; }
+    public int? MaxToolRoundsOverride { get; init; }
+    public string? UserMemoryPrompt { get; init; }
+}
+
+public sealed record WorkflowChatSourceInput
+{
+    public string? Kind { get; init; }
+    public string? WorkflowName { get; init; }
+    public string? ActorId { get; init; }
+    public IReadOnlyList<string>? WorkflowYamls { get; init; }
 }
 
 public sealed record ChatInputContentPart
@@ -73,6 +93,8 @@ public sealed record WorkflowResumeInput
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
+    public string? EditedContent { get; init; }
+    public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 

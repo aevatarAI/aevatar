@@ -1,0 +1,42 @@
+using Aevatar.GAgents.Channel.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+namespace Aevatar.GAgents.Platform.Lark;
+
+/// <summary>
+/// DI registration entry point for the Lark platform package: HTTP client, message
+/// composer, native message producer, and payload redactor.
+/// </summary>
+public static class LarkPlatformServiceCollectionExtensions
+{
+    /// <summary>
+    /// Registers the Lark platform services: a named <see cref="HttpClient"/> for the
+    /// proxied Lark host, the Lark <see cref="IMessageComposer"/> /
+    /// <see cref="IChannelNativeMessageProducer"/> pair, and the payload redactor.
+    /// </summary>
+    public static IServiceCollection AddLarkPlatform(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        // Refactor (iter20/cluster-003):
+        //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
+        //   New principle: delete orphan path,NyxID relay 唯一 ingress
+        //
+        // AddLarkPlatform stays as an outbound/rendering composition hook. It must not
+        // start a Lark-local inbound worker or own conversation ingress state.
+        services.AddHttpClient(LarkConversationHostDefaults.HttpClientName, client =>
+        {
+            client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
+        });
+        services.TryAddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
+            sp => sp.GetRequiredService<LarkMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
+        services.TryAddSingleton<LarkPayloadRedactor>();
+
+        return services;
+    }
+}

@@ -171,8 +171,7 @@ public class MultimodalPipelineTests
             {
                 Messages = history.BuildMessages("You are a helpful assistant."),
                 Tools = null,
-            },
-            streamBufferCapacity: 64);
+            });
     }
 
     private sealed class StreamingProvider : ILLMProvider
@@ -180,9 +179,6 @@ public class MultimodalPipelineTests
         private readonly IReadOnlyList<LLMStreamChunk> _chunks;
         public StreamingProvider(IReadOnlyList<LLMStreamChunk> chunks) => _chunks = chunks;
         public string Name => "streaming-test";
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new LLMResponse { Content = "response" });
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

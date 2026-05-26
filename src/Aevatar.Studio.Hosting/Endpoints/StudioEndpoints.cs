@@ -3,13 +3,13 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Storage;
-using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
@@ -17,6 +17,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
@@ -24,23 +25,29 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal static class StudioEndpoints
 {
+    private const string AuthenticationSectionName = "Aevatar:Authentication";
+
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
         app.MapGet("/api/auth/me", HandleGetAuthMeAsync)
-            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK);
+            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/health", HandleGetHealthAsync)
             .WithTags("Health")
             .WithName("GetAppHealth")
             .WithSummary("Get readiness status for the current app-facing API surface.")
             .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
-            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable);
+            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable)
+            .AllowAnonymous();
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapGet("/api/studio/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
             .WithTags("Studio")
-            .Produces<AppContextResponse>(StatusCodes.Status200OK);
+            .Produces<AppContextResponse>(StatusCodes.Status200OK)
+            .AllowAnonymous();
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
@@ -94,6 +101,13 @@ internal static class StudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetScopedScriptCatalogAsync(http, scriptId, services, ct));
+        app.MapPost("/api/app/scripts/{scriptId}/save-observation", (
+            HttpContext http,
+            string scriptId,
+            AppScopeScriptSaveObservationRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleObserveScopedScriptSaveAsync(http, scriptId, request, services, ct));
         app.MapPost("/api/app/scripts", (
             HttpContext http,
             AppScopeScriptSaveRequest request,
@@ -116,11 +130,11 @@ internal static class StudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetAppScriptEvolutionDecisionAsync(proposalId, services, ct));
-        app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
+        app.MapGet("/api/app/scripts/runtimes/{actorId}/activity", (
             string actorId,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleGetAppScriptReadModelAsync(actorId, services, ct));
+            HandleGetAppScriptRuntimeActivityAsync(actorId, services, ct));
 
         app.MapPost("/api/scopes/{scopeId}/scripts/draft-run", (
             HttpContext http,
@@ -176,17 +190,100 @@ internal static class StudioEndpoints
         var scopeResolver = http.RequestServices.GetService<IAppScopeResolver>();
         var scope = scopeResolver?.Resolve(http);
         var schemeProvider = http.RequestServices.GetService<IAuthenticationSchemeProvider>();
-        var authEnabled = schemeProvider != null &&
-                          (await schemeProvider.GetAllSchemesAsync())
-                          .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var configuration = http.RequestServices.GetService<IConfiguration>();
+        var schemes = schemeProvider == null
+            ? Array.Empty<AuthenticationScheme>()
+            : (await schemeProvider.GetAllSchemesAsync()).ToArray();
+        var authEnabled = schemes.Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
+        var providerDisplayName = ResolveAuthProviderDisplayName(configuration, schemes);
+        var loginUrl = authEnabled
+            ? AppApiErrors.BuildLoginUrl("/")
+            : null;
+        var logoutUrl = authEnabled
+            ? BuildLogoutUrl("/")
+            : null;
+        var invokeAuthMode = ResolveInvokeAuthMode(authEnabled, isAuthenticated);
+        var externalCallerHint = BuildExternalCallerHint(
+            providerDisplayName,
+            authEnabled,
+            invokeAuthMode);
 
         return new AppAuthMeResponse(
             Enabled: authEnabled,
             Authenticated: isAuthenticated,
+            ProviderDisplayName: providerDisplayName,
+            LoginUrl: loginUrl,
+            LogoutUrl: logoutUrl,
             Name: user?.Identity?.Name,
             Email: user?.FindFirst("email")?.Value,
+            InvokeAuthMode: invokeAuthMode,
+            ExternalCallerHint: externalCallerHint,
             ScopeId: scope?.ScopeId,
             ScopeSource: scope?.Source);
+    }
+
+    private static string? ResolveAuthProviderDisplayName(
+        IConfiguration? configuration,
+        IReadOnlyList<AuthenticationScheme> schemes)
+    {
+        var nyxIdAuthority = configuration?["Cli:App:NyxId:Authority"]
+            ?? configuration?["Aevatar:NyxId:Authority"]
+            ?? configuration?[$"{AuthenticationSectionName}:Authority"];
+        if (!string.IsNullOrWhiteSpace(nyxIdAuthority) &&
+            nyxIdAuthority.Contains("nyx", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NyxID";
+        }
+
+        if (schemes.Count == 0)
+            return null;
+
+        var scheme = schemes
+            .FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.DisplayName) || !string.IsNullOrWhiteSpace(item.Name));
+        if (scheme == null)
+            return null;
+
+        var displayName = string.IsNullOrWhiteSpace(scheme.DisplayName)
+            ? scheme.Name
+            : scheme.DisplayName;
+        return string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+    }
+
+    private static string BuildLogoutUrl(string returnUrl)
+    {
+        var normalizedReturnUrl = string.IsNullOrWhiteSpace(returnUrl)
+            ? "/"
+            : returnUrl.Trim();
+        return $"/auth/logout?returnUrl={Uri.EscapeDataString(normalizedReturnUrl)}";
+    }
+
+    private static string ResolveInvokeAuthMode(bool authEnabled, bool isAuthenticated) =>
+        !authEnabled
+            ? "anonymous"
+            : isAuthenticated
+                ? "studio-session"
+                : "bearer-token";
+
+    private static string? BuildExternalCallerHint(
+        string? providerDisplayName,
+        bool authEnabled,
+        string invokeAuthMode)
+    {
+        if (!authEnabled)
+            return "Invoke requests are accepted without authentication.";
+
+        var providerLabel = string.IsNullOrWhiteSpace(providerDisplayName)
+            ? "the configured identity provider"
+            : providerDisplayName.Trim();
+        return invokeAuthMode switch
+        {
+            "studio-session" =>
+                $"Studio invoke uses your current {providerLabel} session. External callers should send Authorization: Bearer <token> from the same provider.",
+            "bearer-token" =>
+                $"Sign in with {providerLabel} to establish a Studio session, or call the invoke endpoints directly with Authorization: Bearer <token>.",
+            _ =>
+                $"Use {providerLabel} credentials when the invoke endpoints require authentication.",
+        };
     }
 
     private static async Task<IResult> HandleGetHealthAsync(
@@ -284,8 +381,9 @@ internal static class StudioEndpoints
             });
         }
 
-        var source = AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.Source);
-        if (string.IsNullOrWhiteSpace(source))
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.Source);
+        var primarySource = scriptPackage.GetPrimaryCSharpSource();
+        if (string.IsNullOrWhiteSpace(primarySource))
         {
             return Results.BadRequest(new
             {
@@ -303,15 +401,13 @@ internal static class StudioEndpoints
         var runtimeActorId = string.IsNullOrWhiteSpace(request.RuntimeActorId)
             ? $"app-script-runtime:{scopeToken}:{scriptId}:{revision}"
             : request.RuntimeActorId.Trim();
-        var sourceHash = AppScriptPackagePayloads.ComputeSourceHash(request.Package, source);
 
         try
         {
             var upsert = await definitionPort.UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
-                source,
-                sourceHash,
+                scriptPackage,
                 definitionActorId,
                 normalizedScopeId,
                 ct);
@@ -348,9 +444,9 @@ internal static class StudioEndpoints
                 definitionActorId = upsert.ActorId,
                 runtimeActorId = resolvedRuntimeActorId,
                 runId,
-                sourceHash,
+                sourceHash = upsert.Snapshot.SourceHash,
                 commandTypeUrl = payload.TypeUrl,
-                readModelUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
+                activityUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/activity",
             });
         }
         catch (InvalidOperationException ex)
@@ -581,7 +677,55 @@ internal static class StudioEndpoints
 
         try
         {
-            return Results.Ok(await service.SaveAsync(scopeContext.ScopeId, request, ct));
+            var accepted = await service.SaveAsync(scopeContext.ScopeId, request, ct);
+            return Results.Accepted(
+                uri: $"/api/app/scripts/{Uri.EscapeDataString(accepted.ScriptId)}/save-observation",
+                value: accepted);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleObserveScopedScriptSaveAsync(
+        HttpContext http,
+        string scriptId,
+        AppScopeScriptSaveObservationRequest request,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script management requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            return Results.Ok(await service.ObserveSaveAsync(scopeContext.ScopeId, scriptId, request, ct));
         }
         catch (AppApiException ex)
         {
@@ -607,14 +751,14 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
         try
         {
-            return Results.Ok(await service.ListRuntimeSnapshotsAsync(take, ct));
+            return Results.Ok(await service.ListRuntimeActivitiesAsync(take, ct));
         }
         catch (AppApiException ex)
         {
@@ -646,7 +790,7 @@ internal static class StudioEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> HandleGetAppScriptReadModelAsync(
+    private static async Task<IResult> HandleGetAppScriptRuntimeActivityAsync(
         string actorId,
         IServiceProvider services,
         CancellationToken ct)
@@ -656,15 +800,15 @@ internal static class StudioEndpoints
         {
             return Results.BadRequest(new
             {
-                code = "SCRIPT_READMODEL_UNAVAILABLE",
-                message = "Script read model queries are not available in the current host.",
+                code = "SCRIPT_RUNTIME_ACTIVITY_UNAVAILABLE",
+                message = "Script runtime activity queries are not available in the current host.",
             });
         }
 
-        ScriptReadModelSnapshotHttpResponse? snapshot;
+        ScriptRuntimeActivitySnapshot? snapshot;
         try
         {
-            snapshot = await service.GetRuntimeSnapshotAsync(actorId, ct);
+            snapshot = await service.GetRuntimeActivityAsync(actorId, ct);
         }
         catch (AppApiException ex)
         {
@@ -732,8 +876,8 @@ internal static class StudioEndpoints
             return;
         }
 
-        var generator = services.GetService<WorkflowGenerateActorService>();
-        if (generator == null)
+        var previewService = services.GetService<IStudioAuthoringPreviewApplicationService>();
+        if (previewService == null)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
@@ -747,40 +891,22 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
-            var result = await generator.GenerateAsync(
-                new WorkflowGenerateRequest(
-                    request.Prompt.Trim(),
-                    request.CurrentYaml,
-                    request.AvailableWorkflowNames,
-                    metadata),
-                (delta, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta,
-                }, token),
-                (progress, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
-                }, token),
-                ct);
-
-            foreach (var chunk in ChunkText(result.Yaml, 320))
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
+            // Refactor (iter21/cluster-001):
+            //   Old pattern: Host resolved fake workflow generator services and executed authoring loops.
+            //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
+            await foreach (var previewEvent in previewService.PreviewAsync(
+                               new StudioAuthoringPreviewRequest(
+                                   StudioAuthoringKind.Workflow,
+                                   request.Prompt.Trim(),
+                                   CurrentYaml: request.CurrentYaml,
+                                   AvailableWorkflowNames: request.AvailableWorkflowNames,
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
+                               ct))
             {
-                await WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_CONTENT",
-                    delta = chunk,
-                }, ct);
+                await WriteWorkflowAuthoringFrameAsync(http.Response, previewEvent, ct);
             }
-
-            await WriteSseFrameAsync(http.Response, new
-            {
-                type = "TEXT_MESSAGE_END",
-                message = result.Yaml,
-                delta = string.Empty,
-            }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -854,8 +980,8 @@ internal static class StudioEndpoints
             return;
         }
 
-        var generator = services.GetService<ScriptGenerateActorService>();
-        if (generator == null)
+        var previewService = services.GetService<IStudioAuthoringPreviewApplicationService>();
+        if (previewService == null)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
@@ -869,59 +995,23 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
-            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
-            var result = await generator.GenerateAsync(
-                new ScriptGenerateRequest(
-                    request.Prompt.Trim(),
-                    request.CurrentSource,
-                    metadata,
-                    request.CurrentPackage,
-                    request.CurrentFilePath),
-                (delta, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta,
-                }, token),
-                (progress, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
-                }, token),
-                ct);
-
-            foreach (var chunk in ChunkText(result.Source, 320))
+            var (metadata, llmControl) = await BuildPreviewContextAsync(http, request.Metadata, ct);
+            // Refactor (iter21/cluster-001):
+            //   Old pattern: Host resolved fake script generator services and executed authoring loops.
+            //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
+            await foreach (var previewEvent in previewService.PreviewAsync(
+                               new StudioAuthoringPreviewRequest(
+                                   StudioAuthoringKind.Script,
+                                   request.Prompt.Trim(),
+                                   CurrentSource: request.CurrentSource,
+                                   CurrentPackage: request.CurrentPackage,
+                                   CurrentFilePath: request.CurrentFilePath,
+                                   Metadata: metadata,
+                                   LlmControl: llmControl),
+                               ct))
             {
-                await WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_CONTENT",
-                    delta = chunk,
-                }, ct);
+                await WriteScriptAuthoringFrameAsync(http.Response, previewEvent, ct);
             }
-
-            await WriteSseFrameAsync(http.Response, new
-            {
-                type = "TEXT_MESSAGE_END",
-                message = result.Source,
-                delta = string.Empty,
-                currentFilePath = result.CurrentFilePath ?? string.Empty,
-                scriptPackage = result.Package == null
-                    ? null
-                    : new
-                    {
-                        csharpSources = (result.Package.CsharpSources ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
-                        {
-                            path = file.Path,
-                            content = file.Content,
-                        }),
-                        protoFiles = (result.Package.ProtoFiles ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
-                        {
-                            path = file.Path,
-                            content = file.Content,
-                        }),
-                        entryBehaviorTypeName = result.Package.EntryBehaviorTypeName,
-                        entrySourcePath = result.Package.EntrySourcePath,
-                    },
-            }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -972,6 +1062,84 @@ internal static class StudioEndpoints
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    private static Task WriteWorkflowAuthoringFrameAsync(
+        HttpResponse response,
+        StudioAuthoringPreviewEvent previewEvent,
+        CancellationToken ct) =>
+        previewEvent switch
+        {
+            StudioAuthoringPreviewEvent.ReasoningDelta reasoning => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = reasoning.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.Progress progress => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+            }, ct),
+            StudioAuthoringPreviewEvent.ContentDelta content => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_CONTENT",
+                delta = content.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.WorkflowCompleted completed => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = completed.Result.Yaml,
+                delta = string.Empty,
+            }, ct),
+            _ => Task.CompletedTask,
+        };
+
+    private static Task WriteScriptAuthoringFrameAsync(
+        HttpResponse response,
+        StudioAuthoringPreviewEvent previewEvent,
+        CancellationToken ct) =>
+        previewEvent switch
+        {
+            StudioAuthoringPreviewEvent.ReasoningDelta reasoning => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = reasoning.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.Progress progress => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+            }, ct),
+            StudioAuthoringPreviewEvent.ContentDelta content => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_CONTENT",
+                delta = content.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.ScriptCompleted completed => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = completed.Result.Source,
+                delta = string.Empty,
+                currentFilePath = completed.Result.CurrentFilePath ?? string.Empty,
+                scriptPackage = completed.Result.Package == null
+                    ? null
+                    : new
+                    {
+                        csharpSources = (completed.Result.Package.CsharpSources ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        protoFiles = (completed.Result.Package.ProtoFiles ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        entryBehaviorTypeName = completed.Result.Package.EntryBehaviorTypeName,
+                        entrySourcePath = completed.Result.Package.EntrySourcePath,
+                    },
+            }, ct),
+            _ => Task.CompletedTask,
+        };
+
     private static ValueTask StartSseAsync(HttpResponse response, CancellationToken ct)
     {
         response.StatusCode = StatusCodes.Status200OK;
@@ -990,19 +1158,6 @@ internal static class StudioEndpoints
         await response.Body.FlushAsync(ct);
     }
 
-    private static IEnumerable<string> ChunkText(string text, int chunkSize)
-    {
-        if (string.IsNullOrEmpty(text))
-            yield break;
-
-        var size = chunkSize > 0 ? chunkSize : 320;
-        for (var index = 0; index < text.Length; index += size)
-        {
-            var length = Math.Min(size, text.Length - index);
-            yield return text.Substring(index, length);
-        }
-    }
-
     private static string? ExtractBearerToken(HttpContext http)
     {
         var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
@@ -1013,7 +1168,7 @@ internal static class StudioEndpoints
             : null;
     }
 
-    private static async Task<Dictionary<string, string>> InjectLLMMetadataAsync(
+    private static async Task<(Dictionary<string, string> Metadata, LLMControlContext LlmControl)> BuildPreviewContextAsync(
         HttpContext http,
         IReadOnlyDictionary<string, string>? clientMetadata,
         CancellationToken ct)
@@ -1022,11 +1177,18 @@ internal static class StudioEndpoints
             ? new Dictionary<string, string>(clientMetadata)
             : new Dictionary<string, string>();
 
-        // Forward caller's Bearer token so NyxID-backed providers and connectors can authenticate.
+        var llmControl = LLMControlContext.Empty;
+
+        // Forward caller's Bearer token through typed LLM control. Metadata
+        // keeps only connector/tool authorization.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
         {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+            llmControl = llmControl with
+            {
+                NyxIdAccessToken = bearerToken,
+                NyxIdOrgToken = bearerToken,
+            };
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
 
@@ -1036,11 +1198,14 @@ internal static class StudioEndpoints
         {
             try
             {
-                var preferences = await llmPreferencesStore.GetAsync(ct);
+                // Studio endpoint reads the bot owner's ambient prefs — the
+                // channel inbound path is the only caller that overrides
+                // with a sender-specific binding-id.
+                var preferences = await llmPreferencesStore.GetOwnerAsync(ct);
                 if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                    llmControl = llmControl with { ModelOverride = preferences.DefaultModel.Trim() };
                 if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+                    llmControl = llmControl with { NyxIdRoutePreference = preferences.PreferredRoute.Trim() };
             }
             catch
             {
@@ -1048,7 +1213,7 @@ internal static class StudioEndpoints
             }
         }
 
-        return metadata;
+        return (metadata, llmControl);
     }
 
     internal sealed record AppScriptDraftRunRequest(
@@ -1083,8 +1248,13 @@ internal static class StudioEndpoints
 public sealed record AppAuthMeResponse(
     bool Enabled,
     bool Authenticated,
+    string? ProviderDisplayName,
+    string? LoginUrl,
+    string? LogoutUrl,
     string? Name,
     string? Email,
+    string? InvokeAuthMode,
+    string? ExternalCallerHint,
     string? ScopeId,
     string? ScopeSource);
 

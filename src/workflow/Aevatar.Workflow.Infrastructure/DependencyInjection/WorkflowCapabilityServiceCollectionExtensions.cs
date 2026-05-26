@@ -9,6 +9,7 @@ using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -25,14 +26,20 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();
+        services.TryAddSingleton<IHumanInteractionPort, NullHumanInteractionPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowExecutionRunEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext>,
+            WorkflowHumanInteractionProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext>,
+            WorkflowHumanApprovalResolutionProjector>());
         services.AddWorkflowApplication();
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
-            options.WorkflowDirectories.Add(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
             options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
             options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
             options.WorkflowDirectories.Add(AevatarPaths.Workflows);

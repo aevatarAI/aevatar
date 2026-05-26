@@ -16,7 +16,7 @@ public sealed record UpdateWorkspaceSettingsRequest(string RuntimeBaseUrl);
 
 public sealed record AddWorkflowDirectoryRequest(string Path, string? Label = null);
 
-public sealed record WorkflowSummary(
+public sealed record WorkflowDraftSummary(
     string WorkflowId,
     string Name,
     string Description,
@@ -28,7 +28,14 @@ public sealed record WorkflowSummary(
     bool HasLayout,
     DateTimeOffset UpdatedAtUtc);
 
-public sealed record WorkflowFileResponse(
+public sealed record WorkflowCommittedSummary(
+    string WorkflowId,
+    string Name,
+    string Description,
+    int StepCount,
+    DateTimeOffset? UpdatedAtUtc = null);
+
+public sealed record WorkflowDraftResponse(
     string WorkflowId,
     string Name,
     string FileName,
@@ -36,13 +43,18 @@ public sealed record WorkflowFileResponse(
     string DirectoryId,
     string DirectoryLabel,
     string Yaml,
-    WorkflowDocument? Document,
     WorkflowLayoutDocument? Layout,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record WorkflowCommittedResponse(
+    string WorkflowId,
+    string Name,
+    string Yaml,
+    WorkflowDocument? Document,
     IReadOnlyList<ValidationFinding> Findings,
     DateTimeOffset? UpdatedAtUtc = null);
 
-public sealed record SaveWorkflowFileRequest(
-    string? WorkflowId,
+public sealed record SaveWorkflowDraftRequest(
     string DirectoryId,
     string WorkflowName,
     string? FileName,

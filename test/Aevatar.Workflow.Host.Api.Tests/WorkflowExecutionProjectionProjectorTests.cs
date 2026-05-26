@@ -182,7 +182,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         report.ReportVersion.Should().Be("3.0");
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.RunIsolated);
-        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.RuntimeSnapshot);
+        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.WorkflowName.Should().BeEmpty();
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Unknown);
         report.Success.Should().BeNull();
@@ -333,9 +333,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     SuspensionType = "human_input",
                     Prompt = "Need approval",
                     VariableName = "approval",
+                    Secure = true,
+                    RedactedOutput = "[captured]",
                     Metadata =
                     {
                         ["channel"] = "ui",
+                        ["variable"] = "legacy_approval",
+                        ["secure"] = "false",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy]",
                     },
                 },
                 6,
@@ -489,7 +495,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Timeline.Should().Contain(x => x.Stage == "workflow.start" && x.Message == "command=cmd-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.request" && x.StepId == "step-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.failed" && x.StepId == "step-1");
-        report.Timeline.Should().Contain(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        var suspendedTimeline = report.Timeline.Single(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        suspendedTimeline.Data.Should().ContainKey("channel").WhoseValue.Should().Be("ui");
+        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("approval");
+        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[captured]");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
         report.Timeline.Should().Contain(x => x.Stage == "signal.waiting" && x.Data["timeout_ms"] == "900");
         report.Timeline.Should().Contain(x => x.Stage == "signal.buffered");
         report.Timeline.Count(x => x.Stage == "tool.call").Should().Be(2);
@@ -548,6 +559,48 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Success.Should().BeTrue();
         report.FinalOutput.Should().Be("workflow done");
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldFallbackLegacyOnlySecureInputMetadata()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-legacy-secure",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 5, 10, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secure-input",
+                    SuspensionType = "secure_input",
+                    Prompt = "enter secret",
+                    Metadata =
+                    {
+                        ["variable"] = "api_key",
+                        ["secure"] = "true",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy captured]",
+                        ["source"] = "legacy-test",
+                    },
+                },
+                30,
+                "evt-legacy-secure"),
+            timestamp);
+
+        var suspendedTimeline = report.Timeline.Single(x =>
+            x.Stage == "workflow.suspended" &&
+            x.StepId == "secure-input");
+        suspendedTimeline.Data.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
+        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("api_key");
+        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[legacy captured]");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
     }
 
     [Fact]
@@ -702,7 +755,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void BuildTimelineAndGraphDocuments_ShouldCloneCollections()
+    public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
         {
@@ -738,18 +791,13 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             ],
         };
 
-        var timelineDocument = WorkflowExecutionArtifactMaterializationSupport.BuildTimelineDocument(report);
-        var graphDocument = WorkflowExecutionArtifactMaterializationSupport.BuildGraphDocument(report);
-
-        timelineDocument.Timeline[0].Data["key"] = "changed";
-        graphDocument.Steps[0].RequestParameters["temperature"] = "0.9";
-        graphDocument.Topology.Add(new WorkflowExecutionTopologyEdge("root-actor", "child-2"));
-
         report.Timeline[0].Data["key"].Should().Be("value");
         report.Steps[0].RequestParameters["temperature"].Should().Be("0.2");
         report.Topology.Should().ContainSingle();
-        timelineDocument.RootActorId.Should().Be("root-actor");
-        graphDocument.WorkflowName.Should().Be("wf-clone");
+
+        var graph = new WorkflowRunInsightReportGraphMaterializer().Materialize(report);
+        graph.Nodes.Should().Contain(x => x.NodeId == "root-actor");
+        graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
     }
 
     [Theory]
@@ -817,9 +865,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void WorkflowRunGraphArtifactMaterializer_ShouldNormalizeTokensAndDeduplicateNodesAndEdges()
+    public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
-        var readModel = new WorkflowRunGraphArtifactDocument
+        var readModel = new WorkflowRunInsightReportDocument
         {
             RootActorId = " ",
             CommandId = " ",
@@ -898,26 +946,26 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             },
         };
 
-        var snapshot = mapper.ToActorSnapshot(currentState, report);
+        var snapshot = mapper.ToActorSnapshot(currentState);
         var unknownSnapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
         {
             RootActorId = "actor-2",
             Status = "mystery",
         });
-        var timelineItem = mapper.ToActorTimelineItem(new WorkflowExecutionTimelineEvent
+        var timelineItem = mapper.ToWorkflowRunTimelineExportItem(new WorkflowExecutionTimelineEvent
         {
             Timestamp = new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero),
             Stage = "signal.waiting",
             Data = { ["signal_name"] = "continue" },
         });
-        var node = mapper.ToActorGraphNode(new ProjectionGraphNode
+        var node = mapper.ToWorkflowRunGraphExportNode(new ProjectionGraphNode
         {
             NodeId = "node-1",
             NodeType = "Actor",
             Properties = { ["key"] = "value" },
             UpdatedAt = new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero),
         });
-        var edge = mapper.ToActorGraphEdge(new ProjectionGraphEdge
+        var edge = mapper.ToWorkflowRunGraphExportEdge(new ProjectionGraphEdge
         {
             EdgeId = "edge-1",
             FromNodeId = "node-1",
@@ -926,7 +974,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Properties = { ["kind"] = "runtime" },
             UpdatedAt = new DateTimeOffset(2026, 3, 18, 8, 3, 0, TimeSpan.Zero),
         });
-        var subgraph = mapper.ToActorGraphSubgraph(
+        var subgraph = mapper.ToWorkflowRunGraphExportSubgraph(
             "node-1",
             new ProjectionGraphSubgraph
             {
@@ -950,12 +998,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             });
 
         snapshot.ActorId.Should().Be("actor-1");
-        snapshot.WorkflowName.Should().Be("wf-report");
+        snapshot.WorkflowName.Should().BeEmpty();
         snapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Running);
-        snapshot.LastSuccess.Should().BeTrue();
-        snapshot.LastOutput.Should().Be("done");
-        snapshot.TotalSteps.Should().Be(3);
-        snapshot.RoleReplyCount.Should().Be(4);
+        snapshot.LastSuccess.Should().BeNull();
+        snapshot.LastOutput.Should().BeEmpty();
+        snapshot.TotalSteps.Should().Be(0);
+        snapshot.RoleReplyCount.Should().Be(0);
 
         unknownSnapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Unknown);
         timelineItem.Data.Should().Contain(new KeyValuePair<string, string>("signal_name", "continue"));
@@ -1026,10 +1074,19 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     {
         public List<TReadModel> Upserts { get; } = [];
 
+        public List<string> Deletes { get; } = [];
+
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

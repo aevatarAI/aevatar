@@ -12,11 +12,12 @@ export type GovernanceDraft = {
 };
 
 export const governanceWorkbenchViews = [
-  'audit',
+  'overview',
   'policies',
   'bindings',
   'endpoints',
   'activation',
+  'changes',
 ] as const;
 
 export type GovernanceWorkbenchView =
@@ -149,9 +150,13 @@ export function readGovernanceWorkbenchView(
   search = typeof window === 'undefined' ? '' : window.location.search,
 ): GovernanceWorkbenchView {
   const value = new URLSearchParams(search).get('view')?.trim() ?? '';
+  if (value === 'audit') {
+    return 'changes';
+  }
+
   return governanceWorkbenchViews.includes(value as GovernanceWorkbenchView)
     ? (value as GovernanceWorkbenchView)
-    : 'audit';
+    : 'overview';
 }
 
 export function buildGovernanceWorkbenchHref(
@@ -175,7 +180,7 @@ export function buildGovernanceWorkbenchHref(
   if (draft.revisionId.trim()) {
     params.set('revisionId', draft.revisionId.trim());
   }
-  if (view !== 'audit') {
+  if (view !== 'overview') {
     params.set('view', view);
   }
 

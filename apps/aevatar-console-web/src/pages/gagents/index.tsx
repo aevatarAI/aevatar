@@ -26,6 +26,7 @@ import {
   Typography,
 } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 import { parseRunContextData } from '@/shared/agui/customEventData';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
@@ -60,6 +61,9 @@ import { describeError } from '@/shared/ui/errorText';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
 
 type ActorReuseMode = 'new' | 'existing';
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
 type NoticeState = {
   message: string;
   type: 'success' | 'error';
@@ -279,6 +283,10 @@ function readQueryValue(name: string): string {
   return new URLSearchParams(window.location.search).get(name)?.trim() ?? '';
 }
 
+function createDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
+}
+
 function readEventString(event: AGUIEvent, key: string): string {
   const record = event as unknown as Record<string, unknown>;
   const value = record[key];
@@ -408,7 +416,6 @@ const GAgentsPage: React.FC = () => {
       readQueryValue('actorId') ? 'existing' : 'new',
     );
   const [prompt, setPrompt] = useState('');
-  const [registryActorIdInput, setRegistryActorIdInput] = useState('');
   const [registryNotice, setRegistryNotice] = useState<NoticeState | null>(
     null,
   );
@@ -452,7 +459,7 @@ const GAgentsPage: React.FC = () => {
   const bindingQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ['runtime-gagents', 'binding', normalizedScopeId],
-    queryFn: () => runtimeGAgentApi.getScopeBinding(normalizedScopeId),
+    queryFn: () => runtimeGAgentApi.getDefaultRouteTarget(normalizedScopeId),
     retry: false,
   });
 
@@ -630,7 +637,7 @@ const GAgentsPage: React.FC = () => {
     }
 
     if (!bindingQuery.data?.available || !currentBindingRevision) {
-      return 'This will create the first published default service for the current scope.';
+      return 'This will create the first published default service for the current workspace.';
     }
 
     if (currentBindingMatchesSelectedType) {
@@ -806,43 +813,6 @@ const GAgentsPage: React.FC = () => {
     }
   };
 
-  const handleSaveRegistryActor = async () => {
-    const actorId = registryActorIdInput.trim();
-    if (!normalizedScopeId || !selectedActorStoreTypeName || !actorId) {
-      setRegistryNotice({
-        type: 'error',
-        message:
-          'Select a scope, choose a GAgent type, and enter an actor id before saving.',
-      });
-      return;
-    }
-
-    setRegistryPendingKey(`save:${actorId}`);
-    setRegistryNotice(null);
-    try {
-      await runtimeGAgentApi.addActor(
-        normalizedScopeId,
-        selectedActorStoreTypeName,
-        actorId,
-      );
-      await invalidateActorQueries(normalizedScopeId);
-      setActorReuseMode('existing');
-      setPreferredActorId(actorId);
-      setRegistryActorIdInput('');
-      setRegistryNotice({
-        type: 'success',
-        message: `Saved ${actorId} under ${selectedType?.typeName || selectedActorStoreTypeName}.`,
-      });
-    } catch (error) {
-      setRegistryNotice({
-        type: 'error',
-        message: describeError(error),
-      });
-    } finally {
-      setRegistryPendingKey('');
-    }
-  };
-
   const handleUseRegistryActor = (actorTypeName: string, actorId: string) => {
     handleSelectType(actorTypeName);
     setActorReuseMode('existing');
@@ -862,7 +832,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId) {
       setRegistryNotice({
         type: 'error',
-        message: 'Scope is required before removing a saved actor.',
+        message: 'Workspace is required before removing a saved actor.',
       });
       return;
     }
@@ -1023,7 +993,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Resolve the current scope before publishing a GAgent binding.',
+          'Resolve the current workspace before publishing a GAgent binding.',
       });
       return;
     }
@@ -1118,7 +1088,7 @@ const GAgentsPage: React.FC = () => {
     setBindingPendingKey(`activate:${revisionId}`);
     setBindingNotice(null);
     try {
-      const result = await runtimeGAgentApi.activateScopeBindingRevision(
+      const result = await runtimeGAgentApi.activateMemberBindingRevision(
         normalizedScopeId,
         revisionId,
       );
@@ -1128,7 +1098,7 @@ const GAgentsPage: React.FC = () => {
       setIsRevisionDrawerOpen(true);
       setBindingNotice({
         type: 'success',
-        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+        message: `Workspace ${result.scopeId} is now serving revision ${result.revisionId}.`,
       });
     } catch (error) {
       setBindingNotice({
@@ -1148,7 +1118,7 @@ const GAgentsPage: React.FC = () => {
     setBindingPendingKey(`retire:${revisionId}`);
     setBindingNotice(null);
     try {
-      const result = await runtimeGAgentApi.retireScopeBindingRevision(
+      const result = await runtimeGAgentApi.retireMemberBindingRevision(
         normalizedScopeId,
         revisionId,
       );
@@ -1181,7 +1151,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId || !normalizedActorTypeName || !normalizedPrompt) {
       setRunState((current) => ({
         ...current,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       }));
       return;
@@ -1190,6 +1160,11 @@ const GAgentsPage: React.FC = () => {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setActiveWorkbenchTab('draft');
     setActiveRunOutputTab('transcript');
     setRunState({
@@ -1209,6 +1184,7 @@ const GAgentsPage: React.FC = () => {
           actorTypeName: normalizedActorTypeName,
           prompt: normalizedPrompt,
           preferredActorId: normalizedPreferredActorId || undefined,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -1280,6 +1256,14 @@ const GAgentsPage: React.FC = () => {
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState((current) => ({
+            ...current,
+            error: reason.message,
+            status: 'error',
+          }));
+        }
         return;
       }
 
@@ -1289,6 +1273,7 @@ const GAgentsPage: React.FC = () => {
         status: 'error',
       }));
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
@@ -1357,17 +1342,17 @@ const GAgentsPage: React.FC = () => {
   const rail = (
     <div style={cliRailShellStyle}>
       <div style={cliRailSectionStyle}>
-        <div style={cliCardLabelStyle}>Scope Context</div>
+        <div style={cliCardLabelStyle}>Workspace Context</div>
         <Input
-          aria-label="Scope ID"
+          aria-label="Workspace ID"
           onChange={(event) => setScopeId(event.target.value)}
-          placeholder="Scope ID"
+          placeholder="Workspace ID"
           value={scopeId}
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved scope: ${resolvedScope.scopeId}`
-            : 'No scope was resolved from the current session.'}
+            ? `NyxID resolved workspace: ${resolvedScope.scopeId}`
+            : 'No workspace was resolved from the current session.'}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1481,6 +1466,7 @@ const GAgentsPage: React.FC = () => {
 
               return (
                 <button
+                  className={AEVATAR_PRESSABLE_CARD_CLASS}
                   key={assemblyQualifiedName}
                   onClick={() => handleSelectType(assemblyQualifiedName)}
                   style={{
@@ -1609,7 +1595,7 @@ const GAgentsPage: React.FC = () => {
       title={selectedRevision ? selectedRevision.revisionId : 'No revision selected'}
     >
       {selectedRevision ? (
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Space size={[8, 8]} wrap>
             <Typography.Text strong copyable>
               {selectedRevision.revisionId}
@@ -1740,8 +1726,8 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={
         selectedType
-          ? `Reusable actor ids saved for ${selectedType.typeName} in this scope.`
-          : 'Reusable actor ids saved for this scope.'
+          ? `Reusable actor ids saved for ${selectedType.typeName} in this workspace.`
+          : 'Reusable actor ids saved for this workspace.'
       }
       eyebrow="Actor Registry"
       extra={
@@ -1756,7 +1742,7 @@ const GAgentsPage: React.FC = () => {
       }
       title="Actor Registry"
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         {registryNotice ? (
           <Alert
             closable
@@ -1766,37 +1752,6 @@ const GAgentsPage: React.FC = () => {
             type={registryNotice.type}
           />
         ) : null}
-
-        <Input
-          aria-label="Registry actor id"
-          disabled={!normalizedScopeId || !selectedActorStoreTypeName}
-          onChange={(event) => setRegistryActorIdInput(event.target.value)}
-          placeholder={
-            selectedType
-              ? `Save actor id for ${selectedType.typeName}`
-              : 'Select a GAgent type before saving an actor'
-          }
-          value={registryActorIdInput}
-        />
-        <Space size={[8, 8]} wrap>
-          <Button
-            disabled={
-              !normalizedScopeId ||
-              !selectedActorStoreTypeName ||
-              !registryActorIdInput.trim()
-            }
-            loading={registryPendingKey.startsWith('save:')}
-            onClick={() => void handleSaveRegistryActor()}
-            type="primary"
-          >
-            Save actor
-          </Button>
-          <Typography.Text type="secondary">
-            {selectedType
-              ? `Saving under ${selectedType.fullName}.`
-              : 'Saved actors follow the currently selected GAgent type.'}
-          </Typography.Text>
-        </Space>
 
         {gAgentActorsQuery.error ? (
           <Alert
@@ -1809,7 +1764,7 @@ const GAgentsPage: React.FC = () => {
             description={
               gAgentActorsQuery.isLoading
                 ? 'Loading actor registry.'
-                : 'No saved actors were found for this scope.'
+                : 'No saved actors were found for this workspace.'
             }
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
@@ -1938,8 +1893,8 @@ const GAgentsPage: React.FC = () => {
 
   const currentBindingPanel = (
     <WorkbenchCard
-      description="Current default service for this scope."
-      eyebrow="Current Scope Binding"
+      description="Current default service for this workspace."
+      eyebrow="Current Workspace Binding"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
@@ -1965,7 +1920,7 @@ const GAgentsPage: React.FC = () => {
           : 'No published binding'
       }
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {bindingQuery.error ? (
           <Alert
             showIcon
@@ -1995,7 +1950,7 @@ const GAgentsPage: React.FC = () => {
                 <Typography.Text type="secondary">
                   Implementation
                 </Typography.Text>
-                <Space direction="vertical" size={4} style={{ marginTop: 4 }}>
+                <Space orientation="vertical" size={4} style={{ marginTop: 4 }}>
                   <Tag color={getBindingTone(currentBindingRevision)}>
                     {formatRuntimeGAgentBindingImplementationKind(
                       currentBindingRevision?.implementationKind,
@@ -2067,7 +2022,7 @@ const GAgentsPage: React.FC = () => {
 
   const publishBindingPanel = (
     <WorkbenchCard
-      description="Publish the selected GAgent type as this scope's default service."
+      description="Publish the selected GAgent type as this workspace's default service."
       eyebrow="Publish Binding"
       extra={
         <Button
@@ -2084,7 +2039,7 @@ const GAgentsPage: React.FC = () => {
           : 'Publish GAgent Binding'
       }
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {!selectedType ? (
           <AevatarInspectorEmpty description="Choose a discovered GAgent type before configuring a published binding." />
         ) : (
@@ -2096,7 +2051,7 @@ const GAgentsPage: React.FC = () => {
                   key: 'settings',
                   label: 'Service settings',
                   children: (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
                         style={{
                           display: 'grid',
@@ -2157,7 +2112,7 @@ const GAgentsPage: React.FC = () => {
 
                       {bindingActorReuseMode === 'existing' ? (
                         <Space
-                          direction="vertical"
+                          orientation="vertical"
                           size={12}
                           style={{ width: '100%' }}
                         >
@@ -2213,7 +2168,7 @@ const GAgentsPage: React.FC = () => {
                   key: 'endpoints',
                   label: `Endpoints (${bindingDraft.endpoints.length})`,
                   children: (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
                         style={{
                           ...infoCardStyle,
@@ -2247,7 +2202,7 @@ const GAgentsPage: React.FC = () => {
                           </Button>
                         </Space>
 
-                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                           {bindingDraft.endpoints.map((endpoint, index) => (
                             <div
                               key={`binding-endpoint-${index}`}
@@ -2394,7 +2349,7 @@ const GAgentsPage: React.FC = () => {
               checked={publishAcknowledged}
               onChange={(event) => setPublishAcknowledged(event.target.checked)}
             >
-              I understand this changes the scope's published default service.
+              I understand this changes the workspace's published default service.
             </Checkbox>
 
             <Space size={[8, 8]} wrap>
@@ -2441,7 +2396,7 @@ const GAgentsPage: React.FC = () => {
           : 'No revisions yet'
       }
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         {bindingQuery.error ? (
           <Alert
             showIcon
@@ -2547,7 +2502,7 @@ const GAgentsPage: React.FC = () => {
                     ) : null}
                   </div>
 
-                  <Space direction="vertical" size={8}>
+                  <Space orientation="vertical" size={8}>
                     <Button
                       disabled={!canActivate}
                       loading={
@@ -2596,7 +2551,7 @@ const GAgentsPage: React.FC = () => {
       }
       title={selectedType ? selectedType.typeName : 'GAgent Draft Run'}
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {selectedType ? (
           <div
             style={{
@@ -2639,7 +2594,7 @@ const GAgentsPage: React.FC = () => {
         />
 
         {actorReuseMode === 'existing' ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Select
               allowClear
               aria-label="Saved actor id"
@@ -2789,14 +2744,14 @@ const GAgentsPage: React.FC = () => {
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>
-          <Typography.Text type="secondary">Scope</Typography.Text>
+          <Typography.Text type="secondary">Workspace ID</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
             {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
           </Typography.Text>
         </Space>
       }
-      title="GAgents"
-      titleHelp="Discover runtime GAgent types, publish scope bindings, reuse actors, and verify draft and serving paths from one workbench."
+      title="团队成员"
+      titleHelp="这里保留原有 GAgent runtime 能力，但统一对外表述为团队成员管理与绑定工作台。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -2807,7 +2762,7 @@ const GAgentsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setIsActorRegistryDrawerOpen(false)}
         open={isActorRegistryDrawerOpen}
-        title="Actor Registry"
+        title="成员注册表"
         width={screens.xl ? 680 : 520}
       >
         {actorRegistryPanel}
@@ -2820,7 +2775,7 @@ const GAgentsPage: React.FC = () => {
             ? describeRuntimeGAgentBindingRevisionTarget(selectedRevision)
             : undefined
         }
-        title="Revision Details"
+        title="版本详情"
         width={screens.xl ? 620 : 480}
       >
         {selectedRevisionPanel}

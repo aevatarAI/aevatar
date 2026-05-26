@@ -38,9 +38,9 @@ import {
   type ScopeServiceRunSummary,
 } from "@/shared/models/runtime/scopeServices";
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
+  describeStudioMemberBindingRevisionContext,
+  describeStudioMemberBindingRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
@@ -51,10 +51,16 @@ import {
 type ScopeServiceRuntimeWorkbenchProps = {
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
-  readonly selectedServiceId: string;
-  readonly selectedEndpointId: string;
-  readonly onSelectService: (serviceId: string) => void;
+  readonly selectedServiceId?: string;
+  readonly selectedEndpointId?: string;
+  readonly onSelectService?: (serviceId: string) => void;
   readonly onUseEndpoint: (serviceId: string, endpointId: string) => void;
+  readonly initialServiceId?: string;
+  readonly preferredServiceId?: string;
+  readonly onSelectionChange?: (selection: {
+    serviceId: string;
+    endpointId: string;
+  }) => void;
 };
 
 type ServiceRuntimeTab = "overview" | "bindings" | "revisions" | "runs";
@@ -201,6 +207,9 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
   selectedEndpointId,
   onSelectService,
   onUseEndpoint,
+  initialServiceId,
+  preferredServiceId,
+  onSelectionChange,
 }) => {
   const [messageApi, messageContextHolder] = message.useMessage();
   const queryClient = useQueryClient();
@@ -214,9 +223,124 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
   const [selectedRunAuditTarget, setSelectedRunAuditTarget] =
     useState<RunAuditTarget>(null);
   const [retiringBindingId, setRetiringBindingId] = useState("");
+  const [internalSelectedServiceId, setInternalSelectedServiceId] = useState(
+    () => initialServiceId?.trim() || preferredServiceId?.trim() || "",
+  );
+  const [internalSelectedEndpointId, setInternalSelectedEndpointId] =
+    useState("");
+  const isControlledSelection =
+    typeof selectedServiceId === "string" &&
+    typeof selectedEndpointId === "string" &&
+    typeof onSelectService === "function";
+  const resolvedSelectedServiceId = isControlledSelection
+    ? selectedServiceId || ""
+    : internalSelectedServiceId;
+  const resolvedSelectedEndpointId = isControlledSelection
+    ? selectedEndpointId || ""
+    : internalSelectedEndpointId;
 
   const selectedService =
-    services.find((service) => service.serviceId === selectedServiceId) ?? null;
+    services.find((service) => service.serviceId === resolvedSelectedServiceId) ??
+    null;
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    if (!services.length) {
+      setInternalSelectedServiceId("");
+      return;
+    }
+
+    if (
+      resolvedSelectedServiceId &&
+      services.some((service) => service.serviceId === resolvedSelectedServiceId)
+    ) {
+      return;
+    }
+
+    const normalizedInitialServiceId = initialServiceId?.trim() || "";
+    if (
+      normalizedInitialServiceId &&
+      services.some((service) => service.serviceId === normalizedInitialServiceId)
+    ) {
+      setInternalSelectedServiceId(normalizedInitialServiceId);
+      return;
+    }
+
+    const normalizedPreferredServiceId = preferredServiceId?.trim() || "";
+    setInternalSelectedServiceId(
+      normalizedPreferredServiceId || services[0]?.serviceId || "",
+    );
+  }, [
+    initialServiceId,
+    isControlledSelection,
+    preferredServiceId,
+    resolvedSelectedServiceId,
+    services,
+  ]);
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    if (!selectedService) {
+      setInternalSelectedEndpointId("");
+      return;
+    }
+
+    if (
+      resolvedSelectedEndpointId &&
+      selectedService.endpoints.some(
+        (endpoint) => endpoint.endpointId === resolvedSelectedEndpointId,
+      )
+    ) {
+      return;
+    }
+
+    setInternalSelectedEndpointId(selectedService.endpoints[0]?.endpointId || "");
+  }, [
+    isControlledSelection,
+    resolvedSelectedEndpointId,
+    selectedService,
+  ]);
+
+  useEffect(() => {
+    if (isControlledSelection) {
+      return;
+    }
+
+    onSelectionChange?.({
+      serviceId: resolvedSelectedServiceId,
+      endpointId: resolvedSelectedEndpointId,
+    });
+  }, [
+    isControlledSelection,
+    onSelectionChange,
+    resolvedSelectedEndpointId,
+    resolvedSelectedServiceId,
+  ]);
+
+  const handleSelectService = (serviceId: string) => {
+    if (isControlledSelection) {
+      onSelectService?.(serviceId);
+      return;
+    }
+
+    setInternalSelectedServiceId(serviceId);
+    setInternalSelectedEndpointId("");
+  };
+
+  const handleUseEndpoint = (serviceId: string, endpointId: string) => {
+    if (!isControlledSelection) {
+      setInternalSelectedServiceId(serviceId);
+      setInternalSelectedEndpointId(endpointId);
+    }
+
+    onUseEndpoint(serviceId, endpointId);
+  };
 
   const bindingsQuery = useQuery({
     enabled: Boolean(scopeId && selectedService?.serviceId),
@@ -448,7 +572,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
     </div>
   ) : (
     <Empty
-      description="No scope-specific bindings are published for this service yet."
+      description="No workspace bindings are published for this service yet."
       image={Empty.PRESENTED_IMAGE_SIMPLE}
     />
   );
@@ -476,7 +600,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               <AevatarStatusTag
                 domain="governance"
                 status={revision.status || "draft"}
-                label={formatStudioScopeBindingImplementationKind(
+                label={formatStudioMemberBindingImplementationKind(
                   revision.implementationKind,
                 )}
               />
@@ -485,8 +609,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               {revision.retiredAt ? <AevatarStatusTag domain="governance" status="retired" /> : null}
             </Space>
             <Typography.Text type="secondary">
-              {describeStudioScopeBindingRevisionTarget(revision)} ·{" "}
-              {describeStudioScopeBindingRevisionContext(revision) || "No detail"}
+              {describeStudioMemberBindingRevisionTarget(revision)} ·{" "}
+              {describeStudioMemberBindingRevisionContext(revision) || "No detail"}
             </Typography.Text>
             <Typography.Text type="secondary">
               Serving {revision.servingState || revision.status} · Published{" "}
@@ -635,7 +759,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           <AevatarPanel
             title="Endpoint Surface"
-            titleHelp="Operators can switch endpoints from here without losing the current scope and service context."
+            titleHelp="Operators can switch endpoints from here without losing the current workspace and service context."
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {selectedService.endpoints.length > 0 ? (
@@ -659,7 +783,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         domain="observation"
                         label={endpoint.kind || "endpoint"}
                         status={
-                          endpoint.endpointId === selectedEndpointId
+                          endpoint.endpointId === resolvedSelectedEndpointId
                             ? "streaming"
                             : "snapshot_available"
                         }
@@ -674,15 +798,18 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     <Space wrap>
                       <Button
                         onClick={() =>
-                          onUseEndpoint(selectedService.serviceId, endpoint.endpointId)
+                          handleUseEndpoint(
+                            selectedService.serviceId,
+                            endpoint.endpointId,
+                          )
                         }
                         type={
-                          endpoint.endpointId === selectedEndpointId
+                          endpoint.endpointId === resolvedSelectedEndpointId
                             ? "primary"
                             : "default"
                         }
                       >
-                        {endpoint.endpointId === selectedEndpointId
+                        {endpoint.endpointId === resolvedSelectedEndpointId
                           ? "Selected"
                           : "Use endpoint"}
                       </Button>
@@ -721,7 +848,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               </Button>
             }
             title="Dependency Surface"
-            titleHelp="Scope-specific bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
+            titleHelp="Workspace bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
           >
             {bindingsQuery.error ? (
               <Alert
@@ -729,12 +856,12 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 title={
                   bindingsQuery.error instanceof Error
                     ? bindingsQuery.error.message
-                    : "Failed to load scope bindings."
+                    : "Failed to load default route revisions."
                 }
                 type="error"
               />
             ) : bindingsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="Loading scope bindings." />
+              <AevatarInspectorEmpty description="Loading default route revisions." />
             ) : (
               bindingCards
             )}
@@ -788,22 +915,22 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 />
                 <RuntimeMetricCard
                   label="Implementation"
-                  value={formatStudioScopeBindingImplementationKind(
+                  value={formatStudioMemberBindingImplementationKind(
                     currentRevision.implementationKind,
                   )}
                 />
                 <RuntimeMetricCard
                   label="Target"
-                  value={describeStudioScopeBindingRevisionTarget(currentRevision)}
+                  value={describeStudioMemberBindingRevisionTarget(currentRevision)}
                 />
                 <RuntimeMetricCard
                   label="Actor"
                   value={currentRevision.primaryActorId || "n/a"}
                 />
               </div>
-              {describeStudioScopeBindingRevisionContext(currentRevision) ? (
+              {describeStudioMemberBindingRevisionContext(currentRevision) ? (
                 <Alert
-                  description={describeStudioScopeBindingRevisionContext(
+                  description={describeStudioMemberBindingRevisionContext(
                     currentRevision,
                   )}
                   showIcon
@@ -1018,7 +1145,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   key={service.serviceKey}
                   style={{
                     border:
-                      service.serviceId === selectedServiceId
+                      service.serviceId === resolvedSelectedServiceId
                         ? "1px solid var(--ant-color-primary)"
                         : "1px solid var(--ant-color-border-secondary)",
                     borderRadius: 12,
@@ -1045,14 +1172,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   </Typography.Text>
                   <Space wrap>
                     <Button
-                      onClick={() => onSelectService(service.serviceId)}
+                      onClick={() => handleSelectService(service.serviceId)}
                       type={
-                        service.serviceId === selectedServiceId
+                        service.serviceId === resolvedSelectedServiceId
                           ? "primary"
                           : "default"
                       }
                     >
-                      {service.serviceId === selectedServiceId
+                      {service.serviceId === resolvedSelectedServiceId
                         ? "Selected"
                         : "Inspect service"}
                     </Button>
@@ -1169,10 +1296,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
         title={
           bindingEditorState?.mode === "edit"
             ? `Edit binding ${bindingEditorState.bindingId || ""}`
-            : "Create scope binding"
+            : "Create default route"
         }
       >
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Input
             disabled={bindingEditorState?.mode === "edit"}
             onChange={(event) =>

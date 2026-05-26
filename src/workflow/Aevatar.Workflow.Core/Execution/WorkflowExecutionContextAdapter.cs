@@ -6,7 +6,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext, IWorkflowExecutionItemsContext
+// Refactor (iter16/cluster-031):
+//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+//                bag for request metadata, LLM overrides, authorization, secure values
+//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor
 {
     private readonly IEventHandlerContext _inner;
     private readonly IWorkflowExecutionStateHost _stateHost;
@@ -25,9 +30,20 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
 
     public string RunId => _stateHost.RunId;
 
+    public WorkflowExecutionRuntimeContext RuntimeContext => _stateHost.RuntimeContext;
+
     public IServiceProvider Services => _inner.Services;
 
     public ILogger Logger => _inner.Logger;
+
+    // Refactor (iter89/cluster-089-workflow-module-clock-state):
+    //   Old: Workflow modules used process wall clock/Stopwatch directly.
+    //   New: Modules consume the workflow execution context clock so tests
+    //        and runtimes can inject business time and monotonic duration.
+    public DateTimeOffset UtcNow => Clock.GetUtcNow();
+
+    private TimeProvider Clock =>
+        _inner.Services.GetService(typeof(TimeProvider)) as TimeProvider ?? TimeProvider.System;
 
     public static WorkflowExecutionContextAdapter Create(
         IEventHandlerContext context,
@@ -37,6 +53,11 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
         ArgumentNullException.ThrowIfNull(stateHost);
         return new WorkflowExecutionContextAdapter(context, stateHost);
     }
+
+    public long GetTimestamp() => Clock.GetTimestamp();
+
+    public TimeSpan GetElapsedTime(long startingTimestamp) =>
+        Clock.GetElapsedTime(startingTimestamp);
 
     public TState LoadState<TState>(string scopeKey)
         where TState : class, IMessage<TState>, new()
@@ -85,32 +106,6 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
         return _stateHost.ClearExecutionStateAsync(scopeKey, ct);
-    }
-
-    public bool TryGetItem<TItem>(string itemKey, out TItem? value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        if (_stateHost.TryGetExecutionItem(itemKey, out var boxed) &&
-            boxed is TItem typed)
-        {
-            value = typed;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
-
-    public void SetItem(string itemKey, object? value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        _stateHost.SetExecutionItem(itemKey, value);
-    }
-
-    public bool RemoveItem(string itemKey)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
-        return _stateHost.RemoveExecutionItem(itemKey);
     }
 
     public Task PublishAsync<TEvent>(

@@ -1,0 +1,58 @@
+using Aevatar.Foundation.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.GAgents.Channel.Runtime;
+
+internal static class ChannelBotRegistrationStoreCommands
+{
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=register/unregister/rebuild command helper, new=rebuild-only startup helper
+    // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh dispatch, new=startup-owned actor inbox dispatch
+    private const string PublisherActorId = "channel-runtime.registration-store";
+
+    public static Task DispatchRebuildProjectionAsync(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
+        string reason,
+        CancellationToken ct = default) =>
+        DispatchAsync(
+            actorRuntime,
+            dispatchPort,
+            new ChannelBotRebuildProjectionCommand
+            {
+                Reason = reason ?? string.Empty,
+            },
+            ct);
+
+    private static async Task DispatchAsync<TCommand>(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort dispatchPort,
+        TCommand command,
+        CancellationToken ct)
+        where TCommand : class, IMessage
+    {
+        ArgumentNullException.ThrowIfNull(actorRuntime);
+        ArgumentNullException.ThrowIfNull(dispatchPort);
+        ArgumentNullException.ThrowIfNull(command);
+
+        await EnsureStoreActorAsync(actorRuntime, ct);
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, ChannelBotRegistrationGAgent.WellKnownId),
+        };
+
+        await dispatchPort.DispatchAsync(ChannelBotRegistrationGAgent.WellKnownId, envelope, ct);
+    }
+
+    private static async Task EnsureStoreActorAsync(IActorRuntime actorRuntime, CancellationToken ct)
+    {
+        _ = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                ct);
+    }
+}

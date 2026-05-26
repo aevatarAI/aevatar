@@ -1,63 +1,59 @@
+using Aevatar.Scripting.Abstractions;
+
 namespace Aevatar.Scripting.Core.Ports;
 
 public sealed record ScriptDefinitionUpsertResult(
     string ActorId,
-    ScriptDefinitionSnapshot Snapshot);
+    ScriptDefinitionSnapshot Snapshot,
+    ScriptingCommandAcceptedReceipt AcceptedReceipt);
 
 public interface IScriptDefinitionCommandPort
 {
     Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct);
 
     Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         string? scopeId,
         CancellationToken ct) =>
         UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             ct);
 
     async Task<string> UpsertDefinitionAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct) =>
         (await UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             ct)).ActorId;
 
     async Task<string> UpsertDefinitionAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         string? scopeId,
         CancellationToken ct) =>
         (await UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             scopeId,
             ct)).ActorId;

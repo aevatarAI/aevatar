@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Compatibility;
 using Google.Protobuf;
 using Orleans.Runtime;
 
@@ -38,7 +39,7 @@ internal sealed class RuntimeActorGrainEventSourcingSnapshotStore<TState>
         if (snapshot == null || snapshot.Length == 0)
             return Task.FromResult<EventSourcingSnapshot<TState>?>(null);
 
-        if (!string.Equals(_runtimeState.State.AgentStateTypeName, StateTypeName, StringComparison.Ordinal))
+        if (!ProtobufContractCompatibility.IsCompatibleClrTypeName<TState>(_runtimeState.State.AgentStateTypeName))
             return Task.FromResult<EventSourcingSnapshot<TState>?>(null);
 
         var state = new TState();

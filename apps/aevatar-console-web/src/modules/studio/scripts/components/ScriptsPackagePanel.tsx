@@ -7,7 +7,6 @@ import type { ScriptDraft } from '@/shared/studio/scriptsModels';
 
 type ScriptsPackagePanelProps = {
   selectedDraft: ScriptDraft | null;
-  onRevisionChange: (value: string) => void;
   onBaseRevisionChange: (value: string) => void;
   onEntryBehaviorTypeChange: (value: string) => void;
   onDeleteDraft: () => void;
@@ -16,7 +15,6 @@ type ScriptsPackagePanelProps = {
 
 const ScriptsPackagePanel: React.FC<ScriptsPackagePanelProps> = ({
   selectedDraft,
-  onRevisionChange,
   onBaseRevisionChange,
   onEntryBehaviorTypeChange,
   onDeleteDraft,
@@ -42,15 +40,12 @@ const ScriptsPackagePanel: React.FC<ScriptsPackagePanelProps> = ({
       <div className="console-scripts-package-summary">
         <div className="console-scripts-section-label">Entry contract</div>
         <div className="console-scripts-detail-grid" style={{ marginTop: 12 }}>
-          <label className="console-scripts-field">
-            <span className="console-scripts-field-label">Revision</span>
-            <input
-              className="console-scripts-input"
-              placeholder="rev-..."
-              value={selectedDraft.revision}
-              onChange={(event) => onRevisionChange(event.target.value)}
-            />
-          </label>
+          <div className="console-scripts-field">
+            <div className="console-scripts-field-label">Saved Revision</div>
+            <div className="console-scripts-copy-value">
+              {selectedDraft.revision || 'Generated on save'}
+            </div>
+          </div>
           <label className="console-scripts-field">
             <span className="console-scripts-field-label">Base Revision</span>
             <input

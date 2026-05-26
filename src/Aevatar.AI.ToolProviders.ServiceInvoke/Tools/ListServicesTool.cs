@@ -109,7 +109,7 @@ public sealed class ListServicesTool : IAgentTool
         if (_options.EnableDynamicScopeResolution &&
             string.IsNullOrWhiteSpace(tenantId))
         {
-            tenantId = AgentToolRequestContext.TryGet("scope_id");
+            tenantId = AgentToolRequestContext.ScopeId;
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 appId = string.IsNullOrWhiteSpace(appId) ? "default" : appId;

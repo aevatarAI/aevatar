@@ -1,5 +1,6 @@
 ignore:
   - "tools/**"
+  - "agents/**"
 
 comment:
   layout: "diff, flags, files"

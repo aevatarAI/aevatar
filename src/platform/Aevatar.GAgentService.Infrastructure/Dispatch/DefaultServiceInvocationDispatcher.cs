@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Dispatch;
@@ -12,16 +13,19 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 {
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScriptRuntimeCommandPort _scriptRuntimeCommandPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
+    private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
 
     public DefaultServiceInvocationDispatcher(
         IActorDispatchPort dispatchPort,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IWorkflowRunActorPort workflowRunActorPort)
+        IWorkflowRunProvisioningPort workflowRunProvisioningPort,
+        IServiceRunRegistrationPort serviceRunRegistrationPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort ?? throw new ArgumentNullException(nameof(scriptRuntimeCommandPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
+        _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
     }
 
     public async Task<ServiceInvocationAcceptedReceipt> DispatchAsync(
@@ -48,9 +52,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         CancellationToken ct)
     {
         var commandId = ResolveCommandId(request);
-        var envelope = CreateEnvelope(target.Service.PrimaryActorId, request.Payload, commandId, ResolveCorrelationId(request, commandId));
+        var correlationId = ResolveCorrelationId(request, commandId);
+        var runId = ResolveRunId(request, commandId);
+        await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Static, ct);
+        var envelope = CreateEnvelope(target.Service.PrimaryActorId, request.Payload, commandId, correlationId);
         await _dispatchPort.DispatchAsync(target.Service.PrimaryActorId, envelope, ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, ResolveCorrelationId(request, commandId));
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchScriptingAsync(
@@ -60,6 +67,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     {
         var plan = target.Artifact.DeploymentPlan.ScriptingPlan;
         var commandId = ResolveCommandId(request);
+        var correlationId = ResolveCorrelationId(request, commandId);
+        var runId = ResolveRunId(request, commandId);
+        await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Scripting, ct);
         await _scriptRuntimeCommandPort.RunRuntimeAsync(
             target.Service.PrimaryActorId,
             runId: commandId,
@@ -69,7 +79,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             request.Payload?.TypeUrl ?? string.Empty,
             request.Identity?.TenantId,
             ct);
-        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, ResolveCorrelationId(request, commandId));
+        return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchWorkflowAsync(
@@ -80,19 +90,50 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
-        var run = await _workflowRunActorPort.CreateRunAsync(
+        var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 target.Service.PrimaryActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveScopeId(chatRequest)),
+                ResolveAuthoritativeScopeId(request, chatRequest)),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
-        var envelope = CreateEnvelope(run.Actor.Id, Any.Pack(chatRequest), commandId, correlationId);
-        await _dispatchPort.DispatchAsync(run.Actor.Id, envelope, ct);
-        return CreateReceipt(target, run.Actor.Id, commandId, correlationId);
+        var runId = ResolveRunId(request, commandId);
+        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var envelope = CreateEnvelope(run.ActorId, Any.Pack(chatRequest), commandId, correlationId);
+        await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+    }
+
+    private async Task RegisterRunAsync(
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest request,
+        string runId,
+        string commandId,
+        string correlationId,
+        string targetActorId,
+        ServiceImplementationKind implementationKind,
+        CancellationToken ct)
+    {
+        var record = new ServiceRunRecord
+        {
+            ScopeId = request.Identity?.TenantId ?? string.Empty,
+            ServiceId = request.Identity?.ServiceId ?? string.Empty,
+            ServiceKey = target.Service.ServiceKey ?? string.Empty,
+            RunId = runId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            EndpointId = target.Endpoint.EndpointId ?? string.Empty,
+            ImplementationKind = implementationKind,
+            TargetActorId = targetActorId ?? string.Empty,
+            RevisionId = target.Service.RevisionId ?? string.Empty,
+            DeploymentId = target.Service.DeploymentId ?? string.Empty,
+            Status = ServiceRunStatus.Accepted,
+            Identity = request.Identity?.Clone(),
+        };
+        await _serviceRunRegistrationPort.RegisterAsync(record, ct);
     }
 
     private static void EnsureEndpointPayloadMatch(ServiceEndpointDescriptor endpoint, ServiceInvocationRequest request)
@@ -130,7 +171,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string targetActorId,
         string commandId,
-        string correlationId)
+        string correlationId,
+        string runId)
     {
         return new ServiceInvocationAcceptedReceipt
         {
@@ -141,6 +183,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             EndpointId = target.Endpoint.EndpointId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            RunId = runId,
         };
     }
 
@@ -154,6 +197,18 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ? commandId
             : request.CorrelationId;
 
+    private static string ResolveRunId(ServiceInvocationRequest request, string commandId) =>
+        string.IsNullOrWhiteSpace(request.CommandId)
+            ? commandId
+            : request.CommandId;
+
+    private static string ResolveAuthoritativeScopeId(ServiceInvocationRequest request, ChatRequestEvent chatRequest)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Identity?.TenantId))
+            return request.Identity.TenantId.Trim();
+        return ResolveScopeId(chatRequest);
+    }
+
     private static string ResolveScopeId(ChatRequestEvent chatRequest)
     {
         ArgumentNullException.ThrowIfNull(chatRequest);
@@ -161,16 +216,31 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        var metadata = chatRequest.Headers;
+        return TryResolveScopeId(chatRequest.Headers, out var scopeId) ||
+               TryResolveScopeId(chatRequest.Metadata, out scopeId)
+            ? scopeId
+            : string.Empty;
+    }
 
-        if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
+    private static bool TryResolveScopeId(MapField<string, string> values, out string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        if (values.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
             !string.IsNullOrWhiteSpace(workflowScopeId))
         {
-            return workflowScopeId.Trim();
+            scopeId = workflowScopeId.Trim();
+            return true;
         }
 
-        return metadata.TryGetValue("scope_id", out var scopeId) && !string.IsNullOrWhiteSpace(scopeId)
-            ? scopeId.Trim()
-            : string.Empty;
+        if (values.TryGetValue("scope_id", out var legacyScopeId) &&
+            !string.IsNullOrWhiteSpace(legacyScopeId))
+        {
+            scopeId = legacyScopeId.Trim();
+            return true;
+        }
+
+        scopeId = string.Empty;
+        return false;
     }
 }

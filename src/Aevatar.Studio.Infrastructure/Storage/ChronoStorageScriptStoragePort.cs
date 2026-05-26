@@ -17,7 +17,8 @@ internal sealed class ChronoStorageScriptStoragePort : IScriptStoragePort
         var bytes = Encoding.UTF8.GetBytes(sourceText);
         var key = $"scripts/{scriptId}.cs";
         var context = _blobClient.TryResolveContext(string.Empty, key);
-        if (context == null) return;
+        if (context == null)
+            return;
 
         await _blobClient.UploadAsync(context, bytes, "text/plain", ct);
     }

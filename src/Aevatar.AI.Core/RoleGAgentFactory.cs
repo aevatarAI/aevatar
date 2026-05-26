@@ -32,6 +32,9 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public static class RoleGAgentFactory
 {
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
     private static readonly IDeserializer Yaml = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
@@ -61,7 +64,6 @@ public static class RoleGAgentFactory
             MaxTokens = config.MaxTokens,
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
-            StreamBufferCapacity = config.StreamBufferCapacity,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
         });
@@ -76,7 +78,6 @@ public static class RoleGAgentFactory
             MaxTokens = normalized.MaxTokens ?? 0,
             MaxToolRounds = normalized.MaxToolRounds ?? 0,
             MaxHistoryMessages = normalized.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = normalized.StreamBufferCapacity ?? 0,
             EventModules = normalized.EventModules ?? string.Empty,
             EventRoutes = normalized.EventRoutes ?? string.Empty,
         };
@@ -92,10 +93,29 @@ public static class RoleGAgentFactory
         string? eventRoutes,
         IServiceProvider services)
     {
+        var finalModules = BuildModuleExtensions(eventModules, eventRoutes, services);
+        agent.SetModules(finalModules);
+    }
+
+    public static async Task ApplyModuleExtensionsAsync(
+        RoleGAgent agent,
+        string? eventModules,
+        string? eventRoutes,
+        IServiceProvider services,
+        CancellationToken ct = default)
+    {
+        var finalModules = BuildModuleExtensions(eventModules, eventRoutes, services);
+        await agent.SetModulesAsync(finalModules, ct);
+    }
+
+    private static IReadOnlyList<IEventModule<IEventHandlerContext>> BuildModuleExtensions(
+        string? eventModules,
+        string? eventRoutes,
+        IServiceProvider services)
+    {
         if (string.IsNullOrWhiteSpace(eventModules))
         {
-            agent.SetModules([]);
-            return;
+            return [];
         }
 
         var factories = services.GetServices<IEventModuleFactory<IEventHandlerContext>>().ToList();
@@ -103,8 +123,7 @@ public static class RoleGAgentFactory
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (moduleNames.Length == 0)
         {
-            agent.SetModules([]);
-            return;
+            return [];
         }
 
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
@@ -145,7 +164,7 @@ public static class RoleGAgentFactory
             }
         }
 
-        agent.SetModules(finalModules);
+        return finalModules;
     }
 
     private static string? PreferTopLevelText(string? topLevel, string? fallback)
@@ -188,9 +207,6 @@ public sealed class RoleYamlConfig
 
     /// <summary>最大历史消息条数。</summary>
     public int? MaxHistoryMessages { get; set; }
-
-    /// <summary>流式缓冲区容量。</summary>
-    public int? StreamBufferCapacity { get; set; }
 
     /// <summary>平铺写法：逗号分隔的 EventModule 名称列表。</summary>
     public string? EventModules { get; set; }

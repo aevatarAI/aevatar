@@ -1,0 +1,95 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.GAgents.Scheduled;
+
+/// <summary>
+/// Production implementation of <see cref="IUserAgentCatalogCommandPort"/>.
+/// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>
+/// (no direct <c>HandleEventAsync</c> on the actor instance).
+///
+/// Issue #466: this is an internal infrastructure port (not user-facing). It
+/// dispatches by id; ownership semantics live on the public
+/// <see cref="IUserAgentCatalogQueryPort"/> (caller-scoped) and are applied at
+/// the LLM tool layer, not here.
+///
+/// Refactor (iter1/cluster-001):
+///   Old pattern: catalog command plumbing was also available for execution updates.
+///   New principle: command port dispatches only catalog-owned membership mutations.
+///
+/// Refactor (iter4/cluster-009):
+///   Old pattern: Command dispatch polled projection documents to report observed state.
+///   New principle: Command ACKs are accepted-only; observation belongs to explicit query/projection paths.
+///
+/// Refactor (iter23/cluster-002):
+///   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+///   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+/// </summary>
+internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
+{
+    private const string PublisherActorId = "scheduled.user-agent-catalog";
+
+    private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
+
+    public UserAgentCatalogCommandPort(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort)
+    {
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+    }
+
+    // Refactor (iter23/cluster-002):
+    //   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+    //   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+    public async Task UpsertAsync(
+        UserAgentCatalogUpsertCommand command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+            throw new ArgumentException("AgentId is required for upsert.", nameof(command));
+
+        await EnsureCatalogActorAsync(ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
+        };
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
+    // Refactor (iter23/cluster-002):
+    //   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+    //   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+    public async Task TombstoneAsync(
+        string agentId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId))
+            throw new ArgumentException("agentId is required.", nameof(agentId));
+
+        await EnsureCatalogActorAsync(ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand { AgentId = agentId }),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
+        };
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
+    private async Task EnsureCatalogActorAsync(CancellationToken ct)
+    {
+        _ = await _actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            ?? await _actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
+    }
+}

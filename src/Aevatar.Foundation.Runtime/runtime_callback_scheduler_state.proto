@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package aevatar.foundation.runtime.callbacks;
+
+option csharp_namespace = "Aevatar.Foundation.Runtime.Callbacks";
+
+import "agent_messages.proto";
+
+enum RuntimeCallbackScheduleDeliveryMode {
+  RUNTIME_CALLBACK_SCHEDULE_DELIVERY_MODE_UNSPECIFIED = 0;
+  RUNTIME_CALLBACK_SCHEDULE_DELIVERY_MODE_FIRED_SELF_EVENT = 1;
+  RUNTIME_CALLBACK_SCHEDULE_DELIVERY_MODE_ENVELOPE_REDELIVERY = 2;
+}
+
+message RuntimeCallbackSchedulerState {
+  map<string, RuntimeScheduledCallback> reminder_callbacks = 1;
+}
+
+message RuntimeScheduledCallback {
+  string actor_id = 1;
+  string callback_id = 2;
+  int64 generation = 3;
+  bool periodic = 4;
+  int64 due_time_millis = 5;
+  int64 period_millis = 6;
+  int64 fire_index = 7;
+  RuntimeCallbackScheduleDeliveryMode delivery_mode = 8;
+  aevatar.EventEnvelope trigger_envelope = 9;
+  int32 slot_epoch = 10;
+}

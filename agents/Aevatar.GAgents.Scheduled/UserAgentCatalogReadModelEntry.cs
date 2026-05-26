@@ -1,0 +1,38 @@
+using Aevatar.Foundation.Abstractions;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.GAgents.Scheduled;
+
+/// <summary>
+/// Caller-scoped catalog read model row. Distinct from <see cref="UserAgentCatalogEntry"/>
+/// so runner-owned execution facts are never reintroduced into catalog actor state.
+/// </summary>
+public sealed class UserAgentCatalogReadModelEntry
+{
+    public string AgentId { get; init; } = string.Empty;
+    public string ConversationId { get; init; } = string.Empty;
+    public string NyxProviderSlug { get; init; } = string.Empty;
+    public string AgentType { get; init; } = string.Empty;
+    public string TemplateName { get; init; } = string.Empty;
+    public string ScopeId { get; init; } = string.Empty;
+    public string ApiKeyId { get; init; } = string.Empty;
+    public string ScheduleCron { get; init; } = string.Empty;
+    public string ScheduleTimezone { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public Timestamp? LastRunAt { get; init; }
+    public Timestamp? NextRunAt { get; init; }
+    public int ErrorCount { get; init; }
+    public string LastError { get; init; } = string.Empty;
+    public Timestamp? CreatedAt { get; init; }
+    public Timestamp? UpdatedAt { get; init; }
+    public bool Tombstoned { get; init; }
+    public string LarkReceiveId { get; init; } = string.Empty;
+    public string LarkReceiveIdType { get; init; } = string.Empty;
+    public string LarkReceiveIdFallback { get; init; } = string.Empty;
+    public string LarkReceiveIdTypeFallback { get; init; } = string.Empty;
+    public OwnerScope? OwnerScope { get; init; }
+    public long CatalogAuthorityStateVersion { get; init; }
+    public string CatalogLastEventId { get; init; } = string.Empty;
+    public long? RunnerAuthorityStateVersion { get; init; }
+    public string RunnerLastEventId { get; init; } = string.Empty;
+}

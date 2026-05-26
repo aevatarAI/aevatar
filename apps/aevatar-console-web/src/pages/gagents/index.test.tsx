@@ -34,10 +34,12 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
     listTypes: jest.fn(),
     listActors: jest.fn(),
     getScopeBinding: jest.fn(),
+    getDefaultRouteTarget: jest.fn(),
     bindScopeGAgent: jest.fn(),
     activateScopeBindingRevision: jest.fn(),
+    activateMemberBindingRevision: jest.fn(),
     retireScopeBindingRevision: jest.fn(),
-    addActor: jest.fn(),
+    retireMemberBindingRevision: jest.fn(),
     removeActor: jest.fn(),
     streamDraftRun: jest.fn(),
   },
@@ -106,10 +108,12 @@ describe("GAgentsPage", () => {
     listTypes: jest.Mock;
     listActors: jest.Mock;
     getScopeBinding: jest.Mock;
+    getDefaultRouteTarget: jest.Mock;
     bindScopeGAgent: jest.Mock;
     activateScopeBindingRevision: jest.Mock;
+    activateMemberBindingRevision: jest.Mock;
     retireScopeBindingRevision: jest.Mock;
-    addActor: jest.Mock;
+    retireMemberBindingRevision: jest.Mock;
     removeActor: jest.Mock;
     streamDraftRun: jest.Mock;
   };
@@ -154,7 +158,7 @@ describe("GAgentsPage", () => {
         actorIds: ["planner-1"],
       },
     ];
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: false,
       scopeId: "scope-a",
       serviceId: "",
@@ -181,13 +185,13 @@ describe("GAgentsPage", () => {
         preferredActorId: "orders-1",
       },
     });
-    mockedRuntimeGAgentApi.activateScopeBindingRevision.mockResolvedValue({
+    mockedRuntimeGAgentApi.activateMemberBindingRevision.mockResolvedValue({
       scopeId: "scope-a",
       serviceId: "service-orders",
       displayName: "Orders Assistant",
       revisionId: "rev-2",
     });
-    mockedRuntimeGAgentApi.retireScopeBindingRevision.mockResolvedValue({
+    mockedRuntimeGAgentApi.retireMemberBindingRevision.mockResolvedValue({
       scopeId: "scope-a",
       serviceId: "service-orders",
       revisionId: "rev-2",
@@ -199,27 +203,6 @@ describe("GAgentsPage", () => {
           ...group,
           actorIds: [...group.actorIds],
         }))
-    );
-    mockedRuntimeGAgentApi.addActor.mockImplementation(
-      async (_scopeId: string, gAgentType: string, actorId: string) => {
-        const existingGroup = actorGroupsState.find(
-          (group) => group.gAgentType === gAgentType
-        );
-        if (existingGroup) {
-          if (!existingGroup.actorIds.includes(actorId)) {
-            existingGroup.actorIds = [...existingGroup.actorIds, actorId];
-          }
-          return;
-        }
-
-        actorGroupsState = [
-          ...actorGroupsState,
-          {
-            gAgentType,
-            actorIds: [actorId],
-          },
-        ];
-      }
     );
     mockedRuntimeGAgentApi.removeActor.mockImplementation(
       async (_scopeId: string, gAgentType: string, actorId: string) => {
@@ -290,7 +273,7 @@ describe("GAgentsPage", () => {
     expect((await screen.findAllByDisplayValue("planner-1")).length).toBeGreaterThan(0);
   });
 
-  it("adds and removes saved actors from the registry", async () => {
+  it("does not expose direct actor registration from the registry drawer", async () => {
     window.history.replaceState(
       {},
       "",
@@ -307,31 +290,21 @@ describe("GAgentsPage", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Manage actors" }));
     expect((await screen.findAllByText("Actor Registry")).length).toBeGreaterThan(0);
-    fireEvent.change(screen.getByLabelText("Registry actor id"), {
-      target: { value: "orders-2" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save actor" }));
 
-    await waitFor(() => {
-      expect(mockedRuntimeGAgentApi.addActor).toHaveBeenCalledWith(
-        "scope-a",
-        "Tests.OrdersGAgent",
-        "orders-2"
-      );
-    });
-    expect(await screen.findByDisplayValue("orders-2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save actor" })).toBeNull();
+    expect(screen.queryByLabelText("Registry actor id")).toBeNull();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
 
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.removeActor).toHaveBeenCalledWith(
         "scope-a",
         "Tests.OrdersGAgent",
-        "orders-2"
+        "orders-1"
       );
     });
     await waitFor(() => {
-      expect(screen.queryByDisplayValue("orders-2")).toBeNull();
+      expect(screen.queryByDisplayValue("orders-1")).toBeNull();
     });
   });
 
@@ -360,6 +333,7 @@ describe("GAgentsPage", () => {
           actorTypeName: "Tests.OrdersGAgent, Tests",
           prompt: "hello agent",
           preferredActorId: undefined,
+          timeoutMs: 30000,
         },
         expect.any(AbortSignal)
       );
@@ -400,7 +374,7 @@ describe("GAgentsPage", () => {
   });
 
   it("surfaces the current binding and active binding type in the workbench", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
@@ -453,7 +427,7 @@ describe("GAgentsPage", () => {
   });
 
   it("requires acknowledgement before replacing a published binding and then publishes the revision", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
@@ -518,7 +492,7 @@ describe("GAgentsPage", () => {
 
     fireEvent.click(
       screen.getByRole("checkbox", {
-        name: "I understand this changes the scope's published default service.",
+        name: "I understand this changes the workspace's published default service.",
       })
     );
     fireEvent.click(screen.getByRole("button", { name: "Publish binding" }));
@@ -549,7 +523,7 @@ describe("GAgentsPage", () => {
   });
 
   it("activates and retires a selectable binding revision", async () => {
-    mockedRuntimeGAgentApi.getScopeBinding.mockResolvedValue({
+    mockedRuntimeGAgentApi.getDefaultRouteTarget.mockResolvedValue({
       available: true,
       scopeId: "scope-a",
       serviceId: "service-orders",
@@ -625,11 +599,11 @@ describe("GAgentsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
     await waitFor(() => {
       expect(
-        mockedRuntimeGAgentApi.activateScopeBindingRevision
+        mockedRuntimeGAgentApi.activateMemberBindingRevision
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
     expect(
-      await screen.findByText("Scope scope-a is now serving revision rev-2.")
+      await screen.findByText("Workspace scope-a is now serving revision rev-2.")
     ).toBeTruthy();
 
     const retireButton = screen
@@ -640,7 +614,7 @@ describe("GAgentsPage", () => {
 
     await waitFor(() => {
       expect(
-        mockedRuntimeGAgentApi.retireScopeBindingRevision
+        mockedRuntimeGAgentApi.retireMemberBindingRevision
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
     expect(

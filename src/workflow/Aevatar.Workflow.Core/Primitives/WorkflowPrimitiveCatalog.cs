@@ -2,8 +2,11 @@ namespace Aevatar.Workflow.Core.Primitives;
 
 /// <summary>
 /// Central primitive policy for workflow step types.
-/// Keeps alias canonicalization and closed-world restrictions in one place.
+/// Keeps alias canonicalization and built-in primitive discovery in one place.
 /// </summary>
+// Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
+//   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
+//   New principle: Removed dead capability flag; output describes available primitives only
 public static class WorkflowPrimitiveCatalog
 {
     private static readonly IReadOnlyDictionary<string, string> CanonicalTypeMap =
@@ -36,27 +39,6 @@ public static class WorkflowPrimitiveCatalog
             ["vote_consensus"] = "vote",
         };
 
-    private static readonly HashSet<string> ClosedWorldBlockedCanonicalTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "llm_call",
-        "tool_call",
-        "connector_call",
-        "secure_connector_call",
-        "evaluate",
-        "reflect",
-        "human_input",
-        "secure_input",
-        "human_approval",
-        "wait_signal",
-        "emit",
-        "parallel",
-        "race",
-        "map_reduce",
-        "vote",
-        "foreach",
-        "dynamic_workflow",
-    };
-
     private static readonly string[] IdentityPrimitives =
     [
         "transform", "assign", "retrieve_facts", "cache",
@@ -64,11 +46,19 @@ public static class WorkflowPrimitiveCatalog
         "workflow_yaml_validate",
     ];
 
+    private static readonly string[] CapabilityPrimitives =
+    [
+        "llm_call", "tool_call", "connector_call", "secure_connector_call",
+        "evaluate", "reflect", "human_input", "secure_input",
+        "human_approval", "wait_signal", "emit", "parallel", "race",
+        "map_reduce", "vote", "foreach", "dynamic_workflow",
+    ];
+
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();
 
     private static HashSet<string> DeriveBuiltInCanonicalTypes()
     {
-        var set = new HashSet<string>(ClosedWorldBlockedCanonicalTypes, StringComparer.OrdinalIgnoreCase);
+        var set = new HashSet<string>(CapabilityPrimitives, StringComparer.OrdinalIgnoreCase);
         foreach (var canonical in CanonicalTypeMap.Values)
             set.Add(canonical);
         foreach (var identity in IdentityPrimitives)
@@ -86,9 +76,6 @@ public static class WorkflowPrimitiveCatalog
             ? canonical
             : normalized;
     }
-
-    // Closed-world primitive blocking was removed; keep the method for compatibility.
-    public static bool IsClosedWorldBlocked(string? stepType) => false;
 
     public static bool IsStepTypeParameterKey(string key) =>
         key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) ||

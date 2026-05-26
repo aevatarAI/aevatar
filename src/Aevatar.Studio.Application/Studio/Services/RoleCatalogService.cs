@@ -4,28 +4,34 @@ using System.Text.Json;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
 public sealed class RoleCatalogService
 {
-    private readonly IRoleCatalogStore _store;
+    private readonly IRoleCatalogQueryPort _queryPort;
+    private readonly IRoleCatalogCommandPort _commandPort;
     private readonly IRoleCatalogImportParser _importParser;
 
     public RoleCatalogService(
-        IRoleCatalogStore store,
+        IRoleCatalogQueryPort queryPort,
+        IRoleCatalogCommandPort commandPort,
         IRoleCatalogImportParser importParser)
     {
-        _store = store;
+        _queryPort = queryPort;
+        _commandPort = commandPort;
         _importParser = importParser;
     }
 
     public async Task<RoleCatalogResponse> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var catalog = await _store.GetRoleCatalogAsync(cancellationToken);
+        var catalog = await _queryPort.GetRoleCatalogAsync(cancellationToken);
         return ToResponse(catalog);
     }
 
     public async Task<RoleDraftResponse> GetDraftAsync(CancellationToken cancellationToken = default)
     {
-        var draft = await _store.GetRoleDraftAsync(cancellationToken);
+        var draft = await _queryPort.GetRoleDraftAsync(cancellationToken);
         return ToDraftResponse(draft);
     }
 
@@ -36,7 +42,7 @@ public sealed class RoleCatalogService
         var roles = request.Roles ?? [];
         EnsureUniqueIds(roles);
 
-        var saved = await _store.SaveRoleCatalogAsync(
+        var saved = await _commandPort.SaveRoleCatalogAsync(
             new StoredRoleCatalog(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
@@ -45,6 +51,7 @@ public sealed class RoleCatalogService
                     .Where(role => !string.IsNullOrWhiteSpace(role.Id))
                     .Select(ToStoredRole)
                     .ToList()),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToResponse(saved);
@@ -52,7 +59,7 @@ public sealed class RoleCatalogService
 
     public async Task<ImportRoleCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
+        var imported = await _commandPort.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
     }
 
@@ -96,24 +103,25 @@ public sealed class RoleCatalogService
     {
         if (request.Draft is null)
         {
-            await _store.DeleteRoleDraftAsync(cancellationToken);
+            await _commandPort.DeleteRoleDraftAsync(request.ExpectedVersion, cancellationToken);
             return await GetDraftAsync(cancellationToken);
         }
 
-        var saved = await _store.SaveRoleDraftAsync(
+        var saved = await _commandPort.SaveRoleDraftAsync(
             new StoredRoleDraft(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
                 FileExists: false,
                 UpdatedAtUtc: DateTimeOffset.UtcNow,
                 Draft: ToStoredRoleDraft(request.Draft)),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToDraftResponse(saved);
     }
 
-    public Task DeleteDraftAsync(CancellationToken cancellationToken = default) =>
-        _store.DeleteRoleDraftAsync(cancellationToken);
+    public Task DeleteDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
+        _commandPort.DeleteRoleDraftAsync(expectedVersion, cancellationToken);
 
     private static void EnsureUniqueIds(IEnumerable<RoleDefinitionDto> roles)
     {
@@ -164,7 +172,8 @@ public sealed class RoleCatalogService
             catalog.HomeDirectory,
             catalog.FilePath,
             catalog.FileExists,
-            catalog.Roles.Select(ToDto).ToList());
+            catalog.Roles.Select(ToDto).ToList(),
+            catalog.Version);
 
     private static RoleDraftResponse ToDraftResponse(StoredRoleDraft draft) =>
         new(
@@ -172,7 +181,8 @@ public sealed class RoleCatalogService
             draft.FilePath,
             draft.FileExists,
             draft.UpdatedAtUtc,
-            draft.Draft is null ? null : ToDto(draft.Draft));
+            draft.Draft is null ? null : ToDto(draft.Draft),
+            draft.Version);
 
     private static RoleDefinitionDto ToDto(StoredRoleDefinition role) =>
         new(

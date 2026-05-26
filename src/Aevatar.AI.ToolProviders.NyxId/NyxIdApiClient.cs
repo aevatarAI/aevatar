@@ -1,16 +1,46 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
+public sealed record NyxIdSessionRefreshResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? RefreshToken = null,
+    int? ExpiresIn = null,
+    string? Detail = null);
+
+public sealed record NyxIdChannelRelayReplyResult(
+    bool Succeeded,
+    string? MessageId = null,
+    string? PlatformMessageId = null,
+    string? Detail = null,
+    bool EditUnsupported = false);
+
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
-public sealed class NyxIdApiClient
+public sealed class NyxIdApiClient : IDisposable
 {
+    /// <summary>
+    /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
+    /// when the caller does not specify one in <c>extraHeaders</c>. GitHub's REST API rejects
+    /// requests without a <c>User-Agent</c> with HTTP 403 ("Request forbidden by administrative
+    /// rules") — see https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required.
+    /// .NET's <c>HttpClient</c> does not set one by default; NyxID proxies the client's headers
+    /// through to GitHub, so the absence at the .NET layer manifests as a GitHub 403 in
+    /// production. CLI tools written against <c>reqwest</c> (e.g. <c>nyxid proxy request</c>)
+    /// happen to send <c>reqwest/x.y</c> as their default and so never hit this.
+    /// </summary>
+    public const string DefaultProxyUserAgent = "aevatar-agent-builder";
+    private const string UserAgentHeaderName = "User-Agent";
+
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public NyxIdApiClient(
         NyxIdToolOptions options,
@@ -18,7 +48,11 @@ public sealed class NyxIdApiClient
         ILogger<NyxIdApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could construct and permanently pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 
@@ -49,6 +83,54 @@ public sealed class NyxIdApiClient
     public Task<string> CreateServiceAsync(string token, string body, CancellationToken ct) =>
         PostAsync(token, "/api/v1/keys", body, ct);
 
+    // ─── Session Refresh ───
+
+    public async Task<NyxIdSessionRefreshResult> RefreshSessionAsync(string refreshToken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            return new NyxIdSessionRefreshResult(false, Detail: "missing_refresh_token");
+
+        var response = await PostWithoutAuthAsync(
+            "/api/v1/auth/refresh",
+            JsonSerializer.Serialize(new { refresh_token = refreshToken.Trim() }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+            return new NyxIdSessionRefreshResult(false, Detail: errorDetail);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+
+            if (!root.TryGetProperty("access_token", out var accessTokenProp) ||
+                accessTokenProp.ValueKind != JsonValueKind.String)
+            {
+                return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response missing_access_token");
+            }
+
+            var refreshTokenValue = root.TryGetProperty("refresh_token", out var refreshTokenProp) &&
+                                    refreshTokenProp.ValueKind == JsonValueKind.String
+                ? refreshTokenProp.GetString()
+                : null;
+            var expiresIn = root.TryGetProperty("expires_in", out var expiresInProp) &&
+                            expiresInProp.ValueKind == JsonValueKind.Number
+                ? expiresInProp.GetInt32()
+                : (int?)null;
+
+            return new NyxIdSessionRefreshResult(
+                true,
+                AccessToken: accessTokenProp.GetString(),
+                RefreshToken: refreshTokenValue,
+                ExpiresIn: expiresIn);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "NyxID session refresh returned invalid JSON");
+            return new NyxIdSessionRefreshResult(false, Detail: "invalid_refresh_response invalid_json");
+        }
+    }
+
     // ─── Proxy ───
 
     public async Task<string> ProxyRequestAsync(
@@ -68,11 +150,25 @@ public sealed class NyxIdApiClient
         using var request = new HttpRequestMessage(httpMethod, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        var callerSpecifiedUserAgent = false;
         if (extraHeaders != null)
         {
             foreach (var (key, value) in extraHeaders)
+            {
                 request.Headers.TryAddWithoutValidation(key, value);
+                if (string.Equals(key, UserAgentHeaderName, StringComparison.OrdinalIgnoreCase))
+                    callerSpecifiedUserAgent = true;
+            }
         }
+
+        // GitHub-required User-Agent (#417 follow-up). NyxID proxies whatever the .NET client
+        // sends, and HttpClient sends none by default, so without this every GitHub call lands
+        // as 403 "Request forbidden by administrative rules". Inject a default for *all* proxy
+        // targets — non-GitHub services don't care about UA either way, and pinning it at the
+        // proxy boundary means SkillRunner / agent-builder / preflight all benefit without
+        // every call site remembering to pass it.
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
         if (!string.IsNullOrEmpty(body) && httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
         {
@@ -81,6 +177,22 @@ public sealed class NyxIdApiClient
 
         return await SendAsync(request, ct);
     }
+
+    // ─── SSH ───
+
+    /// <summary>
+    /// Executes a shell command on a remote SSH host through NyxID's SSH gateway.
+    /// </summary>
+    /// <param name="serviceIdOrSlug">NyxID service identifier or slug for an SSH-typed service (endpoint registered as <c>ssh://host:port</c>).</param>
+    /// <param name="body">JSON body matching NyxID's <c>SshExecRequest</c>: <c>{ command, principal, timeout_secs }</c>.</param>
+    /// <remarks>
+    /// Mirrors <c>POST /api/v1/ssh/{service_id}/exec</c>. NyxID enforces a 1 MB output cap, a max 300s
+    /// timeout, an 8192-char command length, and a built-in dangerous-command filter. Non-SSH services
+    /// reject this route, so callers must filter to SSH-typed slugs before invoking (the agent tool
+    /// surfaces this in its description so the LLM does not call HTTP-typed services here).
+    /// </remarks>
+    public Task<string> SshExecAsync(string token, string serviceIdOrSlug, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
 
     // ─── API Keys ───
 
@@ -146,13 +258,16 @@ public sealed class NyxIdApiClient
 
     // ─── User Services (for route command) ───
 
+    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/user-services", ct);
+
     public Task<string> UpdateUserServiceAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services", ct);
+        GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
     // ─── API Keys (additions) ───
 
@@ -175,6 +290,12 @@ public sealed class NyxIdApiClient
 
     public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
+
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: approval status reads were hidden inside a blocking remote handler loop.
+    //   New principle: status reads are single-shot calls driven by actor self-continuation events.
+    public Task<string> GetApprovalStatusAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/status", ct);
 
     public Task<string> ListApprovalGrantsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/grants", ct);
@@ -238,8 +359,32 @@ public sealed class NyxIdApiClient
 
     // ─── LLM ───
 
-    public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/llm/status", ct);
+    public async Task<string> GetLlmServicesAsync(string token, CancellationToken ct)
+    {
+        var response = await GetAsync(token, "/api/v1/llm/services", ct).ConfigureAwait(false);
+        return TryParseErrorStatus(response, out var status) && status == 404
+            ? await GetAsync(token, "/api/v1/llm/status", ct).ConfigureAwait(false)
+            : response;
+    }
+
+    public Task<string> ProvisionLlmServiceAsync(string token, string provisionEndpointId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provisionEndpointId);
+        var candidate = provisionEndpointId.Trim();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            candidate.Contains("..", StringComparison.Ordinal) ||
+            candidate.Contains("://", StringComparison.Ordinal) ||
+            candidate.Contains("//", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+        }
+
+        var normalized = candidate.Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+
+        return PostAsync(token, $"/api/v1/llm/services/{Uri.EscapeDataString(normalized)}", "{}", ct);
+    }
 
     // ─── Providers ───
 
@@ -287,8 +432,10 @@ public sealed class NyxIdApiClient
     public Task<string> VerifyChannelBotAsync(string token, string id, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}/verify", "{}", ct);
 
-    public Task<string> ListConversationRoutesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/channel-conversations", ct);
+    public Task<string> ListConversationRoutesAsync(string token, string? botId, CancellationToken ct) =>
+        GetAsync(token, string.IsNullOrWhiteSpace(botId)
+            ? "/api/v1/channel-conversations"
+            : $"/api/v1/channel-conversations?bot_id={Uri.EscapeDataString(botId)}", ct);
 
     public Task<string> GetConversationRouteAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
@@ -302,12 +449,254 @@ public sealed class NyxIdApiClient
     public Task<string> DeleteConversationRouteAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 
+    // ─── Organizations ───
+
+    public Task<string> ListOrgsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/orgs", ct);
+
+    public Task<string> GetOrgAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> CreateOrgAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/orgs", body, ct);
+
+    public Task<string> UpdateOrgAsync(string token, string id, string body, CancellationToken ct) =>
+        PatchAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", body, ct);
+
+    public Task<string> DeleteOrgAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> JoinOrgAsync(string token, string nonce, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/join/{Uri.EscapeDataString(nonce)}", "{}", ct);
+
+    public Task<string> SetPrimaryOrgAsync(string token, string body, CancellationToken ct) =>
+        PatchAsync(token, "/api/v1/users/me/primary-org", body, ct);
+
+    // ─── Org Members ───
+
+    public Task<string> ListOrgMembersAsync(string token, string orgId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members", ct);
+
+    public Task<string> AddOrgMemberAsync(string token, string orgId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members", body, ct);
+
+    public Task<string> UpdateOrgMemberAsync(string token, string orgId, string memberId, string body, CancellationToken ct) =>
+        PatchAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members/{Uri.EscapeDataString(memberId)}", body, ct);
+
+    public Task<string> RemoveOrgMemberAsync(string token, string orgId, string memberId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members/{Uri.EscapeDataString(memberId)}", ct);
+
+    // ─── Org Invites ───
+
+    public Task<string> ListOrgInvitesAsync(string token, string orgId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites", ct);
+
+    public Task<string> CreateOrgInviteAsync(string token, string orgId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites", body, ct);
+
+    public Task<string> CancelOrgInviteAsync(string token, string orgId, string inviteId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites/{Uri.EscapeDataString(inviteId)}", ct);
+
+    // ─── Channel Events ───
+
+    public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
+
+    /// <summary>
+    /// Sends a channel relay reply with plain text only.
+    /// </summary>
+    /// <remarks>
+    /// Kept as a thin wrapper over <see cref="SendChannelRelayReplyAsync"/> so legacy call sites that
+    /// only need a text fallback continue to compile. New call sites should prefer the rich overload.
+    /// </remarks>
+    public Task<NyxIdChannelRelayReplyResult> SendChannelRelayTextReplyAsync(
+        string token,
+        string messageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return SendChannelRelayReplyAsync(token, messageId, new ChannelRelayReplyBody(text), ct);
+    }
+
+    /// <summary>
+    /// Sends a channel relay reply with arbitrary body shape — text fallback and/or rich card metadata.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="body"/> is serialized as <c>{ message_id, reply: { text?, metadata: { card? } } }</c>.
+    /// Transport-neutral callers (for example, the interactive reply dispatcher) use this overload to
+    /// forward composer output verbatim; NyxID's per-platform adapter renders the card for each platform.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> SendChannelRelayReplyAsync(
+        string token,
+        string messageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(messageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_message_id");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply",
+            JsonSerializer.Serialize(new
+            {
+                message_id = messageId,
+                reply = BuildReplyNode(body),
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+            return new NyxIdChannelRelayReplyResult(false, Detail: errorDetail);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: root.TryGetProperty("message_id", out var replyMessageId) && replyMessageId.ValueKind == JsonValueKind.String
+                    ? replyMessageId.GetString()
+                    : null,
+                PlatformMessageId: root.TryGetProperty("platform_message_id", out var platformMessageId) &&
+                                   platformMessageId.ValueKind == JsonValueKind.String
+                    ? platformMessageId.GetString()
+                    : null);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_response");
+        }
+    }
+
+    private static object BuildReplyNode(ChannelRelayReplyBody body)
+    {
+        var hasText = !string.IsNullOrWhiteSpace(body.Text);
+        var hasCard = body.Metadata?.Card is not null;
+
+        if (hasText && hasCard)
+            return new { text = body.Text, metadata = new { card = body.Metadata!.Card } };
+        if (hasText)
+            return new { text = body.Text };
+
+        return new { metadata = new { card = body.Metadata!.Card } };
+    }
+
+    /// <summary>
+    /// Edits a previously sent channel-relay reply so the downstream platform sees updated content
+    /// (per NyxID #480 / #483: <c>POST /api/v1/channel-relay/reply/update</c>).
+    /// </summary>
+    /// <param name="platformMessageId">
+    /// The upstream platform-owned message identifier (for Lark, the <c>om_xxx</c> value) returned
+    /// by a prior send call.
+    /// </param>
+    /// <remarks>
+    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> as a terminal
+    /// signal and stop issuing edits against this message for the remainder of the turn.
+    /// </remarks>
+    public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
+        string token,
+        string platformMessageId,
+        ChannelRelayReplyBody body,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        if (string.IsNullOrWhiteSpace(token))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id");
+        if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
+            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+
+        var response = await PostAsync(
+            token,
+            "/api/v1/channel-relay/reply/update",
+            JsonSerializer.Serialize(new
+            {
+                message_id = platformMessageId,
+                reply = BuildReplyNode(body),
+            }),
+            ct);
+
+        if (TryParseErrorEnvelope(response, out var errorDetail))
+        {
+            var editUnsupported =
+                errorDetail.Contains("edit_unsupported", StringComparison.Ordinal) ||
+                errorDetail.Contains("nyx_status=501", StringComparison.Ordinal);
+            return new NyxIdChannelRelayReplyResult(
+                false,
+                Detail: errorDetail,
+                EditUnsupported: editUnsupported);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var upstream = root.TryGetProperty("upstream_message_id", out var upstreamProp) &&
+                           upstreamProp.ValueKind == JsonValueKind.String
+                ? upstreamProp.GetString()
+                : null;
+            return new NyxIdChannelRelayReplyResult(
+                true,
+                MessageId: null,
+                PlatformMessageId: upstream);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Nyx channel relay reply update returned invalid JSON");
+            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_update_response");
+        }
+    }
+
+    /// <summary>
+    /// Text-only convenience wrapper over
+    /// <see cref="UpdateChannelRelayReplyAsync(string, string, ChannelRelayReplyBody, CancellationToken)"/>.
+    /// </summary>
+    public Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayTextReplyAsync(
+        string token,
+        string platformMessageId,
+        string text,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+
+        return UpdateChannelRelayReplyAsync(token, platformMessageId, new ChannelRelayReplyBody(text), ct);
+    }
+
+    // ─── Admin Invite Codes ───
+
+    public Task<string> ListInviteCodesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/admin/invite-codes", ct);
+
+    public Task<string> CreateInviteCodeAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/admin/invite-codes", body, ct);
+
+    public Task<string> DeactivateInviteCodeAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/admin/invite-codes/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── API Key Bindings ───
+
+    public Task<string> BindApiKeyAsync(string token, string keyId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(keyId)}/bindings", body, ct);
+
     // ─── HTTP helpers ───
 
     private string GetBaseUrl() =>
         _options.BaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("NyxID base URL is not configured.");
 
-    private async Task<string> GetAsync(string token, string path, CancellationToken ct)
+    internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -315,7 +704,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
+    internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -324,7 +713,24 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
+    internal async Task<string> PostWithoutAuthAsync(string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    internal async Task<string> PatchAsync(string token, string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Patch, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    internal async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Put, url);
@@ -333,7 +739,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
+    internal async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Delete, url);
@@ -358,6 +764,15 @@ public sealed class NyxIdApiClient
 
             return content;
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is a control-flow signal, not an HTTP failure. Wrapping it as
+            // {"error":true,"message":"A task was canceled."} would swallow per-call hard
+            // timeouts that callers (e.g. NyxIdSshExecTool) install on top of the LLM run's
+            // CT. Let the exception bubble so callers can map their own cancellation source
+            // to a clearer error payload (PR #562 SSH timeout incident, 2026-05-08).
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);
@@ -367,4 +782,81 @@ public sealed class NyxIdApiClient
 
     private static string EscapeJsonString(string value) =>
         System.Text.Json.JsonSerializer.Serialize(value);
+
+    private static bool TryParseErrorEnvelope(string response, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            detail = "empty_response";
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True)
+            {
+                return false;
+            }
+
+            var status = root.TryGetProperty("status", out var statusProp) &&
+                         statusProp.ValueKind == JsonValueKind.Number
+                ? statusProp.GetInt32()
+                : (int?)null;
+            var body = root.TryGetProperty("body", out var bodyProp) &&
+                       bodyProp.ValueKind == JsonValueKind.String
+                ? bodyProp.GetString()
+                : null;
+            var message = root.TryGetProperty("message", out var messageProp) &&
+                          messageProp.ValueKind == JsonValueKind.String
+                ? messageProp.GetString()
+                : null;
+
+            detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
+                     (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
+                     (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+            return true;
+        }
+        catch (JsonException)
+        {
+            detail = $"invalid_error_envelope response_length={response.Length}";
+            return true;
+        }
+    }
+
+    private static bool TryParseErrorStatus(string response, out int status)
+    {
+        status = 0;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True ||
+                !root.TryGetProperty("status", out var statusProp) ||
+                statusProp.ValueKind != JsonValueKind.Number)
+            {
+                return false;
+            }
+
+            status = statusProp.GetInt32();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
+    }
 }

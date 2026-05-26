@@ -79,6 +79,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        services.TryAddSingleton<IEventStoreMaintenance>(sp =>
+            (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
@@ -94,6 +96,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorTypeProbe, LocalActorTypeProbe>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
+
+        // Kind-token identity registry (issue #498). Mirrors the Orleans
+        // runtime registration so in-memory + Orleans paths share the same
+        // identity model.
+        services.AddAevatarAgentKindRegistry();
 
         return services;
     }
@@ -111,6 +118,8 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
         services.Replace(ServiceDescriptor.Singleton(options));
         services.Replace(ServiceDescriptor.Singleton<IEventStore, FileEventStore>());
+        services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
+            (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
         return services;
     }

@@ -52,7 +52,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "root-t", "mid-t", "leaf-t", "collector-dedup" })
+        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "restored-2", "root-t", "mid-t", "leaf-t", "collector-dedup" })
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
@@ -160,6 +160,27 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         restored.Should().NotBeNull();
         restored!.Id.Should().Be(agentId);
         restored.Agent.Should().BeOfType<CollectorAgent>();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithExistingActorIdAndSameType_ReturnsExistingActor()
+    {
+        var first = await _runtime.CreateAsync<CollectorAgent>("restored-2");
+
+        var second = await _runtime.CreateAsync<CollectorAgent>("restored-2");
+
+        second.Should().BeSameAs(first);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithExistingActorIdAndDifferentType_Throws()
+    {
+        await _runtime.CreateAsync<CollectorAgent>("restored-2");
+
+        var act = () => _runtime.CreateAsync<EchoAgent>("restored-2");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists with agent type*");
     }
 
     [Fact]

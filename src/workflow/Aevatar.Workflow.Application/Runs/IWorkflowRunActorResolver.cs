@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -11,7 +10,6 @@ public interface IWorkflowRunActorResolver
 }
 
 public sealed record WorkflowActorResolutionResult(
-    IActor? Actor,
+    WorkflowRunCreationReceipt? Target,
     string WorkflowNameForRun,
-    WorkflowChatRunStartError Error,
-    IReadOnlyList<string>? CreatedActorIds = null);
+    WorkflowChatRunStartError Error);

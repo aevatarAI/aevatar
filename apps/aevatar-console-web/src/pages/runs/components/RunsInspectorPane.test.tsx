@@ -11,7 +11,7 @@ import type {
 import RunsInspectorPane from "./RunsInspectorPane";
 
 describe("RunsInspectorPane", () => {
-  it("renders the digest, selection, and runtime sidecars sections", () => {
+  it("renders the summary, selected event, and context sections", () => {
     const onOpenInspector = jest.fn();
     const runFocus: RunFocusRecord = {
       alertType: "warning",
@@ -97,21 +97,21 @@ describe("RunsInspectorPane", () => {
       />
     );
 
-    expect(screen.getByText("Run digest")).toBeInTheDocument();
+    expect(screen.getByText("Run summary")).toBeInTheDocument();
     expect(
       screen.queryByText(
         "A compact summary of the current run state, identifiers, and latest visible output.",
       ),
     ).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("Selection")).toBeInTheDocument();
-    expect(screen.getByText("Runtime sidecars")).toBeInTheDocument();
+    expect(screen.getByText("Selected event")).toBeInTheDocument();
+    expect(screen.getByText("Context")).toBeInTheDocument();
     expect(screen.getByText("Latest message")).toBeInTheDocument();
     expect(screen.getByText("Step · review-step")).toBeInTheDocument();
-    expect(screen.getByText("Route snapshot")).toBeInTheDocument();
-    expect(screen.getByText("Actor snapshot")).toBeInTheDocument();
+    expect(screen.getAllByText("Route").length).toBeGreaterThan(0);
+    expect(screen.getByText("Actor state")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open inspector" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
 
     expect(onOpenInspector).toHaveBeenCalledTimes(1);
   });

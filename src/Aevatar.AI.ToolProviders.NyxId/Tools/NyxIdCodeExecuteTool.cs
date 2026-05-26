@@ -54,7 +54,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -80,9 +80,50 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
         _logger.LogInformation("[code_execute] {Language} via slug={Slug}", language, slug);
 
-        var body = JsonSerializer.Serialize(new { language, code });
-        var result = await _client.ProxyRequestAsync(token, slug, "/run", "POST", body, null, ct);
-        return result;
+        // Current chrono-sandbox-service exposes /execute with body { language, script }.
+        // Older sandbox builds expose /run with body { language, code }. We POST the modern
+        // contract first; on a NyxID-proxy 404 (slug exists but upstream returned 404, which
+        // indicates the path doesn't exist on that backend), retry the legacy contract so a
+        // host still pinned to the old sandbox keeps working.
+        var modernBody = JsonSerializer.Serialize(new { language = language, script = code });
+        var modernResult = await _client.ProxyRequestAsync(token, slug, "/execute", "POST", modernBody, null, ct);
+        if (!IsUpstream404(modernResult))
+            return modernResult;
+
+        _logger.LogInformation(
+            "[code_execute] {Slug} returned 404 on /execute; retrying legacy /run contract", slug);
+        var legacyBody = JsonSerializer.Serialize(new { language = language, code = code });
+        return await _client.ProxyRequestAsync(token, slug, "/run", "POST", legacyBody, null, ct);
+    }
+
+    /// <summary>
+    /// NyxID's proxy wraps non-2xx upstream responses as
+    /// <c>{"error":true,"status":N,"body":"..."}</c>. A 404 here means "slug exists but the
+    /// requested path doesn't" — the case where we should retry the legacy contract.
+    /// Service-not-found / catalog-miss surfaces with a different shape and is left alone.
+    /// </summary>
+    private static bool IsUpstream404(string proxyResponse)
+    {
+        if (string.IsNullOrWhiteSpace(proxyResponse))
+            return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(proxyResponse);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("error", out var errProp) ||
+                errProp.ValueKind != JsonValueKind.True)
+            {
+                return false;
+            }
+            return root.TryGetProperty("status", out var statusProp) &&
+                   statusProp.ValueKind == JsonValueKind.Number &&
+                   statusProp.GetInt32() == 404;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -90,7 +131,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     /// </summary>
     private static string? ResolveSandboxSlugFromContext()
     {
-        var context = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.ConnectedServicesContext);
+        var context = AgentToolRequestContext.ConnectedServicesContext;
         if (string.IsNullOrWhiteSpace(context))
             return null;
 

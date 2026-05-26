@@ -462,8 +462,11 @@ export const workbenchHudBodyStyle = {
 } as const;
 
 export const workbenchOverviewGridStyle = {
+  display: "flex",
   flex: 1,
+  flexDirection: "column",
   minHeight: 0,
+  overflow: "hidden",
 } as const;
 
 export const workbenchOverviewCardStyle = {
@@ -538,30 +541,6 @@ export const workbenchConsoleScrollStyle = {
   overflowX: "hidden",
   overflowY: "auto",
   padding: 12,
-} as const;
-
-export const workbenchMessageListStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-} as const;
-
-export const workbenchEventHeaderStyle = {
-  borderBottom: "1px solid var(--ant-color-border-secondary)",
-  color: "var(--ant-color-text-secondary)",
-  display: "grid",
-  fontSize: 12,
-  gap: 12,
-  gridTemplateColumns: "220px 120px minmax(0, 1fr)",
-  padding: "12px 12px 8px",
-} as const;
-
-export const workbenchEventRowStyle = {
-  borderBottom: "1px solid rgba(5, 5, 5, 0.06)",
-  display: "grid",
-  gap: 12,
-  gridTemplateColumns: "220px 120px minmax(0, 1fr)",
-  padding: "10px 12px",
 } as const;
 
 export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [

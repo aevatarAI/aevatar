@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -77,9 +78,14 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
 
+        var descriptor = new TReadModel().Descriptor;
         var normalizedMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(indexMetadata);
+        var augmentedMetadata = ElasticsearchProjectionDescriptorMappingSupport.AugmentMetadata(
+            normalizedMetadata,
+            descriptor);
+        var finalMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(augmentedMetadata);
         _indexPrefix = options.IndexPrefix?.Trim() ?? "";
-        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(normalizedMetadata.IndexName);
+        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(finalMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
         _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
@@ -87,17 +93,16 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _supportsDynamicIndexing = indexScopeSelector is not null;
-        _indexMetadata = normalizedMetadata with { IndexName = _indexName };
+        _indexMetadata = finalMetadata with { IndexName = _indexName };
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _indexScopeSelector = indexScopeSelector;
         _defaultSortField = options.DefaultSortField?.Trim() ?? "";
-        var descriptor = new TReadModel().Descriptor;
         _fieldPathResolver = BuildFieldPathResolver(descriptor);
         _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
 
-        _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex);
+        _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex, _logger);
         _writer = new ElasticsearchOptimisticWriter<TReadModel>(
             _httpClient, _formatter, _parser, _autoCreateIndex, _missingIndexBehavior, _logger);
     }
@@ -111,6 +116,62 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         await _indexManager.EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
         var keyValue = ResolveReadModelKey(readModel);
         return await _writer.UpsertAsync(indexTarget.IndexName, keyValue, readModel, ct);
+    }
+
+    public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelWritesUnsupportedForDelete();
+
+        var trimmedId = id.Trim();
+        // Refactor (iter89/cluster-089-projection-provider-elapsed-clock):
+        // Old: elapsedMs used DateTimeOffset.UtcNow subtraction, so wall-clock changes could skew duration logs.
+        // New: elapsedMs uses a monotonic Stopwatch timestamp; projection clocks remain for semantic timestamps only.
+        var startedAtTimestamp = Stopwatch.GetTimestamp();
+        try
+        {
+            using var response = await _httpClient.DeleteAsync(
+                $"{_indexName}/_doc/{Uri.EscapeDataString(trimmedId)}",
+                ct);
+            ProjectionWriteResult result;
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
+                TryHandleMissingIndexForDelete(notFoundPayload);
+                result = ProjectionWriteResult.Duplicate();
+            }
+            else
+            {
+                await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "delete", ct);
+                var payload = await response.Content.ReadAsStringAsync(ct);
+                result = ResolveDeleteResultFromPayload(payload);
+            }
+
+            var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model delete completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                result.Disposition);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model delete failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                trimmedId,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
     }
 
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
@@ -367,24 +428,35 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private static Dictionary<string, FieldDescriptor> BuildDescriptorFieldMap(MessageDescriptor descriptor)
     {
         var fields = new Dictionary<string, FieldDescriptor>(StringComparer.Ordinal);
-        VisitDescriptorFields(descriptor, prefix: null, fields);
+        VisitDescriptorFields(descriptor, prefix: null, fields, new HashSet<MessageDescriptor>());
         return fields;
     }
 
     private static void VisitDescriptorFields(
         MessageDescriptor descriptor,
         string? prefix,
-        Dictionary<string, FieldDescriptor> fields)
+        Dictionary<string, FieldDescriptor> fields,
+        HashSet<MessageDescriptor> ancestry)
     {
-        foreach (var field in descriptor.Fields.InDeclarationOrder())
-        {
-            var path = string.IsNullOrWhiteSpace(prefix)
-                ? field.Name
-                : $"{prefix}.{field.Name}";
-            fields[path] = field;
+        if (!ancestry.Add(descriptor))
+            return;
 
-            if (field.FieldType == FieldType.Message && field.MessageType != null)
-                VisitDescriptorFields(field.MessageType, path, fields);
+        try
+        {
+            foreach (var field in descriptor.Fields.InDeclarationOrder())
+            {
+                var path = string.IsNullOrWhiteSpace(prefix)
+                    ? field.Name
+                    : $"{prefix}.{field.Name}";
+                fields[path] = field;
+
+                if (field.FieldType == FieldType.Message && field.MessageType != null)
+                    VisitDescriptorFields(field.MessageType, path, fields, ancestry);
+            }
+        }
+        finally
+        {
+            ancestry.Remove(descriptor);
         }
     }
 
@@ -421,6 +493,24 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return true;
     }
 
+    private void TryHandleMissingIndexForDelete(string payload)
+    {
+        if (!ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
+            return;
+
+        if (_missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
+            throw new InvalidOperationException(
+                $"Elasticsearch index '{_indexName}' was not found during 'delete' for read-model '{typeof(TReadModel).FullName}'. " +
+                $"Configure index bootstrap before issuing deletes. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(payload)}");
+
+        _logger.LogWarning(
+            "Projection read-model index is missing during delete. provider={Provider} readModelType={ReadModelType} index={Index} behavior={Behavior}",
+            ProviderName,
+            typeof(TReadModel).FullName,
+            _indexName,
+            _missingIndexBehavior);
+    }
+
     private ResolvedIndexTarget ResolveIndexTarget(TReadModel readModel)
     {
         if (_indexScopeSelector is null)
@@ -446,6 +536,38 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         throw new InvalidOperationException(
             $"Elasticsearch '{operation}' is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
             "Use direct provider-native inspection/query capability for this read model type.");
+    }
+
+    private static ProjectionWriteResult ResolveDeleteResultFromPayload(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return ProjectionWriteResult.Applied();
+
+        try
+        {
+            using var jsonDoc = JsonDocument.Parse(payload);
+            if (jsonDoc.RootElement.TryGetProperty("result", out var resultNode) &&
+                resultNode.ValueKind == JsonValueKind.String &&
+                string.Equals(resultNode.GetString(), "not_found", StringComparison.Ordinal))
+            {
+                return ProjectionWriteResult.Duplicate();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return ProjectionWriteResult.Applied();
+    }
+
+    private void ThrowIfDynamicReadModelWritesUnsupportedForDelete()
+    {
+        if (!_supportsDynamicIndexing)
+            return;
+
+        throw new InvalidOperationException(
+            $"Elasticsearch 'delete' by key is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
+            "Dynamically indexed read models must delete via provider-native index-scoped operations.");
     }
 
     private static TypeRegistry BuildDefaultTypeRegistry()

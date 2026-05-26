@@ -13,7 +13,10 @@
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 </Project>

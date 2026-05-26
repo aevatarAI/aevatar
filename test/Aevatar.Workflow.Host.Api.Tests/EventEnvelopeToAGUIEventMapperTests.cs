@@ -316,8 +316,20 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             StepId = "get_context",
             SuspensionType = "human_input",
             Prompt = "请提供补充信息",
+            Content = "已有上下文",
             TimeoutSeconds = 1800,
             VariableName = "user_context",
+            DeliveryTargetId = "agent-delivery-1",
+            Secure = true,
+            RedactedOutput = "[captured]",
+            Metadata =
+            {
+                ["source"] = "test",
+                ["variable"] = "legacy_variable",
+                ["secure"] = "true",
+                ["input_mode"] = "password",
+                ["redacted_output"] = "[legacy]",
+            },
         }));
         var waiting = CreateMapper().Map(WrapCommitted(new WaitingForSignalEvent
         {
@@ -332,11 +344,50 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         suspended[0].Custom.Name.Should().Be("aevatar.human_input.request");
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
         request.VariableName.Should().Be("user_context");
+        request.Secure.Should().BeTrue();
+        request.RedactedOutput.Should().Be("[captured]");
+        request.Content.Should().Be("已有上下文");
+        request.DeliveryTargetId.Should().Be("agent-delivery-1");
+        request.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("test");
         request.Metadata.Should().NotContainKey("variable");
+        request.Metadata.Should().NotContainKey("secure");
+        request.Metadata.Should().NotContainKey("input_mode");
+        request.Metadata.Should().NotContainKey("redacted_output");
 
         waiting.Should().ContainSingle();
         waiting[0].Custom.Name.Should().Be("aevatar.workflow.waiting_signal");
         waiting[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().Be("run-expected");
+    }
+
+    [Fact]
+    public void WorkflowSuspended_ShouldFallbackLegacySecureInputMetadataToTypedPayload()
+    {
+        var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
+        {
+            RunId = "run-legacy",
+            StepId = "secure-legacy",
+            SuspensionType = "secure_input",
+            Prompt = "provide secret",
+            Metadata =
+            {
+                ["variable"] = "api_key",
+                ["secure"] = "true",
+                ["input_mode"] = "password",
+                ["redacted_output"] = "[legacy captured]",
+                ["source"] = "legacy-test",
+            },
+        }));
+
+        suspended.Should().ContainSingle();
+        var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
+        request.VariableName.Should().Be("api_key");
+        request.Secure.Should().BeTrue();
+        request.RedactedOutput.Should().Be("[legacy captured]");
+        request.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
+        request.Metadata.Should().NotContainKey("variable");
+        request.Metadata.Should().NotContainKey("secure");
+        request.Metadata.Should().NotContainKey("input_mode");
+        request.Metadata.Should().NotContainKey("redacted_output");
     }
 
     [Fact]

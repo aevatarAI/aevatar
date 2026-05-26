@@ -1,14 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
+using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.Metadata;
-using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Governance.Projection.Projectors;
 using Aevatar.GAgentService.Governance.Projection.Queries;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
@@ -20,36 +18,6 @@ namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceConfigurationProjectionInfrastructureTests
 {
-    [Fact]
-    public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
-    {
-        var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(
-            new ServiceGovernanceProjectionOptions(),
-            activationService,
-            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
-
-        await service.EnsureProjectionAsync(string.Empty);
-        await service.EnsureProjectionAsync("config-actor");
-
-        activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
-    }
-
-    [Fact]
-    public async Task ConfigurationProjectionPort_ShouldSkipActivation_WhenDisabled()
-    {
-        var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(
-            new ServiceGovernanceProjectionOptions { Enabled = false },
-            activationService,
-            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
-
-        await service.EnsureProjectionAsync("config-actor");
-
-        activationService.Calls.Should().BeEmpty();
-    }
-
     [Fact]
     public void MetadataProviders_ShouldExposeStableIndexNames()
     {
@@ -72,16 +40,30 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
             x.ServiceType == typeof(IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>) &&
             x.ImplementationType == typeof(ServiceConfigurationReadModelMetadataProvider));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IServiceConfigurationProjectionPort));
-        services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceConfigurationQueryReader) &&
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
-        services.Should().Contain(x =>
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
-        services.Should().Contain(x =>
+            IsObservedProjectionMaterializerFor<ServiceConfigurationProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceConfigurationProjector>(x.ImplementationType));
+    }
+
+    private static bool IsObservedProjectionMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]
@@ -156,10 +138,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         var invalidCommittedResult = (bool)supportType
             .GetMethod("TryGetObservedPayload", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!
             .Invoke(null, invalidCommittedArgs)!;
-        var resolvedVersion = (long)supportType
-            .GetMethod("ResolveNextStateVersion", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!
-            .Invoke(null, [0L, 0L])!;
-
         committedResult.Should().BeTrue();
         ((Any)committedArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
         committedArgs[3].Should().Be("evt-1");
@@ -175,7 +153,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
         invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
-        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]
@@ -186,20 +163,4 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    private sealed class RecordingConfigurationActivationService : IProjectionScopeActivationService<ServiceConfigurationRuntimeLease>
-    {
-        public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
-
-        public Task<ServiceConfigurationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Calls.Add((request.RootActorId, request.ProjectionKind));
-            return Task.FromResult(new ServiceConfigurationRuntimeLease(new ServiceConfigurationProjectionContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            }));
-        }
-    }
 }

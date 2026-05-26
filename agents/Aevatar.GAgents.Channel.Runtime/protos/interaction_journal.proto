@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "chat_activity.proto";
+
+message PreAckJournalEntry {
+  string journal_id = 1;
+  string interaction_id = 2;
+  string interaction_token = 3;
+  int64 received_at_unix_ms = 4;
+  string raw_payload_blob_ref = 5;
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 6;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 7;
+}

@@ -1,5 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
@@ -13,33 +15,27 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowExecutionProjectionPortTests
 {
     [Fact]
-    public async Task EnsureActorProjectionAsync_ShouldStartWorkflowExecutionSession()
+    public void WorkflowExecutionProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
     {
-        var activation = new RecordingActivationService();
-        var port = new WorkflowExecutionProjectionPort(
-            new WorkflowExecutionProjectionOptions { Enabled = true },
-            activation,
-            new RecordingReleaseService(),
-            new RecordingRunEventHub());
-
-        var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1");
-
-        lease.Should().BeSameAs(activation.LeaseToReturn);
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].RootActorId.Should().Be("actor-1");
-        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution-session");
-        activation.Requests[0].SessionId.Should().Be("cmd-1");
+        typeof(IWorkflowExecutionProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task AttachAndDetachLiveSinkAsync_ShouldBridgeSessionHubSubscription()
     {
         var hub = new RecordingRunEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
             new RecordingActivationService(),
             new RecordingReleaseService(),
-            hub);
+            hub,
+            CreateAttachExistingLookup(runtime));
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
@@ -48,12 +44,12 @@ public sealed class WorkflowExecutionProjectionPortTests
         });
         var sink = new RecordingRunEventSink();
 
-        await port.AttachLiveSinkAsync(lease, sink);
+        var liveSinkLease = await port.AttachLiveSinkAsync(lease, sink);
         await hub.Handler!(new WorkflowRunEventEnvelope
         {
             Custom = new WorkflowCustomEventPayload { Name = "event-1" },
         });
-        await port.DetachLiveSinkAsync(lease, sink);
+        await port.DetachLiveSinkAsync(liveSinkLease);
 
         hub.SubscribeCalls.Should().Be(1);
         hub.LastScopeId.Should().Be("actor-1");
@@ -64,6 +60,55 @@ public sealed class WorkflowExecutionProjectionPortTests
     }
 
     [Fact]
+    public async Task AttachExistingActorProjectionAsync_ShouldAttachOnlyWhenProjectionSessionExists()
+    {
+        var hub = new RecordingRunEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
+        var port = new WorkflowExecutionProjectionPort(
+            new WorkflowExecutionProjectionOptions { Enabled = true },
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+        var sink = new RecordingRunEventSink();
+
+        var attachment = await port.AttachExistingActorProjectionAsync("actor-1", "cmd-1", sink);
+
+        attachment.Should().NotBeNull();
+        attachment!.ProjectionLease.ActorId.Should().Be("actor-1");
+        attachment.ProjectionLease.CommandId.Should().Be("cmd-1");
+        hub.SubscribeCalls.Should().Be(1);
+        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastSessionId.Should().Be("cmd-1");
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
+    }
+
+    [Fact]
+    public async Task AttachExistingActorProjectionAsync_ShouldReturnNull_WhenProjectionSessionIsCold()
+    {
+        var hub = new RecordingRunEventHub();
+        var runtime = new RecordingActorRuntime();
+        var port = new WorkflowExecutionProjectionPort(
+            new WorkflowExecutionProjectionOptions { Enabled = true },
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+
+        var attachment = await port.AttachExistingActorProjectionAsync(
+            "actor-1",
+            "cmd-1",
+            new RecordingRunEventSink());
+
+        attachment.Should().BeNull();
+        hub.SubscribeCalls.Should().Be(0);
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
+    }
+
+    [Fact]
     public async Task ReleaseActorProjectionAsync_ShouldDelegateToReleaseService()
     {
         var release = new RecordingReleaseService();
@@ -71,7 +116,8 @@ public sealed class WorkflowExecutionProjectionPortTests
             new WorkflowExecutionProjectionOptions { Enabled = true },
             new RecordingActivationService(),
             release,
-            new RecordingRunEventHub());
+            new RecordingRunEventHub(),
+            CreateAttachExistingLookup(new RecordingActorRuntime()));
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
@@ -82,6 +128,39 @@ public sealed class WorkflowExecutionProjectionPortTests
         await port.ReleaseActorProjectionAsync(lease);
 
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        private readonly HashSet<string> _existingActors = new(StringComparer.Ordinal);
+
+        public List<string> ExistsCalls { get; } = [];
+
+        public void MarkExists(string actorId) => _existingActors.Add(actorId);
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            ExistsCalls.Add(id);
+            return Task.FromResult(_existingActors.Contains(id));
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<WorkflowExecutionRuntimeLease>
@@ -114,6 +193,18 @@ public sealed class WorkflowExecutionProjectionPortTests
             return Task.CompletedTask;
         }
     }
+
+    private static IProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
+            runtime,
+            request => new WorkflowExecutionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new WorkflowExecutionRuntimeLease(context));
 
     private sealed class RecordingRunEventHub : IProjectionSessionEventHub<WorkflowRunEventEnvelope>
     {

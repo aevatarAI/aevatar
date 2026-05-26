@@ -1,322 +1,889 @@
 import {
-  ApiOutlined,
-  BuildOutlined,
+  CheckOutlined,
   CodeOutlined,
-  DoubleRightOutlined,
+  InfoCircleOutlined,
   NodeIndexOutlined,
-  SettingOutlined,
+  RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Col, Row, Tooltip, Typography } from 'antd';
+import { Popover, Typography } from 'antd';
 import React from 'react';
-import { cardStackStyle, stretchColumnStyle } from '@/shared/ui/proComponents';
+import {
+  AEVATAR_INTERACTIVE_BUTTON_CLASS,
+  AEVATAR_INTERACTIVE_CHIP_CLASS,
+  AEVATAR_PRESSABLE_CARD_CLASS,
+} from '@/shared/ui/interactionStandards';
 
-export type StudioWorkspacePage =
-  | 'workflows'
-  | 'studio'
-  | 'scripts'
-  | 'roles'
-  | 'connectors'
-  | 'settings';
+export type StudioShellMemberKind =
+  | 'workflow'
+  | 'script'
+  | 'gagent'
+  | 'member'
+  | 'unknown';
 
-export type StudioShellNavItem = {
-  readonly key: StudioWorkspacePage;
+export type StudioShellMemberTone =
+  | 'live'
+  | 'draft'
+  | 'idle'
+  | 'planned';
+
+export type StudioShellMemberItem = {
+  readonly key: string;
   readonly label: string;
   readonly description: string;
-  readonly count?: React.ReactNode;
+  readonly meta?: string;
+  readonly kind?: StudioShellMemberKind;
+  readonly tone?: StudioShellMemberTone;
+  readonly canDelete?: boolean;
+  readonly canRename?: boolean;
+  readonly disabled?: boolean;
+};
+
+export type StudioLifecycleStep = {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string;
+  readonly status: 'active' | 'available' | 'planned';
+  readonly disabled?: boolean;
 };
 
 type StudioShellProps = {
   readonly alerts?: React.ReactNode;
-  readonly currentPage: StudioWorkspacePage;
-  readonly navItems: readonly StudioShellNavItem[];
-  readonly onSelectPage: (page: StudioWorkspacePage) => void;
+  readonly contentOverflow?: 'auto' | 'hidden';
+  readonly contentScrollMode?: 'contained' | 'page';
+  readonly contextBar?: React.ReactNode;
+  readonly currentLifecycleStep?: string;
+  readonly inventoryActions?: React.ReactNode;
+  readonly lifecycleSteps?: readonly StudioLifecycleStep[];
+  readonly members?: readonly StudioShellMemberItem[];
+  readonly onSelectLifecycleStep?: (stepKey: string) => void;
+  readonly onSelectMember?: (memberKey: string) => void;
   readonly pageTitle: string;
   readonly pageToolbar?: React.ReactNode;
+  readonly selectedMemberKey?: string;
   readonly showPageHeader?: boolean;
   readonly children: React.ReactNode;
 };
 
-const workbenchShellStyle: React.CSSProperties = {
-  background: 'var(--ant-color-bg-layout, transparent)',
-  borderRadius: 16,
-  display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  justifyContent: 'space-between',
-  paddingBlock: 8,
-  transition: 'width 0.2s ease',
-  width: '100%',
-};
-
-const workbenchListStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  paddingInline: 6,
-};
-
-const navButtonBaseStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  width: '100%',
-  height: 56,
-  padding: 0,
-  textAlign: 'left',
-  border: 'none',
-  background: 'transparent',
-  borderRadius: 14,
-  cursor: 'pointer',
-  overflow: 'hidden',
-  position: 'relative',
-  transition: 'background-color 0.18s ease, color 0.18s ease, width 0.2s ease',
-};
-
-const navIndicatorStyle: React.CSSProperties = {
-  width: 3,
-  borderRadius: '0 999px 999px 0',
-  bottom: 10,
-  flexShrink: 0,
-  left: 0,
-  position: 'absolute',
-  top: 10,
-};
-
-const navItemContentStyle: React.CSSProperties = {
-  alignItems: 'center',
-  display: 'flex',
-  flex: 1,
-  gap: 10,
-  height: '100%',
-  justifyContent: 'flex-start',
-  minWidth: 0,
-  paddingInline: 14,
-};
-
-const navItemIconStyle: React.CSSProperties = {
-  alignItems: 'center',
-  display: 'inline-flex',
-  flexShrink: 0,
-  fontSize: 20,
-  height: 20,
-  justifyContent: 'center',
-  width: 20,
-};
-
-const navItemLabelStyle: React.CSSProperties = {
-  color: '#1f2937',
-  fontSize: 14,
-  fontWeight: 500,
-  lineHeight: '22px',
-  minWidth: 0,
-};
-
-const workbenchFooterStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  paddingInline: 6,
-};
-
 const shellRootStyle: React.CSSProperties = {
-  ...cardStackStyle,
+  background: '#f7f8fb',
+  display: 'flex',
   flex: 1,
-  minHeight: 'calc(100vh - 176px)',
-};
-
-const shellRowStyle: React.CSSProperties = {
-  flex: 1,
+  height: '100%',
   minHeight: 0,
+  overflow: 'hidden',
+  width: '100%',
 };
 
-const shellColumnStyle: React.CSSProperties = {
-  ...stretchColumnStyle,
+const railStyle: React.CSSProperties = {
+  background:
+    'linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(249, 245, 237, 0.98) 100%)',
+  borderRight: '1px solid #ebe2d4',
+  display: 'flex',
+  flexDirection: 'column',
+  flexShrink: 0,
   minHeight: 0,
+  width: 276,
 };
 
-const shellContentStyle: React.CSSProperties = {
-  ...cardStackStyle,
-  flex: 1,
+const railHeaderStyle: React.CSSProperties = {
+  borderBottom: '1px solid #ece3d5',
+  display: 'grid',
+  gap: 10,
+  padding: '14px 12px 12px',
+};
+
+const railSectionStyle: React.CSSProperties = {
+  borderBottom: '1px solid #ece3d5',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '10px 12px 12px',
+};
+
+const railSectionHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#7b6e5a',
+  display: 'flex',
+  fontSize: 10,
+  fontWeight: 700,
+  gap: 6,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+};
+
+const railSectionHeaderRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: 8,
+  justifyContent: 'space-between',
+};
+
+const railSectionHeaderStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const memberListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
   minHeight: 0,
   overflowX: 'hidden',
   overflowY: 'auto',
 };
 
-const navItemIconByKey: Record<StudioWorkspacePage, React.ReactNode> = {
-  workflows: <NodeIndexOutlined />,
-  studio: <BuildOutlined />,
-  scripts: <CodeOutlined />,
-  roles: <TeamOutlined />,
-  connectors: <ApiOutlined />,
-  settings: <SettingOutlined />,
+const shellMainStyle: React.CSSProperties = {
+  background: '#fcfbf8',
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
 };
+
+const shellContentStyle: React.CSSProperties = {
+  background: 'transparent',
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const shellAlertsStyle: React.CSSProperties = {
+  borderBottom: '1px solid rgba(229, 220, 203, 0.9)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  padding: '0 16px 12px',
+};
+
+const shellHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255, 255, 255, 0.94)',
+  borderBottom: '1px solid rgba(229, 220, 203, 0.88)',
+  display: 'flex',
+  gap: 16,
+  justifyContent: 'space-between',
+  margin: '0 16px',
+  padding: '14px 18px',
+};
+
+const shellHeaderTitleStyle: React.CSSProperties = {
+  color: '#1d2129',
+  fontSize: 13,
+  fontWeight: 500,
+  margin: 0,
+};
+
+const shellPageBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 0,
+  overflowX: 'hidden',
+  padding: '14px 16px 16px',
+};
+
+const lifecycleSectionStyle: React.CSSProperties = {
+  background: 'transparent',
+  borderBottom: '1px solid rgba(229, 220, 203, 0.82)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '0 16px 10px',
+};
+
+const lifecycleHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: 6,
+  justifyContent: 'space-between',
+};
+
+const lifecycleRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: 6,
+  minWidth: 0,
+  overflowX: 'auto',
+  paddingBottom: 2,
+  scrollbarWidth: 'thin',
+};
+
+const lifecycleConnectorStyle: React.CSSProperties = {
+  background: '#dbcdb4',
+  borderRadius: 999,
+  display: 'block',
+  flex: '0 0 20px',
+  height: 1,
+};
+
+const railSearchInputStyle: React.CSSProperties = {
+  background: 'rgba(255, 252, 246, 0.96)',
+  border: '1px solid #e5dccb',
+  borderRadius: 10,
+  color: '#2f2a23',
+  fontSize: 11.5,
+  minWidth: 0,
+  outline: 'none',
+  padding: '8px 10px',
+  width: '100%',
+};
+
+const railFilterRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+};
+
+const railFilterButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255, 250, 244, 0.92)',
+  border: '1px solid #e6decd',
+  borderRadius: 999,
+  color: '#5f574b',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: 10.5,
+  fontWeight: 700,
+  gap: 5,
+  minHeight: 26,
+  padding: '0 9px',
+};
+
+const railPillStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(245, 239, 228, 0.96)',
+  border: '1px solid #e4dac8',
+  borderRadius: 999,
+  color: '#6c6558',
+  display: 'inline-flex',
+  fontSize: 10,
+  fontWeight: 700,
+  lineHeight: '16px',
+  minHeight: 22,
+  padding: '0 8px',
+};
+
+const inlineInfoButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: '#ffffff',
+  border: '1px solid #dbe3f0',
+  borderRadius: 999,
+  color: '#64748b',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: 10,
+  height: 20,
+  justifyContent: 'center',
+  padding: 0,
+  width: 20,
+};
+
+const inlineInfoPopoverStyle: React.CSSProperties = {
+  color: '#4b5563',
+  fontSize: 12,
+  lineHeight: '18px',
+  maxWidth: 240,
+};
+
+type InlineInfoButtonProps = {
+  readonly ariaLabel: string;
+  readonly buttonStyle?: React.CSSProperties;
+  readonly content: React.ReactNode;
+  readonly placement?: 'bottomLeft' | 'bottomRight' | 'topLeft' | 'topRight';
+};
+
+const InlineInfoButton: React.FC<InlineInfoButtonProps> = ({
+  ariaLabel,
+  buttonStyle,
+  content,
+  placement = 'bottomLeft',
+}) => (
+  <Popover
+    content={<div style={inlineInfoPopoverStyle}>{content}</div>}
+    placement={placement}
+    trigger="click"
+  >
+    <button
+      aria-label={ariaLabel}
+      className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+      onClick={(event) => event.stopPropagation()}
+      style={{ ...inlineInfoButtonStyle, ...buttonStyle }}
+      type="button"
+    >
+      <InfoCircleOutlined />
+    </button>
+  </Popover>
+);
+
+const memberKindIconByKey: Record<StudioShellMemberKind, React.ReactNode> = {
+  workflow: <NodeIndexOutlined />,
+  script: <CodeOutlined />,
+  gagent: <RobotOutlined />,
+  member: <TeamOutlined />,
+  unknown: <TeamOutlined />,
+};
+
+function resolveMemberToneStyles(
+  tone: StudioShellMemberTone | undefined,
+): {
+  readonly background: string;
+  readonly color: string;
+} {
+  switch (tone) {
+    case 'live':
+      return {
+        background: 'rgba(22, 163, 74, 0.12)',
+        color: '#15803d',
+      };
+    case 'draft':
+      return {
+        background: 'rgba(245, 158, 11, 0.16)',
+        color: '#b45309',
+      };
+    case 'planned':
+      return {
+        background: 'rgba(99, 102, 241, 0.12)',
+        color: '#4338ca',
+      };
+    default:
+      return {
+        background: 'rgba(148, 163, 184, 0.14)',
+        color: '#475569',
+      };
+  }
+}
+
+function formatMemberKindLabel(kind: StudioShellMemberKind | undefined): string {
+  switch (kind) {
+    case 'workflow':
+      return 'Workflow';
+    case 'script':
+      return 'Script';
+    case 'gagent':
+      return 'GAgent';
+    case 'member':
+      return 'Member';
+    default:
+      return 'Focus';
+  }
+}
+
+function buildMemberSearchText(member: StudioShellMemberItem): string {
+  return [
+    member.label,
+    member.description,
+    member.meta,
+    formatMemberKindLabel(member.kind),
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
+function handleCardKeyboardSelect(
+  event: React.KeyboardEvent<HTMLElement>,
+  disabled: boolean,
+  onSelect?: () => void,
+): void {
+  if (disabled || !onSelect) {
+    return;
+  }
+
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    onSelect();
+  }
+}
 
 const StudioShell: React.FC<StudioShellProps> = ({
   alerts,
-  currentPage,
-  navItems,
-  onSelectPage,
+  contentOverflow = 'auto',
+  contentScrollMode = 'contained',
+  contextBar,
+  currentLifecycleStep,
+  inventoryActions,
+  lifecycleSteps = [],
+  members = [],
+  onSelectLifecycleStep,
+  onSelectMember,
   pageTitle,
   pageToolbar,
+  selectedMemberKey,
   showPageHeader = true,
   children,
 }) => {
-  const [isExpanded, setIsExpanded] = React.useState(false);
-  const [hoveredKey, setHoveredKey] =
-    React.useState<StudioWorkspacePage | null>(null);
-  const [isToggleHovered, setIsToggleHovered] = React.useState(false);
-  const sidebarWidth = isExpanded ? 160 : 64;
+  const [memberSearch, setMemberSearch] = React.useState('');
+  const [memberFilter, setMemberFilter] = React.useState<
+    'all' | StudioShellMemberKind
+  >('all');
+
+  const memberFilterOptions = React.useMemo(() => {
+    const counts = members.reduce<Record<string, number>>((current, member) => {
+      const kind = member.kind ?? 'unknown';
+      current[kind] = (current[kind] ?? 0) + 1;
+      return current;
+    }, {});
+
+    return [
+      {
+        key: 'all' as const,
+        label: 'All',
+        count: members.length,
+      },
+      {
+        key: 'workflow' as const,
+        label: 'Workflow',
+        count: counts.workflow ?? 0,
+      },
+      {
+        key: 'script' as const,
+        label: 'Script',
+        count: counts.script ?? 0,
+      },
+      {
+        key: 'gagent' as const,
+        label: 'GAgent',
+        count: counts.gagent ?? 0,
+      },
+      {
+        key: 'member' as const,
+        label: 'Member',
+        count: counts.member ?? 0,
+      },
+    ].filter((item) => item.key === 'all' || item.count > 0);
+  }, [members]);
+
+  const filteredMembers = React.useMemo(() => {
+    const normalizedSearch = memberSearch.trim().toLowerCase();
+
+    return members.filter((member) => {
+      if (memberFilter !== 'all' && (member.kind ?? 'unknown') !== memberFilter) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      return buildMemberSearchText(member).includes(normalizedSearch);
+    });
+  }, [memberFilter, memberSearch, members]);
+  const usesPageScroll = contentScrollMode === 'page';
+  const mainStyle = usesPageScroll
+    ? ({
+        ...shellMainStyle,
+        overflowX: 'hidden',
+        overflowY: 'auto',
+      } satisfies React.CSSProperties)
+    : shellMainStyle;
+  const contentStyle = usesPageScroll
+    ? ({
+        ...shellContentStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : shellContentStyle;
+  const pageBodyStyle = usesPageScroll
+    ? ({
+        ...shellPageBodyStyle,
+        flex: '0 0 auto',
+        overflow: 'visible',
+      } satisfies React.CSSProperties)
+    : ({
+        ...shellPageBodyStyle,
+        overflowY: contentOverflow,
+      } satisfies React.CSSProperties);
 
   return (
     <div style={shellRootStyle}>
-      {alerts}
-      <Row gutter={[16, 16]} align="stretch" wrap={false} style={shellRowStyle}>
-        <Col
-          flex={`${sidebarWidth}px`}
-          style={{
-            ...shellColumnStyle,
-            maxWidth: sidebarWidth,
-            minWidth: sidebarWidth,
-            transition: 'max-width 0.2s ease, min-width 0.2s ease',
-            width: sidebarWidth,
-          }}
-        >
-          <aside
+      <aside style={railStyle} aria-label="Team members">
+        <div style={railHeaderStyle}>
+          <div
             style={{
-              ...workbenchShellStyle,
-              width: sidebarWidth,
+              alignItems: 'center',
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'space-between',
             }}
-            aria-label="Workbench"
           >
-            <nav style={workbenchListStyle} aria-label="Workbench navigation">
-              {navItems.map((item) => {
-                const active = currentPage === item.key;
-                const hovered = hoveredKey === item.key;
+            <Typography.Title
+              level={4}
+              style={{
+                color: '#16120d',
+                fontSize: 14,
+                fontWeight: 700,
+                margin: 0,
+                lineHeight: '20px',
+              }}
+            >
+              Team members
+            </Typography.Title>
+            <span style={railPillStyle}>{members.length}</span>
+            <InlineInfoButton
+              ariaLabel="Open team members help"
+              content="Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench."
+            />
+          </div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <input
+              aria-label="Search team members"
+              onChange={(event) => setMemberSearch(event.target.value)}
+              placeholder="Search members or revisions"
+              style={railSearchInputStyle}
+              type="search"
+              value={memberSearch}
+            />
+            <div style={railFilterRowStyle}>
+              {memberFilterOptions.map((option) => {
+                const active = memberFilter === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    aria-pressed={active}
+                    className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                    onClick={() => setMemberFilter(option.key)}
+                    style={{
+                      ...railFilterButtonStyle,
+                      background: active ? '#131820' : railFilterButtonStyle.background,
+                      borderColor: active ? '#131820' : '#e6decd',
+                      color: active ? '#fbfaf6' : '#5f574b',
+                    }}
+                    type="button"
+                  >
+                    <span>{option.label}</span>
+                    <span
+                      style={{
+                        opacity: active ? 0.86 : 0.7,
+                      }}
+                    >
+                      {option.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...railSectionStyle, flex: 1, minHeight: 0 }}>
+          <div style={railSectionHeaderStackStyle}>
+            <div style={railSectionHeaderRowStyle}>
+              <div style={railSectionHeaderStyle}>
+                <span>Member inventory</span>
+              </div>
+            </div>
+            {inventoryActions}
+          </div>
+          {filteredMembers.length > 0 ? (
+            <div style={memberListStyle}>
+              {filteredMembers.map((member) => {
+                const isSelected = selectedMemberKey === member.key;
+                const toneStyles = resolveMemberToneStyles(member.tone);
+                const kind = member.kind ?? 'unknown';
+                const memberIcon =
+                  memberKindIconByKey[kind] ?? memberKindIconByKey.unknown;
 
                 return (
-                  <Tooltip
-                    key={item.key}
-                    title={item.label}
-                    placement="right"
-                    mouseEnterDelay={0.2}
-                  >
-                    <button
-                      type="button"
-                      aria-label={item.label}
-                      aria-current={active ? 'page' : undefined}
-                      style={{
-                        ...navButtonBaseStyle,
-                        background: active
-                          ? 'rgba(22, 119, 255, 0.08)'
-                          : hovered
-                            ? '#fafafa'
-                            : 'transparent',
-                      }}
-                      onClick={() => onSelectPage(item.key)}
-                      onMouseEnter={() => setHoveredKey(item.key)}
-                      onMouseLeave={() =>
-                        setHoveredKey((current) =>
-                          current === item.key ? null : current,
-                        )
+                  // biome-ignore lint/a11y/useSemanticElements: The member card keeps the existing composite card interaction contract.
+                  <div
+                    key={member.key}
+                    aria-current={isSelected ? 'true' : undefined}
+                    aria-disabled={member.disabled ? 'true' : undefined}
+                    className={AEVATAR_PRESSABLE_CARD_CLASS}
+                    onClick={() => {
+                      if (!member.disabled) {
+                        onSelectMember?.(member.key);
                       }
+                    }}
+                    onKeyDown={(event) =>
+                      handleCardKeyboardSelect(
+                        event,
+                        Boolean(member.disabled),
+                        onSelectMember ? () => onSelectMember(member.key) : undefined,
+                      )
+                    }
+                    role="button"
+                    style={{
+                      background: isSelected
+                        ? 'linear-gradient(180deg, rgba(25, 34, 48, 0.98) 0%, rgba(34, 43, 58, 0.98) 100%)'
+                        : 'rgba(255, 252, 246, 0.98)',
+                      border: `1px solid ${isSelected ? '#141a22' : '#ebe3d4'}`,
+                      borderRadius: 16,
+                      boxShadow: isSelected
+                        ? '0 10px 22px rgba(15, 23, 42, 0.14)'
+                        : '0 4px 14px rgba(110, 94, 71, 0.05)',
+                      cursor:
+                        member.disabled || !onSelectMember ? 'default' : 'pointer',
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 10,
+                      opacity: member.disabled ? 0.56 : 1,
+                      boxSizing: 'border-box',
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      padding: '10px 12px',
+                      textAlign: 'left',
+                      transition:
+                        'background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease',
+                      width: '100%',
+                    }}
+                    title={[member.description, member.meta].filter(Boolean).join(' · ')}
+                    tabIndex={
+                      member.disabled || !onSelectMember ? -1 : 0
+                    }
+                  >
+                    <div
+                      style={{
+                        alignItems: 'center',
+                        display: 'flex',
+                        gap: 8,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
                     >
-                      <span
+                      <div
                         aria-hidden="true"
                         style={{
-                          ...navIndicatorStyle,
-                          background: active ? '#1677ff' : 'transparent',
+                          alignItems: 'center',
+                          background: isSelected
+                            ? 'rgba(255, 255, 255, 0.14)'
+                            : 'rgba(32, 24, 12, 0.05)',
+                          borderRadius: 8,
+                          color: isSelected ? '#f8dcc2' : '#6b5c48',
+                          display: 'inline-flex',
+                          flexShrink: 0,
+                          fontSize: 11,
+                          height: 24,
+                          justifyContent: 'center',
+                          width: 24,
                         }}
-                      />
-                      <span style={navItemContentStyle}>
+                      >
+                        {memberIcon}
+                      </div>
+                      <div
+                        style={{
+                          alignItems: 'center',
+                          display: 'flex',
+                          flex: 1,
+                          gap: 8,
+                          minWidth: 0,
+                        }}
+                      >
                         <span
-                          aria-hidden="true"
                           style={{
-                            ...navItemIconStyle,
-                            color: active ? '#1677ff' : '#667085',
+                            background: isSelected
+                              ? 'rgba(255, 255, 255, 0.14)'
+                              : 'rgba(243, 236, 224, 0.92)',
+                            border: `1px solid ${isSelected ? 'rgba(255,255,255,0.12)' : '#e6decd'}`,
+                            borderRadius: 999,
+                            color: isSelected ? '#f4efe6' : '#746655',
+                            display: 'inline-flex',
+                            flexShrink: 0,
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            lineHeight: '14px',
+                            minHeight: 20,
+                            padding: '0 7px',
                           }}
                         >
-                          {navItemIconByKey[item.key]}
+                          {formatMemberKindLabel(kind)}
                         </span>
-                        {isExpanded ? (
-                          <Typography.Text
-                            style={{
-                              ...navItemLabelStyle,
-                              color: active ? '#1677ff' : '#1f2937',
-                            }}
-                            ellipsis={{ tooltip: false }}
-                          >
-                            {item.label}
-                          </Typography.Text>
-                        ) : null}
+                        <span
+                          style={{
+                            color: isSelected ? '#fbfaf6' : '#111827',
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: '20px',
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {member.label}
+                        </span>
+                      </div>
+                      <div
+                        aria-hidden="true"
+                        style={{
+                          alignItems: 'center',
+                          alignSelf: 'center',
+                          background: toneStyles.background,
+                          borderRadius: 999,
+                          color: toneStyles.color,
+                          display: 'inline-flex',
+                          flexShrink: 0,
+                          fontSize: 9.5,
+                          fontWeight: 700,
+                          justifyContent: 'center',
+                          lineHeight: '14px',
+                          minHeight: 22,
+                          minWidth: 24,
+                          padding: '0 7px',
+                        }}
+                      >
+                        <span
+                          style={{
+                            background: toneStyles.color,
+                            borderRadius: 999,
+                            display: 'inline-flex',
+                            height: 7,
+                            marginRight: 6,
+                            width: 7,
+                          }}
+                        />
+                        {member.tone ?? 'idle'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <Typography.Text
+              style={{
+                color: '#73685a',
+                fontSize: 12,
+                lineHeight: '18px',
+              }}
+            >
+              {members.length > 0
+                ? 'No members match the current search or filter. Try clearing the rail controls.'
+                : 'No team members yet. Create a member to start building in Studio.'}
+            </Typography.Text>
+          )}
+        </div>
+
+      </aside>
+
+      <div data-testid="studio-shell-main" style={mainStyle}>
+        {contextBar}
+        {lifecycleSteps.length > 0 ? (
+          <div data-testid="studio-lifecycle-section" style={lifecycleSectionStyle}>
+            <div style={lifecycleHeaderStyle}>
+              <Typography.Text
+                style={{
+                  color: '#6b7280',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                Member lifecycle
+              </Typography.Text>
+              <InlineInfoButton
+                ariaLabel="Open lifecycle help"
+                content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
+              />
+            </div>
+            <nav
+              aria-label="Member lifecycle"
+              data-testid="studio-lifecycle-stepper"
+              style={lifecycleRowStyle}
+            >
+              {lifecycleSteps.map((step, index) => {
+                const isActive = currentLifecycleStep === step.key;
+                const isPlanned = step.status === 'planned';
+                const indicatorBackground = isActive
+                  ? '#ffffff'
+                  : step.disabled || isPlanned
+                    ? '#f3f4f6'
+                    : '#eef4ff';
+                const indicatorColor = isActive
+                  ? '#111827'
+                  : step.disabled || isPlanned
+                    ? '#9ca3af'
+                    : '#2f54eb';
+                return (
+                  <React.Fragment key={step.key}>
+                    {index > 0 ? (
+                      <span aria-hidden="true" style={lifecycleConnectorStyle} />
+                    ) : null}
+                    <button
+                      aria-current={isActive ? 'step' : undefined}
+                      className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                      disabled={step.disabled}
+                      onClick={() => onSelectLifecycleStep?.(step.key)}
+                      title={step.description}
+                      style={{
+                        alignItems: 'center',
+                        background: isActive ? '#111827' : '#ffffff',
+                        border: `1px solid ${isActive ? '#111827' : '#e5dccb'}`,
+                        borderRadius: 999,
+                        cursor:
+                          step.disabled || !onSelectLifecycleStep
+                            ? 'default'
+                            : 'pointer',
+                        display: 'flex',
+                        flex: '0 0 auto',
+                        gap: 8,
+                        minHeight: 0,
+                        opacity: step.disabled ? 0.68 : 1,
+                        padding: '6px 14px',
+                        textAlign: 'left',
+                      }}
+                      type="button"
+                    >
+                      <span
+                        style={{
+                          alignItems: 'center',
+                          background: indicatorBackground,
+                          border: `1px solid ${isActive ? '#ffffff' : indicatorBackground}`,
+                          borderRadius: 999,
+                          color: indicatorColor,
+                          display: 'inline-flex',
+                          flexShrink: 0,
+                          fontSize: 9.5,
+                          fontWeight: 700,
+                          height: 22,
+                          justifyContent: 'center',
+                          width: 22,
+                        }}
+                      >
+                        {step.disabled || isPlanned ? index + 1 : <CheckOutlined />}
+                      </span>
+                      <span
+                        style={{
+                          color: isActive ? '#ffffff' : '#111827',
+                          fontSize: 10.5,
+                          fontWeight: isActive ? 700 : 600,
+                          lineHeight: '16px',
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {step.label}
                       </span>
                     </button>
-                  </Tooltip>
+                  </React.Fragment>
                 );
               })}
             </nav>
-            <div style={workbenchFooterStyle}>
-              <Tooltip
-                title={isExpanded ? 'Collapse workbench' : 'Expand workbench'}
-                placement="right"
-              >
-                <button
-                  type="button"
-                  aria-label={
-                    isExpanded ? 'Collapse workbench' : 'Expand workbench'
-                  }
-                  aria-pressed={isExpanded}
-                  style={{
-                    ...navButtonBaseStyle,
-                    background: isToggleHovered ? '#fafafa' : 'transparent',
-                  }}
-                  onClick={() => setIsExpanded((current) => !current)}
-                  onMouseEnter={() => setIsToggleHovered(true)}
-                  onMouseLeave={() => setIsToggleHovered(false)}
-                >
-                  <span style={navItemContentStyle}>
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        ...navItemIconStyle,
-                        color: '#667085',
-                        transform: isExpanded ? 'rotate(180deg)' : 'none',
-                        transition: 'transform 0.2s ease',
-                      }}
-                    >
-                      <DoubleRightOutlined />
-                    </span>
-                    {isExpanded ? (
-                      <Typography.Text style={navItemLabelStyle}>
-                        Collapse
-                      </Typography.Text>
-                    ) : null}
-                  </span>
-                </button>
-              </Tooltip>
+          </div>
+        ) : null}
+        {alerts ? <div style={shellAlertsStyle}>{alerts}</div> : null}
+        <div data-testid="studio-shell-content" style={contentStyle}>
+          {showPageHeader ? (
+            <div style={shellHeaderStyle}>
+              <Typography.Title level={4} style={shellHeaderTitleStyle}>
+                {pageTitle}
+              </Typography.Title>
+              {pageToolbar}
             </div>
-          </aside>
-        </Col>
-        <Col flex="auto" style={{ ...shellColumnStyle, minWidth: 0 }}>
-          <div style={shellContentStyle}>
-            {showPageHeader ? (
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 16,
-                }}
-              >
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  {pageTitle}
-                </Typography.Title>
-                {pageToolbar}
-              </div>
-            ) : null}
+          ) : null}
+          <div style={pageBodyStyle}>
             {children}
           </div>
-        </Col>
-      </Row>
+        </div>
+      </div>
     </div>
   );
 };

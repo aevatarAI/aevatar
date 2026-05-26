@@ -16,6 +16,8 @@
     "start": "PORT=\"${PORT:-${AEVATAR_CONSOLE_FRONTEND_PORT:-5173}}\" UMI_ENV=dev max dev",
     "start:dev": "PORT=\"${PORT:-${AEVATAR_CONSOLE_FRONTEND_PORT:-5173}}\" UMI_ENV=dev MOCK=none max dev",
     "test": "jest",
+    "test:unit": "jest --selectProjects node",
+    "test:ui": "jest --selectProjects jsdom",
     "test:coverage": "npm run jest -- --coverage",
     "tsc": "tsc --noEmit"
   },

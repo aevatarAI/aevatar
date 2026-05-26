@@ -1,16 +1,19 @@
 import type { ProColumns } from '@ant-design/pro-components';
-import { Typography } from 'antd';
 import React from 'react';
 import type {
   ServiceBindingSnapshot,
   ServiceEndpointExposureSnapshot,
   ServicePolicySnapshot,
 } from '@/shared/models/governance';
+import { AevatarCompactText } from '@/shared/ui/compactText';
 
 export const bindingColumns: ProColumns<ServiceBindingSnapshot>[] = [
   {
     title: 'Binding',
     dataIndex: 'bindingId',
+    render: (_, record) => (
+      <AevatarCompactText monospace value={record.bindingId} />
+    ),
   },
   {
     title: 'Display name',
@@ -22,21 +25,41 @@ export const bindingColumns: ProColumns<ServiceBindingSnapshot>[] = [
   },
   {
     title: 'Policies',
-    render: (_, record) => record.policyIds.join(', ') || 'n/a',
+    render: (_, record) =>
+      record.policyIds.length > 0 ? (
+        <AevatarCompactText
+          maxChars={24}
+          mode="tail"
+          monospace
+          value={record.policyIds.join(', ')}
+        />
+      ) : (
+        'n/a'
+      ),
   },
   {
     title: 'Target',
     render: (_, record) => {
       if (record.serviceRef) {
-        return `${record.serviceRef.identity.serviceId}:${
-          record.serviceRef.endpointId || '*'
-        }`;
+        return (
+          <AevatarCompactText
+            monospace
+            value={`${record.serviceRef.identity.serviceId}:${
+              record.serviceRef.endpointId || '*'
+            }`}
+          />
+        );
       }
       if (record.connectorRef) {
-        return `${record.connectorRef.connectorType}:${record.connectorRef.connectorId}`;
+        return (
+          <AevatarCompactText
+            monospace
+            value={`${record.connectorRef.connectorType}:${record.connectorRef.connectorId}`}
+          />
+        );
       }
       if (record.secretRef) {
-        return record.secretRef.secretName;
+        return <AevatarCompactText value={record.secretRef.secretName} />;
       }
       return 'n/a';
     },
@@ -51,6 +74,9 @@ export const policyColumns: ProColumns<ServicePolicySnapshot>[] = [
   {
     title: 'Policy',
     dataIndex: 'policyId',
+    render: (_, record) => (
+      <AevatarCompactText monospace value={record.policyId} />
+    ),
   },
   {
     title: 'Display name',
@@ -59,12 +85,30 @@ export const policyColumns: ProColumns<ServicePolicySnapshot>[] = [
   {
     title: 'Activation bindings',
     render: (_, record) =>
-      record.activationRequiredBindingIds.join(', ') || 'n/a',
+      record.activationRequiredBindingIds.length > 0 ? (
+        <AevatarCompactText
+          maxChars={24}
+          mode="tail"
+          monospace
+          value={record.activationRequiredBindingIds.join(', ')}
+        />
+      ) : (
+        'n/a'
+      ),
   },
   {
     title: 'Allowed callers',
     render: (_, record) =>
-      record.invokeAllowedCallerServiceKeys.join(', ') || 'n/a',
+      record.invokeAllowedCallerServiceKeys.length > 0 ? (
+        <AevatarCompactText
+          maxChars={24}
+          mode="tail"
+          monospace
+          value={record.invokeAllowedCallerServiceKeys.join(', ')}
+        />
+      ) : (
+        'n/a'
+      ),
   },
   {
     title: 'Active deployment required',
@@ -81,6 +125,9 @@ export const endpointColumns: ProColumns<ServiceEndpointExposureSnapshot>[] = [
   {
     title: 'Endpoint',
     dataIndex: 'endpointId',
+    render: (_, record) => (
+      <AevatarCompactText monospace value={record.endpointId} />
+    ),
   },
   {
     title: 'Display name',
@@ -98,11 +145,27 @@ export const endpointColumns: ProColumns<ServiceEndpointExposureSnapshot>[] = [
     title: 'Request type',
     dataIndex: 'requestTypeUrl',
     render: (_, record) => (
-      <Typography.Text copyable>{record.requestTypeUrl}</Typography.Text>
+      <AevatarCompactText
+        copyable
+        maxChars={28}
+        mode="tail"
+        monospace
+        value={record.requestTypeUrl}
+      />
     ),
   },
   {
     title: 'Policies',
-    render: (_, record) => record.policyIds.join(', ') || 'n/a',
+    render: (_, record) =>
+      record.policyIds.length > 0 ? (
+        <AevatarCompactText
+          maxChars={24}
+          mode="tail"
+          monospace
+          value={record.policyIds.join(', ')}
+        />
+      ) : (
+        'n/a'
+      ),
   },
 ];

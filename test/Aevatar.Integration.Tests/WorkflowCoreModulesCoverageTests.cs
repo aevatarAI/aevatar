@@ -133,6 +133,55 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ConcurrentFirstUse_ShouldStartSourceDiscoveryOnce()
+    {
+        using var source = new BlockingCountingToolSource(
+            [
+                new FakeAgentTool("parallel_echo", args => args),
+            ]);
+        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyCount = 0;
+
+        var tasks = Enumerable.Range(0, 32)
+            .Select(i => Task.Run(async () =>
+            {
+                if (Interlocked.Increment(ref readyCount) == 32)
+                    ready.TrySetResult(true);
+
+                await start.Task;
+                var ctx = CreateContext();
+                await module.HandleAsync(
+                    Envelope(new StepRequestEvent
+                    {
+                        StepId = $"step-parallel-{i}",
+                        StepType = "tool_call",
+                        Input = """{"ok":true}""",
+                        Parameters = { ["tool"] = "parallel_echo" },
+                    }),
+                    ctx,
+                    CancellationToken.None);
+                return ctx;
+            }))
+            .ToArray();
+
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        start.SetResult(true);
+        await source.WaitForFirstDiscoveryAsync();
+        source.Release();
+
+        var contexts = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        source.DiscoverCalls.Should().Be(1);
+        contexts.SelectMany(ctx => ctx.Published.Select(x => x.evt))
+            .OfType<ToolResultEvent>()
+            .Should()
+            .HaveCount(32)
+            .And.OnlyContain(x => x.Success);
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldHonorDiscoveryCancellation_AndRetryOnNextCall()
     {
         var source = new CancellableToolSource(
@@ -893,6 +942,132 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task LLMCallModule_WhenTelegramTimeoutParameterIsZero_ShouldPromoteTypedPresence()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-telegram-zero",
+                StepType = "llm_call",
+                RunId = "run-telegram-zero",
+                Input = "wait",
+                Parameters =
+                {
+                    ["telegram.wait_timeout_ms"] = "0",
+                    ["telegram.timeout_ms"] = "0",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var zeroRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        zeroRequest.Telegram.HasWaitTimeoutMs.Should().BeTrue();
+        zeroRequest.Telegram.WaitTimeoutMs.Should().Be(0);
+        zeroRequest.Telegram.HasTimeoutMs.Should().BeTrue();
+        zeroRequest.Telegram.TimeoutMs.Should().Be(0);
+
+        ctx = CreateContext();
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-telegram-absent",
+                StepType = "llm_call",
+                RunId = "run-telegram-absent",
+                Input = "wait",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var absentRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        absentRequest.Telegram.HasWaitTimeoutMs.Should().BeFalse();
+        absentRequest.Telegram.HasTimeoutMs.Should().BeFalse();
+    }
+
+    [Fact]
+    public void LLMCallModule_TryApplyTelegramParameter_ShouldPromoteTypedTelegramFields()
+    {
+        var telegram = new TelegramBridgeRequest();
+
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.connector", " telegram_user ").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.chat_id", " 10001 ").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.operation", "/waitReply").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.message_thread_id", "42").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.text", "hello typed").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.parse_mode", "Markdown").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.disable_web_page_preview", "true").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.reply_to_message_id", "99").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.expected_from_user_id", "2002").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.expected_from_username", "@openclaw_bot").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.correlation_contains", "done").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.wait_timeout_ms", "5000").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.poll_timeout_seconds", "2").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.settle_polls_after_match", "3").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.collect_all_replies", "true").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.start_from_latest", "false").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.offset", "123").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.http_method", "GET").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.content_type", "application/custom").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.timeout_ms", "7000").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.phone_number", "+8613800000000").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.verification_code", "123 456").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.2fa_password", "secret").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.emit_chat_response", "true").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "workflow.run_id", "run-1").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "workflow.step_id", "step-1").Should().BeTrue();
+
+        telegram.ConnectorName.Should().Be(" telegram_user ");
+        telegram.ChatId.Should().Be(" 10001 ");
+        telegram.Operation.Should().Be(TelegramBridgeOperation.WaitReply);
+        telegram.MessageThreadId.Should().Be(42);
+        telegram.Text.Should().Be("hello typed");
+        telegram.ParseMode.Should().Be("Markdown");
+        telegram.HasDisableWebPagePreview.Should().BeTrue();
+        telegram.DisableWebPagePreview.Should().BeTrue();
+        telegram.ReplyToMessageId.Should().Be(99);
+        telegram.ExpectedFromUserId.Should().Be("2002");
+        telegram.ExpectedFromUsername.Should().Be("@openclaw_bot");
+        telegram.CorrelationContains.Should().Be("done");
+        telegram.WaitTimeoutMs.Should().Be(5000);
+        telegram.PollTimeoutSeconds.Should().Be(2);
+        telegram.SettlePollsAfterMatch.Should().Be(3);
+        telegram.CollectAllReplies.Should().BeTrue();
+        telegram.StartFromLatest.Should().BeFalse();
+        telegram.Offset.Should().Be(123);
+        telegram.HttpMethod.Should().Be("GET");
+        telegram.ContentType.Should().Be("application/custom");
+        telegram.TimeoutMs.Should().Be(7000);
+        telegram.PhoneNumber.Should().Be("+8613800000000");
+        telegram.VerificationCode.Should().Be("123 456");
+        telegram.Password.Should().Be("secret");
+        telegram.EmitChatResponse.Should().BeTrue();
+        telegram.RunId.Should().Be("run-1");
+        telegram.StepId.Should().Be("step-1");
+    }
+
+    [Fact]
+    public void LLMCallModule_TryApplyTelegramParameter_ShouldHandleAliasesAndInvalidValues()
+    {
+        var telegram = new TelegramBridgeRequest();
+
+        LLMCallModule.TryApplyTelegramParameter(telegram, "path", "/ensureLogin").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "operation", "/sendMessage").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "llm_timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "offset", "0").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "disable_web_page_preview", "not-bool").Should().BeTrue();
+        LLMCallModule.TryApplyTelegramParameter(telegram, "unknown", "value").Should().BeFalse();
+
+        telegram.Operation.Should().Be(TelegramBridgeOperation.SendMessage);
+        telegram.HasTimeoutMs.Should().BeTrue();
+        telegram.TimeoutMs.Should().Be(5000);
+        telegram.Offset.Should().Be(0);
+        telegram.HasDisableWebPagePreview.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
@@ -1372,6 +1547,32 @@ public sealed class WorkflowCoreModulesCoverageTests
             });
 
             return await pending.Task;
+        }
+    }
+
+    private sealed class BlockingCountingToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource, IDisposable
+    {
+        private readonly TaskCompletionSource<bool> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _discoverCalls;
+
+        public int DiscoverCalls => Volatile.Read(ref _discoverCalls);
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _discoverCalls);
+            _entered.TrySetResult(true);
+            await _release.Task.WaitAsync(ct);
+            return tools;
+        }
+
+        public Task WaitForFirstDiscoveryAsync() =>
+            _entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public void Release() => _release.SetResult(true);
+
+        public void Dispose()
+        {
         }
     }
 }

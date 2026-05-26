@@ -13,6 +13,10 @@ inputs:
     description: Whether to install ripgrep when missing.
     required: false
     default: "false"
+  install-buf:
+    description: Whether to install buf when missing.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -39,3 +43,44 @@ runs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
         fi
+
+    - name: Ensure buf
+      if: ${{ inputs.install-buf == 'true' }}
+      shell: bash
+      env:
+        BUF_VERSION: 1.68.3
+      run: |
+        if command -v buf >/dev/null 2>&1; then
+          buf --version
+          exit 0
+        fi
+
+        os="$(uname -s)"
+        arch="$(uname -m)"
+
+        case "${os}" in
+          Linux) os="Linux" ;;
+          Darwin) os="Darwin" ;;
+          *)
+            echo "Unsupported OS for buf installation: ${os}"
+            exit 1
+            ;;
+        esac
+
+        case "${arch}" in
+          x86_64|amd64) arch="x86_64" ;;
+          arm64|aarch64) arch="arm64" ;;
+          *)
+            echo "Unsupported architecture for buf installation: ${arch}"
+            exit 1
+            ;;
+        esac
+
+        archive="buf-${os}-${arch}.tar.gz"
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "${tmpdir}"' EXIT
+
+        curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/${archive}" -o "${tmpdir}/buf.tgz"
+        tar -xzf "${tmpdir}/buf.tgz" -C "${tmpdir}"
+        sudo install "${tmpdir}/buf/bin/buf" /usr/local/bin/buf
+        buf --version

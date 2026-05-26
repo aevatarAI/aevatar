@@ -45,6 +45,30 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldReturnAcceptedPayload_WithoutWaitingForTerminalWorkflowEvents()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("cmd-1");
+        service.DispatchCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldPreserveOpaqueActorIdInAcceptedLocationAndPayload()
     {
         const string opaqueActorId = "script-runtime:opaque-actor-9";
@@ -523,6 +547,8 @@ public sealed class ChatEndpointsInternalTests
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
+                EditedContent = "approved edited",
+                Feedback = "looks good",
                 Metadata = new Dictionary<string, string>
                 {
                     ["source"] = "host",
@@ -534,7 +560,11 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/actors/actor-1");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/actors/actor-1\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -542,6 +572,8 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");
+        service.Commands.Single().EditedContent.Should().Be("approved edited");
+        service.Commands.Single().Feedback.Should().Be("looks good");
         service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
     }
 
@@ -568,7 +600,10 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be($"/api/actors/{Uri.EscapeDataString(opaqueActorId)}");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be(opaqueActorId);
     }
@@ -759,7 +794,8 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/actors/actor-1");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -798,7 +834,8 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/actors/actor-1");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
@@ -806,7 +843,8 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().Payload.Should().Be("yes");
         service.Commands.Single().CommandId.Should().BeNull();
         service.Commands.Single().StepId.Should().BeNull();
-        body.Should().Contain(receipt.CommandId);
+        body.Should().Contain($"\"acceptedCommandId\":\"{receipt.CommandId}\"");
+        body.Should().Contain("\"statusUrl\":\"/api/actors/actor-1\"");
         body.Should().Contain("\"accepted\":true");
     }
 
@@ -882,14 +920,16 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/actors/actor-1");
         service.Commands.Should().ContainSingle();
         service.Commands.Single().ActorId.Should().Be("actor-1");
         service.Commands.Single().RunId.Should().Be("run-1");
         service.Commands.Single().CommandId.Should().Be("stop-cmd-1");
         service.Commands.Single().Reason.Should().Be("user requested stop");
         body.Should().Contain("user requested stop");
-        body.Should().Contain("stop-cmd-1");
+        body.Should().Contain("\"acceptedCommandId\":\"stop-cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/actors/actor-1\"");
     }
 
     [Fact]
@@ -1061,12 +1101,14 @@ public sealed class ChatEndpointsInternalTests
 
         public Exception? DispatchException { get; set; }
         public WorkflowChatRunRequest? LastCommand { get; private set; }
+        public int DispatchCalls { get; private set; }
 
         public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
             WorkflowChatRunRequest command,
             CancellationToken ct = default)
         {
             LastCommand = command;
+            DispatchCalls++;
             ct.ThrowIfCancellationRequested();
             if (DispatchException != null)
                 throw DispatchException;

@@ -1,0 +1,218 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.RoleCatalog;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.ReadModels;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.Studio.Infrastructure.ActorBacked;
+
+/// <summary>
+/// Actor-backed implementation of role catalog query and command ports.
+/// Reads from the projection document store (CQRS read model).
+/// Writes send commands to the Write GAgent through CQRS Core dispatch.
+/// Local JSON is only an explicit import boundary, never a draft backup.
+/// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
+/// </summary>
+internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogQueryPort, IRoleCatalogCommandPort
+{
+    private const string WriteActorIdPrefix = "role-catalog-";
+    private const string ActorHomeDirectory = "actor://role-catalog";
+    private const string ActorFilePath = "actor://role-catalog/roles";
+    private const string PublisherId = "aevatar.studio.infrastructure.role-catalog";
+
+    private readonly IStudioActorBootstrap _bootstrap;
+    private readonly StudioActorCommandDispatch _commandDispatch;
+    private readonly IAppScopeResolver _scopeResolver;
+    private readonly IStudioLocalRoleCatalogImportReader _localImportReader;
+    private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
+    private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
+
+    public ActorBackedRoleCatalogStore(
+        IStudioActorBootstrap bootstrap,
+        StudioActorCommandDispatch commandDispatch,
+        IAppScopeResolver scopeResolver,
+        IStudioLocalRoleCatalogImportReader localImportReader,
+        IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
+        ILogger<ActorBackedRoleCatalogStore> logger)
+    {
+        _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
+        _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
+        _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _localImportReader = localImportReader ?? throw new ArgumentNullException(nameof(localImportReader));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await ReadProjectedStateAsync(cancellationToken);
+        var roles = state?.Roles
+            .Select(ToStoredRoleDefinition)
+            .ToList()
+            .AsReadOnly()
+            ?? (IReadOnlyList<StoredRoleDefinition>)[];
+
+        return new StoredRoleCatalog(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
+            FileExists: roles.Count > 0,
+            Roles: roles,
+            Version: state?.LastAppliedEventVersion ?? 0);
+    }
+
+    public async Task<StoredRoleCatalog> SaveRoleCatalogAsync(
+        StoredRoleCatalog catalog,
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default)
+    {
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new RoleCatalogSavedEvent();
+        evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
+
+        return new StoredRoleCatalog(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
+            FileExists: true,
+            Roles: catalog.Roles,
+            Version: NextDeterministicVersion(expectedVersion));
+    }
+
+    public async Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        var localCatalog = await _localImportReader.ReadAsync(cancellationToken);
+        if (!localCatalog.FileExists)
+        {
+            throw new InvalidOperationException($"Local role catalog not found at '{localCatalog.FilePath}'.");
+        }
+
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new RoleCatalogSavedEvent();
+        evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
+
+        var importedCatalog = new StoredRoleCatalog(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
+            FileExists: true,
+            Roles: localCatalog.Roles);
+
+        return new ImportedRoleCatalog(localCatalog.FilePath, true, importedCatalog);
+    }
+
+    public async Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await ReadProjectedStateAsync(cancellationToken);
+        var draftEntry = state?.Draft;
+        var version = state?.LastAppliedEventVersion ?? 0;
+        if (draftEntry is null)
+        {
+            return new StoredRoleDraft(
+                HomeDirectory: ActorHomeDirectory,
+                FilePath: ActorFilePath + "/draft",
+                FileExists: false,
+                UpdatedAtUtc: null,
+                Draft: null,
+                Version: version);
+        }
+
+        return new StoredRoleDraft(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath + "/draft",
+            FileExists: true,
+            UpdatedAtUtc: draftEntry.UpdatedAtUtc?.ToDateTimeOffset(),
+            Draft: draftEntry.Draft is not null ? ToStoredRoleDefinition(draftEntry.Draft) : null,
+            Version: version);
+    }
+
+    public async Task<StoredRoleDraft> SaveRoleDraftAsync(
+        StoredRoleDraft draft,
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default)
+    {
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var updatedAtUtc = draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow;
+        var evt = new RoleDraftSavedEvent
+        {
+            Draft = draft.Draft is not null ? ToProtoRoleDefinition(draft.Draft) : null,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
+        };
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
+
+        return new StoredRoleDraft(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath + "/draft",
+            FileExists: true,
+            UpdatedAtUtc: updatedAtUtc,
+            Draft: draft.Draft,
+            Version: NextDeterministicVersion(expectedVersion));
+    }
+
+    public async Task DeleteRoleDraftAsync(
+        long? expectedVersion = null,
+        CancellationToken cancellationToken = default)
+    {
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new RoleDraftDeletedEvent();
+        if (expectedVersion is not null)
+            evt.ExpectedVersion = expectedVersion.Value;
+        await _commandDispatch.DispatchAsync(actor, evt, PublisherId, cancellationToken);
+
+    }
+
+    // Post-write version is deterministic only when caller supplied expected_version
+    // (actor enforces match → Apply increments by exactly one). Without expected_version
+    // the projection is eventually consistent and may still report the pre-write value,
+    // so we return 0 to signal "unknown — re-GET for authoritative version".
+    private static long NextDeterministicVersion(long? expectedVersion) =>
+        expectedVersion is null ? 0 : expectedVersion.Value + 1;
+
+    // ── Read from projection ──
+
+    private async Task<RoleCatalogState?> ReadProjectedStateAsync(CancellationToken ct)
+    {
+        var actorId = ResolveWriteActorId();
+        var document = await _documentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(RoleCatalogState.Descriptor))
+            return null;
+
+        return document.StateRoot.Unpack<RoleCatalogState>();
+    }
+
+    // ── Actor resolution ──
+
+    private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
+
+    private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
+        _bootstrap.EnsureAsync<RoleCatalogGAgent>(ResolveWriteActorId(), ct);
+
+    private static StoredRoleDefinition ToStoredRoleDefinition(RoleDefinitionEntry entry) =>
+        new(
+            Id: entry.Id,
+            Name: entry.Name,
+            SystemPrompt: entry.SystemPrompt,
+            Provider: entry.Provider,
+            Model: entry.Model,
+            Connectors: entry.Connectors.ToList().AsReadOnly());
+
+    private static RoleDefinitionEntry ToProtoRoleDefinition(StoredRoleDefinition def)
+    {
+        var entry = new RoleDefinitionEntry
+        {
+            Id = def.Id,
+            Name = def.Name,
+            SystemPrompt = def.SystemPrompt,
+            Provider = def.Provider,
+            Model = def.Model,
+        };
+        entry.Connectors.AddRange(def.Connectors);
+        return entry;
+    }
+}

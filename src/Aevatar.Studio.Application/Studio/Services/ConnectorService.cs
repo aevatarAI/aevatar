@@ -4,6 +4,9 @@ using System.Text.Json;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter56/cluster-911-studio-store-query-command):
+//   old=Store mixed read/write + hand-built EventEnvelope
+//   new=split query/command port + CQRS Core dispatch
 public sealed class ConnectorService
 {
     private static readonly HashSet<string> SupportedTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -13,26 +16,29 @@ public sealed class ConnectorService
         "mcp",
     };
 
-    private readonly IConnectorCatalogStore _store;
+    private readonly IConnectorCatalogQueryPort _queryPort;
+    private readonly IConnectorCatalogCommandPort _commandPort;
     private readonly IConnectorCatalogImportParser _importParser;
 
     public ConnectorService(
-        IConnectorCatalogStore store,
+        IConnectorCatalogQueryPort queryPort,
+        IConnectorCatalogCommandPort commandPort,
         IConnectorCatalogImportParser importParser)
     {
-        _store = store;
+        _queryPort = queryPort;
+        _commandPort = commandPort;
         _importParser = importParser;
     }
 
     public async Task<ConnectorCatalogResponse> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var catalog = await _store.GetConnectorCatalogAsync(cancellationToken);
+        var catalog = await _queryPort.GetConnectorCatalogAsync(cancellationToken);
         return ToResponse(catalog);
     }
 
     public async Task<ConnectorDraftResponse> GetDraftAsync(CancellationToken cancellationToken = default)
     {
-        var draft = await _store.GetConnectorDraftAsync(cancellationToken);
+        var draft = await _queryPort.GetConnectorDraftAsync(cancellationToken);
         return ToDraftResponse(draft);
     }
 
@@ -43,7 +49,7 @@ public sealed class ConnectorService
         var connectors = request.Connectors ?? [];
         EnsureUniqueNames(connectors);
 
-        var saved = await _store.SaveConnectorCatalogAsync(
+        var saved = await _commandPort.SaveConnectorCatalogAsync(
             new StoredConnectorCatalog(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
@@ -52,6 +58,7 @@ public sealed class ConnectorService
                     .Where(connector => !string.IsNullOrWhiteSpace(connector.Name))
                     .Select(ToStoredConnector)
                     .ToList()),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToResponse(saved);
@@ -59,7 +66,7 @@ public sealed class ConnectorService
 
     public async Task<ImportConnectorCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
+        var imported = await _commandPort.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
     }
 
@@ -103,24 +110,25 @@ public sealed class ConnectorService
     {
         if (request.Draft is null)
         {
-            await _store.DeleteConnectorDraftAsync(cancellationToken);
+            await _commandPort.DeleteConnectorDraftAsync(request.ExpectedVersion, cancellationToken);
             return await GetDraftAsync(cancellationToken);
         }
 
-        var saved = await _store.SaveConnectorDraftAsync(
+        var saved = await _commandPort.SaveConnectorDraftAsync(
             new StoredConnectorDraft(
                 HomeDirectory: string.Empty,
                 FilePath: string.Empty,
                 FileExists: false,
                 UpdatedAtUtc: DateTimeOffset.UtcNow,
                 Draft: ToStoredConnectorDraft(request.Draft)),
+            request.ExpectedVersion,
             cancellationToken);
 
         return ToDraftResponse(saved);
     }
 
-    public Task DeleteDraftAsync(CancellationToken cancellationToken = default) =>
-        _store.DeleteConnectorDraftAsync(cancellationToken);
+    public Task DeleteDraftAsync(long? expectedVersion = null, CancellationToken cancellationToken = default) =>
+        _commandPort.DeleteConnectorDraftAsync(expectedVersion, cancellationToken);
 
     private static void EnsureUniqueNames(IEnumerable<ConnectorDefinitionDto> connectors)
     {
@@ -279,7 +287,8 @@ public sealed class ConnectorService
             catalog.HomeDirectory,
             catalog.FilePath,
             catalog.FileExists,
-            catalog.Connectors.Select(ToDto).ToList());
+            catalog.Connectors.Select(ToDto).ToList(),
+            catalog.Version);
 
     private static ImportConnectorCatalogResponse ToImportResponse(ImportedConnectorCatalog imported) =>
         new(
@@ -297,7 +306,8 @@ public sealed class ConnectorService
             draft.FilePath,
             draft.FileExists,
             draft.UpdatedAtUtc,
-            draft.Draft is null ? null : ToDto(draft.Draft));
+            draft.Draft is null ? null : ToDto(draft.Draft),
+            draft.Version);
 
     private static ConnectorDefinitionDto ToDto(StoredConnectorDefinition connector) =>
         new(

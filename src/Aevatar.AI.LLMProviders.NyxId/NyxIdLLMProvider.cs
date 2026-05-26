@@ -47,13 +47,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     public string Name { get; }
 
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var route = await ResolveRouteAsync(request, ct);
-        return await CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken)
-            .ChatAsync(route.Request, ct);
-    }
-
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         CancellationToken ct = default)
@@ -91,28 +87,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    string? body = null;
-                    int? status = null;
-                    for (var cur = ex; cur != null; cur = cur.InnerException)
-                    {
-                        if (cur is System.ClientModel.ClientResultException cre)
-                        {
-                            status = cre.Status;
-                            var raw = cre.GetRawResponse();
-                            if (raw != null)
-                                body = System.Text.Encoding.UTF8.GetString(raw.Content.ToArray());
-                            break;
-                        }
-                    }
-
-                    _logger?.LogWarning(ex,
-                        "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
-                        status, route.RouteName, route.Endpoint, body);
-
-                    var detail = $"{ex.Message} | endpoint={route.Endpoint}, model={route.Request.Model}, route={route.RouteName}";
-                    if (!string.IsNullOrWhiteSpace(body))
-                        detail += $" | NyxID response: {body}";
-                    throw new InvalidOperationException(detail, ex);
+                    throw TranslateUpstreamFailure(ex, route);
                 }
 
                 yield return current;
@@ -124,13 +99,140 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         }
     }
 
+    private NyxIdUpstreamException TranslateUpstreamFailure(Exception ex, NyxIdResolvedRoute route)
+    {
+        var (status, body) = ExtractUpstreamStatusAndBody(ex);
+
+        _logger?.LogWarning(ex,
+            "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+            status, route.RouteName, route.Endpoint, body);
+
+        return ClassifyUpstreamFailure(ex, status, body, route);
+    }
+
+    internal static (int? Status, string? Body) ExtractUpstreamStatusAndBody(Exception ex)
+    {
+        for (var cur = ex; cur != null; cur = cur.InnerException)
+        {
+            if (cur is System.ClientModel.ClientResultException cre)
+            {
+                var raw = cre.GetRawResponse();
+                var body = raw != null
+                    ? System.Text.Encoding.UTF8.GetString(raw.Content.ToArray())
+                    : null;
+                return (cre.Status, body);
+            }
+        }
+
+        return (null, null);
+    }
+
+    internal static NyxIdUpstreamException ClassifyUpstreamFailure(
+        Exception source,
+        int? status,
+        string? body,
+        NyxIdResolvedRoute route)
+    {
+        var model = route.Request.Model;
+        var routeName = route.RouteName;
+        var upstreamSummary = ExtractUpstreamSummary(body);
+
+        var (kind, message) = status switch
+        {
+            503 => (
+                NyxIdUpstreamFailureKind.ServiceUnavailable,
+                $"Upstream LLM route '{routeName}' is temporarily unavailable (HTTP 503) for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Please retry shortly or select a different route/model.",
+                    upstreamSummary)),
+            429 => (
+                NyxIdUpstreamFailureKind.RateLimited,
+                $"Upstream LLM route '{routeName}' is rate limited (HTTP 429) for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Wait a moment before retrying.",
+                    upstreamSummary)),
+            401 or 403 => (
+                NyxIdUpstreamFailureKind.AuthenticationFailed,
+                $"Upstream LLM route '{routeName}' rejected the request with HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Your session may have expired — try signing in again.",
+                    upstreamSummary)),
+            >= 500 => (
+                NyxIdUpstreamFailureKind.UpstreamServerError,
+                $"Upstream LLM route '{routeName}' returned server error HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "The upstream service is unhealthy — retry later or switch routes.",
+                    upstreamSummary)),
+            >= 400 => (
+                NyxIdUpstreamFailureKind.RequestRejected,
+                $"Upstream LLM route '{routeName}' rejected the request with HTTP {status} for model '{model}'. "
+                + AppendUpstreamDetail(
+                    "Check the model id and route configuration.",
+                    upstreamSummary)),
+            _ => (
+                NyxIdUpstreamFailureKind.ProviderError,
+                $"Provider error calling NyxID route '{routeName}' for model '{model}': "
+                + AppendUpstreamDetail(
+                    SummarizeSourceMessage(source),
+                    upstreamSummary)),
+        };
+
+        return new NyxIdUpstreamException(kind, status, routeName, model, message, source);
+    }
+
+    private static string AppendUpstreamDetail(string message, string? upstreamSummary)
+    {
+        if (string.IsNullOrWhiteSpace(upstreamSummary))
+            return message;
+
+        return $"{message} Upstream said: {upstreamSummary}";
+    }
+
+    private static string SummarizeSourceMessage(Exception source)
+    {
+        var raw = source.Message?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return $"{source.GetType().Name} thrown without a message.";
+
+        var collapsed = raw
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
+        return collapsed.Length > 500 ? collapsed[..500] + "…" : collapsed;
+    }
+
+    private static string? ExtractUpstreamSummary(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == System.Text.Json.JsonValueKind.Object
+                && error.TryGetProperty("message", out var messageEl)
+                && messageEl.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                var upstream = messageEl.GetString()?.Trim();
+                return string.IsNullOrWhiteSpace(upstream) ? null : upstream;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Body wasn't valid JSON; fall through to raw trimming below.
+        }
+
+        var trimmed = body.Trim();
+        return trimmed.Length > 200 ? trimmed[..200] + "…" : trimmed;
+    }
+
     internal Task<NyxIdResolvedRoute> ResolveRouteAsync(LLMRequest request, CancellationToken ct = default)
     {
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var accessToken = ResolveAccessToken(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(
-            TryGetMetadataValue(normalizedRequest, LLMRequestMetadataKeys.NyxIdRoutePreference));
+        var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
         _logger.LogDebug(
@@ -178,22 +280,63 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private LLMRequest NormalizeRequest(LLMRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var model = ResolveModel(request);
 
         return new LLMRequest
         {
             Messages = request.Messages,
             RequestId = request.RequestId,
             Metadata = request.Metadata,
+            CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
             Tools = request.Tools,
-            Model = ResolveModel(request),
-            Temperature = request.Temperature,
+            Model = model,
+            Temperature = NormalizeTemperatureForModel(model, request.Temperature),
             MaxTokens = request.MaxTokens,
+            ResponseFormat = request.ResponseFormat,
         };
+    }
+
+    internal static double? NormalizeTemperatureForModel(string? model, double? temperature)
+    {
+        if (!temperature.HasValue)
+            return null;
+
+        // NyxID's current OpenAI-compatible reasoning routes reject the temperature parameter.
+        return IsReasoningModel(model) ? null : temperature;
+    }
+
+    private static bool IsReasoningModel(string? model)
+    {
+        var normalized = model?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+
+        var slashIndex = normalized.LastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex < normalized.Length - 1)
+            normalized = normalized[(slashIndex + 1)..];
+
+        if (normalized.StartsWith("gpt-5-chat", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return normalized.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase)
+            || IsOpenAIReasoningFamily(normalized, "o1")
+            || IsOpenAIReasoningFamily(normalized, "o3")
+            || IsOpenAIReasoningFamily(normalized, "o4");
+    }
+
+    private static bool IsOpenAIReasoningFamily(string model, string family)
+    {
+        return model.Equals(family, StringComparison.OrdinalIgnoreCase)
+            || model.StartsWith(family + "-", StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveModel(LLMRequest request)
     {
-        var metadataModel = TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
+        var metadataModel = request.LlmControl?.ModelOverride
+                            ?? request.RoutingContext?.ModelOverride;
         var requestedModel = request.Model?.Trim();
 
         return !string.IsNullOrWhiteSpace(metadataModel)
@@ -205,9 +348,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
-        if (!string.IsNullOrWhiteSpace(userToken))
-            return userToken;
+        var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
+        if (!string.IsNullOrWhiteSpace(typedToken))
+            return typedToken;
+
+        var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(controlToken))
+            return controlToken;
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
@@ -216,10 +363,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         throw new NyxIdAuthenticationRequiredException(Name);
     }
 
-    private static string? TryGetMetadataValue(LLMRequest request, string key) =>
-        request.Metadata != null && request.Metadata.TryGetValue(key, out var value)
-            ? value?.Trim()
-            : null;
+    private static string? ResolveRoutePreference(LLMRequest request) =>
+        request.LlmControl?.NyxIdRoutePreference
+        ?? request.RoutingContext?.NyxIdRoutePreference;
 
     private static string NormalizeRoutePreference(string? value)
     {
