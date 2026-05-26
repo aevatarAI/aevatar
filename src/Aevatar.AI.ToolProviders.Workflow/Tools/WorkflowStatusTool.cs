@@ -23,15 +23,18 @@ public sealed class WorkflowStatusTool : IAgentTool
 
     public string Name => "workflow_status";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string Description =>
         "Query the status of a workflow execution. " +
         "Shows completion status, steps, role replies, and timeline events. " +
         "Use 'list' action to see available workflows, 'catalog' for definitions, " +
         "or provide a workflow_run_id to get a specific run's status.";
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow_status described run report/timeline lookups as actor_id-driven actor queries.
-    //   New principle: report and timeline are workflow-run artifacts/exports, with actor_id accepted only as a deprecated alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -44,10 +47,6 @@ public sealed class WorkflowStatusTool : IAgentTool
             "workflow_run_id": {
               "type": "string",
               "description": "Workflow run ID (required for 'status' and 'timeline')"
-            },
-            "actor_id": {
-              "type": "string",
-              "description": "Deprecated alias for workflow_run_id"
             },
             "workflow_name": {
               "type": "string",
@@ -128,12 +127,12 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow_status read execution reports through an actor report readmodel query keyed by actor_id.
-    //   New principle: execution reports are workflow-run report artifacts; actor_id remains only as a deprecated caller alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetStatusAsync(ToolArgs args, CancellationToken ct)
     {
-        var workflowRunId = GetWorkflowRunId(args);
+        var workflowRunId = args.Str("workflow_run_id");
         if (string.IsNullOrWhiteSpace(workflowRunId))
             return """{"error":"'workflow_run_id' is required for 'status' action. Use action='list' to find available workflows."}""";
 
@@ -165,12 +164,12 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow_status exposed timeline data through an actor timeline readmodel query keyed by actor_id.
-    //   New principle: timeline data is a workflow-run timeline export artifact; actor_id remains only as a deprecated caller alias.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     private async Task<string> GetTimelineAsync(ToolArgs args, CancellationToken ct)
     {
-        var workflowRunId = GetWorkflowRunId(args);
+        var workflowRunId = args.Str("workflow_run_id");
         if (string.IsNullOrWhiteSpace(workflowRunId))
             return """{"error":"'workflow_run_id' is required for 'timeline' action"}""";
 
@@ -194,9 +193,4 @@ public sealed class WorkflowStatusTool : IAgentTool
     private static string? Truncate(string? s, int max) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Length <= max ? s : s[..max] + "...";
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow tool calls treated actor_id as the artifact query identity.
-    //   New principle: workflow_run_id is the artifact identity; actor_id is accepted only for transitional tool compatibility.
-    private static string GetWorkflowRunId(ToolArgs args) =>
-        args.Str("workflow_run_id") ?? args.Str("actor_id") ?? string.Empty;
 }
