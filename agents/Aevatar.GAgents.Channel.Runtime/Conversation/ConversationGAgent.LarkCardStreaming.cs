@@ -10,9 +10,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
-    // Refactor (iter47/issue-878-actor-turn-inline-timeouts):
-    //   Old pattern: ConversationGAgent created CancellationTokenSource around CardKit calls inside actor turn and continued business branches synchronously.
-    //   New principle: Card operations are typed continuation events (correlationId+sequence+card id); stateless executor runs CardKit outside actor turn; self-timeout events handle deadlines; actor turn reconciles stale keys serially per correlation.
+    // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+    //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+    //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
     // Refactor (iter20/cluster-004):
     //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
     //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
@@ -391,7 +391,7 @@ public sealed partial class ConversationGAgent
             ct: ct);
     }
 
-    private void StartLarkCardCreateOperation(
+    private Task StartLarkCardCreateOperationAsync(
         LlmReplyCardStreamChunkEvent evt,
         string correlationId,
         string streamingElementId,
@@ -399,27 +399,24 @@ public sealed partial class ConversationGAgent
         long generation,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        var runner = ResolveCardRunner();
-        var executor = ResolveBusinessIoExecutor();
         var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Create, sequence, generation);
-        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit create IO from the actor turn.
-        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
-        _ = executor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                workItemId,
-                Id,
-                "lark-card-create",
-                correlationId,
-                StreamingFailureUpdateTimeout,
-                ct => ExecuteLarkCardCreateOperationAsync(
-                    runner,
-                    evt.Clone(),
-                    correlationId,
-                    streamingElementId,
-                    sequence,
-                    generation,
-                    runtimeContext,
-                    ct)),
+        // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+        //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+        //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-create",
+            correlationId,
+            generation,
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Create,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = evt.Clone(),
+                StreamingElementId = streamingElementId,
+            },
             CancellationToken.None);
     }
 
@@ -476,7 +473,7 @@ public sealed partial class ConversationGAgent
             .ConfigureAwait(false);
     }
 
-    private void StartLarkCardStreamOperation(
+    private Task StartLarkCardStreamOperationAsync(
         LlmReplyCardStreamChunkEvent evt,
         string correlationId,
         LarkCardStreamingState state,
@@ -484,30 +481,24 @@ public sealed partial class ConversationGAgent
         long generation,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        var runner = ResolveCardRunner();
-        var executor = ResolveBusinessIoExecutor();
         var cardId = state.CardId ?? string.Empty;
         var streamingElementId = state.StreamingElementId;
         var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Stream, sequence, generation);
-        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit stream IO from the actor turn.
-        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
-        _ = executor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                workItemId,
-                Id,
-                "lark-card-stream",
-                correlationId,
-                StreamingFailureUpdateTimeout,
-                ct => ExecuteLarkCardStreamOperationAsync(
-                    runner,
-                    evt.Clone(),
-                    correlationId,
-                    cardId,
-                    streamingElementId,
-                    sequence,
-                    generation,
-                    runtimeContext,
-                    ct)),
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-stream",
+            correlationId,
+            generation,
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Stream,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = evt.Clone(),
+                CardId = cardId,
+                StreamingElementId = streamingElementId,
+            },
             CancellationToken.None);
     }
 
@@ -571,7 +562,7 @@ public sealed partial class ConversationGAgent
             .ConfigureAwait(false);
     }
 
-    private void StartLarkCardFinalizeOperation(
+    private Task StartLarkCardFinalizeOperationAsync(
         ChatActivity activityForToken,
         string correlationId,
         string commandId,
@@ -582,37 +573,31 @@ public sealed partial class ConversationGAgent
         long generation,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        var runner = ResolveCardRunner();
-        var executor = ResolveBusinessIoExecutor();
         var cardId = state.CardId ?? string.Empty;
         var cardMessageId = state.CardMessageId ?? string.Empty;
         var streamingElementId = state.StreamingElementId;
         var lastFlushedText = state.LastFlushedText;
         var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Finalize, sequence, generation);
-        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched CardKit finalize IO from the actor turn.
-        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
-        _ = executor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                workItemId,
-                Id,
-                "lark-card-finalize",
-                correlationId,
-                StreamingFailureUpdateTimeout,
-                ct => ExecuteLarkCardFinalizeOperationAsync(
-                    runner,
-                    activityForToken.Clone(),
-                    correlationId,
-                    commandId,
-                    cardId,
-                    cardMessageId,
-                    streamingElementId,
-                    finalText,
-                    lastFlushedText,
-                    finalDiffers,
-                    sequence,
-                    generation,
-                    runtimeContext,
-                    ct)),
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-finalize",
+            correlationId,
+            generation,
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Finalize,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Activity = activityForToken.Clone(),
+                CommandId = commandId,
+                FinalText = finalText,
+                LastFlushedText = lastFlushedText,
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                StreamingElementId = streamingElementId,
+                FinalDiffers = finalDiffers,
+            },
             CancellationToken.None);
     }
 
@@ -687,6 +672,83 @@ public sealed partial class ConversationGAgent
 
         await DispatchLarkCardContinuationAsync(signal, correlationId, CancellationToken.None)
             .ConfigureAwait(false);
+    }
+
+    // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+    //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+    //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+    private async Task ExecuteLarkCardOperationStepAsync(
+        ReplyOperationStepEvent evt,
+        LarkCardOperationStepPayload step)
+    {
+        var correlationId = evt.CorrelationId;
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(
+                state,
+                step.Operation,
+                step.Sequence,
+                step.OperationGeneration,
+                NormalizeOptional(step.CardId)))
+        {
+            return;
+        }
+
+        using var lease = ResolveProviderIoLeaseFactory().Acquire(Id, evt.OperationName, correlationId);
+        var runtimeContext = step.Operation == LarkCardOperationPhase.Finalize
+            ? BuildNyxRelayRuntimeContext(
+                correlationId,
+                step.Activity,
+                string.Empty,
+                0)
+            : BuildNyxRelayRuntimeContext(
+                step.Chunk?.CorrelationId,
+                step.Chunk?.Activity,
+                step.Chunk?.ReplyToken,
+                step.Chunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+
+        switch (step.Operation)
+        {
+            case LarkCardOperationPhase.Create:
+                await ExecuteLarkCardCreateOperationAsync(
+                    ResolveCardRunner(),
+                    step.Chunk?.Clone() ?? new LlmReplyCardStreamChunkEvent(),
+                    correlationId,
+                    step.StreamingElementId,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+            case LarkCardOperationPhase.Stream:
+                await ExecuteLarkCardStreamOperationAsync(
+                    ResolveCardRunner(),
+                    step.Chunk?.Clone() ?? new LlmReplyCardStreamChunkEvent(),
+                    correlationId,
+                    step.CardId,
+                    step.StreamingElementId,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+            case LarkCardOperationPhase.Finalize:
+                await ExecuteLarkCardFinalizeOperationAsync(
+                    ResolveCardRunner(),
+                    step.Activity?.Clone() ?? new ChatActivity(),
+                    correlationId,
+                    step.CommandId,
+                    step.CardId,
+                    step.CardMessageId,
+                    step.StreamingElementId,
+                    step.FinalText,
+                    step.LastFlushedText,
+                    step.FinalDiffers,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+        }
     }
 
     private static LarkCardOperationRawResult ToRawResult(ConversationCardCreateResult result) =>
@@ -817,7 +879,7 @@ public sealed partial class ConversationGAgent
                 finalText: null,
                 lastFlushedText: null,
                 CancellationToken.None);
-            StartLarkCardCreateOperation(evt, correlationId, state.StreamingElementId, 1, generation, runtimeContext);
+            await StartLarkCardCreateOperationAsync(evt, correlationId, state.StreamingElementId, 1, generation, runtimeContext);
             return true;
         }
 
@@ -854,7 +916,7 @@ public sealed partial class ConversationGAgent
             finalText: null,
             lastFlushedText: state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardStreamOperation(evt, correlationId, state, nextSequence, streamGeneration, runtimeContext);
+        await StartLarkCardStreamOperationAsync(evt, correlationId, state, nextSequence, streamGeneration, runtimeContext);
         return true;
     }
 
@@ -943,7 +1005,7 @@ public sealed partial class ConversationGAgent
             finalText,
             state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardFinalizeOperation(
+        await StartLarkCardFinalizeOperationAsync(
             activityForToken,
             correlationId,
             commandId,
@@ -1388,7 +1450,7 @@ public sealed partial class ConversationGAgent
                 finalText,
                 state.LastFlushedText,
                 CancellationToken.None);
-            StartLarkCardFinalizeOperation(
+            await StartLarkCardFinalizeOperationAsync(
                 activity,
                 correlationId,
                 commandId,
@@ -1435,7 +1497,7 @@ public sealed partial class ConversationGAgent
             finalText: null,
             lastFlushedText: state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardStreamOperation(nextChunk, correlationId, state, streamSequence, streamGeneration, streamContext);
+        await StartLarkCardStreamOperationAsync(nextChunk, correlationId, state, streamSequence, streamGeneration, streamContext);
     }
 
     /// <summary>

@@ -23,7 +23,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
-    private readonly ILongRunningBusinessIoExecutor _businessIoExecutor;
+    private readonly IDisposableProviderIoLeaseFactory _providerIoLeaseFactory;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -34,7 +34,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     public AgentRunReplyGenerationExecutor(
         IActorDispatchPort actorDispatchPort,
-        ILongRunningBusinessIoExecutor businessIoExecutor,
+        IDisposableProviderIoLeaseFactory providerIoLeaseFactory,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
@@ -45,7 +45,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IActorHandledDispatchPort? actorHandledDispatchPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _businessIoExecutor = businessIoExecutor ?? throw new ArgumentNullException(nameof(businessIoExecutor));
+        _providerIoLeaseFactory = providerIoLeaseFactory ?? throw new ArgumentNullException(nameof(providerIoLeaseFactory));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -112,17 +112,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             Request = request.Request.Clone(),
         };
-        // Refactor (iter99/cluster-596-phase-e): Old pattern: executor owned the whole multi-round LLM/tool loop.
-        // New principle: AgentRunGAgent owns per-step continuation; executor performs exactly one LLM IO step.
-        return _businessIoExecutor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:llm:{workItem.StepIndex}",
-                workItem.RunActorId,
-                "agent-run-reply-llm-step",
-                workItem.Request.CorrelationId,
-                ResolveFallbackTimeout(),
-                executorCt => ExecuteLlmStepAndReportAsync(workItem, executorCt)),
-            ct);
+        // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+        //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+        //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+        using var lease = _providerIoLeaseFactory.Acquire(
+            workItem.RunActorId,
+            "agent-run-reply-llm-step",
+            workItem.Request.CorrelationId);
+        return ExecuteLlmStepAndReportAsync(workItem, ct);
     }
 
     public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
@@ -133,17 +130,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             Request = request.Request.Clone(),
         };
-        // Refactor (iter99/cluster-596-phase-e): Old pattern: tool execution stayed inside ChatRuntime's multi-round loop.
-        // New principle: a typed self-message asks for one tool IO step, then actor reconciles the result.
-        return _businessIoExecutor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                $"{workItem.RunId}:{workItem.Request.CorrelationId}:{workItem.Attempt}:tool:{workItem.StepIndex}",
-                workItem.RunActorId,
-                "agent-run-reply-tool-step",
-                workItem.Request.CorrelationId,
-                ResolveFallbackTimeout(),
-                executorCt => ExecuteToolStepAndReportAsync(workItem, executorCt)),
-            ct);
+        // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+        //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+        //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+        using var lease = _providerIoLeaseFactory.Acquire(
+            workItem.RunActorId,
+            "agent-run-reply-tool-step",
+            workItem.Request.CorrelationId);
+        return ExecuteToolStepAndReportAsync(workItem, ct);
     }
 
     private async Task ExecuteLlmStepAndReportAsync(
@@ -559,16 +553,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
 
         return control;
-    }
-
-    private TimeSpan ResolveFallbackTimeout()
-    {
-        if (_relayOptions is null)
-            return TimeSpan.FromSeconds(AgentRunGAgent.FallbackTimeoutSecondsDefault);
-        var configured = _relayOptions.ResponseTimeoutSeconds;
-        if (configured <= 0)
-            return TimeSpan.Zero;
-        return TimeSpan.FromSeconds(configured);
     }
 
     private static string? NormalizeOptional(string? value)

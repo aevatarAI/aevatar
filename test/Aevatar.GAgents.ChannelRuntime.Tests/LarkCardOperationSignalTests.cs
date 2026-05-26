@@ -17,7 +17,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class LarkCardOperationSignalTests
 {
     [Fact]
-    public async Task LarkCardCreateTaskRun_DispatchesSignalOnlyPayload()
+    public async Task LarkCardCreateSelfContinuation_DispatchesSignalOnlyPayload()
     {
         var dispatch = new RecordingActorDispatchPort();
         var runner = new RecordingCardRunner
@@ -33,6 +33,7 @@ public sealed class LarkCardOperationSignalTests
 
         await agent.HandleEventAsync(Envelope("conv-lark-card-signal-only",
             CreateCardStreamChunk("corr-signal-only", "relay-msg-1", "hello")));
+        await agent.HandleReplyOperationStepAsync(await NextSentAsync<ReplyOperationStepEvent>(agent));
 
         var signal = await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>();
 
@@ -217,7 +218,7 @@ public sealed class LarkCardOperationSignalTests
             .AddSingleton(dispatch)
             .AddSingleton(cardRunner)
             .AddSingleton(callbackScheduler ?? new NoopCallbackScheduler())
-            .AddSingleton<ILongRunningBusinessIoExecutor, ImmediateBusinessIoExecutor>()
+            .AddSingleton<IDisposableProviderIoLeaseFactory, DisposableProviderIoLeaseFactory>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -225,7 +226,7 @@ public sealed class LarkCardOperationSignalTests
         var agent = new ConversationGAgent
         {
             Services = services,
-            EventPublisher = new NoopEventPublisher(),
+            EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
@@ -503,8 +504,11 @@ public sealed class LarkCardOperationSignalTests
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NoopEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher
     {
+        private readonly Queue<IMessage> _sent = new();
+        private readonly SemaphoreSlim _available = new(0);
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -521,12 +525,43 @@ public sealed class LarkCardOperationSignalTests
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
-            Task.CompletedTask;
+            Enqueue(evt);
+
+        private Task Enqueue(IMessage evt)
+        {
+            lock (_sent)
+            {
+                _sent.Enqueue(evt);
+            }
+            _available.Release();
+            return Task.CompletedTask;
+        }
+
+        public async Task<T> NextSentAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || !await _available.WaitAsync(remaining))
+                    break;
+
+                IMessage message;
+                lock (_sent)
+                {
+                    message = _sent.Dequeue();
+                }
+
+                if (message is T typed)
+                    return typed;
+            }
+
+            throw new TimeoutException($"Timed out waiting for sent {typeof(T).Name}.");
+        }
     }
 
-    private sealed class ImmediateBusinessIoExecutor : ILongRunningBusinessIoExecutor
-    {
-        public Task SubmitAsync(LongRunningBusinessIoWorkItem workItem, CancellationToken ct) =>
-            workItem.ExecuteAsync(ct);
-    }
+    private static Task<T> NextSentAsync<T>(ConversationGAgent agent)
+        where T : IMessage<T>, new() =>
+        ((RecordingEventPublisher)agent.EventPublisher).NextSentAsync<T>();
 }

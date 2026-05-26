@@ -321,6 +321,20 @@ message LarkCardOperationTimeoutFiredEvent {
   int64 fired_at_unix_ms = 12;
 }
 
+// Refactor (iter107/cluster-107-channel-business-io-process-queue):
+//   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+//   New principle: owner actor consumes typed self-continuation steps; provider IO is a disposable lease, not a process-local fact source.
+message ReplyOperationStepEvent {
+  string operation_id = 1;
+  string operation_name = 2;
+  string correlation_id = 3;
+  int64 lease_epoch = 4;
+  oneof payload {
+    NyxRelayTextOperationStepPayload nyx_relay_text = 5;
+    LarkCardOperationStepPayload lark_card = 6;
+  }
+}
+
 enum NyxRelayTextOperationResultState {
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_SUCCEEDED = 1;
@@ -365,6 +379,35 @@ message NyxRelayTextOperationTimeoutFiredEvent {
   string last_flushed_text = 9;
   int32 edit_count = 10;
   int64 fired_at_unix_ms = 11;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Nyx relay text IO continuation.
+message NyxRelayTextOperationStepPayload {
+  NyxRelayTextOperationKind operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyStreamChunkEvent chunk = 4;
+  string current_platform_message_id = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  int32 edit_count = 9;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Lark CardKit IO continuation.
+message LarkCardOperationStepPayload {
+  LarkCardOperationPhase operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyCardStreamChunkEvent chunk = 4;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  string card_id = 9;
+  string card_message_id = 10;
+  string streaming_element_id = 11;
+  bool final_differs = 12;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

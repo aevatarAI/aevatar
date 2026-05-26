@@ -33,6 +33,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter107/cluster-107-channel-business-io-process-queue):
+//   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+//   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
     // Refactor (iter17/cluster-038):
@@ -914,7 +917,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             lastFlushedText: state.LastFlushedText,
             editCount: state.EditCount,
             CancellationToken.None);
-        StartNyxRelayTextOperation(
+        await StartNyxRelayTextOperationAsync(
             NyxRelayTextOperationKind.Interim,
             evt,
             correlationId,
@@ -1025,7 +1028,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 lastFlushedText: state.LastFlushedText,
                 editCount: state.EditCount,
                 CancellationToken.None);
-            StartNyxRelayTextOperation(
+            await StartNyxRelayTextOperationAsync(
                 NyxRelayTextOperationKind.FailureSelfHeal,
                 failureChunk,
                 correlationId,
@@ -1099,7 +1102,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state.LastFlushedText,
                 state.EditCount,
                 CancellationToken.None);
-            StartNyxRelayTextOperation(
+            await StartNyxRelayTextOperationAsync(
                 NyxRelayTextOperationKind.Final,
                 finalChunk,
                 correlationId,
@@ -1188,7 +1191,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             ChunkAtUnixMs = chunk.ChunkAtUnixMs,
         };
 
-    private void StartNyxRelayTextOperation(
+    private Task StartNyxRelayTextOperationAsync(
         NyxRelayTextOperationKind operation,
         LlmReplyStreamChunkEvent chunk,
         string correlationId,
@@ -1201,32 +1204,82 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         long generation,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        var runner = ResolveRunner();
-        var executor = ResolveBusinessIoExecutor();
         var workItemId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation);
-        // Refactor (iter97/cluster-098): Old pattern: raw Task.Run launched Nyx relay text IO from the actor turn.
-        // New principle: actor has already recorded in-flight intent/timeout; bounded executor owns the business IO and returns via existing completion event.
-        _ = executor.SubmitAsync(
-            new LongRunningBusinessIoWorkItem(
-                workItemId,
-                Id,
-                $"nyx-relay-text-{operation}",
-                correlationId,
-                StreamingFailureUpdateTimeout,
-                ct => ExecuteNyxRelayTextOperationAsync(
-                    runner,
-                    operation,
-                    chunk.Clone(),
-                    correlationId,
-                    currentPlatformMessageId,
-                    commandId,
-                    finalText,
-                    lastFlushedText,
-                    editCount,
-                    sequence,
-                    generation,
-                    runtimeContext,
-                    ct)),
+        // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+        //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+        //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            $"nyx-relay-text-{operation}",
+            correlationId,
+            generation,
+            ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText,
+            new NyxRelayTextOperationStepPayload
+            {
+                Operation = operation,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = chunk.Clone(),
+                CurrentPlatformMessageId = currentPlatformMessageId ?? string.Empty,
+                CommandId = commandId ?? string.Empty,
+                FinalText = finalText ?? string.Empty,
+                LastFlushedText = lastFlushedText ?? string.Empty,
+                EditCount = editCount,
+            },
+            CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleReplyOperationStepAsync(ReplyOperationStepEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!string.Equals(NormalizeOptional(evt.CorrelationId), evt.CorrelationId, StringComparison.Ordinal))
+            return;
+
+        switch (evt.PayloadCase)
+        {
+            case ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText:
+                await ExecuteNyxRelayTextOperationStepAsync(evt, evt.NyxRelayText);
+                return;
+            case ReplyOperationStepEvent.PayloadOneofCase.LarkCard:
+                await ExecuteLarkCardOperationStepAsync(evt, evt.LarkCard);
+                return;
+            default:
+                Logger.LogDebug(
+                    "Ignoring reply operation step without payload. operationId={OperationId}",
+                    evt.OperationId);
+                return;
+        }
+    }
+
+    private async Task ExecuteNyxRelayTextOperationStepAsync(
+        ReplyOperationStepEvent evt,
+        NyxRelayTextOperationStepPayload step)
+    {
+        var correlationId = evt.CorrelationId;
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (!MatchesNyxRelayTextInFlight(state, step.Operation, step.Sequence, step.OperationGeneration))
+            return;
+
+        using var lease = ResolveProviderIoLeaseFactory().Acquire(Id, evt.OperationName, correlationId);
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            step.Chunk?.CorrelationId,
+            step.Chunk?.Activity,
+            step.Chunk?.ReplyToken,
+            step.Chunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+        await ExecuteNyxRelayTextOperationAsync(
+            ResolveRunner(),
+            step.Operation,
+            step.Chunk?.Clone() ?? new LlmReplyStreamChunkEvent(),
+            correlationId,
+            NormalizeOptional(step.CurrentPlatformMessageId),
+            NormalizeOptional(step.CommandId),
+            NormalizeOptional(step.FinalText),
+            NormalizeOptional(step.LastFlushedText),
+            step.EditCount,
+            step.Sequence,
+            step.OperationGeneration,
+            runtimeContext,
             CancellationToken.None);
     }
 
@@ -1822,6 +1875,40 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";
 
+    // Refactor (iter107/cluster-107-channel-business-io-process-queue):
+    //   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
+    //   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+    private Task PublishReplyOperationStepAsync(
+        string operationId,
+        string operationName,
+        string correlationId,
+        long leaseEpoch,
+        ReplyOperationStepEvent.PayloadOneofCase payloadCase,
+        IMessage payload,
+        CancellationToken ct)
+    {
+        var step = new ReplyOperationStepEvent
+        {
+            OperationId = operationId,
+            OperationName = operationName,
+            CorrelationId = correlationId,
+            LeaseEpoch = leaseEpoch,
+        };
+        switch (payloadCase)
+        {
+            case ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText:
+                step.NyxRelayText = (NyxRelayTextOperationStepPayload)payload;
+                break;
+            case ReplyOperationStepEvent.PayloadOneofCase.LarkCard:
+                step.LarkCard = (LarkCardOperationStepPayload)payload;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(payloadCase), payloadCase, "Unsupported reply operation step payload.");
+        }
+
+        return SendToAsync(Id, step, ct);
+    }
+
     // ADR-0021 §6 / canon §9 — single source of truth for "this LLM reply turn is
     // already finalized". Every reply-ready / dropped / streaming-chunk handler entry
     // uses this so late or duplicate signals uniformly no-op. The dedup key is the
@@ -1977,8 +2064,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private IConversationTurnRunner ResolveRunner() =>
         Services.GetService<IConversationTurnRunner>() ?? new NullConversationTurnRunner();
 
-    private ILongRunningBusinessIoExecutor ResolveBusinessIoExecutor() =>
-        Services.GetRequiredService<ILongRunningBusinessIoExecutor>();
+    private IDisposableProviderIoLeaseFactory ResolveProviderIoLeaseFactory() =>
+        Services.GetService<IDisposableProviderIoLeaseFactory>() ?? new DisposableProviderIoLeaseFactory();
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
         string? correlationId,
