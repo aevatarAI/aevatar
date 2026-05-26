@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -5,6 +8,7 @@ using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -282,6 +286,90 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldOwnStreamLoopAndRecordCompletion()
+    {
+        var provider = new RecordingLlmProvider([
+            new LLMStreamChunk { DeltaContent = "hel" },
+            new LLMStreamChunk
+            {
+                DeltaContent = "lo",
+                IsLast = true,
+                Usage = new TokenUsage(2, 3, 5),
+            },
+        ]);
+        var actor = CreateActor("resp_1", services =>
+            services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
+
+        provider.StreamCallCount.Should().Be(1);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("token-1");
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.Completion!.OutputText.Should().Be("hello");
+        actor.State.Completion.Usage!.TotalTokens.Should().Be(5);
+        actor.State.ActiveRun!.Status.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldExecuteSubstituteToolInsideActorLoop()
+    {
+        var provider = new RecordingLlmProvider(
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_task",
+                        Name = "Task",
+                        ArgumentsJson = """{"prompt":"work"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "delegated", IsLast = true },
+            ]);
+        var tool = new RecordingAgentTool("Task", """{"ok":true}""");
+        var actor = CreateActor("resp_1", services =>
+        {
+            services.AddSingleton<ILLMProviderFactory>(provider);
+            services.AddSingleton<IResponsesToolProvider>(new StaticResponsesToolProvider([tool], []));
+        });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var command = BuildRunRequested("resp_1");
+        command.ToolSelection.ForwardedTools.Add(new LlmSessionRuntimeToolDeclaration
+        {
+            ToolName = "Task",
+            Description = "Client task tool",
+            ParametersJson = """{"type":"object"}""",
+            SchemaHash = "schema-task",
+        });
+        command.ToolSelection.SubstitutedToolNames.Add("Task");
+
+        await actor.HandleLlmRunRequestedAsync(command);
+
+        provider.StreamCallCount.Should().Be(2);
+        tool.Calls.Should().ContainSingle().Which.Should().Be("""{"prompt":"work"}""");
+        provider.LastRequest!.Messages.Should().HaveCount(3);
+        provider.LastRequest.Messages[1].ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be("Task");
+        provider.LastRequest.Messages[2].ToolCallId.Should().Be("call_task");
+        actor.State.ForwardedToolCalls.Should().BeEmpty();
+        actor.State.Completion!.OutputText.Should().Be("delegated");
+    }
+
+    [Fact]
     public async Task HandleRecordCompletionAsync_ShouldRecordFailureFact()
     {
         var actor = CreateActor("resp_1");
@@ -442,11 +530,14 @@ public sealed class LlmSessionGAgentTests
         call.ReceivedAt.Should().NotBeNull();
     }
 
-    private static LlmSessionGAgent CreateActor(string responseId) =>
+    private static LlmSessionGAgent CreateActor(
+        string responseId,
+        Action<IServiceCollection>? configureServices = null) =>
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent());
+            static () => new LlmSessionGAgent(),
+            configureServices);
 
     private static LlmSessionRecord BuildRecord(string responseId) =>
         new()
@@ -488,6 +579,92 @@ public sealed class LlmSessionGAgentTests
                 },
             },
         };
+
+    private static LlmRunRequested BuildRunRequested(string responseId) =>
+        new()
+        {
+            ResponseId = responseId,
+            RunId = $"{responseId}:llm-run",
+            Model = "test-model",
+            ScopeId = "user-1",
+            OwnerSubject = "user-1",
+            BearerToken = "token-1",
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            Messages =
+            {
+                new LlmSessionRuntimeChatMessage
+                {
+                    Role = "user",
+                    Content = "hello",
+                },
+            },
+            ToolSelection = new LlmSessionRuntimeToolSelection(),
+        };
+
+    private sealed class RecordingLlmProvider(params IReadOnlyList<LLMStreamChunk>[] batches)
+        : ILLMProvider, ILLMProviderFactory
+    {
+        public string Name => "recording";
+
+        public int StreamCallCount { get; private set; }
+
+        public LLMRequest? LastRequest { get; private set; }
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            LastRequest = request;
+            StreamCallCount++;
+            var chunks = StreamCallCount <= batches.Length ? batches[StreamCallCount - 1] : [];
+            foreach (var chunk in chunks)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return chunk;
+                await Task.Yield();
+            }
+        }
+    }
+
+    private sealed class StaticResponsesToolProvider(
+        IReadOnlyList<IAgentTool> substituteTools,
+        IReadOnlyList<IAgentTool> additiveTools) : IResponsesToolProvider
+    {
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(substituteTools);
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(additiveTools);
+    }
+
+    private sealed class RecordingAgentTool(string name, string result) : IAgentTool
+    {
+        public List<string> Calls { get; } = [];
+
+        public string Name { get; } = name;
+
+        public string Description => "test tool";
+
+        public string ParametersSchema => """{"type":"object"}""";
+
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            Calls.Add(argumentsJson);
+            return Task.FromResult(result);
+        }
+    }
 
     private static DateTimeOffset ResolveExpiry(LlmSessionRecord record) =>
         (record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow)

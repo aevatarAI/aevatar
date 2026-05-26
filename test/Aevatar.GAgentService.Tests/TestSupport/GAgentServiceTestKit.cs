@@ -124,20 +124,22 @@ internal static class GAgentServiceTestKit
     public static TAgent CreateStatefulAgent<TAgent, TState>(
         InMemoryEventStore eventStore,
         string actorId,
-        Func<TAgent> factory)
+        Func<TAgent> factory,
+        Action<IServiceCollection>? configureServices = null)
         where TAgent : GAgentBase<TState>
         where TState : class, IMessage<TState>, new()
     {
         var agent = factory();
         AssignActorId(agent, actorId);
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<TState>(eventStore);
-        agent.Services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
             .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
-            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
-            .BuildServiceProvider();
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
+        configureServices?.Invoke(services);
+        agent.Services = services.BuildServiceProvider();
         return agent;
     }
 

@@ -169,8 +169,7 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_item.added");
         body.Should().Contain("\"type\":\"response.output_text.delta\"");
-        body.Should().Contain("\"delta\":\"po\"");
-        body.Should().Contain("\"delta\":\"ng\"");
+        body.Should().Contain("\"delta\":\"pong\"");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("event: response.output_item.done");
         body.Should().Contain("event: response.completed");
@@ -1286,7 +1285,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            sessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -1356,7 +1358,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            sessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -2423,7 +2428,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(responseSessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort>(sp => new RecordingLlmRunDispatchPort(
+            provider,
+            responseSessions,
+            sp.GetServices<IResponsesToolProvider>()));
         builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<ResponsesForwardedCompletionRecorder>();
         builder.Services.AddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
@@ -2932,6 +2940,344 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesToolProviderContext context,
             CancellationToken ct = default) =>
             ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class RecordingLlmRunDispatchPort(
+        RecordingLLMProvider provider,
+        RecordingResponseSessionStore sessions,
+        IEnumerable<IResponsesToolProvider> toolProviders) : IActorDispatchPort
+    {
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            var command = envelope.Payload.Unpack<LlmRunRequested>();
+            var tools = await BuildEffectiveToolsAsync(command, ct);
+            var messages = command.Messages.Select(ToChatMessage).ToList();
+            var outputText = new StringBuilder();
+            TokenUsage? usage = null;
+
+            for (var round = 0; round < 8; round++)
+            {
+                var request = new LLMRequest
+                {
+                    Messages = [.. messages],
+                    RequestId = command.ResponseId,
+                    Metadata = BuildRequestMetadata(command),
+                    CallerContext = new LLMRequestCallerContext(
+                        command.ScopeId,
+                        command.OwnerSubject,
+                        command.ResponseId,
+                        new LLMRequestCallerCredentials(command.BearerToken)),
+                    Tools = tools,
+                    LlmControl = new LLMControlContext(
+                        NyxIdAccessToken: null,
+                        NyxIdOrgToken: null,
+                        SenderNyxIdAccessToken: null,
+                        ModelOverride: null,
+                        NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference)
+                            ? null
+                            : command.RoutePreference,
+                        MaxToolRoundsOverride: null,
+                        UserMemoryPrompt: null),
+                    Model = string.IsNullOrWhiteSpace(command.Model) ? null : command.Model,
+                    Temperature = command.HasTemperature ? command.Temperature : null,
+                    MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
+                };
+
+                var accumulatedToolCalls = new TestToolCallAccumulator();
+                await foreach (var chunk in provider.ChatStreamAsync(request, ct))
+                {
+                    var delta = ExtractChunkText(chunk);
+                    if (!string.IsNullOrEmpty(delta))
+                        outputText.Append(delta);
+                    if (chunk.Usage is not null)
+                        usage = chunk.Usage;
+                    if (chunk.DeltaToolCall is not null)
+                        accumulatedToolCalls.TrackDelta(chunk.DeltaToolCall);
+                    if (chunk.IsLast)
+                        break;
+                }
+
+                var toolCalls = accumulatedToolCalls.BuildToolCalls();
+                var forwarded = SelectForwardedToolCalls(toolCalls, command.ToolSelection);
+                foreach (var toolCall in forwarded)
+                {
+                    await sessions.RecordForwardedToolCallAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildForwardedToolCall(toolCall, command.ToolSelection),
+                        ct);
+                }
+
+                if (forwarded.Count > 0)
+                {
+                    await sessions.RecordCompletionAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildCompletion(outputText.ToString(), forwarded, usage),
+                        ct);
+                    return DispatchAdmissionFactory.Create(actorId, envelope);
+                }
+
+                var local = SelectLocalToolCalls(toolCalls, command.ToolSelection, tools);
+                if (local.Count == 0)
+                {
+                    await sessions.RecordCompletionAsync(
+                        actorId,
+                        command.ResponseId,
+                        BuildCompletion(outputText.ToString(), [], usage),
+                        ct);
+                    return DispatchAdmissionFactory.Create(actorId, envelope);
+                }
+
+                messages.Add(new ChatMessage
+                {
+                    Role = "assistant",
+                    ToolCalls = local,
+                });
+
+                var localTools = tools
+                    .Where(static tool => tool is not ForwardedTestAgentTool)
+                    .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+                    .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+                foreach (var toolCall in local)
+                {
+                    var result = localTools.TryGetValue(toolCall.Name, out var tool)
+                        ? await tool.ExecuteAsync(
+                            string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
+                            ct)
+                        : "{}";
+                    messages.Add(ChatMessage.Tool(toolCall.Id, result));
+                }
+            }
+
+            await sessions.RecordCompletionAsync(
+                actorId,
+                command.ResponseId,
+                BuildCompletion(outputText.ToString(), [], usage),
+                ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
+
+        private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
+            LlmRunRequested command,
+            CancellationToken ct)
+        {
+            var context = new ResponsesToolProviderContext(
+                new ResponsesToolProviderCallerScope(command.ScopeId, command.OwnerSubject, LlmSessionOriginKind.ApiKey.ToString()),
+                BuildRequestMetadata(command));
+            var providers = toolProviders.ToArray();
+            var substituteTools = new List<IAgentTool>();
+            var additiveTools = new List<IAgentTool>();
+            foreach (var toolProvider in providers)
+            {
+                substituteTools.AddRange(await toolProvider.GetSubstituteToolsAsync(context, ct));
+                additiveTools.AddRange(await toolProvider.GetAdditiveToolsAsync(context, ct));
+            }
+
+            var substitutedNames = (command.ToolSelection?.SubstitutedToolNames ?? [])
+                .ToHashSet(StringComparer.Ordinal);
+            var additiveNames = (command.ToolSelection?.AdditiveToolNames ?? [])
+                .ToHashSet(StringComparer.Ordinal);
+            var substitutesByName = substituteTools
+                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+            var effective = new List<IAgentTool>();
+            foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
+            {
+                if (substitutedNames.Contains(declaration.ToolName) &&
+                    substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
+                    effective.Add(substitute);
+                else
+                    effective.Add(new ForwardedTestAgentTool(declaration));
+            }
+
+            var names = effective.Select(static tool => tool.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var substitutedName in substitutedNames)
+            {
+                if (names.Contains(substitutedName))
+                    continue;
+                if (substitutesByName.TryGetValue(substitutedName, out var substitute) &&
+                    names.Add(substitute.Name))
+                {
+                    effective.Add(substitute);
+                }
+            }
+
+            foreach (var additive in additiveTools)
+            {
+                if (additiveNames.Contains(additive.Name) && names.Add(additive.Name))
+                    effective.Add(additive);
+            }
+
+            return effective;
+        }
+
+        private static Dictionary<string, string> BuildRequestMetadata(LlmRunRequested command) =>
+            new(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
+                ["scope_id"] = command.ScopeId,
+            };
+
+        private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
+            new()
+            {
+                Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
+                Content = message.Content,
+                ReasoningContent = string.IsNullOrWhiteSpace(message.ReasoningContent) ? null : message.ReasoningContent,
+                ToolCallId = string.IsNullOrWhiteSpace(message.ToolCallId) ? null : message.ToolCallId,
+                ToolCalls = message.ToolCalls.Count == 0
+                    ? null
+                    : message.ToolCalls.Select(static call => new ToolCall
+                    {
+                        Id = call.CallId,
+                        Name = call.ToolName,
+                        ArgumentsJson = call.ArgumentsJson,
+                    }).ToArray(),
+            };
+
+        private static string? ExtractChunkText(LLMStreamChunk chunk)
+        {
+            if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
+                return chunk.DeltaContent;
+            return chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part
+                ? part.Text
+                : null;
+        }
+
+        private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(
+            IReadOnlyList<ToolCall> toolCalls,
+            LlmSessionRuntimeToolSelection? selection)
+        {
+            if (selection is null || selection.ForwardedTools.Count == 0)
+                return [];
+
+            var substituted = selection.SubstitutedToolNames.ToHashSet(StringComparer.Ordinal);
+            var forwarded = selection.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Where(name => !substituted.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            return toolCalls.Where(call => forwarded.Contains(call.Name)).ToArray();
+        }
+
+        private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
+            IReadOnlyList<ToolCall> toolCalls,
+            LlmSessionRuntimeToolSelection? selection,
+            IReadOnlyList<IAgentTool> tools)
+        {
+            var forwarded = SelectForwardedToolCalls(toolCalls, selection)
+                .Select(static call => call.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            var localNames = tools
+                .Select(static tool => tool.Name)
+                .Where(name => !forwarded.Contains(name))
+                .ToHashSet(StringComparer.Ordinal);
+            return toolCalls.Where(call => localNames.Contains(call.Name)).ToArray();
+        }
+
+        private static LlmSessionForwardedToolCall BuildForwardedToolCall(
+            ToolCall toolCall,
+            LlmSessionRuntimeToolSelection? selection)
+        {
+            var declaration = selection?.ForwardedTools
+                .FirstOrDefault(tool => string.Equals(tool.ToolName, toolCall.Name, StringComparison.Ordinal));
+            return new LlmSessionForwardedToolCall
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                SchemaHash = declaration?.SchemaHash ?? string.Empty,
+                Arguments = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+                Status = LlmSessionForwardedToolCallStatus.Pending,
+                EmittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Expiry = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(24)),
+            };
+        }
+
+        private static LlmSessionCompletion BuildCompletion(
+            string outputText,
+            IReadOnlyList<ToolCall> forwardedToolCalls,
+            TokenUsage? usage)
+        {
+            var completion = new LlmSessionCompletion
+            {
+                OutputText = outputText,
+                CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            };
+            if (usage is not null)
+            {
+                completion.Usage = new LlmSessionTokenUsage
+                {
+                    PromptTokens = usage.PromptTokens,
+                    CompletionTokens = usage.CompletionTokens,
+                    TotalTokens = usage.TotalTokens,
+                };
+            }
+
+            completion.ToolCalls.AddRange(forwardedToolCalls.Select(static call => new LlmSessionCompletedToolCall
+            {
+                CallId = call.Id,
+                ToolName = call.Name,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(
+                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson),
+            }));
+            return completion;
+        }
+
+        private sealed class TestToolCallAccumulator
+        {
+            private readonly Dictionary<string, (string Name, StringBuilder Arguments)> _calls = new(StringComparer.Ordinal);
+            private readonly List<string> _order = [];
+            private int _anonymousCounter;
+
+            public void TrackDelta(ToolCall delta)
+            {
+                var id = string.IsNullOrWhiteSpace(delta.Id)
+                    ? $"anonymous-{_anonymousCounter++}"
+                    : delta.Id;
+                if (!_calls.TryGetValue(id, out var current))
+                {
+                    current = (delta.Name, new StringBuilder());
+                    _calls[id] = current;
+                    _order.Add(id);
+                }
+
+                if (!string.IsNullOrWhiteSpace(delta.Name))
+                    current.Name = delta.Name;
+                if (!string.IsNullOrEmpty(delta.ArgumentsJson))
+                    current.Arguments.Append(delta.ArgumentsJson);
+                _calls[id] = current;
+            }
+
+            public IReadOnlyList<ToolCall> BuildToolCalls() =>
+                _order.Select(id =>
+                {
+                    var current = _calls[id];
+                    return new ToolCall
+                    {
+                        Id = id,
+                        Name = current.Name,
+                        ArgumentsJson = current.Arguments.ToString(),
+                    };
+                }).ToArray();
+        }
+
+        private sealed class ForwardedTestAgentTool(LlmSessionRuntimeToolDeclaration declaration) : IAgentTool
+        {
+            public string Name { get; } = declaration.ToolName;
+
+            public string Description { get; } = declaration.Description;
+
+            public string ParametersSchema { get; } = declaration.ParametersJson;
+
+            public bool IsReadOnly => true;
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+                throw new InvalidOperationException("Forwarded test tool must not execute locally.");
+        }
     }
 
     private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

@@ -11,6 +11,7 @@ using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;

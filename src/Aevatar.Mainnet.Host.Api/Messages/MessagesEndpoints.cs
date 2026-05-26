@@ -19,8 +19,8 @@ internal static partial class MessagesApiEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         // Path B (Anthropic Messages) is a stateless facade over the same
-        // LlmSessionGAgent / NyxIdLLMProvider / IResponsesCompletionApplicationService
-        // pipeline as /v1/responses. AllowAnonymous matches the Responses
+        // LlmSessionGAgent / NyxIdLLMProvider typed run pipeline as /v1/responses.
+        // AllowAnonymous matches the Responses
         // endpoint — NyxID issues opaque api keys, not JWTs, so the JwtBearer
         // fallback policy would 401 valid callers.
         app.MapPost("/v1/messages", HandleCreateMessageAsync).AllowAnonymous();
