@@ -475,6 +475,46 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WhenSearchMatchCannotBeParsed_BoundsNudgeOnlyRecovery()
+    {
+        var providerFactory = new UnparseableSearchMatchRecoveryProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* chrono-ai-daily")),
+            ]);
+        var skillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "daily",
+            OriginalCommand: "/daily",
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-unparseable-search-match",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-unparseable-search-match" },
+                Content = new MessageContent { Text = "/daily" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with { SkillRecovery = skillRecovery },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("fallback after bounded recovery");
+        providerFactory.Requests.Count.Should().BeLessThan(40);
+        providerFactory.Requests.Count(request =>
+            request.Messages.Any(message =>
+                message.Role == "user" &&
+                message.Content?.Contains("no skill has been loaded", StringComparison.OrdinalIgnoreCase) == true))
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
@@ -1074,6 +1114,32 @@ public sealed class ConversationReplyGeneratorTests
                     : HasToolCall(request, "ornn_search_skills")
                         ? "goal skill selected without loading"
                         : "generic answer",
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class UnparseableSearchMatchRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "unparseable-search-match-recovery";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = "fallback after bounded recovery",
             };
             yield return new LLMStreamChunk { IsLast = true };
             await Task.CompletedTask;

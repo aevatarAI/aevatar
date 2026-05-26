@@ -132,11 +132,13 @@ internal static class SkillRecoveryFinalAnswerGuard
                         ExtractCommandArguments(recovery)),
                     ConsumesOrnnSearchAttempt: false,
                     Nudge: null)
-                : new RecoveryDirective(
+                : recoveryAttempts >= maxAttempts
+                    ? default
+                    : new RecoveryDirective(
                     ToolCall: null,
-                    ConsumesOrnnSearchAttempt: false,
+                    ConsumesOrnnSearchAttempt: true,
                     Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult));
-            return true;
+            return directive.ToolCall is not null || !string.IsNullOrWhiteSpace(directive.Nudge);
         }
 
         if (!recovery.RequireOrnnSearchOnBlocker)

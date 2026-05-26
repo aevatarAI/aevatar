@@ -8,6 +8,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
@@ -1303,6 +1304,70 @@ public sealed class ConversationGAgentDedupTests
                 ContainsSubsequence(payloadBytes, sentinelBytes)
                     .ShouldBeFalse(
                         $"persisted event {record.EventType} must not contain credential bytes for {sentinel}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_PersistsDurableToolContextButStripsTypedCredentials()
+    {
+        const string sentinelSenderToken = "sentinel-typed-sender-token-56bf";
+        const string sentinelOwnerToken = "sentinel-typed-owner-token-91d4";
+        const string sentinelOrgToken = "sentinel-typed-org-token-e720";
+        var durableSkillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "daily",
+            OriginalCommand: "/daily",
+            PrimarySkillName: "chrono-ai-daily",
+            MaxOrnnSearchAttempts: 2);
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                    ToolContext = (AgentToolExecutionContext.Empty with
+                    {
+                        Credentials = new AgentToolCredentials(
+                            sentinelOwnerToken,
+                            sentinelOrgToken,
+                            sentinelSenderToken),
+                        SkillRecovery = durableSkillRecovery,
+                    }).ToPayload(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-persist-tool-context", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-tool-context", "conv:slack:C1"));
+
+        dispatcher.Dispatched.ShouldHaveSingleItem();
+        var dispatchedContext = AgentToolExecutionContextMapper.FromPayload(dispatcher.Dispatched[0].ToolContext);
+        dispatchedContext.Credentials.NyxIdAccessToken.ShouldBe(sentinelOwnerToken);
+        dispatchedContext.Credentials.NyxIdOrgToken.ShouldBe(sentinelOrgToken);
+        dispatchedContext.Credentials.SenderNyxIdAccessToken.ShouldBe(sentinelSenderToken);
+
+        var pending = agent.State.PendingLlmReplyRequests.Single();
+        var persistedContext = AgentToolExecutionContextMapper.FromPayload(pending.ToolContext);
+        persistedContext.SkillRecovery.ShouldBe(durableSkillRecovery);
+        persistedContext.Credentials.ShouldBe(AgentToolCredentials.Empty);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        foreach (var sentinel in new[] { sentinelSenderToken, sentinelOwnerToken, sentinelOrgToken })
+        {
+            var sentinelBytes = Encoding.UTF8.GetBytes(sentinel);
+            foreach (var record in events)
+            {
+                var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+                ContainsSubsequence(payloadBytes, sentinelBytes)
+                    .ShouldBeFalse(
+                        $"persisted event {record.EventType} must not contain typed credential bytes for {sentinel}");
             }
         }
     }

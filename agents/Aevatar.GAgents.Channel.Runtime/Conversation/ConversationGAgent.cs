@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -275,7 +276,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
             persistedCopy.TargetRef = null;
             persistedCopy.LlmControl = null;
-            persistedCopy.ToolContext = null;
+            StripRuntimeCredentialsFromToolContext(persistedCopy);
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
             await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
@@ -330,6 +331,45 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
     }
+
+    private static void StripRuntimeCredentialsFromToolContext(NeedsLlmReplyEvent request)
+    {
+        if (request.ToolContext is null)
+            return;
+
+        var durableContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Credentials = AgentToolCredentials.Empty,
+        };
+        request.ToolContext = HasDurableToolContext(durableContext)
+            ? durableContext.ToPayload()
+            : null;
+    }
+
+    private static bool HasDurableToolContext(AgentToolExecutionContext context) =>
+        !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
+        !string.IsNullOrWhiteSpace(context.Request.CallId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.Platform) ||
+        !string.IsNullOrWhiteSpace(context.Channel.SenderId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
+        context.Routing.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
+        context.ExternalMetadata.Count > 0 ||
+        context.SkillRecovery.RequireInitialOrnnSearch ||
+        context.SkillRecovery.RequireOrnnSearchOnBlocker ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.CommandName) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.OriginalCommand) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.PrimarySkillName) ||
+        context.SkillRecovery.MaxOrnnSearchAttempts > 0;
 
     private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
         ChatActivity activity,
