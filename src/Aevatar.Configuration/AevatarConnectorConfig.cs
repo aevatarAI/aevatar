@@ -99,7 +99,7 @@ public static partial class AevatarConnectorConfig
             "workflows",
             "aevatar-native",
             "connectors",
-            "aevatar-native-s-workflows.connectors.json"),
+            "aevatar-native-s-capabilities.connectors.json"),
     ];
 
     public static IReadOnlyList<ConnectorConfigEntry> LoadConnectors(string? filePath = null)

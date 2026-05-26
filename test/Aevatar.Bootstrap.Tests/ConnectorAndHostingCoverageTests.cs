@@ -444,7 +444,7 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public async Task ConnectorRegistration_ShouldRegisterBundledAevatarNativeSWorkflowConnectors()
+    public async Task ConnectorRegistration_ShouldRegisterBundledAevatarNativeSCapabilityConnectors()
     {
         using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
         {

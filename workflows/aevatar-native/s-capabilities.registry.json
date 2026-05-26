@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "aevatar.native.capability.registry.v1",
+  "metadataSource": {
+    "owner": "ornn",
+    "storage": "remote",
+    "localArtifactRole": "bootstrap-mirror",
+    "refreshMode": "runtime-fetch"
+  },
+  "runtimePolicy": {
+    "defaultRuntime": "gagent",
+    "allowedRuntimes": [
+      "gagent",
+      "workflow"
+    ],
+    "workflowRequiredWhen": [
+      "durable_run_state",
+      "multi_event_continuation",
+      "branching_or_parallel_steps",
+      "step_level_retry_audit"
+    ],
+    "disallowedRuntimes": [
+      "n8n"
+    ]
+  },
+  "connectorCatalog": "connectors/aevatar-native-s-capabilities.connectors.json",
+  "capabilities": [
+    {
+      "name": "budget-monitoring",
+      "level": "S",
+      "metadataRef": "ornn://aevatar-native/capabilities/budget-monitoring",
+      "defaultRuntime": {
+        "kind": "gagent",
+        "entrypoint": "BudgetMonitoringGAgent",
+        "reason": "The current behavior is a scheduled linear run that can be handled by one task-scoped GAgent plus Ornn skill bindings."
+      },
+      "optionalWorkflow": {
+        "workflowFile": "optional-workflows/budget-monitoring.yaml",
+        "useWhen": [
+          "durable_run_state",
+          "step_level_retry_audit",
+          "operator_editable_dag"
+        ]
+      },
+      "nyxidIngress": {
+        "kind": "schedule_or_endpoint",
+        "route": "budget-monitoring",
+        "method": "POST",
+        "target": {
+          "kind": "aevatar_capability_run",
+          "capability": "budget-monitoring",
+          "callbackUrlEnv": "AEVATAR_CAPABILITY_CALLBACK_URL"
+        }
+      },
+      "nyxidConnectors": [
+        "nyxid_lark_bitable_proxy",
+        "nyxid_lark_channel_bot"
+      ],
+      "payloadBuilder": {
+        "kind": "ornn_skill_binding",
+        "tool": "use_skill",
+        "skill": "budget-monitoring.variance-payload-builder",
+        "contract": {
+          "inputRef": "ornn://aevatar-native/contracts/budget-monitoring/budget-variance-payload.input.v1",
+          "outputRef": "ornn://aevatar-native/contracts/budget-monitoring/budget-variance-payload.output.v1"
+        }
+      },
+      "ornnSkillBindings": [
+        {
+          "stepId": "load_budget_variance_skill",
+          "skill": "budget-monitoring.variance-payload-builder",
+          "tool": "use_skill",
+          "purpose": "payload_construction"
+        },
+        {
+          "stepId": "build_variance_payload",
+          "skill": "budget-monitoring.variance-payload-builder",
+          "purpose": "payload_construction"
+        }
+      ],
+      "runtimeAssertions": {
+        "aevatarOwnsStateWhenWorkflowRuntimeIsSelected": true,
+        "nyxidOwnsIngressAndCredentials": true,
+        "ornnOwnsCapabilityMetadataAndSkillDiscovery": true,
+        "dependsOnExternalRuntime": false
+      }
+    },
+    {
+      "name": "lark-onboarding-email-approval",
+      "level": "S",
+      "metadataRef": "ornn://aevatar-native/capabilities/lark-onboarding-email-approval",
+      "defaultRuntime": {
+        "kind": "gagent",
+        "entrypoint": "LarkOnboardingEmailApprovalGAgent",
+        "reason": "The current behavior is a linear ingress-to-skill-to-Lark request and does not require workflow runtime ownership."
+      },
+      "optionalWorkflow": {
+        "workflowFile": "optional-workflows/lark-onboarding-email-approval.yaml",
+        "useWhen": [
+          "multi_event_continuation",
+          "approval_callback_wait",
+          "step_level_retry_audit"
+        ]
+      },
+      "nyxidIngress": {
+        "kind": "endpoint",
+        "route": "lark-onboarding-email-approval",
+        "method": "POST",
+        "target": {
+          "kind": "aevatar_capability_run",
+          "capability": "lark-onboarding-email-approval",
+          "callbackUrlEnv": "AEVATAR_CAPABILITY_CALLBACK_URL"
+        }
+      },
+      "nyxidConnectors": [
+        "nyxid_lark_approval_proxy"
+      ],
+      "payloadBuilder": {
+        "kind": "ornn_skill_binding",
+        "tool": "use_skill",
+        "skill": "lark-onboarding-email-approval.payload-builder",
+        "contract": {
+          "inputRef": "ornn://aevatar-native/contracts/lark-onboarding-email-approval/lark-approval-payload.input.v1",
+          "outputRef": "ornn://aevatar-native/contracts/lark-onboarding-email-approval/lark-approval-payload.output.v1"
+        }
+      },
+      "ornnSkillBindings": [
+        {
+          "stepId": "load_onboarding_payload_skill",
+          "skill": "lark-onboarding-email-approval.payload-builder",
+          "tool": "use_skill",
+          "purpose": "payload_construction"
+        },
+        {
+          "stepId": "build_lark_approval_payload",
+          "skill": "lark-onboarding-email-approval.payload-builder",
+          "purpose": "payload_construction"
+        }
+      ],
+      "runtimeAssertions": {
+        "aevatarOwnsStateWhenWorkflowRuntimeIsSelected": true,
+        "nyxidOwnsIngressAndCredentials": true,
+        "ornnOwnsCapabilityMetadataAndSkillDiscovery": true,
+        "dependsOnExternalRuntime": false
+      }
+    }
+  ]
+}

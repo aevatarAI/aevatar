@@ -4,23 +4,23 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Core.Tests.Primitives;
 
-public sealed class AevatarNativeSWorkflowArtifactTests
+public sealed class AevatarNativeSOptionalWorkflowArtifactTests
 {
-    public static TheoryData<string> NativeWorkflowFiles => new()
+    public static TheoryData<string> OptionalWorkflowFiles => new()
     {
         "budget-monitoring.yaml",
         "lark-onboarding-email-approval.yaml",
     };
 
     [Theory]
-    [MemberData(nameof(NativeWorkflowFiles))]
-    public void NativeSWorkflowYaml_ShouldParseAndPassCoreValidation(string fileName)
+    [MemberData(nameof(OptionalWorkflowFiles))]
+    public void NativeSOptionalWorkflowYaml_ShouldParseAndPassCoreValidation(string fileName)
     {
         var path = Path.Combine(
             FindRepositoryRoot().FullName,
             "workflows",
             "aevatar-native",
-            "s-workflows",
+            "optional-workflows",
             fileName);
         var yaml = File.ReadAllText(path);
 

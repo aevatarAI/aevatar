@@ -162,8 +162,8 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
-      - name: Aevatar Native S Workflow Artifact Guard
-        run: bash tools/ci/aevatar_native_s_workflow_guard.sh
+      - name: Aevatar Native S Capability Artifact Guard
+        run: bash tools/ci/aevatar_native_s_capability_guard.sh
 
   console-web:
     # Refactor (iter16/cluster-ci-systemic-refactor):
