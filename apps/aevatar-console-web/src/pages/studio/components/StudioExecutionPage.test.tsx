@@ -153,14 +153,12 @@ describe('StudioExecutionPage', () => {
     );
 
     expect(screen.getByText('Run Compare')).toBeInTheDocument();
-    expect(screen.getByText('Health & Trust')).toBeInTheDocument();
-    expect(screen.getByText('Member Snapshot')).toBeInTheDocument();
-    expect(screen.getByText('Human Escalation Playback')).toBeInTheDocument();
+    expect(screen.getByText('Human Playback')).toBeInTheDocument();
+    expect(screen.getByText('Observation Facts')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop run' })).toBeInTheDocument();
     expect(screen.getByText('执行日志')).toBeInTheDocument();
-    expect(screen.getByLabelText('选择测试运行')).toBeInTheDocument();
+    expect(screen.getByLabelText('选择运行记录')).toBeInTheDocument();
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
