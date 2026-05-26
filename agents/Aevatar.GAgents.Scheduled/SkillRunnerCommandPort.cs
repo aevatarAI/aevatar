@@ -7,16 +7,19 @@ namespace Aevatar.GAgents.Scheduled;
 // Refactor (iter23/cluster-002):
 //   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
 //   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+// Refactor (iter111/cluster-111-handled-dispatch-contract):
+//   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+//   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
 {
     private const string PublisherActorId = "scheduled.skill-runner";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
 
     public SkillRunnerCommandPort(
         IActorRuntime actorRuntime,
-        IActorHandledDispatchPort actorDispatchPort)
+        IActorDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -77,6 +80,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
             Payload = Any.Pack(command),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, agentId),
         };
-        return _actorDispatchPort.DispatchAndWaitHandledAsync(agentId, envelope, ct);
+        return _actorDispatchPort.DispatchAsync(agentId, envelope, ct);
     }
 }

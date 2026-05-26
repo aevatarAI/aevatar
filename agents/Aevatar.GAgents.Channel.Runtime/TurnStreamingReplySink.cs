@@ -17,12 +17,15 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Refactor (iter20/cluster-004):
 ///   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 ///   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+/// Refactor (iter111/cluster-111-handled-dispatch-contract):
+///   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+///   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 /// </remarks>
 public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {
     private const string PublisherActorId = "channel-runtime.streaming-reply";
 
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly string _targetActorId;
     private readonly string _correlationId;
     private readonly string _registrationId;
@@ -35,7 +38,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private bool _disposed;
 
     public TurnStreamingReplySink(
-        IActorHandledDispatchPort actorDispatchPort,
+        IActorDispatchPort actorDispatchPort,
         string targetActorId,
         string correlationId,
         string registrationId,
@@ -111,7 +114,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
         try
         {
-            await _actorDispatchPort.DispatchAndWaitHandledAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
+            await _actorDispatchPort.DispatchAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
             ChunksEmitted++;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

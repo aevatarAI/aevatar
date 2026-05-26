@@ -64,6 +64,9 @@ internal sealed record DispatchAdmissionFollowUp(
 /// <summary>
 /// Actor envelope dispatch contract.
 /// </summary>
+// Refactor (iter111/cluster-111-handled-dispatch-contract):
+//   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+//   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 public interface IActorDispatchPort
 {
     /// <summary>
@@ -72,16 +75,4 @@ public interface IActorDispatchPort
     /// committed, or observed by a read model.
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
-}
-
-/// <summary>
-/// Optional runtime contract for callers that explicitly require one actor turn to finish.
-/// This is separate from <see cref="IActorDispatchPort"/> so accepted-only ACK semantics stay honest.
-/// </summary>
-public interface IActorHandledDispatchPort
-{
-    Task<DispatchAdmission> DispatchAndWaitHandledAsync(
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct = default);
 }

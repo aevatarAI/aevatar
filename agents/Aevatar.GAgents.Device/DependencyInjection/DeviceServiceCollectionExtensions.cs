@@ -75,6 +75,9 @@ public static class DeviceServiceCollectionExtensions
         // Refactor (iter47/issue-873-device-endpoint-direct-runtime-dispatch):
         //   Old pattern: Device HTTP endpoint resolves/creates actors, builds EventEnvelope directly, and dispatches through runtime/dispatch ports.
         //   New principle: Endpoint delegates to typed application command facade; target resolution, envelope construction, dispatch receipt, and resource ownership live behind command skeleton contracts. No callback-time auto-create.
+        // Refactor (iter111/cluster-111-handled-dispatch-contract):
+        //   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+        //   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton<DeviceRegistrationCommandFacade>();
         services.TryAddSingleton<IDeviceCallbackCommandService, DeviceCallbackCommandFacade>();
@@ -82,8 +85,8 @@ public static class DeviceServiceCollectionExtensions
         services.TryAddSingleton<DeviceRegistrationCommandReceiptFactory>();
         services.TryAddSingleton<DeviceCallbackCommandEnvelopeFactory>();
         services.TryAddSingleton<DeviceCallbackCommandReceiptFactory>();
-        services.TryAddSingleton<ICommandTargetDispatcher<DeviceRegistrationCommandTarget>, HandledActorCommandTargetDispatcher<DeviceRegistrationCommandTarget>>();
-        services.TryAddSingleton<ICommandTargetDispatcher<DeviceCallbackCommandTarget>, HandledActorCommandTargetDispatcher<DeviceCallbackCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<DeviceRegistrationCommandTarget>, ActorCommandTargetDispatcher<DeviceRegistrationCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<DeviceCallbackCommandTarget>, ActorCommandTargetDispatcher<DeviceCallbackCommandTarget>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceRegisterCommand, DeviceRegistrationCommandTarget, DeviceRegistrationCommandStartError>, DeviceRegistrationCommandTargetResolver<DeviceRegisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceUnregisterCommand, DeviceRegistrationCommandTarget, DeviceRegistrationCommandStartError>, DeviceRegistrationCommandTargetResolver<DeviceUnregisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<DeviceCallbackDispatchCommand, DeviceCallbackCommandTarget, DeviceCallbackCommandStartError>, DeviceCallbackCommandTargetResolver>();

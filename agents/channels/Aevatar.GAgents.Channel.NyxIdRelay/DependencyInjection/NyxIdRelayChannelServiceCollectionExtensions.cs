@@ -21,6 +21,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
+    // Refactor (iter111/cluster-111-handled-dispatch-contract):
+    //   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+    //   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
     public static IServiceCollection AddNyxIdRelayChannel(this IServiceCollection services)
     {
         // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
@@ -34,7 +37,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ChannelRelayRegistrationFacade>();
         services.TryAddSingleton<ChannelBotRegistrationCommandEnvelopeFactory>();
         services.TryAddSingleton<ChannelRegistrationCommandReceiptFactory>();
-        services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, HandledActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();
         services.TryAddSingleton<ICommandTargetResolver<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>, ChannelBotRegistrationCommandTargetResolver<ChannelBotRegisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>, ChannelBotRegistrationCommandTargetResolver<ChannelBotUnregisterCommand>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<ChannelBotRegisterCommand>>(sp => sp.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());

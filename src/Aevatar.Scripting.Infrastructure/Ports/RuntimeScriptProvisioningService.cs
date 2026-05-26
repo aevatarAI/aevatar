@@ -4,26 +4,17 @@ using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter111/cluster-111-handled-dispatch-contract):
+//   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+//   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
     private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly ICommandDispatchPipeline<ProvisionScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>? _dispatchPipeline;
-    private readonly IActorHandledDispatchPort? _handledDispatchPort;
 
     public RuntimeScriptProvisioningService(
         ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
-        : this(dispatchService, null, null)
-    {
-    }
-
-    public RuntimeScriptProvisioningService(
-        ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        ICommandDispatchPipeline<ProvisionScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>? dispatchPipeline,
-        IActorHandledDispatchPort? handledDispatchPort)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _dispatchPipeline = dispatchPipeline;
-        _handledDispatchPort = handledDispatchPort;
     }
 
     public async Task<string> EnsureRuntimeAsync(
@@ -68,19 +59,6 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
             runtimeActorId,
             definitionSnapshot,
             scopeId);
-        if (_dispatchPipeline != null && _handledDispatchPort != null)
-        {
-            var prepared = await _dispatchPipeline.PrepareAsync(command, ct);
-            if (!prepared.Succeeded || prepared.Target == null)
-                throw prepared.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");
-
-            await _handledDispatchPort.DispatchAndWaitHandledAsync(
-                prepared.Target.Target.TargetId,
-                prepared.Target.Envelope,
-                ct);
-            return prepared.Target.Receipt.ActorId;
-        }
-
         var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");

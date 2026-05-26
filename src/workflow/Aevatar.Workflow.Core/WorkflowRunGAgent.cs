@@ -30,6 +30,9 @@ namespace Aevatar.Workflow.Core;
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
+// Refactor (iter111/cluster-111-handled-dispatch-contract):
+//   Old pattern: Public CQRS/runtime surface exposes IActorHandledDispatchPort, lets command paths synchronously wait for one actor turn, then returns DispatchAdmission.
+//   New principle: Command skeleton depends only on accepted inbox dispatch; any handled/committed/readmodel stage is modeled as explicit follow-up observation or continuation event, never as dispatch ACK.
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -46,7 +49,6 @@ public sealed class WorkflowRunGAgent
     private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IActorHandledDispatchPort? _handledDispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
@@ -60,12 +62,10 @@ public sealed class WorkflowRunGAgent
         IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
-        IActorHandledDispatchPort? handledDispatchPort = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _handledDispatchPort = handledDispatchPort ?? dispatchPort as IActorHandledDispatchPort;
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _ = workflowDefinitionResolver;
@@ -578,9 +578,6 @@ public sealed class WorkflowRunGAgent
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope)
     {
-        if (_handledDispatchPort != null)
-            return _handledDispatchPort.DispatchAndWaitHandledAsync(actorId, envelope);
-
         return _dispatchPort.DispatchAsync(actorId, envelope);
     }
 

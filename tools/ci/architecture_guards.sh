@@ -364,7 +364,6 @@ dispatch_projection_boundary_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
-  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorHandledDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
 
@@ -430,6 +429,34 @@ done < <(
 if [ -n "${dispatch_admission_handler_wait_report}" ]; then
   echo "${dispatch_admission_handler_wait_report}"
   echo "Actor dispatch ports must return DispatchAdmission after runtime/inbox admission; do not call or await actor HandleEventAsync in DispatchAsync."
+  exit 1
+fi
+
+# Refactor (iter111/cluster-111-handled-dispatch-contract):
+#   Old: Production application command ports could depend on IActorHandledDispatchPort
+#   or DispatchAndWaitHandledAsync and turn a one-actor-turn wait into an ACK.
+#   New: Production command dispatch uses IActorDispatchPort accepted-only; handled,
+#   committed, or observed stages must be explicit follow-up observation.
+handled_dispatch_contract_report="$(
+  rg -n "IActorHandledDispatchPort|DispatchAndWaitHandledAsync|HandledActorCommandTargetDispatcher|LocalActorHandledDispatchPort|OrleansActorHandledDispatchPort" \
+    src agents \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!*.g.cs' \
+    -g '!*.Designer.cs' \
+    | awk -F: '
+{
+  text = substr($0, length($1) + length($2) + 3);
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  print $0;
+}'
+)"
+
+if [ -n "${handled_dispatch_contract_report}" ]; then
+  echo "${handled_dispatch_contract_report}"
+  echo "Production command dispatch must not use handled-dispatch contracts; use IActorDispatchPort accepted-only and explicit observation for later stages."
   exit 1
 fi
 
