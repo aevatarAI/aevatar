@@ -3,6 +3,7 @@ using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         const string orchestratorDefinitionActorId = "multi-orchestrator-definition";
         const string orchestratorRuntimeActorId = "multi-orchestrator-runtime";
 
-        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+        var workerADefinition = await ScriptEvolutionIntegrationTestKit.UpsertDefinitionWithSnapshotAsync(
             provider,
             "worker-a-script",
             "rev-a-1",
@@ -34,7 +35,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "1"),
             workerADefinitionActorId,
             CancellationToken.None);
-        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+        var workerBDefinition = await ScriptEvolutionIntegrationTestKit.UpsertDefinitionWithSnapshotAsync(
             provider,
             "worker-b-script",
             "rev-b-1",
@@ -94,6 +95,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "generated_round",
                 "2"),
             RuntimeAgentType = runtimeAgentType,
+            WorkerAV1DefinitionSnapshot = workerADefinition.Snapshot.ToBindingSpec(),
+            WorkerBV1DefinitionSnapshot = workerBDefinition.Snapshot.ToBindingSpec(),
         };
         await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
             provider,
@@ -180,18 +183,18 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         catalogEntryA.RevisionHistory.Should().Contain(["rev-a-2", "rev-a-3"]);
         catalogEntryB.RevisionHistory.Should().Contain(["rev-b-2", "rev-b-3"]);
 
-        var workerADefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+        var workerADefinitionV3 = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
             catalogEntryA.ActiveDefinitionActorId,
             "rev-a-3",
             CancellationToken.None);
-        var workerBDefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+        var workerBDefinitionV3 = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
             catalogEntryB.ActiveDefinitionActorId,
             "rev-b-3",
             CancellationToken.None);
-        workerADefinition.Revision.Should().Be("rev-a-3");
-        workerBDefinition.Revision.Should().Be("rev-b-3");
+        workerADefinitionV3.Revision.Should().Be("rev-a-3");
+        workerBDefinitionV3.Revision.Should().Be("rev-b-3");
     }
 
     [Fact]

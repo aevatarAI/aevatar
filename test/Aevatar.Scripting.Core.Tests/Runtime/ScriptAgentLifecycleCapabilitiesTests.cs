@@ -12,6 +12,7 @@ using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using CoreScriptDefinitionUpsertResult = Aevatar.Scripting.Core.Ports.ScriptDefinitionUpsertResult;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
@@ -102,7 +103,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                 CandidateSourceHash: "hash",
                 Reason: "reason"),
             CancellationToken.None);
-        var definitionActorId = await capabilities.UpsertScriptDefinitionAsync(
+        var definitionUpsert = await capabilities.UpsertScriptDefinitionAsync(
             "script-1",
             "rev-2",
             "source",
@@ -113,6 +114,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-2",
             "runtime-1",
+            definitionUpsert.DefinitionSnapshot,
             CancellationToken.None);
         await capabilities.RunScriptInstanceAsync(
             "runtime-1",
@@ -144,7 +146,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
 
         aiResponse.Should().Be("ok:hello");
         decision.Accepted.Should().BeTrue();
-        definitionActorId.Should().Be("definition-1");
+        definitionUpsert.ActorId.Should().Be("definition-1");
         runtimeActorId.Should().Be("runtime-1");
         proposalPort.LastProposal.Should().NotBeNull();
         proposalPort.LastProposal!.CandidateRevision.Should().Be("rev-2");
@@ -158,7 +160,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task ProposeScriptEvolutionAsync_ShouldRememberAcceptedSnapshot_ForLaterProvisioning()
+    public async Task SpawnScriptRuntimeAsync_ShouldUseCommandOwnedDefinitionSnapshot()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
         var proposalPort = new StaticProposalPort(new ScriptPromotionDecision(
@@ -199,6 +201,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-2",
             "runtime-1",
+            decision.DefinitionSnapshot!,
             CancellationToken.None);
 
         decision.Accepted.Should().BeTrue();
@@ -209,7 +212,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task ProposeScriptEvolutionAsync_ShouldNotRememberSnapshot_WhenDecisionHasNoSnapshot()
+    public async Task SpawnScriptRuntimeAsync_ShouldNotReadSnapshot_WhenDecisionHasNoSnapshot()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
         var proposalPort = new StaticProposalPort(new ScriptPromotionDecision(
@@ -241,6 +244,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-2",
             "runtime-1",
+            CreateDefinitionBindingSpec("rev-2"),
             CancellationToken.None);
 
         runtimeActorId.Should().Be("runtime-1");
@@ -249,9 +253,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task TransientDefinitionSnapshotCache_ShouldStayScopedToSingleCapabilityInstance()
+    public async Task SpawnScriptRuntimeAsync_ShouldTrustProvidedSnapshot_AcrossCapabilityInstances()
     {
-        var sharedDefinitionSnapshotPort = new CountingDefinitionSnapshotPort();
         var firstProvisioningPort = new RecordingRuntimeProvisioningPort();
         var secondProvisioningPort = new RecordingRuntimeProvisioningPort();
         var cachedSnapshot = new ScriptDefinitionSnapshot(
@@ -265,9 +268,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "schema-hash");
 
         var firstCapabilities = CreateCapabilities(
-            definitionSnapshotPort: sharedDefinitionSnapshotPort,
             definitionCommandPort: new StaticDefinitionCommandPort(
-                new ScriptDefinitionUpsertResult(
+                new CoreScriptDefinitionUpsertResult(
                     "definition-1",
                     cachedSnapshot,
                     new ScriptingCommandAcceptedReceipt("definition-1", "command-1", "corr-1"))),
@@ -284,33 +286,32 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-2",
             "runtime-1",
+            cachedSnapshot.ToBindingSpec(),
             CancellationToken.None);
 
-        sharedDefinitionSnapshotPort.RequestCount.Should().Be(0);
         firstProvisioningPort.EnsureCalls.Should().ContainSingle();
         firstProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
 
         var secondCapabilities = CreateCapabilities(
-            definitionSnapshotPort: sharedDefinitionSnapshotPort,
             runtimeProvisioningPort: secondProvisioningPort);
 
         await secondCapabilities.SpawnScriptRuntimeAsync(
             "definition-1",
             "rev-2",
             "runtime-2",
+            cachedSnapshot.ToBindingSpec(),
             CancellationToken.None);
 
-        sharedDefinitionSnapshotPort.RequestCount.Should().Be(1);
         secondProvisioningPort.EnsureCalls.Should().ContainSingle();
         secondProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
     }
 
     [Fact]
-    public async Task UpsertScriptDefinitionAsync_ShouldRememberSnapshot_UsingLatestKey_WhenRevisionIsBlank()
+    public async Task SpawnScriptRuntimeAsync_ShouldUseProvidedSnapshot_WhenRevisionIsBlank()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
         var definitionPort = new StaticDefinitionCommandPort(
-            new ScriptDefinitionUpsertResult(
+            new CoreScriptDefinitionUpsertResult(
                 "definition-1",
                 new ScriptDefinitionSnapshot(
                     "script-1",
@@ -337,6 +338,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             string.Empty,
             "runtime-1",
+            definitionPort.Result.Snapshot.ToBindingSpec(),
             CancellationToken.None);
 
         provisioningPort.EnsureCalls.Should().ContainSingle();
@@ -345,11 +347,11 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task UpsertScriptDefinitionAsync_ShouldNotRememberSnapshot_WhenDefinitionActorIdIsBlank()
+    public async Task SpawnScriptRuntimeAsync_ShouldUseProvidedProposalSnapshot_WhenDefinitionActorIdIsBlank()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
         var definitionPort = new StaticDefinitionCommandPort(
-            new ScriptDefinitionUpsertResult(
+            new CoreScriptDefinitionUpsertResult(
                 string.Empty,
                 new ScriptDefinitionSnapshot(
                     "script-1",
@@ -376,6 +378,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-1",
             "runtime-1",
+            definitionPort.Result.Snapshot.ToBindingSpec(),
             CancellationToken.None);
 
         runtimeActorId.Should().Be("runtime-1");
@@ -384,7 +387,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task ProposeScriptEvolutionAsync_ShouldNotRememberSnapshot_WhenDefinitionActorIdIsBlank()
+    public async Task SpawnScriptRuntimeAsync_ShouldUseProvidedSnapshot_WhenDefinitionActorIdIsBlank()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
         var proposalPort = new StaticProposalPort(new ScriptPromotionDecision(
@@ -422,6 +425,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             "definition-1",
             "rev-2",
             "runtime-1",
+            CreateDefinitionBindingSpec("rev-2"),
             CancellationToken.None);
 
         runtimeActorId.Should().Be("runtime-1");
@@ -460,18 +464,17 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     {
         var cases = new (string Name, Func<ScriptBehaviorRuntimeCapabilities> Create)[]
         {
-            ("publishAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", null!, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("sendToAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("publishToSelfAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, null!, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("scheduleSelfSignalAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("cancelCallbackAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), null!, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
-            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort())),
-            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!)),
+            ("publishAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", null!, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("sendToAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("publishToSelfAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, null!, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("scheduleSelfSignalAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("cancelCallbackAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), null!, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort())),
+            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!)),
         };
 
         foreach (var testCase in cases)
@@ -483,7 +486,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
 
     private static ScriptBehaviorRuntimeCapabilities CreateCapabilities(
         IAICapability? aiCapability = null,
-        IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
         IScriptEvolutionProposalPort? proposalPort = null,
         IScriptDefinitionCommandPort? definitionCommandPort = null,
         IScriptRuntimeProvisioningPort? runtimeProvisioningPort = null,
@@ -505,13 +507,25 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                 Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory))),
             cancelCallbackAsync: cancelCallbackAsync ?? ((_, _) => Task.CompletedTask),
             aiCapability: aiCapability ?? new RecordingAICapability(),
-            definitionSnapshotPort: definitionSnapshotPort ?? new RecordingDefinitionSnapshotPort(),
             proposalPort: proposalPort ?? new RecordingProposalPort(),
             definitionCommandPort: definitionCommandPort ?? new RecordingDefinitionCommandPort(),
             runtimeProvisioningPort: runtimeProvisioningPort ?? new RecordingRuntimeProvisioningPort(),
             runtimeCommandPort: runtimeCommandPort ?? new RecordingRuntimeCommandPort(),
             catalogCommandPort: catalogCommandPort ?? new RecordingCatalogCommandPort());
     }
+
+    private static ScriptDefinitionBindingSpec CreateDefinitionBindingSpec(string revision) =>
+        new()
+        {
+            ScriptId = "script-1",
+            Revision = revision,
+            SourceHash = ScriptSources.UppercaseBehaviorHash,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
+            StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
+        };
 
     private sealed class RecordingAICapability : IAICapability
     {
@@ -718,7 +732,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             Upserts.Add((scriptId, scriptRevision, definitionActorId));
             var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             var actorId = definitionActorId ?? "definition-created";
-            return Task.FromResult(new ScriptDefinitionUpsertResult(
+            return Task.FromResult(new CoreScriptDefinitionUpsertResult(
                 actorId,
                 new ScriptDefinitionSnapshot(
                     scriptId,
@@ -733,9 +747,11 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         }
     }
 
-    private sealed class StaticDefinitionCommandPort(ScriptDefinitionUpsertResult result) : IScriptDefinitionCommandPort
+    private sealed class StaticDefinitionCommandPort(CoreScriptDefinitionUpsertResult result) : IScriptDefinitionCommandPort
     {
-        public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
+        public CoreScriptDefinitionUpsertResult Result => result;
+
+        public Task<CoreScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
             ScriptPackageSpec scriptPackage,
