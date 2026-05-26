@@ -2153,8 +2153,6 @@ public class VoicePresenceModuleTests
         public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
         public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
         public Task<RealtimeVoiceProviderSession> ConnectAsync(
             VoiceProviderSessionKey sessionKey,
             VoiceProviderConfig config,
@@ -2169,54 +2167,6 @@ public class VoicePresenceModuleTests
             return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingProviderSession(this));
         }
 
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
-        {
-            _ = config;
-            _ = ct;
-            ConnectCalls++;
-            return Task.CompletedTask;
-        }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = ct;
-            AudioFrames.Add(pcm16.ToArray());
-            return Task.CompletedTask;
-        }
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-        {
-            _ = ct;
-            ToolResults.Add((callId, resultJson));
-            return Task.CompletedTask;
-        }
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-        {
-            _ = ct;
-            InjectEventCalls++;
-            if (ThrowOnInjectEvent)
-                throw new InvalidOperationException("inject failed");
-
-            InjectedEvents.Add(injection.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task CancelResponseAsync(CancellationToken ct)
-        {
-            _ = ct;
-            CancelCalls++;
-            return Task.CompletedTask;
-        }
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-        {
-            _ = ct;
-            UpdateSessionCalls++;
-            LastSession = session.Clone();
-            return Task.CompletedTask;
-        }
-
         public ValueTask DisposeAsync()
         {
             Disposed = true;
@@ -2224,26 +2174,44 @@ public class VoicePresenceModuleTests
         }
 
         public Task RaiseEventAsync(VoiceProviderEvent evt, CancellationToken ct) =>
-            _eventSink?.Invoke(_sessionKey, evt, ct) ??
-            OnEvent?.Invoke(evt, ct) ??
-            Task.CompletedTask;
+            _eventSink?.Invoke(_sessionKey, evt, ct) ?? Task.CompletedTask;
 
         private sealed class RecordingProviderSession(RecordingVoiceProvider provider) : RealtimeVoiceProviderSession
         {
-            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
-                provider.SendAudioAsync(pcm16, ct);
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+            {
+                provider.AudioFrames.Add(pcm16.ToArray());
+                return Task.CompletedTask;
+            }
 
-            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
-                provider.SendToolResultAsync(callId, resultJson, ct);
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+            {
+                provider.ToolResults.Add((callId, resultJson));
+                return Task.CompletedTask;
+            }
 
-            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
-                provider.InjectEventAsync(injection, ct);
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+            {
+                provider.InjectEventCalls++;
+                if (provider.ThrowOnInjectEvent)
+                    throw new InvalidOperationException("inject failed");
 
-            public override Task CancelResponseAsync(CancellationToken ct) =>
-                provider.CancelResponseAsync(ct);
+                provider.InjectedEvents.Add(injection.Clone());
+                return Task.CompletedTask;
+            }
 
-            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
-                provider.UpdateSessionAsync(session, ct);
+            public override Task CancelResponseAsync(CancellationToken ct)
+            {
+                provider.CancelCalls++;
+                return Task.CompletedTask;
+            }
+
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+            {
+                provider.UpdateSessionCalls++;
+                provider.LastSession = session.Clone();
+                return Task.CompletedTask;
+            }
 
             public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }

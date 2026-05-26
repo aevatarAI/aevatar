@@ -319,51 +319,30 @@ public class VoicePresenceEndpointsTests
 
     private sealed class RecordingVoiceProvider : IRealtimeVoiceProvider
     {
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
+        public Task<RealtimeVoiceProviderSession> ConnectAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            CancellationToken ct)
         {
+            _ = sessionKey;
             _ = config;
+            _ = eventSink;
             _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-        {
-            _ = callId;
-            _ = resultJson;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-        {
-            _ = injection;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task CancelResponseAsync(CancellationToken ct)
-        {
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-        {
-            _ = session;
-            _ = ct;
-            return Task.CompletedTask;
+            return Task.FromResult<RealtimeVoiceProviderSession>(new NoopProviderSession());
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class NoopProviderSession : RealtimeVoiceProviderSession
+        {
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) => Task.CompletedTask;
+            public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) => Task.CompletedTask;
+            public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class StubVoiceTransport : IVoiceTransport

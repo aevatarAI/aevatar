@@ -26,7 +26,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
     private readonly ILogger _logger;
 
     private bool _disposed;
-    private MiniCPMRealtimeProviderSession? _activeSession;
 
     public MiniCPMRealtimeProvider(
         MiniCPMRealtimeProviderOptions? options = null,
@@ -51,8 +50,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
     public Task<RealtimeVoiceProviderSession> ConnectAsync(
         VoiceProviderSessionKey sessionKey,
         VoiceProviderConfig config,
@@ -63,10 +60,9 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
-        EnsureDisconnected();
         ValidateProviderConfig(config);
 
-        _activeSession = new MiniCPMRealtimeProviderSession(
+        var session = new MiniCPMRealtimeProviderSession(
             sessionKey,
             new Uri(config.Endpoint.Trim(), UriKind.Absolute),
             Guid.NewGuid().ToString("n"),
@@ -74,69 +70,22 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             _options,
             _logger,
             eventSink);
-        _activeSession.Start();
-        return Task.FromResult<RealtimeVoiceProviderSession>(_activeSession);
+        session.Start();
+        return Task.FromResult<RealtimeVoiceProviderSession>(session);
     }
-
-    public async Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
-    {
-        var legacySession = new VoiceProviderSessionKey(string.Empty, string.Empty, string.Empty, 0);
-        await ConnectAsync(
-            legacySession,
-            config,
-            (key, providerEvent, token) =>
-            {
-                _ = key;
-                var callback = OnEvent;
-                return callback?.Invoke(providerEvent, token) ?? Task.CompletedTask;
-            },
-            ct);
-    }
-
-    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
-        EnsureSession().SendAudioAsync(pcm16, ct);
-
-    public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
-        EnsureSession().SendToolResultAsync(callId, resultJson, ct);
-
-    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
-        EnsureSession().InjectEventAsync(injection, ct);
 
     // Refactor (iter15/cluster-026-voice-provider-background-state):
     //   Old pattern: cancel mutated active/suppressed response epoch state and emitted synthetic cancel events.
     //   New principle: cancel only sends provider stop; VoicePresenceModule owns actor cancellation state.
-    public async Task CancelResponseAsync(CancellationToken ct)
-        => await EnsureSession().CancelResponseAsync(ct);
-
-    public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
-        EnsureSession().UpdateSessionAsync(session, ct);
-
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
 
         _disposed = true;
-        await DisposeActiveSessionAsync();
+        await ValueTask.CompletedTask;
         if (_ownsHttpClient)
             _httpClient.Dispose();
-    }
-
-    private MiniCPMRealtimeProviderSession EnsureSession() =>
-        _activeSession ?? throw new InvalidOperationException("MiniCPM voice provider is not connected.");
-
-    private void EnsureDisconnected()
-    {
-        if (_activeSession != null)
-            throw new InvalidOperationException("MiniCPM voice provider is already connected.");
-    }
-
-    private async Task DisposeActiveSessionAsync()
-    {
-        var session = _activeSession;
-        _activeSession = null;
-        if (session != null)
-            await session.DisposeAsync();
     }
 
     // Refactor (iter106/cluster-106-voice-provider-session-runtime):

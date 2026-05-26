@@ -30,7 +30,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
     private readonly ILogger _logger;
 
     private bool _disposed;
-    private OpenAIRealtimeProviderSession? _activeSession;
 
     public OpenAIRealtimeProvider(
         OpenAIRealtimeProviderOptions? options = null,
@@ -52,8 +51,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
     public async Task<RealtimeVoiceProviderSession> ConnectAsync(
         VoiceProviderSessionKey sessionKey,
         VoiceProviderConfig config,
@@ -63,47 +60,13 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
-        EnsureDisconnected();
         ValidateProviderConfig(config);
 
         var session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
-        _activeSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink);
-        _activeSession.Start();
-        return _activeSession;
+        var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink);
+        providerSession.Start();
+        return providerSession;
     }
-
-    public async Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
-    {
-        var legacySession = new VoiceProviderSessionKey(string.Empty, string.Empty, string.Empty, 0);
-        await ConnectAsync(
-            legacySession,
-            config,
-            (key, providerEvent, token) =>
-            {
-                _ = key;
-                var callback = OnEvent;
-                return callback?.Invoke(providerEvent, token) ?? Task.CompletedTask;
-            },
-            ct);
-    }
-
-    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
-        EnsureSession().SendAudioAsync(pcm16, ct);
-
-    public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
-        EnsureSession().SendToolResultAsync(callId, resultJson, ct);
-
-    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
-        EnsureSession().InjectEventAsync(injection, ct);
-
-    internal Task InjectUserTextAsync(string text, CancellationToken ct) =>
-        EnsureSession().InjectUserTextAsync(text, ct);
-
-    public Task CancelResponseAsync(CancellationToken ct) =>
-        EnsureSession().CancelResponseAsync(ct);
-
-    public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
-        EnsureSession().UpdateSessionAsync(session, ct);
 
     public async ValueTask DisposeAsync()
     {
@@ -111,7 +74,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             return;
 
         _disposed = true;
-        await DisposeActiveSessionAsync();
+        await ValueTask.CompletedTask;
     }
 
     private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
@@ -332,23 +295,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
         if (string.IsNullOrWhiteSpace(config.ApiKey))
             throw new InvalidOperationException("OpenAI realtime provider requires api_key.");
-    }
-
-    private OpenAIRealtimeProviderSession EnsureSession() =>
-        _activeSession ?? throw new InvalidOperationException("OpenAI realtime provider is not connected.");
-
-    private void EnsureDisconnected()
-    {
-        if (_activeSession != null)
-            throw new InvalidOperationException("OpenAI realtime provider is already connected.");
-    }
-
-    private async Task DisposeActiveSessionAsync()
-    {
-        var session = _activeSession;
-        _activeSession = null;
-        if (session != null)
-            await session.DisposeAsync();
     }
 
     // Refactor (iter106/cluster-106-voice-provider-session-runtime):
