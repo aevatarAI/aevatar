@@ -114,6 +114,35 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenCommandRunIdMissing_ShouldRejectEvenWhenRequestRunIdExists()
+    {
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ignored" };
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var initialState = runtime.State.Clone();
+
+        await runtime.HandleStartAsync(new AgentRunStartRequested
+        {
+            RunId = string.Empty,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-missing-command-run-id",
+                RunId = "run-request",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+                ReplyToken = "relay-token-missing-command-run-id",
+            },
+        });
+
+        runtime.State.Should().BeEquivalentTo(initialState);
+        replyGenerator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldAcceptDuplicateStarts_ForActorOwnedAdmission()
     {
         var actorRuntime = new DispatchingActorRuntime();
