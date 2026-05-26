@@ -51,10 +51,6 @@ internal readonly record struct AgentRunId
 
 internal static class AgentRunActorIds
 {
-    private const string ActorIdPrefix = "channel-agent-run:";
-
-    // Refactor (iter101/cluster-105):
-    //   Old pattern: callers parsed this actor id prefix to recover run_id.
-    //   New principle: actor id remains an opaque address; run_id travels in typed command/state fields.
-    public static string ForRun(AgentRunId runId) => ActorIdPrefix + runId.Value;
+    // Refactor (iter102/cluster-103): Old pattern: AgentRunActorIds reverse-parsed actorId prefix -> runId fallback. New principle: run_id is the typed authority on commands/state; actorId stays one-way opaque.
+    public static string ForRun(AgentRunId runId) => "channel-agent-run:" + runId.Value;
 }
