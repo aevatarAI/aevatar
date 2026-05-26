@@ -8,6 +8,9 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 /// relevant API hints into the system prompt based on the user's
 /// actually connected services.
 /// </summary>
+// Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+//   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+//   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
 public static class NyxIdServiceApiHints
 {
     private static readonly (string Pattern, string Hint)[] HintEntries =
@@ -17,11 +20,11 @@ public static class NyxIdServiceApiHints
 Base URL includes bot token — paths are relative.
 POST /getMe {} — Bot info
 POST /sendMessage {"chat_id":"...","text":"...","parse_mode":"Markdown"} — Send message
-POST /getUpdates {} — Get incoming messages (use to find chat_id)
 POST /sendPhoto {"chat_id":"...","photo":"https://...","caption":"..."} — Send photo
 POST /editMessageText {"chat_id":"...","message_id":N,"text":"..."} — Edit message
 POST /deleteMessage {"chat_id":"...","message_id":N} — Delete message
 POST /setMyCommands {"commands":[{"command":"start","description":"..."}]} — Set commands
+Inbound messages are delivered through NyxID Channel Bot Relay to /api/webhooks/nyxid-relay; do not poll getUpdates from Aevatar connectors.
 """),
 
         ("github", """

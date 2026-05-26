@@ -678,6 +678,37 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task TelegramUserConnector_GetUpdates_ShouldRouteCallersToNyxIdRelay()
+    {
+        var connector = new TelegramUserConnector(
+            "telegram-user-no-inbound",
+            apiId: 123456,
+            apiHash: "hash",
+            phoneNumber: "",
+            verificationCode: "",
+            password: "",
+            sessionPath: "",
+            deviceModel: "",
+            systemVersion: "",
+            appVersion: "",
+            systemLangCode: "",
+            langCode: "",
+            allowedOperations: ["/sendMessage"],
+            timeoutMs: 1000,
+            logger: NullLogger.Instance);
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/getUpdates",
+            Payload = """{"offset":1,"timeout":25}""",
+        });
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("/getUpdates was removed");
+        response.Error.Should().Contain("NyxID Channel Bot Relay");
+    }
+
+    [Fact]
     public async Task HttpConnectorBuilder_WithHttpClientFactory_ShouldUseNamedClient()
     {
         var handler = new StubHttpMessageHandler(_ =>
