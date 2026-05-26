@@ -177,7 +177,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
         options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
-        options.WorkflowDirectories.Should().NotContain(
+        options.WorkflowDirectories.Should().Contain(
             Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
     }
 
@@ -391,7 +391,14 @@ public sealed class WorkflowInfrastructureCoverageTests
                 .GetProperty("ClosedWorldBlocked")
                 .Should().BeNull();
             document.Connectors.Select(connector => connector.Name)
-                .Should().Equal("cli_runner", "custom_sink", "http_news", "mcp_tools");
+                .Should().Equal(
+                    "cli_runner",
+                    "custom_sink",
+                    "http_news",
+                    "mcp_tools",
+                    "nyxid_lark_approval_proxy",
+                    "nyxid_lark_bitable_proxy",
+                    "nyxid_lark_channel_bot");
             document.Connectors.Single(connector => connector.Name == "http_news")
                 .AllowedInputKeys.Should().Equal("limit", "query");
             document.Connectors.Single(connector => connector.Name == "http_news")

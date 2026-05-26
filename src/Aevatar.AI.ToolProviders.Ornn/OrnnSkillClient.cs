@@ -15,6 +15,8 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// </summary>
 public sealed class OrnnSkillClient
 {
+    private const string OrnnApiBasePath = "/api/v1";
+
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
@@ -60,7 +62,7 @@ public sealed class OrnnSkillClient
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
     }
 
-    /// <summary>搜索技能。</summary>
+    /// <summary>Searches Ornn skills through the NyxID-bound Ornn API service.</summary>
     public async Task<OrnnSearchResult> SearchSkillsAsync(
         string accessToken,
         string query = "",
@@ -79,7 +81,7 @@ public sealed class OrnnSkillClient
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
 
-        var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
+        var path = $"{OrnnApiBasePath}/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
         using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -128,13 +130,13 @@ public sealed class OrnnSkillClient
         }
     }
 
-    /// <summary>获取技能 JSON（含文件内容）。</summary>
+    /// <summary>Gets Ornn skill JSON, including package file contents.</summary>
     public async Task<OrnnSkillJson?> GetSkillJsonAsync(
         string accessToken,
         string idOrName,
         CancellationToken ct = default)
     {
-        var path = $"/api/v1/skills/{Uri.EscapeDataString(idOrName)}/json";
+        var path = $"{OrnnApiBasePath}/skills/{Uri.EscapeDataString(idOrName)}/json";
 
         using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);

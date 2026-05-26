@@ -50,7 +50,7 @@ public sealed class OrnnSkillClientTests
         request.Authorization!.Scheme.Should().Be("Bearer");
         request.Authorization.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class OrnnSkillClientTests
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.Authorization!.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/Translate%20Skill/json");
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skills/Translate%20Skill/json");
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class OrnnSkillClientTests
 
     private static OrnnSkillClient CreateClient(
         OrnnTestHttpMessageHandler handler,
-        string slug = "ornn",
+        string slug = "ornn-api",
         TimeSpan? perCallTimeout = null)
     {
         var nyxClient = new NyxIdApiClient(

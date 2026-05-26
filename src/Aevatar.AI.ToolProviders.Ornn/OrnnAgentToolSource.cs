@@ -5,8 +5,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Ornn;
 
 /// <summary>
-/// Ornn 技能工具来源。提供 ornn_search_skills 发现工具。
-/// 技能使用功能已合入统一的 use_skill 工具（通过 IRemoteSkillFetcher）。
+/// Ornn skill tool source. Provides the <c>ornn_search_skills</c> discovery tool.
+/// Skill execution is integrated into the unified <c>use_skill</c> tool through
+/// <see cref="Skills.IRemoteSkillFetcher"/>.
 /// </summary>
 public sealed class OrnnAgentToolSource : IAgentToolSource
 {

@@ -162,6 +162,9 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
+      - name: Install Python Guard Dependencies
+        run: python3 -m pip install --user PyYAML==6.0.2
+
       - name: Aevatar Native S Capability Artifact Guard
         run: bash tools/ci/aevatar_native_s_capability_guard.sh
 

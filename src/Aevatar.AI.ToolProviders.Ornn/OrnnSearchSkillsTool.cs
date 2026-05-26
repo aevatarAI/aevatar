@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
-/// <summary>搜索用户 Ornn 技能库的工具。</summary>
+/// <summary>Tool for searching the user's Ornn skill library.</summary>
 public sealed class OrnnSearchSkillsTool : IAgentTool
 {
     private readonly OrnnSkillClient _client;
@@ -20,7 +20,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         "Search the user's Ornn skill library for matching skill packages. " +
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
-        "domain workflows), or says \"挂载/use/load this skill\". " +
+        "domain workflows), or says \"mount/use/load this skill\". " +
         "Also call this when a loaded skill leaves you blocked by a missing capability, unknown workflow step, " +
         "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +

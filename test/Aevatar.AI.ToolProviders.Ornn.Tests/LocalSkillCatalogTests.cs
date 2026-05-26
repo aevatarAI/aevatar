@@ -10,8 +10,13 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 /// Skill catalog and use_skill lookup semantics.
 /// </summary>
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
-//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
-//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+//   Old pattern: SkillRegistry exposed mixed local + remote skill registration and cached
+//   remote skills in a 5-minute process-wide cache, violating read/write separation,
+//   per-user token isolation, and process-local state rules.
+//   New principle: delete SkillRegistry, TTL tests, and the 5-minute cache; keep a
+//   local-only LocalSkillCatalog. Each use_skill remote call invokes
+//   IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) without caching, and docs/canon
+//   stays factually synchronized.
 public sealed class LocalSkillCatalogTests
 {
     [Fact]
@@ -120,8 +125,13 @@ public sealed class LocalSkillCatalogTests
     }
 
     // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
-    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
-    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+    //   Old pattern: SkillRegistry exposed mixed local + remote skill registration and cached
+    //   remote skills in a 5-minute process-wide cache, violating read/write separation,
+    //   per-user token isolation, and process-local state rules.
+    //   New principle: delete SkillRegistry, TTL tests, and the 5-minute cache; keep a
+    //   local-only LocalSkillCatalog. Each use_skill remote call invokes
+    //   IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) without caching, and docs/canon
+    //   stays factually synchronized.
     private sealed class RecordingRemoteSkillFetcher : IRemoteSkillFetcher
     {
         private int _calls;

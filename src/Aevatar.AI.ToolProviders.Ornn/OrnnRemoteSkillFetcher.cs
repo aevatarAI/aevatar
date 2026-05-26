@@ -1,6 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// OrnnRemoteSkillFetcher — 从 Ornn 平台拉取技能
-// 实现 IRemoteSkillFetcher，将 Ornn API 响应转换为 SkillDefinition
+// OrnnRemoteSkillFetcher - loads skills from Ornn and maps Ornn API responses to SkillDefinition.
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.ToolProviders.Skills;
@@ -8,7 +7,7 @@ using Aevatar.AI.ToolProviders.Skills;
 namespace Aevatar.AI.ToolProviders.Ornn;
 
 /// <summary>
-/// Ornn 远程技能拉取器。通过 OrnnSkillClient 从 Ornn 平台获取技能。
+/// Remote Ornn skill fetcher that retrieves skill packages through <see cref="OrnnSkillClient"/>.
 /// </summary>
 public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
 {
@@ -23,7 +22,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         if (skill == null)
             return null;
 
-        // 从 SKILL.md 文件内容中提取 instructions
+        // Extract instructions from SKILL.md when the package includes it.
         var instructions = "";
         Dictionary<string, string>? associatedFiles = null;
 
@@ -40,7 +39,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
                 associatedFiles = others;
         }
 
-        // 尝试从 instructions 解析 frontmatter
+        // Parse optional frontmatter from the instruction body.
         var parser = new SkillFrontmatterParser();
         var parsed = parser.Parse(instructions);
 

@@ -133,7 +133,7 @@ llm-anthropic/claude-haiku-4-5
 | `use_skill` | 按名称加载本地或 Ornn 远程 skill，并把 skill 指令返回给模型执行 |
 | `ornn_search_skills` | 通过 NyxID proxy 搜索调用者在 Ornn 上可见的 skill |
 
-`use_skill` 和 `ornn_search_skills` 使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问 Ornn API。也就是说，它们看到的是这个调用者在 NyxID / Ornn 权限下可见的 skill，而不是 Aevatar 服务端的全局技能库。使用受限 NyxID API key 时，`--allowed-services` 需要同时覆盖 `aevatar`、目标 LLM service，以及 Ornn API service（默认 slug 为 `ornn-api`，可通过 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
+`use_skill` 和 `ornn_search_skills` 使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问 Ornn API。Aevatar 会在 NyxID proxy service slug 后追加生产 `ornn-api` 当前暴露的 Ornn API 路由（`/api/v1/skill-search` 与 `/api/v1/skills/{idOrName}/json`）。也就是说，它们看到的是这个调用者在 NyxID / Ornn 权限下可见的 skill，而不是 Aevatar 服务端的全局技能库。使用受限 NyxID API key 时，`--allowed-services` 需要同时覆盖 `aevatar`、目标 LLM service，以及 Ornn API service（默认 slug 为 `ornn-api`，可通过 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
 
 chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 direct tool plan：同一个 tool set 会被注入，同一个 trusted prefilled arguments 合并规则会生效。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 

@@ -204,7 +204,7 @@ QA 关注点：
 **Skill 加载**：
 - `UseSkillTool` 参数：`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本。
 - 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
-- `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问 Ornn API；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
+- `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问生产 NyxID `ornn-api` service 当前暴露的 Ornn API 路由（`/api/v1/skill-search` 与 `/api/v1/skills/{idOrName}/json`）；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
 - 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径。外层 reply generation 不再用固定 120s 之类的硬超时截断长 skill workflow。
 - `../chrono-ornn` 不在本 worktree 同级目录时，本文只描述 aevatar 可验证的 skill bridge 契约，不复制 Ornn skill 内部实现。
 

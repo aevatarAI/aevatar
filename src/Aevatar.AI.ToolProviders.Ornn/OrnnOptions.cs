@@ -1,6 +1,6 @@
 namespace Aevatar.AI.ToolProviders.Ornn;
 
-/// <summary>Ornn 技能平台配置。</summary>
+/// <summary>Ornn skill platform configuration.</summary>
 public sealed class OrnnOptions
 {
     /// <summary>

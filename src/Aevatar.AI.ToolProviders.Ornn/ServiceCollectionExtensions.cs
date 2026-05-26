@@ -7,13 +7,15 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
-/// <summary>Ornn 技能工具的 DI 注册扩展。</summary>
+/// <summary>DI registration extensions for Ornn skill tools.</summary>
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// 注册 Ornn 技能工具系统。ornn_search_skills 工具始终注册到 LLM；远程技能按需获取通过
-    /// IRemoteSkillFetcher 集成到统一的 use_skill 工具。所有 Ornn API 调用通过 NyxID 的
-    /// proxy 路由，因此调用方必须先注册 NyxIdApiClient（一般通过 AddNyxIdTools）。
+    /// Registers the Ornn skill tool system. The <c>ornn_search_skills</c> tool is always
+    /// advertised to the LLM; remote skill loading is integrated into the unified
+    /// <c>use_skill</c> tool through <see cref="IRemoteSkillFetcher"/>. All Ornn API calls
+    /// route through the NyxID proxy, so callers must register <see cref="NyxIdApiClient"/>
+    /// first, usually through <c>AddNyxIdTools</c>.
     /// </summary>
     /// <remarks>
     /// We intentionally do NOT TryAdd a placeholder <c>NyxIdToolOptions</c>/<c>NyxIdApiClient</c>
