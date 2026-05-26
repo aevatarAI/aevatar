@@ -22,6 +22,9 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
 //   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
 //   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+// Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+//   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+//   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
@@ -456,7 +459,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Attempt = attempt,
             StepIndex = generationContext.NextStepIndex,
             Request = request.Clone(),
-            StepState = generationContext.Clone(),
         }, TopologyAudience.Self, CancellationToken.None);
     }
 
@@ -552,7 +554,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
-    private bool IsCurrentStepContinuation(string runId, string correlationId, int attempt, int stepIndex)
+    private bool IsCurrentStepRequest(string runId, string correlationId, int attempt, int stepIndex)
     {
         if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
             return false;
@@ -561,7 +563,19 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (currentStep is null)
             return stepIndex <= 1;
 
-        return stepIndex == currentStep.NextStepIndex || stepIndex == currentStep.NextStepIndex + 1;
+        return stepIndex == currentStep.NextStepIndex;
+    }
+
+    private bool IsCurrentStepResult(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
+            return false;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null)
+            return false;
+
+        return stepIndex == currentStep.NextStepIndex + 1;
     }
 
     private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextLlmStepRequestedEvent command) =>
@@ -583,25 +597,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleNextLlmStepAsync(AgentRunNextLlmStepRequestedEvent command)
     {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+        var hasResult = command.LlmStepResult is not null;
+        if (hasResult)
+        {
+            if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+                return;
+
+            await PersistStepStateAsync(ApplyLlmStepResult(State.GenerationStep!, command.LlmStepResult!, command.StepIndex));
+        }
+        else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+        {
             return;
-
-        var isCompletedLlmStep = State.GenerationStep is not null &&
-                                 command.StepState is not null &&
-                                 command.StepIndex == State.GenerationStep.NextStepIndex + 1;
-
-        if (command.StepState is not null)
-            await PersistStepStateAsync(command.StepState);
+        }
 
         var request = command.Request?.Clone() ?? BuildStepRequest(command);
         ApplyTargetRefOverrides(request);
 
-        var stepState = command.StepState ?? State.GenerationStep;
+        var stepState = State.GenerationStep;
         if (stepState is null)
             return;
 
-        if (ShouldCompleteAfterLlmStep(stepState, isCompletedLlmStep))
+        if (ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
             await CompletePerStepReplyAsync(request, stepState);
             return;
@@ -622,16 +642,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleNextToolStepAsync(AgentRunNextToolStepRequestedEvent command)
     {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentStepContinuation(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
-            return;
+        var hasResult = command.ToolStepResult is not null;
+        if (hasResult)
+        {
+            if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+                return;
 
-        if (command.StepState is not null)
-            await PersistStepStateAsync(command.StepState);
+            await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, command.ToolStepResult!, command.StepIndex));
+        }
+        else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+        {
+            return;
+        }
 
         var request = command.Request?.Clone() ?? BuildStepRequest(command);
         ApplyTargetRefOverrides(request);
-        var stepState = command.StepState ?? State.GenerationStep;
+        var stepState = State.GenerationStep;
         if (stepState is null)
             return;
 
@@ -639,6 +669,77 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
 
         await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static AgentRunReplyStepState ApplyLlmStepResult(
+        AgentRunReplyStepState current,
+        AgentRunLlmStepResult result,
+        int completedStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = completedStepIndex;
+        next.AccumulatedText = result.AccumulatedText ?? string.Empty;
+        AddUsage(next, result.Usage);
+        if (result.OutboundIntent is not null)
+            next.OutboundIntent = result.OutboundIntent.Clone();
+        if (!string.IsNullOrEmpty(result.FinishReason))
+            next.LastFinishReason = result.FinishReason;
+        if (result.HasStreamedTextContent)
+            next.HasStreamedTextContent = true;
+
+        next.PendingToolCalls.Clear();
+        if (result.ToolCalls.Count > 0)
+            next.PendingToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+
+        if (!string.IsNullOrEmpty(result.Content) ||
+            !string.IsNullOrEmpty(result.ReasoningContent) ||
+            result.ToolCalls.Count > 0)
+        {
+            var message = new AgentRunChatMessage
+            {
+                Role = "assistant",
+                Content = result.Content ?? string.Empty,
+                ReasoningContent = result.ReasoningContent ?? string.Empty,
+            };
+            message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+            next.Messages.Add(message);
+        }
+
+        return next;
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static AgentRunReplyStepState ApplyToolStepResult(
+        AgentRunReplyStepState current,
+        AgentRunToolStepResult result,
+        int completedStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = completedStepIndex;
+        next.PendingToolCalls.Clear();
+        next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
+        if (result.AdvanceRound)
+            next.Round++;
+        return next;
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static void AddUsage(AgentRunReplyStepState state, AgentRunReplyTokenUsage? usage)
+    {
+        if (usage is null)
+            return;
+
+        state.AggregatedUsage ??= new AgentRunReplyTokenUsage();
+        state.AggregatedUsage.PromptTokens += usage.PromptTokens;
+        state.AggregatedUsage.CompletionTokens += usage.CompletionTokens;
+        state.AggregatedUsage.TotalTokens += usage.TotalTokens;
     }
 
     /// <summary>
