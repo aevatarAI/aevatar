@@ -709,6 +709,38 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public void TelegramUser_only_getUpdates_should_fallback_to_sendMessage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """
+            {
+              "connectors": [
+                {
+                  "name": "telegram_user_main",
+                  "type": "telegram_user",
+                  "telegramUser": {
+                    "allowedOperations": ["/getUpdates"]
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+
+            connectors.Should().ContainSingle()
+                .Which.TelegramUser.AllowedOperations.Should().Equal(["/sendMessage"],
+                    "filtering /getUpdates should fall back to /sendMessage when no allowed operations remain");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void TelegramUserConnector_must_not_reintroduce_inbound_queue_or_polling_state()
     {
         var path = Path.GetFullPath(Path.Combine(
