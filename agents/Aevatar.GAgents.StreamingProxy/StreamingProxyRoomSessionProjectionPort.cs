@@ -14,13 +14,11 @@ public sealed class StreamingProxyRoomSessionProjectionPort
     private readonly IProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease> _attachExistingLeaseLookup;
 
     public StreamingProxyRoomSessionProjectionPort(
-        IProjectionScopeActivationService<StreamingProxyRoomSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<StreamingProxyRoomSessionRuntimeLease> releaseService,
         IProjectionSessionEventHub<StreamingProxyRoomSessionEnvelope> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<StreamingProxyRoomSessionRuntimeLease> attachExistingLeaseLookup)
         : base(
             static () => true,
-            activationService,
             releaseService,
             sessionEventHub)
     {
@@ -68,6 +66,7 @@ public sealed class StreamingProxyRoomSessionProjectionPort
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         CancellationToken ct)
     {
+        // Refactor (iter101/cluster-104): Old streaming proxy port could inherit ensure activation; new attach path only observes sessions already activated by projection binders.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

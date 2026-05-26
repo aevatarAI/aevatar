@@ -83,11 +83,10 @@ public sealed class NyxIdChatSessionProjectionPort
     private readonly IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> _attachExistingLeaseLookup;
 
     public NyxIdChatSessionProjectionPort(
-        IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> attachExistingLeaseLookup)
-        : base(static () => true, activationService, releaseService, sessionEventHub)
+        : base(static () => true, releaseService, sessionEventHub)
     {
         _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
@@ -104,6 +103,7 @@ public sealed class NyxIdChatSessionProjectionPort
         IEventSink<AGUIEvent> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old chat session port inherited direct ensure activation; new request-facing surface attaches only to an existing projection session.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 
