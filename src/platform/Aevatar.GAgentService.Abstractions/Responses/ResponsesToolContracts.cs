@@ -23,4 +23,3 @@ public sealed record ResponsesToolProviderCallerScope(
     string ScopeId,
     string OwnerSubject,
     string OriginKind);
-
