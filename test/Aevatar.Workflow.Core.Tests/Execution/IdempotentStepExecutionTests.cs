@@ -391,6 +391,8 @@ public sealed class IdempotentStepExecutionTests
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
         public Any? GetExecutionState(string scopeKey) =>

@@ -20,8 +20,15 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
         string? authorization)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.Connector.Authorization =
-            string.IsNullOrWhiteSpace(authorization) ? null : authorization.Trim();
+        if (string.IsNullOrWhiteSpace(authorization))
+        {
+            stateHost.ExecutionContextState.Connector = null;
+            return;
+        }
+
+        WorkflowRunExecutionContextStateAccess
+            .EnsureConnector(stateHost.ExecutionContextState)
+            .HttpAuthorization = authorization.Trim();
     }
 
     // Refactor (iter16/cluster-031):
@@ -31,7 +38,7 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
     public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.Connector.Authorization = null;
+        stateHost.ExecutionContextState.Connector = null;
     }
 
     // Refactor (iter16/cluster-031):
@@ -45,14 +52,6 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
     {
         ArgumentNullException.ThrowIfNull(ctx);
 
-        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor &&
-            !string.IsNullOrWhiteSpace(runtimeAccessor.RuntimeContext.Connector.Authorization))
-        {
-            authorization = runtimeAccessor.RuntimeContext.Connector.Authorization.Trim();
-            return true;
-        }
-
-        authorization = string.Empty;
-        return false;
+        return WorkflowRunExecutionContextStateAccess.TryGetConnectorAuthorization(ctx, out authorization);
     }
 }

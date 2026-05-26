@@ -1,6 +1,9 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -14,6 +17,7 @@ using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -443,6 +447,92 @@ public class WorkflowGAgentCoverageTests
 
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
             .Should().ContainSingle(x => x.Content == "done");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_CommittedObservation_ShouldRedactExecutionContextAndCapturedSecrets()
+    {
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent(eventStore: eventStore);
+        SetAgentId(agent, "workflow-run-redaction");
+        agent.EventPublisher = publisher;
+        agent.CommittedStateEventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_redaction",
+            runId: "run-redaction");
+
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+            agent,
+            new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+            });
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+            agent,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token" },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = "model",
+                    NyxIdRoutePreference = "route",
+                },
+            });
+
+        await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        await agent.UpsertExecutionStateAsync(
+            SecureInputStateAccess.ModuleStateKey,
+            Any.Pack(new SecureInputModuleState
+            {
+                Captured =
+                {
+                    ["run-redaction::api_key"] = new CapturedSecureInputState
+                    {
+                        RunId = "run-redaction",
+                        VariableName = "api_key",
+                        Value = "sk-secret",
+                    },
+                },
+            }));
+
+        agent.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token");
+        agent.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
+            .Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().Be("sk-secret");
+
+        var observedState = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Last()
+            .StateRoot
+            .Unpack<WorkflowRunState>();
+
+        observedState.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        observedState.ExecutionContext.Llm.ModelOverride.Should().Be("model");
+        observedState.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route");
+        observedState.ExecutionContext.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedState.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
+            .Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().BeEmpty();
+
+        var observedEvent = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Last()
+            .StateEvent
+            .EventData
+            .Unpack<WorkflowExecutionStateUpsertedEvent>();
+        observedEvent.State.Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().BeEmpty();
     }
 
     [Fact]
@@ -1511,7 +1601,8 @@ public class WorkflowGAgentCoverageTests
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddAevatarWorkflow();
 
         if (workflowResolver != null)
             services.AddSingleton(workflowResolver);
@@ -1569,24 +1660,26 @@ public class WorkflowGAgentCoverageTests
 
     private static void SeedRuntimeContext(WorkflowRunGAgent agent)
     {
-        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        runtimeContext.LlmOverrides.NyxIdAccessToken = "token";
-        runtimeContext.LlmOverrides.ModelOverride = "model";
-        runtimeContext.LlmOverrides.NyxIdRoutePreference = "route";
-        runtimeContext.Connector.Authorization = "Bearer secret";
-        runtimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
-        runtimeContext.CapturedSecureInputs.Set(agent.RunId, "api_key", "secret");
+        var host = (IWorkflowExecutionStateHost)agent;
+        host.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+        {
+            NyxidAccessToken = "token",
+            ModelOverride = "model",
+            NyxidRoutePreference = "route",
+        };
+        host.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+        {
+            HttpAuthorization = "Bearer secret",
+        };
+        host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
     }
 
     private static void AssertRuntimeContextCleared(WorkflowRunGAgent agent)
     {
-        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        runtimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
-        runtimeContext.LlmOverrides.ModelOverride.Should().BeNull();
-        runtimeContext.LlmOverrides.NyxIdRoutePreference.Should().BeNull();
-        runtimeContext.Connector.Authorization.Should().BeNull();
-        runtimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
-        runtimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
+        var host = (IWorkflowExecutionStateHost)agent;
+        host.ExecutionContextState.Llm.Should().BeNull();
+        host.ExecutionContextState.Connector.Should().BeNull();
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
     private static string BuildValidWorkflowYaml(
@@ -1634,7 +1727,7 @@ public class WorkflowGAgentCoverageTests
                """;
     }
 
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
     {
         public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
@@ -1674,6 +1767,20 @@ public class WorkflowGAgentCoverageTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
+        {
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            Published.Add((evt, TopologyAudience.Self));
+            return Task.CompletedTask;
+        }
+
+        Task ICommittedStateEventPublisher.PublishAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience,
+            CancellationToken ct,
+            EventEnvelope? sourceEnvelope,
+            EventEnvelopePublishOptions? options)
         {
             _ = audience;
             _ = sourceEnvelope;

@@ -22,11 +22,11 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+// Refactor (iter115/cluster-3):
+//   Old pattern: WorkflowRunGAgent kept durable control/security facts in
+//                process-local runtime context.
+//   New principle: durable control/security facts live in typed WorkflowRunState;
+//                  runtime context carries only same-turn passthrough metadata.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
@@ -110,6 +110,15 @@ public sealed class WorkflowRunGAgent
         : State.RunId;
 
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
+
+    WorkflowRunExecutionContextState IWorkflowExecutionStateHost.ExecutionContextState
+    {
+        get
+        {
+            State.ExecutionContext ??= new WorkflowRunExecutionContextState();
+            return State.ExecutionContext;
+        }
+    }
 
     public Any? GetExecutionState(string scopeKey)
     {
@@ -722,6 +731,7 @@ public sealed class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
@@ -757,6 +767,7 @@ public sealed class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
             next.DefinitionActorId = evt.DefinitionActorId.Trim();
         if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
@@ -801,6 +812,7 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
@@ -815,6 +827,7 @@ public sealed class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         return next;
@@ -828,6 +841,7 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();

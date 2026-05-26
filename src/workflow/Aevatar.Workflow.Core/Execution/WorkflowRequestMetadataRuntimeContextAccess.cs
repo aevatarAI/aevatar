@@ -20,6 +20,7 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
         IReadOnlyDictionary<string, string>? metadata)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
+        WorkflowRunExecutionContextStateAccess.ApplyRequestMetadata(stateHost, metadata);
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
     }
 
@@ -28,7 +29,7 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
         AgentToolExecutionContext? toolContext)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.ApplyToolContext(toolContext);
+        WorkflowRunExecutionContextStateAccess.ApplyToolContext(stateHost, toolContext);
     }
 
     // Refactor (iter16/cluster-031):
@@ -39,6 +40,7 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
     public static void RemoveRequestMetadata(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
+        WorkflowRunExecutionContextStateAccess.Clear(stateHost);
         stateHost.RuntimeContext.ApplyRequestMetadata(null);
     }
 

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -10,7 +11,11 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor
+internal sealed class TestEventHandlerContext :
+    IEventHandlerContext,
+    IWorkflowExecutionContext,
+    IWorkflowExecutionRuntimeContextAccessor,
+    IWorkflowExecutionStateHostAccessor
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 
@@ -37,6 +42,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     public WorkflowExecutionRuntimeContext RuntimeContext => Agent is IWorkflowExecutionStateHost host
         ? host.RuntimeContext
         : _fallbackRuntimeContext;
+
+    public IWorkflowExecutionStateHost StateHost => Agent is IWorkflowExecutionStateHost host
+        ? host
+        : throw new InvalidOperationException("Workflow execution state host is required.");
 
     private readonly WorkflowExecutionRuntimeContext _fallbackRuntimeContext = new();
     private TimeSpan? _nextElapsedTime;
@@ -271,6 +280,8 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+    public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -317,6 +328,8 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public string RunId { get; } = runId;
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+    public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;

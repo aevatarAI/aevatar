@@ -193,6 +193,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
         public Any? GetExecutionState(string scopeKey) =>
             _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 

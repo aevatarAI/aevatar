@@ -1,0 +1,62 @@
+using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.Workflow.Core.Execution;
+
+// Refactor (iter115/cluster-3):
+//   Old pattern: raw security/control state could become observable through
+//                committed WorkflowRunState state_root publication.
+//   New principle: actor state remains typed, while the observation envelope
+//                  gets a redacted clone before projection/AGUI fanout.
+internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePublicationHook
+{
+    public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ct.ThrowIfCancellationRequested();
+
+        if (context.ActorType != typeof(WorkflowRunGAgent) ||
+            context.Published.StateRoot?.Is(WorkflowRunState.Descriptor) != true)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (context.Published.StateEvent?.EventData?.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) == true)
+        {
+            var stateEvent = context.Published.StateEvent.EventData.Unpack<WorkflowExecutionStateUpsertedEvent>();
+            if (stateEvent.State?.Is(SecureInputModuleState.Descriptor) == true)
+            {
+                var secureState = stateEvent.State.Unpack<SecureInputModuleState>() ?? new SecureInputModuleState();
+                stateEvent.State = Any.Pack(RedactSecureInputState(secureState));
+                context.Published.StateEvent.EventData = Any.Pack(stateEvent);
+            }
+        }
+
+        var state = context.Published.StateRoot.Unpack<WorkflowRunState>() ?? new WorkflowRunState();
+        state.ExecutionContext = WorkflowRunExecutionContextStateAccess.RedactedClone(state.ExecutionContext);
+        RedactSecureInputExecutionState(state);
+
+        context.Published.StateRoot = Any.Pack(state);
+        return Task.CompletedTask;
+    }
+
+    private static void RedactSecureInputExecutionState(WorkflowRunState state)
+    {
+        foreach (var pair in state.ExecutionStates.ToList())
+        {
+            if (!pair.Value.Is(SecureInputModuleState.Descriptor))
+                continue;
+
+            var secureState = pair.Value.Unpack<SecureInputModuleState>() ?? new SecureInputModuleState();
+            state.ExecutionStates[pair.Key] = Any.Pack(RedactSecureInputState(secureState));
+        }
+    }
+
+    private static SecureInputModuleState RedactSecureInputState(SecureInputModuleState source)
+    {
+        var redacted = source.Clone();
+        foreach (var captured in redacted.Captured.Values)
+            captured.Value = string.Empty;
+        return redacted;
+    }
+}

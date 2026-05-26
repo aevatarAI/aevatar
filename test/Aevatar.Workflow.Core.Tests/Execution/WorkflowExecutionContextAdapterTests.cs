@@ -30,12 +30,12 @@ public sealed class WorkflowExecutionContextAdapterTests
     public void RuntimeContext_ShouldExposeStateHostRuntimeContext()
     {
         var host = new RecordingStateHost();
-        host.RuntimeContext.LlmOverrides.ModelOverride = "model-x";
+        host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
 
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
 
         adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
-        adapter.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model-x");
+        adapter.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
     }
 
     [Fact]
@@ -279,6 +279,8 @@ public sealed class WorkflowExecutionContextAdapterTests
         public string RunId { get; set; } = "run-1";
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
