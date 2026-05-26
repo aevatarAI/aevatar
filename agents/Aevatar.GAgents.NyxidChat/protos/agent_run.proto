@@ -244,7 +244,9 @@ message AgentRunNextLlmStepRequestedEvent {
   int32 attempt = 4;
   int32 step_index = 5;
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
-  AgentRunLlmStepResult llm_step_result = 7;
+  reserved 7;
+  reserved "step_state";
+  AgentRunLlmStepResult llm_step_result = 8;
 }
 
 // Typed self-message: request the next single tool IO step. The nested request
@@ -256,7 +258,9 @@ message AgentRunNextToolStepRequestedEvent {
   int32 attempt = 4;
   int32 step_index = 5;
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
-  AgentRunToolStepResult tool_step_result = 7;
+  reserved 7;
+  reserved "step_state";
+  AgentRunToolStepResult tool_step_result = 8;
 }
 
 // Transient command for executor failures that did not produce a normal reply

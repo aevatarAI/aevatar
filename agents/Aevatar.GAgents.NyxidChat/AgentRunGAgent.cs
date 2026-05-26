@@ -671,6 +671,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await DispatchLlmStepExecutorAsync(request, stepState);
     }
 
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
     private static AgentRunReplyStepState ApplyLlmStepResult(
         AgentRunReplyStepState current,
         AgentRunLlmStepResult result,
@@ -708,6 +711,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
     private static AgentRunReplyStepState ApplyToolStepResult(
         AgentRunReplyStepState current,
         AgentRunToolStepResult result,
@@ -722,6 +728,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
     private static void AddUsage(AgentRunReplyStepState state, AgentRunReplyTokenUsage? usage)
     {
         if (usage is null)
