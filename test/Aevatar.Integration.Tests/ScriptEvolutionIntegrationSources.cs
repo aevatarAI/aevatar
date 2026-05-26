@@ -79,6 +79,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -107,6 +108,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "worker-definition",
                     "rev-worker-1",
                     "worker-temp-" + context.RunId,
+                    input.WorkerV1DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     tempRuntimeId,
@@ -121,7 +123,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "worker.temp.run",
                     ct);
 
-                var newDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var newDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "new-script",
                     "rev-new-1",
                     newScriptSource,
@@ -129,9 +131,10 @@ internal static class ScriptEvolutionIntegrationSources
                     "new-definition",
                     ct);
                 var newRuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
-                    newDefinitionActorId,
+                    newDefinition.ActorId,
                     "rev-new-1",
                     "new-runtime-" + context.RunId,
+                    newDefinition.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     newRuntimeId,
@@ -142,7 +145,7 @@ internal static class ScriptEvolutionIntegrationSources
                         InputText = "new",
                     }),
                     "rev-new-1",
-                    newDefinitionActorId,
+                    newDefinition.ActorId,
                     "new.runtime.run",
                     ct);
 
@@ -164,6 +167,7 @@ internal static class ScriptEvolutionIntegrationSources
                         decision.DefinitionActorId,
                         decision.CandidateRevision,
                         "worker-evolved-" + context.RunId,
+                        decision.DefinitionSnapshot ?? new ScriptDefinitionBindingSpec(),
                         ct);
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         evolvedRuntimeId,
@@ -186,7 +190,7 @@ internal static class ScriptEvolutionIntegrationSources
                         TempRuntimeId = tempRuntimeId,
                         NewRuntimeId = newRuntimeId,
                         EvolvedRuntimeId = evolvedRuntimeId,
-                        NewDefinitionActorId = newDefinitionActorId,
+                        NewDefinitionActorId = newDefinition.ActorId,
                         DecisionStatus = decision.Status,
                     },
                 });
@@ -207,6 +211,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -240,6 +245,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "multi-worker-a-definition",
                     "rev-a-1",
                     "temp-worker-a-" + context.RunId,
+                    input.WorkerAV1DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     tempARuntimeId,
@@ -258,6 +264,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "multi-worker-b-definition",
                     "rev-b-1",
                     "temp-worker-b-" + context.RunId,
+                    input.WorkerBV1DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     tempBRuntimeId,
@@ -272,7 +279,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "worker.b.temp",
                     ct);
 
-                var generatedDefinitionActorId1 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var generatedDefinition1 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "generated-script-1",
                     "rev-g-1",
                     generatedSource1,
@@ -280,9 +287,10 @@ internal static class ScriptEvolutionIntegrationSources
                     "generated-definition-1-" + context.RunId,
                     ct);
                 var generatedRuntimeId1 = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
-                    generatedDefinitionActorId1,
+                    generatedDefinition1.ActorId,
                     "rev-g-1",
                     "generated-runtime-1-" + context.RunId,
+                    generatedDefinition1.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     generatedRuntimeId1,
@@ -293,7 +301,7 @@ internal static class ScriptEvolutionIntegrationSources
                         InputText = "generated one",
                     }),
                     "rev-g-1",
-                    generatedDefinitionActorId1,
+                    generatedDefinition1.ActorId,
                     "generated.script.1.run",
                     ct);
 
@@ -345,6 +353,7 @@ internal static class ScriptEvolutionIntegrationSources
                         decisionA3.DefinitionActorId,
                         decisionA3.CandidateRevision,
                         "worker-a-evolved-" + context.RunId,
+                        decisionA3.DefinitionSnapshot ?? new ScriptDefinitionBindingSpec(),
                         ct);
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         evolvedARuntimeId,
@@ -367,6 +376,7 @@ internal static class ScriptEvolutionIntegrationSources
                         decisionB3.DefinitionActorId,
                         decisionB3.CandidateRevision,
                         "worker-b-evolved-" + context.RunId,
+                        decisionB3.DefinitionSnapshot ?? new ScriptDefinitionBindingSpec(),
                         ct);
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         evolvedBRuntimeId,
@@ -382,7 +392,7 @@ internal static class ScriptEvolutionIntegrationSources
                         ct);
                 }
 
-                var generatedDefinitionActorId2 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var generatedDefinition2 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "generated-script-2",
                     "rev-g-2",
                     generatedSource2,
@@ -390,9 +400,10 @@ internal static class ScriptEvolutionIntegrationSources
                     "generated-definition-2-" + context.RunId,
                     ct);
                 var generatedRuntimeId2 = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
-                    generatedDefinitionActorId2,
+                    generatedDefinition2.ActorId,
                     "rev-g-2",
                     "generated-runtime-2-" + context.RunId,
+                    generatedDefinition2.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     generatedRuntimeId2,
@@ -403,7 +414,7 @@ internal static class ScriptEvolutionIntegrationSources
                         InputText = "generated two",
                     }),
                     "rev-g-2",
-                    generatedDefinitionActorId2,
+                    generatedDefinition2.ActorId,
                     "generated.script.2.run",
                     ct);
 
@@ -441,6 +452,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -466,7 +478,7 @@ internal static class ScriptEvolutionIntegrationSources
                 var nextV3Source = input.NextV3Source ?? string.Empty;
                 var generatedSource = input.GeneratedSource ?? string.Empty;
 
-                var generatedDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var generatedDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "self-generated-script",
                     "rev-self-generated-1",
                     generatedSource,
@@ -474,9 +486,10 @@ internal static class ScriptEvolutionIntegrationSources
                     "self-generated-definition-" + context.RunId,
                     ct);
                 var generatedRuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
-                    generatedDefinitionActorId,
+                    generatedDefinition.ActorId,
                     "rev-self-generated-1",
                     "self-generated-runtime-" + context.RunId,
+                    generatedDefinition.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     generatedRuntimeId,
@@ -487,7 +500,7 @@ internal static class ScriptEvolutionIntegrationSources
                         InputText = "generated",
                     }),
                     "rev-self-generated-1",
-                    generatedDefinitionActorId,
+                    generatedDefinition.ActorId,
                     "self.generated.run",
                     ct);
 
@@ -509,6 +522,7 @@ internal static class ScriptEvolutionIntegrationSources
                         decisionV2.DefinitionActorId,
                         decisionV2.CandidateRevision,
                         "self-v2-runtime-" + context.RunId,
+                        decisionV2.DefinitionSnapshot ?? new ScriptDefinitionBindingSpec(),
                         ct);
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         v2RuntimeId,
@@ -549,6 +563,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -590,6 +605,7 @@ internal static class ScriptEvolutionIntegrationSources
                         decisionV3.DefinitionActorId,
                         decisionV3.CandidateRevision,
                         "self-v3-runtime-" + context.RunId,
+                        decisionV3.DefinitionSnapshot ?? new ScriptDefinitionBindingSpec(),
                         ct);
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         v3RuntimeId,
@@ -630,6 +646,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -654,7 +671,7 @@ internal static class ScriptEvolutionIntegrationSources
                 var manualV1Source = input.ManualV1Source ?? string.Empty;
                 var manualV2Source = input.ManualV2Source ?? string.Empty;
 
-                var manualDefinitionActorIdV1 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var manualDefinitionV1 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "manual-catalog-script",
                     "rev-manual-1",
                     manualV1Source,
@@ -665,12 +682,12 @@ internal static class ScriptEvolutionIntegrationSources
                     "script-catalog",
                     "manual-catalog-script",
                     "rev-manual-1",
-                    manualDefinitionActorIdV1,
+                    manualDefinitionV1.ActorId,
                     ComputeHash(manualV1Source),
                     "manual-promote-v1-" + context.RunId,
                     ct);
 
-                var manualDefinitionActorIdV2 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var manualDefinitionV2 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "manual-catalog-script",
                     "rev-manual-2",
                     manualV2Source,
@@ -681,15 +698,16 @@ internal static class ScriptEvolutionIntegrationSources
                     "script-catalog",
                     "manual-catalog-script",
                     "rev-manual-2",
-                    manualDefinitionActorIdV2,
+                    manualDefinitionV2.ActorId,
                     ComputeHash(manualV2Source),
                     "manual-promote-v2-" + context.RunId,
                     ct);
 
                 var manualRuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
-                    manualDefinitionActorIdV2,
+                    manualDefinitionV2.ActorId,
                     "rev-manual-2",
                     "manual-catalog-runtime-" + context.RunId,
+                    manualDefinitionV2.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     manualRuntimeId,
@@ -700,7 +718,7 @@ internal static class ScriptEvolutionIntegrationSources
                         InputText = "manual",
                     }),
                     "rev-manual-2",
-                    manualDefinitionActorIdV2,
+                    manualDefinitionV2.ActorId,
                     "manual.catalog.run",
                     ct);
 
@@ -716,8 +734,8 @@ internal static class ScriptEvolutionIntegrationSources
                 {
                     Current = new CatalogControlState
                     {
-                        ManualDefinitionActorIdV1 = manualDefinitionActorIdV1,
-                        ManualDefinitionActorIdV2 = manualDefinitionActorIdV2,
+                        ManualDefinitionActorIdV1 = manualDefinitionV1.ActorId,
+                        ManualDefinitionActorIdV2 = manualDefinitionV2.ActorId,
                         ManualRuntimeId = manualRuntimeId,
                     },
                 });
@@ -766,7 +784,7 @@ internal static class ScriptEvolutionIntegrationSources
 
                 var aiResponse = await context.RuntimeCapabilities.AskAIAsync("health-check", ct);
 
-                var publishedDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var publishedDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "interaction-published-script",
                     "rev-published-1",
                     publishSource,
@@ -781,7 +799,7 @@ internal static class ScriptEvolutionIntegrationSources
                     TopologyAudience.Children,
                     ct);
 
-                var sendToDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var sendToDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "interaction-sendto-script",
                     "rev-sendto-1",
                     sendToSource,
@@ -789,7 +807,7 @@ internal static class ScriptEvolutionIntegrationSources
                     "sendto-definition-" + context.RunId,
                     ct);
                 await context.RuntimeCapabilities.SendToAsync(
-                    sendToDefinitionActorId,
+                    sendToDefinition.ActorId,
                     new UpsertScriptDefinitionRequestedEvent
                     {
                         ScriptId = "interaction-sendto-script",
@@ -799,7 +817,7 @@ internal static class ScriptEvolutionIntegrationSources
                     },
                     ct);
 
-                var upsertDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var upsertDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "interaction-invoke-script",
                     "rev-invoke-1",
                     invokeSource,
@@ -812,9 +830,9 @@ internal static class ScriptEvolutionIntegrationSources
                     Current = new InteractionUpsertState
                     {
                         AiResponseLength = (aiResponse ?? string.Empty).Length.ToString(),
-                        PublishedDefinitionActorId = publishedDefinitionActorId,
-                        SendtoDefinitionActorId = sendToDefinitionActorId,
-                        UpsertDefinitionActorId = upsertDefinitionActorId,
+                        PublishedDefinitionActorId = publishedDefinition.ActorId,
+                        SendtoDefinitionActorId = sendToDefinition.ActorId,
+                        UpsertDefinitionActorId = upsertDefinition.ActorId,
                     },
                 });
             }
@@ -834,6 +852,7 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Text;
         using System.Threading;
         using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
@@ -868,6 +887,7 @@ internal static class ScriptEvolutionIntegrationSources
                     workerADefinitionActorId,
                     "rev-a-1",
                     tempARuntimeId,
+                    input.WorkerADefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     tempARuntimeId,
@@ -886,6 +906,7 @@ internal static class ScriptEvolutionIntegrationSources
                     workerBDefinitionActorId,
                     "rev-b-1",
                     tempBRuntimeId,
+                    input.WorkerBDefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     tempBRuntimeId,
@@ -900,17 +921,19 @@ internal static class ScriptEvolutionIntegrationSources
                     "temp.b.run",
                     ct);
 
-                generatedDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var generatedDefinition = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     newScriptId,
                     "rev-new-1",
                     newScriptSource,
                     ComputeHash(newScriptSource),
                     generatedDefinitionActorId,
                     ct);
+                generatedDefinitionActorId = generatedDefinition.ActorId;
                 generatedRuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
                     generatedDefinitionActorId,
                     "rev-new-1",
                     generatedRuntimeId,
+                    generatedDefinition.DefinitionSnapshot,
                     ct);
                 await context.RuntimeCapabilities.RunScriptInstanceAsync(
                     generatedRuntimeId,
