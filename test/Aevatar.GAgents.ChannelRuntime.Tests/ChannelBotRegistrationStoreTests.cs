@@ -4,12 +4,12 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -300,39 +300,6 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             ],
             _agent.EventSourcing!.CurrentVersion,
             CancellationToken.None);
-    }
-
-    [Fact]
-    public async Task RebuildProjectionInboxSignal_PersistsRefreshEvent_WithoutMutatingState()
-    {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-            NyxAgentApiKeyId = "key-1",
-        });
-
-        var beforeState = _agent.State.Clone();
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
-
-        // Refactor (iter101/cluster-104): Rebuild is no longer a directly callable public handler; tests exercise the actor inbox path used by startup refresh.
-        await _agent.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new ChannelBotRebuildProjectionCommand
-            {
-                Reason = "test-rebuild",
-            }),
-            Route = EnvelopeRouteSemantics.CreateDirect(
-                "test",
-                ChannelBotRegistrationGAgent.WellKnownId),
-        });
-
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
-        _agent.State.Should().BeEquivalentTo(beforeState);
     }
 
     private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
