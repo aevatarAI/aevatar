@@ -33,6 +33,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
     // Refactor (iter17/cluster-038):
@@ -924,8 +927,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             lastFlushedText: state.LastFlushedText,
             editCount: state.EditCount,
             sequence,
-            generation,
-            runtimeContext);
+            generation);
     }
 
     private async Task<bool> TryCompleteStreamedReplyAsync(
@@ -1035,8 +1037,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 lastFlushedText: state.LastFlushedText,
                 editCount: state.EditCount,
                 sequence,
-                generation,
-                runtimeContext);
+                generation);
             return true;
         }
 
@@ -1109,8 +1110,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state.LastFlushedText,
                 state.EditCount,
                 sequence,
-                generation,
-                runtimeContext);
+                generation);
             return true;
         }
 
@@ -1198,8 +1198,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         string? lastFlushedText,
         int editCount,
         long sequence,
-        long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        long generation)
     {
         var workItemId = BuildNyxRelayTextOperationId(correlationId, operation, sequence, generation);
         return PublishReplyOperationStepAsync(

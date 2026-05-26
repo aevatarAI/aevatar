@@ -25,9 +25,9 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
 //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
 //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
-// Refactor (iter107/cluster-107-channel-business-io-process-queue):
-//   Old pattern: Channel actor records intent, then process-local Channel/Task workers (LongRunningBusinessIoExecutor singleton) own the actual business IO work item and call back later.
-//   New principle: Delete the singleton business IO queue; existing owner actor (ConversationGAgent / AgentRunGAgent) uses typed self-continuations + disposable provider IO leases - actor-owned operation state, no process-local fact source.
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;

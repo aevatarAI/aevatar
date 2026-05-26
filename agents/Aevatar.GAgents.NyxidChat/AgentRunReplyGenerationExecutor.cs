@@ -18,6 +18,9 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
 //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
 //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";

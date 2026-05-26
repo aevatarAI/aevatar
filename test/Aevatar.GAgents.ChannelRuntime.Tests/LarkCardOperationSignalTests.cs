@@ -51,6 +51,96 @@ public sealed class LarkCardOperationSignalTests
     }
 
     [Fact]
+    public async Task LarkCardStreamSelfContinuation_RunsStreamAndDispatchesCompletionSignal()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent("conv-lark-card-stream-step", runner, dispatch, new InMemoryEventStore());
+
+        var firstChunk = CreateCardStreamChunk("corr-stream-step", "relay-msg-1", "hello");
+        await agent.HandleEventAsync(Envelope(agent.Id, firstChunk));
+        await agent.HandleReplyOperationStepAsync(await NextSentAsync<ReplyOperationStepEvent>(agent));
+        await agent.HandleEventAsync(Envelope(agent.Id, await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>()));
+
+        var secondChunk = CreateCardStreamChunk("corr-stream-step", "relay-msg-1", "hello world");
+        await agent.HandleEventAsync(Envelope(agent.Id, secondChunk));
+
+        var step = await NextSentAsync<ReplyOperationStepEvent>(agent);
+        await agent.HandleReplyOperationStepAsync(step);
+        var signal = await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>();
+
+        runner.StreamCalls.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new CardStreamCall(
+                "corr-stream-step",
+                "hello world",
+                "card_ok",
+                "streaming_main",
+                step.LarkCard.Sequence,
+                "runtime-token-corr-stream-step",
+                "runtime-user-access-token-corr-stream-step"));
+        signal.Operation.Should().Be(LarkCardOperationPhase.Stream);
+        signal.OperationId.Should().Be("corr-stream-step:Stream:2:2");
+        signal.CorrelationId.Should().Be("corr-stream-step");
+        signal.Sequence.Should().Be(2);
+        signal.OperationGeneration.Should().Be(2);
+        signal.State.Should().Be(LarkCardOperationResultState.Succeeded);
+        signal.CardId.Should().Be("card_ok");
+        signal.StreamingElementId.Should().Be("streaming_main");
+        signal.Chunk.AccumulatedText.Should().Be("hello world");
+    }
+
+    [Fact]
+    public async Task LarkCardFinalizeSelfContinuation_RunsFinalizeAndDispatchesCompletionSignal()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent("conv-lark-card-finalize-step", runner, dispatch, new InMemoryEventStore());
+
+        var firstChunk = CreateCardStreamChunk("corr-finalize-step", "relay-msg-1", "hello");
+        await agent.HandleEventAsync(Envelope(agent.Id, firstChunk));
+        await agent.HandleReplyOperationStepAsync(await NextSentAsync<ReplyOperationStepEvent>(agent));
+        await agent.HandleEventAsync(Envelope(agent.Id, await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>()));
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-finalize-step",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = firstChunk.Activity.Clone(),
+            Outbound = new MessageContent { Text = "hello final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "runtime-ready-token-corr-finalize-step",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReadyAtUnixMs = 100,
+        });
+
+        var step = await NextSentAsync<ReplyOperationStepEvent>(agent);
+        await agent.HandleReplyOperationStepAsync(step);
+        var signal = await dispatch.WaitForPayloadAsync<LarkCardOperationCompletedEvent>();
+
+        runner.FinalizeCalls.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new CardFinalizeCall(
+                "corr-finalize-step",
+                "card_ok",
+                "streaming_main",
+                "hello final",
+                true,
+                step.LarkCard.Sequence,
+                string.Empty,
+                "runtime-user-access-token-corr-finalize-step"));
+        signal.Operation.Should().Be(LarkCardOperationPhase.Finalize);
+        signal.OperationId.Should().Be("corr-finalize-step:Finalize:2:2");
+        signal.CorrelationId.Should().Be("corr-finalize-step");
+        signal.Sequence.Should().Be(2);
+        signal.OperationGeneration.Should().Be(2);
+        signal.State.Should().Be(LarkCardOperationResultState.Succeeded);
+        signal.CardId.Should().Be("card_ok");
+        signal.CardMessageId.Should().Be("om_card_msg");
+        signal.FinalText.Should().Be("hello final");
+        signal.LastFlushedText.Should().Be("hello");
+    }
+
+    [Fact]
     public async Task LarkCardOperationCompleted_ActorReconstructsRichContinuation()
     {
         var store = new InMemoryEventStore();
@@ -323,6 +413,9 @@ public sealed class LarkCardOperationSignalTests
         public ConversationCardCreateResult CreateResult { get; init; } =
             ConversationCardCreateResult.Succeeded("card_ok", "om_card_msg");
 
+        public List<CardStreamCall> StreamCalls { get; } = [];
+        public List<CardFinalizeCall> FinalizeCalls { get; } = [];
+
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
             string streamingElementId,
@@ -336,8 +429,18 @@ public sealed class LarkCardOperationSignalTests
             string elementId,
             long sequence,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationCardStreamResult.Succeeded());
+            CancellationToken ct)
+        {
+            StreamCalls.Add(new CardStreamCall(
+                chunk.CorrelationId,
+                chunk.AccumulatedText,
+                cardId,
+                elementId,
+                sequence,
+                runtimeContext.NyxRelayReplyToken?.ReplyToken ?? string.Empty,
+                runtimeContext.NyxUserAccessToken ?? string.Empty));
+            return Task.FromResult(ConversationCardStreamResult.Succeeded());
+        }
 
         public Task<ConversationCardFinalizeResult> RunCardFinalizeAsync(
             ChatActivity referenceActivity,
@@ -347,25 +450,64 @@ public sealed class LarkCardOperationSignalTests
             bool finalTextDiffersFromLastFlushed,
             long sequence,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationCardFinalizeResult.Succeeded());
+            CancellationToken ct)
+        {
+            FinalizeCalls.Add(new CardFinalizeCall(
+                referenceActivity.Id,
+                cardId,
+                elementId,
+                finalText,
+                finalTextDiffersFromLastFlushed,
+                sequence,
+                runtimeContext.NyxRelayReplyToken?.ReplyToken ?? string.Empty,
+                runtimeContext.NyxUserAccessToken ?? string.Empty));
+            return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
+        }
     }
+
+    private sealed record CardStreamCall(
+        string CorrelationId,
+        string AccumulatedText,
+        string CardId,
+        string ElementId,
+        long Sequence,
+        string ReplyToken,
+        string UserAccessToken);
+
+    private sealed record CardFinalizeCall(
+        string ActivityId,
+        string CardId,
+        string ElementId,
+        string FinalText,
+        bool FinalTextDiffers,
+        long Sequence,
+        string ReplyToken,
+        string UserAccessToken);
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
-        private readonly TaskCompletionSource<EventEnvelope> _dispatched =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Queue<EventEnvelope> _dispatched = new();
+        private readonly SemaphoreSlim _available = new(0);
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            _dispatched.TrySetResult(envelope.Clone());
+            lock (_dispatched)
+            {
+                _dispatched.Enqueue(envelope.Clone());
+            }
+            _available.Release();
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public async Task<T> WaitForPayloadAsync<T>()
             where T : IMessage<T>, new()
         {
-            var envelope = await _dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await _available.WaitAsync(TimeSpan.FromSeconds(5));
+            EventEnvelope envelope;
+            lock (_dispatched)
+            {
+                envelope = _dispatched.Dequeue();
+            }
             return envelope.Payload.Unpack<T>();
         }
     }
