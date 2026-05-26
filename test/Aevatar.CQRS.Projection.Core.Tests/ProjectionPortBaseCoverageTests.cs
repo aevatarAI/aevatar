@@ -11,76 +11,39 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
     [Fact]
     public void Constructor_ShouldThrow_WhenDependenciesAreNull()
     {
-        var activation = new TestActivationService();
         var release = new TestReleaseService();
         var sessionEventHub = new TestSessionEventHub();
 
         Action noEnabledAccessor = () => _ = new TestEventSinkProjectionLifecyclePort(
             null!,
-            activation,
-            release,
-            sessionEventHub);
-        Action noActivation = () => _ = new TestEventSinkProjectionLifecyclePort(
-            () => true,
-            null!,
             release,
             sessionEventHub);
         Action noRelease = () => _ = new TestEventSinkProjectionLifecyclePort(
             () => true,
-            activation,
             null!,
             sessionEventHub);
         Action noHub = () => _ = new TestEventSinkProjectionLifecyclePort(
             () => true,
-            activation,
             release,
             null!);
 
         noEnabledAccessor.Should().Throw<ArgumentNullException>().WithParameterName("projectionEnabledAccessor");
-        noActivation.Should().Throw<ArgumentNullException>().WithParameterName("activationService");
         noRelease.Should().Throw<ArgumentNullException>().WithParameterName("releaseService");
         noHub.Should().Throw<ArgumentNullException>().WithParameterName("sessionEventHub");
     }
 
     [Fact]
-    public async Task EnsureProjectionAsync_ShouldReturnNull_WhenDisabledOrRootActorIdInvalid()
+    public void LifecyclePortBase_ShouldNotExposeEnsureProjectionSurface()
     {
-        var disabledFixture = CreateFixture(enabled: false);
-        var disabledResult = await disabledFixture.Service.EnsureProjectionPublicAsync(
-            "actor-1",
-            "projection",
-            "session-1",
-            CancellationToken.None);
-        disabledResult.Should().BeNull();
-        disabledFixture.Activation.Calls.Should().Be(0);
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs"));
+        var source = File.ReadAllText(sourcePath);
 
-        var blankRootFixture = CreateFixture(enabled: true);
-        var blankRootResult = await blankRootFixture.Service.EnsureProjectionPublicAsync(
-            "   ",
-            "projection",
-            "session-1",
-            CancellationToken.None);
-        blankRootResult.Should().BeNull();
-        blankRootFixture.Activation.Calls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task EnsureProjectionAsync_ShouldCallActivation_WhenEnabled()
-    {
-        var fixture = CreateFixture(enabled: true);
-
-        var lease = await fixture.Service.EnsureProjectionPublicAsync(
-            "actor-1",
-            "projection-1",
-            "session-1",
-            CancellationToken.None);
-
-        lease.Should().BeSameAs(fixture.Activation.LeaseToReturn);
-        fixture.Activation.Calls.Should().Be(1);
-        fixture.Activation.LastRequest.Should().NotBeNull();
-        fixture.Activation.LastRequest!.RootActorId.Should().Be("actor-1");
-        fixture.Activation.LastRequest.ProjectionKind.Should().Be("projection-1");
-        fixture.Activation.LastRequest.SessionId.Should().Be("session-1");
+        source.Should().Contain("Refactor (iter101/cluster-104):");
+        source.Should().NotContain("protected async Task<TLeaseContract?> EnsureProjectionAsync");
+        source.Should().NotContain("_activationService");
+        source.Should().NotContain("IProjectionScopeActivationService<TRuntimeLease>");
     }
 
     [Fact]
@@ -171,20 +134,17 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
 
     private static Fixture CreateFixture(bool enabled)
     {
-        var activation = new TestActivationService();
         var release = new TestReleaseService();
         var sessionEventHub = new TestSessionEventHub();
         var service = new TestEventSinkProjectionLifecyclePort(
             () => enabled,
-            activation,
             release,
             sessionEventHub);
-        return new Fixture(service, activation, release, sessionEventHub);
+        return new Fixture(service, release, sessionEventHub);
     }
 
     private sealed record Fixture(
         TestEventSinkProjectionLifecyclePort Service,
-        TestActivationService Activation,
         TestReleaseService Release,
         TestSessionEventHub SessionEventHub);
 }
@@ -194,33 +154,16 @@ internal sealed class TestEventSinkProjectionLifecyclePort
 {
     public TestEventSinkProjectionLifecyclePort(
         Func<bool> projectionEnabledAccessor,
-        IProjectionScopeActivationService<TestPortRuntimeLease> activationService,
         IProjectionScopeReleaseService<TestPortRuntimeLease> releaseService,
         IProjectionSessionEventHub<string> sessionEventHub)
         : base(
             projectionEnabledAccessor,
-            activationService,
             releaseService,
             sessionEventHub)
     {
     }
 
     public int ResolveRuntimeLeaseCalls { get; private set; }
-
-    public Task<TestPortRuntimeLease?> EnsureProjectionPublicAsync(
-        string rootActorId,
-        string projectionKind,
-        string sessionId,
-        CancellationToken ct = default) =>
-        EnsureProjectionAsync(
-            new ProjectionScopeStartRequest
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionKind,
-                Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = sessionId,
-            },
-            ct);
 
     public Task<IAsyncDisposable?> AttachSinkPublicAsync(
         TestPortRuntimeLease lease,
@@ -261,24 +204,6 @@ internal sealed class TestPortRuntimeLease
     public string ScopeId => RootActorId;
 
     public string SessionId { get; }
-}
-
-internal sealed class TestActivationService : IProjectionScopeActivationService<TestPortRuntimeLease>
-{
-    public int Calls { get; private set; }
-
-    public ProjectionScopeStartRequest? LastRequest { get; private set; }
-
-    public TestPortRuntimeLease LeaseToReturn { get; } = new("lease-actor", "lease-session");
-
-    public Task<TestPortRuntimeLease> EnsureAsync(
-        ProjectionScopeStartRequest request,
-        CancellationToken ct = default)
-    {
-        Calls++;
-        LastRequest = request;
-        return Task.FromResult(LeaseToReturn);
-    }
 }
 
 internal sealed class TestReleaseService : IProjectionScopeReleaseService<TestPortRuntimeLease>

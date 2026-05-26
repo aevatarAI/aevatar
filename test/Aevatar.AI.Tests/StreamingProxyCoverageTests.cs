@@ -442,7 +442,7 @@ public class StreamingProxyCoverageTests
                     Content = "hello from projection",
                     SessionId = "stream-session",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     Messages =
@@ -455,9 +455,9 @@ public class StreamingProxyCoverageTests
                             Content = "hello from projection",
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 2));
+            },
+            },
+            version: 2));
 
         cts.Cancel();
         await task;
@@ -500,7 +500,6 @@ public class StreamingProxyCoverageTests
             new StubActor("projection.session.scope:streaming-proxy-room-chat-session:room-a:session-123");
         var hub = new RecordingRoomSessionEventHub();
         var port = new StreamingProxyRoomSessionProjectionPort(
-            new RecordingRoomSessionActivationService(),
             new RecordingRoomSessionReleaseService(),
             hub,
             CreateRoomSessionAttachExistingLookup(runtime));
@@ -521,7 +520,6 @@ public class StreamingProxyCoverageTests
     {
         var hub = new RecordingRoomSessionEventHub();
         var port = new StreamingProxyRoomSessionProjectionPort(
-            new RecordingRoomSessionActivationService(),
             new RecordingRoomSessionReleaseService(),
             hub,
             CreateRoomSessionAttachExistingLookup(new StubActorRuntime()));
@@ -618,7 +616,7 @@ public class StreamingProxyCoverageTests
                     Prompt = "Discuss webhook relay",
                     SessionId = "session-123",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     Messages =
@@ -632,9 +630,9 @@ public class StreamingProxyCoverageTests
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                             IsTopic = true,
                         },
-                    },
-                },
-                version: 2),
+            },
+            },
+            version: 2),
         });
         interactionService.Frames.Add(new StreamingProxyRoomSessionEnvelope
         {
@@ -646,7 +644,7 @@ public class StreamingProxyCoverageTests
                     Content = "I can help with that.",
                     SessionId = "session-123",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     Messages =
@@ -660,7 +658,7 @@ public class StreamingProxyCoverageTests
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                             IsTopic = true,
                         },
-                        new StreamingProxyChatMessage
+            new StreamingProxyChatMessage
                         {
                             Sequence = 2,
                             SenderAgentId = "agent-1",
@@ -668,9 +666,9 @@ public class StreamingProxyCoverageTests
                             Content = "I can help with that.",
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 3),
+            },
+            },
+            version: 3),
         });
         interactionService.Frames.Add(new StreamingProxyRoomSessionEnvelope
         {
@@ -681,11 +679,11 @@ public class StreamingProxyCoverageTests
                     Status = StreamingProxyChatSessionTerminalStatus.Completed,
                     TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                 },
-                version: 4),
+            version: 4),
         });
 
         await InvokeTaskAsync(
@@ -772,8 +770,8 @@ public class StreamingProxyCoverageTests
                     Content = "hello",
                     SessionId = "session-123",
                 },
-                new StreamingProxyGAgentState { RoomName = "Room A" },
-                version: 2),
+            new StreamingProxyGAgentState { RoomName = "Room A" },
+            version: 2),
         });
         projectionPort.Messages.Add(new StreamingProxyRoomSessionEnvelope
         {
@@ -1072,7 +1070,7 @@ public class StreamingProxyCoverageTests
                     Status = StreamingProxyChatSessionTerminalStatus.Completed,
                     TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     TerminalSessions =
@@ -1083,9 +1081,9 @@ public class StreamingProxyCoverageTests
                             Status = StreamingProxyChatSessionTerminalStatus.Completed,
                             TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 12),
+            },
+            },
+            version: 12),
             CancellationToken.None);
 
         var snapshot = await queryPort.GetAsync("room-a", "session-1", CancellationToken.None);
@@ -1123,11 +1121,11 @@ public class StreamingProxyCoverageTests
                     Content = "hello",
                     SessionId = "session-1",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                 },
-                version: 13),
+            version: 13),
             CancellationToken.None);
 
         var snapshot = await queryPort.GetAsync("room-a", "session-1", CancellationToken.None);
@@ -1153,7 +1151,7 @@ public class StreamingProxyCoverageTests
                     AgentId = "agent-1",
                     DisplayName = "Alice",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     Participants =
                     {
@@ -1163,9 +1161,9 @@ public class StreamingProxyCoverageTests
                             DisplayName = "Alice",
                             JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 6),
+            },
+            },
+            version: 6),
             CancellationToken.None);
 
         writer.Upserts.Should().ContainSingle();
@@ -1181,7 +1179,7 @@ public class StreamingProxyCoverageTests
             context,
             CreateCommittedEnvelope(
                 new GroupChatParticipantLeftEvent { AgentId = "agent-1" },
-                new StreamingProxyGAgentState(),
+            new StreamingProxyGAgentState(),
                 version: 7),
             CancellationToken.None);
 
@@ -1211,7 +1209,7 @@ public class StreamingProxyCoverageTests
                     Content = "hello",
                     SessionId = "session-1",
                 },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     Participants =
                     {
@@ -1221,9 +1219,9 @@ public class StreamingProxyCoverageTests
                             DisplayName = "Alice",
                             JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 8),
+            },
+            },
+            version: 8),
             CancellationToken.None);
 
         writer.Upserts.Should().BeEmpty();
@@ -1247,7 +1245,7 @@ public class StreamingProxyCoverageTests
                         Status = StreamingProxyChatSessionTerminalStatus.Completed,
                         TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     },
-                    new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                     {
                         RoomName = "Room A",
                         TerminalSessions =
@@ -1258,9 +1256,9 @@ public class StreamingProxyCoverageTests
                                 Status = StreamingProxyChatSessionTerminalStatus.Completed,
                                 TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                             },
-                        },
-                    },
-                    version: 22),
+            },
+            },
+            version: 22),
             },
             writer);
 
@@ -1405,7 +1403,7 @@ public class StreamingProxyCoverageTests
         {
             await WriteRoomSessionEventAsync(
                 new StreamingProxyRoomSessionEnvelope { Envelope = envelope },
-                writer);
+            writer);
         }
 
         context.Response.Body.Position = 0;
@@ -1430,7 +1428,7 @@ public class StreamingProxyCoverageTests
         {
             CreateCommittedEnvelope(
                 new GroupChatTopicEvent { Prompt = "topic", SessionId = "s1" },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     Messages =
@@ -1444,12 +1442,12 @@ public class StreamingProxyCoverageTests
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                             IsTopic = true,
                         },
-                    },
-                },
-                version: 1),
+            },
+            },
+            version: 1),
             CreateCommittedEnvelope(
                 new GroupChatMessageEvent { AgentId = "a1", AgentName = "A1", Content = "hi", SessionId = "s1" },
-                new StreamingProxyGAgentState
+            new StreamingProxyGAgentState
                 {
                     RoomName = "Room A",
                     Messages =
@@ -1463,7 +1461,7 @@ public class StreamingProxyCoverageTests
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                             IsTopic = true,
                         },
-                        new StreamingProxyChatMessage
+            new StreamingProxyChatMessage
                         {
                             Sequence = 2,
                             SenderAgentId = "a1",
@@ -1471,16 +1469,16 @@ public class StreamingProxyCoverageTests
                             Content = "hi",
                             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                         },
-                    },
-                },
-                version: 2),
+            },
+            },
+            version: 2),
         };
 
         foreach (var envelope in methodCalls)
         {
             await WriteRoomSessionEventAsync(
                 new StreamingProxyRoomSessionEnvelope { Envelope = envelope },
-                writer);
+            writer);
         }
 
         context.Response.Body.Position = 0;
@@ -1582,7 +1580,7 @@ public class StreamingProxyCoverageTests
                 {
                     NyxIdAccessToken = " typed-access ",
                 },
-                Routing = LLMRequestRoutingContext.Empty with
+            Routing = LLMRequestRoutingContext.Empty with
                 {
                     NyxIdRoutePreference = " typed-route ",
                     ModelOverride = " typed-model ",
@@ -1768,7 +1766,7 @@ public class StreamingProxyCoverageTests
                         EventData = Any.Pack(payload),
                         AgentId = "room-a",
                     },
-                    StateRoot = Any.Pack(state),
+            StateRoot = Any.Pack(state),
                 }),
         };
     }
@@ -2196,7 +2194,7 @@ public class StreamingProxyCoverageTests
                 {
                     Envelope = envelope,
                 },
-                ct);
+            ct);
         }
     }
 
@@ -2298,7 +2296,7 @@ public class StreamingProxyCoverageTests
                 {
                     Envelope = envelope,
                 },
-                ct);
+            ct);
         }
     }
 

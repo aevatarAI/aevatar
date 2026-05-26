@@ -32,7 +32,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -67,7 +66,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -92,7 +90,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         var runtime = new RecordingActorRuntime();
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -114,7 +111,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         var release = new RecordingReleaseService();
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             release,
             new RecordingRunEventHub(),
             CreateAttachExistingLookup(new RecordingActorRuntime()));

@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -47,11 +49,7 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
             try
             {
                 await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
-                await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
-                    _actorRuntime,
-                    _dispatchPort,
-                    "startup_projection_rebuild",
-                    ct);
+                await DispatchStartupProjectionRefreshAsync(ct);
                 _logger.LogInformation(
                     "Channel bot registration projection scope activated and rebuild dispatched for {ActorId} (attempt {Attempt})",
                     ChannelBotRegistrationGAgent.WellKnownId, attempt);
@@ -84,4 +82,31 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+
+    private async Task DispatchStartupProjectionRefreshAsync(CancellationToken ct)
+    {
+        // Refactor (iter101/cluster-104): Old channel registration exposed a reusable RebuildProjection helper; new rebuild signal is private to startup after projection activation.
+        _ = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ChannelBotRebuildProjectionCommand
+            {
+                Reason = "startup_projection_rebuild",
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                "channel-runtime.registration-store",
+                ChannelBotRegistrationGAgent.WellKnownId),
+        };
+
+        await _dispatchPort.DispatchAndWaitHandledAsync(
+            ChannelBotRegistrationGAgent.WellKnownId,
+            envelope,
+            ct);
+    }
 }
