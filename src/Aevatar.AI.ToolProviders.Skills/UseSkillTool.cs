@@ -125,6 +125,41 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine(
             "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
+        // 工作流：识别后单独展示，附调用说明
+        if (skill.Workflows is { Count: > 0 } workflows)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Available Workflows");
+            sb.AppendLine();
+            sb.AppendLine(
+                "This skill ships executable workflows. To run one, call the `aevatar_start_workflow` tool with:");
+            sb.AppendLine("- `workflow_id`: the workflow's `name` (shown below)");
+            sb.AppendLine("- `workflow_yamls`: an array containing the workflow's YAML body verbatim");
+            sb.AppendLine("- `inputs.prompt`: the user's task as a plain string");
+            sb.AppendLine();
+            foreach (var workflow in workflows)
+            {
+                sb.Append("### ");
+                sb.AppendLine(workflow.Name);
+                if (!string.IsNullOrWhiteSpace(workflow.Description))
+                {
+                    sb.Append("Description: ");
+                    sb.AppendLine(workflow.Description);
+                }
+                if (!string.IsNullOrWhiteSpace(workflow.WhenToUse))
+                {
+                    sb.Append("When to use: ");
+                    sb.AppendLine(workflow.WhenToUse);
+                }
+                sb.Append("Source: ");
+                sb.AppendLine(workflow.FileName);
+                sb.AppendLine("```yaml");
+                sb.AppendLine(workflow.Yaml.TrimEnd());
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+        }
+
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })
         {
