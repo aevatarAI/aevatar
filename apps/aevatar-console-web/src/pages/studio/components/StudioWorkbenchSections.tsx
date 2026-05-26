@@ -63,6 +63,12 @@ type StudioNoticeLike = {
   readonly message: string;
 };
 
+type StudioCompactNoticeLike = {
+  readonly description?: React.ReactNode;
+  readonly title: React.ReactNode;
+  readonly type: StudioNoticeLike['type'] | 'default';
+};
+
 function readWorkflowSortTimestamp(value: string): number {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -160,6 +166,30 @@ const studioNoticeCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
   padding: 14,
+};
+
+const studioCompactNoticeStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const studioCompactNoticeStyle: React.CSSProperties = {
+  alignItems: 'center',
+  border: '1px solid',
+  borderRadius: 8,
+  display: 'flex',
+  gap: 10,
+  minHeight: 40,
+  padding: '8px 12px',
+};
+
+const studioCompactNoticeBodyStyle: React.CSSProperties = {
+  alignItems: 'baseline',
+  display: 'flex',
+  flex: 1,
+  flexWrap: 'wrap',
+  gap: 8,
+  minWidth: 0,
 };
 
 const studioEmptyPanelStyle: React.CSSProperties = {
@@ -349,6 +379,36 @@ const StudioNoticeCard: React.FC<{
           description
         )
       ) : null}
+    </div>
+  );
+};
+
+const StudioCompactNotice: React.FC<StudioCompactNoticeLike> = ({
+  description,
+  title,
+  type,
+}) => {
+  const accent = getStudioNoticeAccent(type);
+
+  return (
+    <div
+      style={{
+        ...studioCompactNoticeStyle,
+        background: accent.background,
+        borderColor: accent.border,
+      }}
+    >
+      <Tag color={type === 'default' ? 'default' : type}>{accent.label}</Tag>
+      <div style={studioCompactNoticeBodyStyle}>
+        <Typography.Text strong>{title}</Typography.Text>
+        {description ? (
+          typeof description === 'string' ? (
+            <Typography.Text type="secondary">{description}</Typography.Text>
+          ) : (
+            description
+          )
+        ) : null}
+      </div>
     </div>
   );
 };
@@ -1487,7 +1547,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     return (
       <div style={{ ...fillCardStyle, height: '100%' }}>
         {selectedExecution.isError ? (
-          <StudioNoticeCard
+          <StudioCompactNotice
             type="error"
             title="读取执行详情失败"
             description={describeError(selectedExecution.error)}
@@ -1504,48 +1564,59 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     );
   }
 
+  const compactNotices: StudioCompactNoticeLike[] = [];
+  if (executions.isError) {
+    compactNotices.push({
+      description: describeError(executions.error),
+      title: '读取运行列表失败',
+      type: 'error',
+    });
+  }
+  if (selectedExecution.isError) {
+    compactNotices.push({
+      description: describeError(selectedExecution.error),
+      title: '读取执行详情失败',
+      type: 'error',
+    });
+  }
+  if (executionNotice) {
+    compactNotices.push({
+      description: executionNotice.message,
+      title:
+        executionNotice.type === 'error'
+          ? '执行操作失败'
+          : executionNotice.type === 'info'
+            ? '已请求停止运行'
+            : '执行状态已更新',
+      type: executionNotice.type,
+    });
+  }
+  if (selectedExecutionDetail?.error) {
+    compactNotices.push({
+      description: selectedExecutionDetail.error,
+      title: '执行异常',
+      type: 'error',
+    });
+  }
+  if (emptyState) {
+    compactNotices.push({
+      description: emptyState.description,
+      title: emptyState.title,
+      type: 'info',
+    });
+  }
+
   return (
     <div style={cardStackStyle}>
-      {executions.isError ? (
-        <StudioNoticeCard
-          type="error"
-          title="读取运行列表失败"
-          description={describeError(executions.error)}
-        />
-      ) : null}
-      {selectedExecution.isError ? (
-        <StudioNoticeCard
-          type="error"
-          title="读取执行详情失败"
-          description={describeError(selectedExecution.error)}
-        />
-      ) : null}
-      {executionNotice ? (
-        <StudioNoticeCard
-          type={executionNotice.type}
-          title={
-            executionNotice.type === 'error'
-              ? '执行操作失败'
-              : executionNotice.type === 'info'
-                ? '已请求停止运行'
-                : '执行状态已更新'
-          }
-          description={executionNotice.message}
-        />
-      ) : null}
-      {selectedExecutionDetail?.error ? (
-        <StudioNoticeCard
-          type="error"
-          title="执行异常"
-          description={selectedExecutionDetail.error}
-        />
-      ) : null}
-      {emptyState ? (
-        <StudioNoticeCard
-          type="info"
-          title={emptyState.title}
-          description={emptyState.description}
-        />
+      {compactNotices.length > 0 ? (
+        <div style={studioCompactNoticeStackStyle}>
+          {compactNotices.map((notice, index) => (
+            <StudioCompactNotice
+              key={`${notice.type}-${index}`}
+              {...notice}
+            />
+          ))}
+        </div>
       ) : null}
 
       <section style={observeRunHeaderStyle}>

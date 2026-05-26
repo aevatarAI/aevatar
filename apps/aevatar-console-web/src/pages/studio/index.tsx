@@ -7473,17 +7473,17 @@ const StudioPage: React.FC = () => {
       Boolean(resolvedStudioScopeId) &&
       Boolean(workbenchStudioMemberId || workbenchPublishedServiceId),
     queryFn: () =>
-      workbenchStudioMemberId
-        ? scopeRuntimeApi.listMemberRuns(
+      workbenchPublishedServiceId
+        ? scopeRuntimeApi.listServiceRuns(
             resolvedStudioScopeId,
-            workbenchStudioMemberId,
+            workbenchPublishedServiceId,
             {
               take: 12,
             },
           )
-        : scopeRuntimeApi.listServiceRuns(
+        : scopeRuntimeApi.listMemberRuns(
             resolvedStudioScopeId,
-            workbenchPublishedServiceId,
+            workbenchStudioMemberId,
             {
               take: 12,
             },
@@ -7542,19 +7542,19 @@ const StudioPage: React.FC = () => {
       Boolean(selectedExecutionId) &&
       Boolean(selectedObserveBackendRunSummary),
     queryFn: () =>
-      workbenchStudioMemberId
-        ? scopeRuntimeApi.getMemberRunAudit(
+      workbenchPublishedServiceId
+        ? scopeRuntimeApi.getServiceRunAudit(
             resolvedStudioScopeId,
-            workbenchStudioMemberId,
+            workbenchPublishedServiceId,
             selectedExecutionId,
             {
               actorId:
                 trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
             },
           )
-        : scopeRuntimeApi.getServiceRunAudit(
+        : scopeRuntimeApi.getMemberRunAudit(
             resolvedStudioScopeId,
-            workbenchPublishedServiceId,
+            workbenchStudioMemberId,
             selectedExecutionId,
             {
               actorId:
