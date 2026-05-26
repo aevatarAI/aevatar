@@ -314,39 +314,6 @@ public class VoicePresenceEndpointsTests
         }
     }
 
-    private sealed class StubVoiceTransport : IVoiceTransport
-    {
-        public bool Disposed { get; private set; }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-    }
-
     private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
     {
         public List<VoicePresenceSessionRequest> Requests { get; } = [];
