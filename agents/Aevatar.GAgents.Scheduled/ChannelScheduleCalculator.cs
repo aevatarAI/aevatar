@@ -11,7 +11,7 @@ public static class ChannelScheduleCalculator
 {
     public static bool TryGetNextOccurrence(
         string cronExpression,
-        string? timeZoneId,
+        TimeZoneInfo timeZone,
         DateTimeOffset fromUtc,
         out DateTimeOffset nextRunAtUtc,
         out string? error)
@@ -25,8 +25,7 @@ public static class ChannelScheduleCalculator
             return false;
         }
 
-        if (!TryResolveTimeZone(timeZoneId, out var timeZone, out error))
-            return false;
+        ArgumentNullException.ThrowIfNull(timeZone);
 
         CronExpression expression;
         try
@@ -48,35 +47,6 @@ public static class ChannelScheduleCalculator
 
         nextRunAtUtc = new DateTimeOffset(DateTime.SpecifyKind(nextUtc.Value, DateTimeKind.Utc), TimeSpan.Zero);
         return true;
-    }
-
-    public static bool TryResolveTimeZone(
-        string? timeZoneId,
-        out TimeZoneInfo timeZone,
-        out string? error)
-    {
-        error = null;
-        var normalized = string.IsNullOrWhiteSpace(timeZoneId)
-            ? SkillRunnerDefaults.DefaultTimezone
-            : timeZoneId.Trim();
-
-        try
-        {
-            timeZone = TimeZoneInfo.FindSystemTimeZoneById(normalized);
-            return true;
-        }
-        catch (TimeZoneNotFoundException ex)
-        {
-            timeZone = TimeZoneInfo.Utc;
-            error = ex.Message;
-            return false;
-        }
-        catch (InvalidTimeZoneException ex)
-        {
-            timeZone = TimeZoneInfo.Utc;
-            error = ex.Message;
-            return false;
-        }
     }
 
     public static TimeSpan ComputeDueTime(DateTimeOffset nextRunAtUtc, DateTimeOffset nowUtc)

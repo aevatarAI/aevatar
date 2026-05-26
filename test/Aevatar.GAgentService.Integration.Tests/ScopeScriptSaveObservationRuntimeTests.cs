@@ -46,7 +46,7 @@ public sealed class ScopeScriptSaveObservationRuntimeTests
             new ScopeScriptUpsertRequest(
                 scopeId,
                 scriptId,
-                CatalogOnlyBehaviorSource,
+                ScriptPackageSpecExtensions.CreateSingleSource(CatalogOnlyBehaviorSource),
                 revisionId),
             CancellationToken.None);
         var observationRequest = new ScopeScriptSaveObservationRequest(

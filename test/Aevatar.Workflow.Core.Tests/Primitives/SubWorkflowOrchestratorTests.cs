@@ -216,7 +216,9 @@ public sealed class SubWorkflowOrchestratorTests
             CancellationToken.None);
 
         harness.Runtime.CreateRequests.Should().BeEmpty();
-        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Runtime.Linked.Should().ContainSingle(x =>
+            x.ParentId == "owner-1" &&
+            x.ChildId == childActorId);
         harness.Persisted.OfType<SubWorkflowDefinitionResolvedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
         harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
         harness.Persisted.Should().NotContain(x => x is SubWorkflowBindingUpsertedEvent);
@@ -327,6 +329,299 @@ public sealed class SubWorkflowOrchestratorTests
         racedActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
         harness.Persisted.Should().Contain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenRegistrationPersistFails_ShouldNotCreateChild()
+    {
+        var harness = CreateHarness();
+        harness.FailPersistTypes.Add(typeof(SubWorkflowInvocationRegisteredEvent));
+        var state = new WorkflowRunState();
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-registration-fails",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-register",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+        AssertPublishedFailureContains(harness, "persist failed");
+        harness.Operations.Should().Contain("persist-fail:SubWorkflowInvocationRegisteredEvent");
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenCreateFails_ShouldPersistInvocationBeforeCreate()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        var childActorId = "owner-1:workflow:sub_flow:parent-run:invoke-create-fails";
+        harness.Runtime.FailCreateActorIds.Add(childActorId);
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-create-fails",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-create",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        var registered = harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle().Subject;
+        registered.ChildActorId.Should().Be(childActorId);
+        registered.Input.Should().BeEmpty();
+        registered.HandoffPhase.Should().Be((int)SubWorkflowInvocationHandoffPhase.Registered);
+        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+        AssertPublishedFailureContains(harness, "failed to create or get sub-workflow actor");
+        harness.Operations.Should().ContainInOrder(
+            "persist:SubWorkflowInvocationRegisteredEvent",
+            $"create:{childActorId}");
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenLinkFails_ShouldKeepRegisteredInvocationAndActorResolvedPhase()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        var childActorId = "owner-1:workflow:sub_flow:parent-run:invoke-link-fails";
+        harness.Runtime.FailLinkChildIds.Add(childActorId);
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-link-fails",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-link",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.ChildActorId == childActorId);
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().ContainSingle(x =>
+            x.ChildRunId == "invoke-link-fails" &&
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.ActorResolved);
+        harness.Sent.Should().BeEmpty();
+        AssertPublishedFailureContains(harness, "link failed");
+        harness.Operations.Should().ContainInOrder(
+            "persist:SubWorkflowInvocationRegisteredEvent",
+            $"create:{childActorId}",
+            "persist:SubWorkflowInvocationHandoffAdvancedEvent",
+            $"link:{childActorId}");
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenBindFails_ShouldKeepLinkedPhase()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        var childActorId = "owner-1:workflow:sub_flow:parent-run:invoke-bind-fails";
+        harness.Runtime.FailDispatchActorIds.Add(childActorId);
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-bind-fails",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-bind",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.ChildActorId == childActorId);
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().Contain(x =>
+            x.ChildRunId == "invoke-bind-fails" &&
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.Linked);
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().NotContain(x =>
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.Bound);
+        harness.Sent.Should().BeEmpty();
+        AssertPublishedFailureContains(harness, "dispatch failed");
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenStartFails_ShouldPersistFailureAndCleanupTransientChild()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        var childActorId = "owner-1:workflow:sub_flow:parent-run:invoke-start-fails";
+        harness.FailStartActorIds.Add(childActorId);
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-start-fails",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-start",
+                WorkflowName = "sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Transient,
+            },
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().Contain(x =>
+            x.ChildRunId == "invoke-start-fails" &&
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.StartFailed);
+        harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>().Should().ContainSingle(x =>
+            x.InvocationId == "invoke-start-fails" &&
+            !x.Success &&
+            x.Error.Contains("StartWorkflowEvent", StringComparison.Ordinal));
+        harness.Runtime.Unlinked.Should().ContainSingle(childActorId);
+        harness.Runtime.Destroyed.Should().ContainSingle(childActorId);
+        AssertPublishedFailureContains(harness, "start failed");
+    }
+
+    [Fact]
+    public async Task RecoverPendingSubWorkflowInvocationsAsync_ShouldResumeFromStoredPhaseWithoutChangingChildActorId()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-recover",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-recover",
+            WorkflowName = "sub_flow",
+            ChildActorId = "child-recover",
+            ChildRunId = "invoke-recover",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.Linked,
+            Input = "payload-recover",
+            DefinitionYaml = ValidSubFlowYaml,
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["invoke-recover"] = 0;
+        harness.Runtime.StoredActors["child-recover"] = new RecordingActor("child-recover");
+
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Runtime.StoredActors.Should().ContainKey("child-recover");
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Select(x => x.HandoffPhase)
+            .Should()
+            .ContainInOrder(
+                (int)SubWorkflowInvocationHandoffPhase.Bound,
+                (int)SubWorkflowInvocationHandoffPhase.StartDispatchPending,
+                (int)SubWorkflowInvocationHandoffPhase.StartDispatched);
+        harness.Sent.Should().ContainSingle(x => x.TargetActorId == "child-recover");
+        var start = harness.Sent.Single().Message.Should().BeOfType<StartWorkflowEvent>().Subject;
+        start.RunId.Should().Be("invoke-recover");
+        start.Input.Should().Be("payload-recover");
+    }
+
+    [Theory]
+    [InlineData(SubWorkflowInvocationHandoffPhase.Registered, true, true, true, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.ActorResolved, false, true, true, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.Bound, false, false, false, true)]
+    [InlineData(SubWorkflowInvocationHandoffPhase.StartDispatchPending, false, false, false, true)]
+    public async Task RecoverPendingSubWorkflowInvocationsAsync_ShouldResumeFromPhaseWithoutRepeatingCompletedHandoff(
+        SubWorkflowInvocationHandoffPhase phase,
+        bool expectCreate,
+        bool expectLink,
+        bool expectBind,
+        bool expectStart)
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        var childActorId = $"child-{phase}";
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-recover-" + (int)phase,
+            ParentRunId = "parent-run",
+            ParentStepId = "step-recover",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-recover-" + (int)phase,
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = phase,
+            Input = "payload-recover",
+            DefinitionYaml = ValidSubFlowYaml,
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["invoke-recover-" + (int)phase] = 0;
+        if (!expectCreate)
+            harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
+
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Any(x => x.RequestedId == childActorId).Should().Be(expectCreate);
+        harness.Runtime.Linked.Any(x => x.ChildId == childActorId).Should().Be(expectLink);
+        harness.Operations.Any(x => x == $"dispatch:{childActorId}").Should().Be(expectBind);
+        harness.Sent.Any(x => x.TargetActorId == childActorId).Should().Be(expectStart);
+        harness.Persisted.OfType<SubWorkflowInvocationHandoffAdvancedEvent>().Should().Contain(x =>
+            x.HandoffPhase == (int)SubWorkflowInvocationHandoffPhase.StartDispatched);
+    }
+
+    [Fact]
+    public async Task RecoverPendingSubWorkflowInvocationsAsync_WhenReenteredWithSameInvocationAndChildActor_ShouldNotDuplicateActorLinkOrBind()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState
+        {
+            RunId = "parent-run",
+        };
+        const string childActorId = "child-reenter";
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
+        state.PendingSubWorkflowInvocations.Add(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-reenter",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-reenter",
+            WorkflowName = "sub_flow",
+            ChildActorId = childActorId,
+            ChildRunId = "invoke-reenter",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+            HandoffPhase = SubWorkflowInvocationHandoffPhase.StartDispatchPending,
+            Input = "payload-reenter",
+            DefinitionYaml = ValidSubFlowYaml,
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["invoke-reenter"] = 0;
+        harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
+
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+        await harness.Orchestrator.RecoverPendingSubWorkflowInvocationsAsync(state, CancellationToken.None);
+
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Runtime.Linked.Should().BeEmpty();
+        harness.Operations.Should().NotContain($"dispatch:{childActorId}");
+        harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
     }
 
     [Fact]
@@ -871,6 +1166,10 @@ public sealed class SubWorkflowOrchestratorTests
         var sent = new List<SentMessage>();
         var scheduledTimeouts = new List<ScheduledTimeout>();
         var cancelledLeases = new List<RuntimeCallbackLease>();
+        var operations = new List<string>();
+        var failPersistTypes = new HashSet<global::System.Type>();
+        var failStartActorIds = new HashSet<string>(StringComparer.Ordinal);
+        runtime.Operations = operations;
 
         var orchestrator = new SubWorkflowOrchestrator(
             runtime,
@@ -879,11 +1178,28 @@ public sealed class SubWorkflowOrchestratorTests
             () => NullLogger.Instance,
             (evt, _) =>
             {
+                operations.Add($"persist:{evt.GetType().Name}");
+                if (failPersistTypes.Contains(evt.GetType()))
+                {
+                    operations[^1] = $"persist-fail:{evt.GetType().Name}";
+                    throw new InvalidOperationException($"persist failed for {evt.GetType().Name}");
+                }
+
                 persisted.Add(evt);
                 return Task.CompletedTask;
             },
             (events, _) =>
             {
+                foreach (var evt in events)
+                {
+                    operations.Add($"persist:{evt.GetType().Name}");
+                    if (failPersistTypes.Contains(evt.GetType()))
+                    {
+                        operations[^1] = $"persist-fail:{evt.GetType().Name}";
+                        throw new InvalidOperationException($"persist failed for {evt.GetType().Name}");
+                    }
+                }
+
                 persisted.AddRange(events);
                 return Task.CompletedTask;
             },
@@ -894,6 +1210,10 @@ public sealed class SubWorkflowOrchestratorTests
             },
             (targetActorId, evt, _) =>
             {
+                operations.Add($"send:{targetActorId}:{evt.GetType().Name}");
+                if (evt is StartWorkflowEvent && failStartActorIds.Contains(targetActorId))
+                    throw new InvalidOperationException($"start failed for {targetActorId}");
+
                 sent.Add(new SentMessage(targetActorId, evt));
                 return Task.CompletedTask;
             },
@@ -909,7 +1229,17 @@ public sealed class SubWorkflowOrchestratorTests
                 return Task.CompletedTask;
             });
 
-        return new OrchestratorHarness(orchestrator, runtime, persisted, published, sent, scheduledTimeouts, cancelledLeases);
+        return new OrchestratorHarness(
+            orchestrator,
+            runtime,
+            persisted,
+            published,
+            sent,
+            scheduledTimeouts,
+            cancelledLeases,
+            operations,
+            failPersistTypes,
+            failStartActorIds);
     }
 
     private static WorkflowRunState BuildStateWithPending(
@@ -939,6 +1269,14 @@ public sealed class SubWorkflowOrchestratorTests
         return state;
     }
 
+    private static void AssertPublishedFailureContains(OrchestratorHarness harness, string expectedText)
+    {
+        harness.Published.Should().ContainSingle();
+        var failure = harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain(expectedText);
+    }
+
     private sealed record OrchestratorHarness(
         SubWorkflowOrchestrator Orchestrator,
         RecordingActorRuntime Runtime,
@@ -946,12 +1284,17 @@ public sealed class SubWorkflowOrchestratorTests
         List<PublishedMessage> Published,
         List<SentMessage> Sent,
         List<ScheduledTimeout> ScheduledTimeouts,
-        List<RuntimeCallbackLease> CancelledLeases);
+        List<RuntimeCallbackLease> CancelledLeases,
+        List<string> Operations,
+        HashSet<global::System.Type> FailPersistTypes,
+        HashSet<string> FailStartActorIds);
 
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         private readonly Dictionary<string, Queue<IActor?>> _queuedGets = new(StringComparer.Ordinal);
         private int _createdCount;
+
+        public List<string> Operations { get; set; } = [];
 
         public Dictionary<string, RecordingActor> StoredActors { get; } = new(StringComparer.Ordinal);
 
@@ -964,6 +1307,10 @@ public sealed class SubWorkflowOrchestratorTests
         public List<string> Destroyed { get; } = [];
 
         public HashSet<string> FailCreateActorIds { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> FailLinkChildIds { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> FailDispatchActorIds { get; } = new(StringComparer.Ordinal);
 
         public void EnqueueGet(string actorId, IActor? actor)
         {
@@ -984,6 +1331,7 @@ public sealed class SubWorkflowOrchestratorTests
         {
             ct.ThrowIfCancellationRequested();
             var resolvedId = id ?? $"created-{++_createdCount}";
+            Operations.Add($"create:{resolvedId}");
             CreateRequests.Add((agentType, resolvedId));
             if (FailCreateActorIds.Contains(resolvedId))
                 throw new InvalidOperationException($"create failed for {resolvedId}");
@@ -996,6 +1344,7 @@ public sealed class SubWorkflowOrchestratorTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Operations.Add($"destroy:{id}");
             Destroyed.Add(id);
             StoredActors.Remove(id);
             return Task.CompletedTask;
@@ -1015,11 +1364,16 @@ public sealed class SubWorkflowOrchestratorTests
             return Task.FromResult<IActor?>(StoredActors.TryGetValue(id, out var actor) ? actor : null);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Operations.Add($"dispatch:{actorId}");
+            if (FailDispatchActorIds.Contains(actorId))
+                throw new InvalidOperationException($"dispatch failed for {actorId}");
+
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) =>
@@ -1028,6 +1382,10 @@ public sealed class SubWorkflowOrchestratorTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Operations.Add($"link:{childId}");
+            if (FailLinkChildIds.Contains(childId))
+                throw new InvalidOperationException($"link failed for {childId}");
+
             Linked.Add((parentId, childId));
             return Task.CompletedTask;
         }
@@ -1035,6 +1393,7 @@ public sealed class SubWorkflowOrchestratorTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Operations.Add($"unlink:{childId}");
             Unlinked.Add(childId);
             return Task.CompletedTask;
         }

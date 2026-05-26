@@ -1,5 +1,8 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
 namespace Aevatar.Foundation.VoicePresence.Tests;
@@ -71,5 +74,94 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceControlFrame));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceToolDefinition));
+    }
+
+    [Fact]
+    public void VoiceCapabilityAndLeaseMessages_ShouldRoundtripAndExposeReflection()
+    {
+        var leaseRequested = new VoicePresenceSessionLeaseRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            SessionLeaseRequested = leaseRequested,
+        };
+        var capability = new VoicePresenceCapabilityReadModel
+        {
+            Id = "agent-1:voice_presence",
+            ActorId = "agent-1",
+            ModuleName = "voice_presence",
+            StateVersion = 3,
+            LastEventId = "event-3",
+            UpdatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Initialized = true,
+            PcmSampleRateHz = 24000,
+            ActiveSessionId = "lease-1",
+            RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+        };
+
+        VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray()).ShouldBe(signal);
+        VoicePresenceCapabilityReadModel.Parser.ParseFrom(capability.ToByteArray()).ShouldBe(capability);
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested);
+        capability.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceCapabilityReadModel));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceSessionLeaseRequested));
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_audio_frame_received()
+    {
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var audio = new VoiceTransportAudioFrameReceived
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = expiresAt,
+            Pcm16 = ByteString.CopyFrom([1, 2, 3]),
+            SampleRateHz = 24000,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportAudioFrameReceived = audio,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_transport_audio_self_signal()
+    {
+        var audio = new VoiceTransportAudioFrameReceived
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            Pcm16 = ByteString.CopyFrom([4, 5, 6]),
+            SampleRateHz = 24000,
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildSelfEnvelope("voice-agent", "voice_presence", audio);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        signal.TransportAudioFrameReceived.ShouldBe(audio);
+        signal.TransportAudioFrameReceived.ShouldNotBeSameAs(audio);
     }
 }

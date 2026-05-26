@@ -1185,14 +1185,14 @@ public sealed class ServiceServingRolloutGAgentTests
 
         public Exception? ExceptionToThrow { get; init; }
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             var callIndex = ++_attemptCount;
             if (ThrowOnCallIndex == callIndex && ExceptionToThrow != null)
                 throw ExceptionToThrow;
 
             Commands.Add((actorId, envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>()));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

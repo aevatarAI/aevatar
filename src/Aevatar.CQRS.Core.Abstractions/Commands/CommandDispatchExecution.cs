@@ -7,4 +7,5 @@ public sealed record CommandDispatchExecution<TTarget, TReceipt>
     public required CommandContext Context { get; init; }
     public required EventEnvelope Envelope { get; init; }
     public required TReceipt Receipt { get; init; }
+    public DispatchAdmission? Admission { get; init; }
 }

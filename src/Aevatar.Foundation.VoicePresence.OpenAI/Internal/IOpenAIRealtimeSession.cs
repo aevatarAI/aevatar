@@ -4,7 +4,7 @@ namespace Aevatar.Foundation.VoicePresence.OpenAI.Internal;
 
 internal interface IOpenAIRealtimeSession : IAsyncDisposable
 {
-    Task ConfigureConversationSessionAsync(RealtimeConversationSessionOptions options, CancellationToken ct);
+    Task SendSessionUpdateAsync(BinaryData sessionUpdateEvent, CancellationToken ct);
 
     Task SendInputAudioAsync(BinaryData audio, CancellationToken ct);
 

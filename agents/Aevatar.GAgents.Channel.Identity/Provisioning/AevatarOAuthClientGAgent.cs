@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,11 +16,14 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// registration against NyxID. Holds <see cref="AevatarOAuthClientState"/>
 /// (client_id + HMAC key + observed broker capability) so the entire silo
 /// fleet shares one provisioning record — no IConfiguration / appsettings /
-/// secrets store needed. See cluster bootstrap service for the
-/// caller-side wiring.
+/// secrets store needed. See cluster bootstrap service for the startup
+/// signal wiring.
 /// </summary>
 public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientState>
 {
+    // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
+    //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
+    //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     /// <summary>
     /// Well-known actor id. There is exactly one of these per cluster.
     /// </summary>
@@ -33,6 +37,10 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     /// falls back to <c>"v{rotated_at_unix}"</c>.
     /// </summary>
     public const string InitialHmacKid = "v1";
+    internal static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
+
+    private const string ProvisioningRetryCallbackPrefix = "aevatar-oauth-client-provisioning-retry";
 
     /// <inheritdoc />
     /// <remarks>
@@ -50,7 +58,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .On<AevatarOAuthClientProvisionedEvent>(ApplyProvisioned)
             .On<AevatarOAuthClientHmacKeyRotatedEvent>(ApplyHmacKeyRotated)
             .On<AevatarOAuthClientBrokerCapabilityObservedEvent>(ApplyBrokerCapabilityObserved)
-            .On<AevatarOAuthClientProjectionRebuildRequestedEvent>(static (state, _) => state)
+            .On<AevatarOAuthClientProvisioningRetryScheduledEvent>(ApplyProvisioningRetryScheduled)
+            .On<AevatarOAuthClientProvisioningRetryClearedEvent>(ApplyProvisioningRetryCleared)
+            .On<AevatarOAuthClientDriftReconciledEvent>(static (state, _) => state)
             .OrCurrent();
 
     // ─── Commands ───
@@ -66,7 +76,38 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     [EventHandler]
     public async Task HandleEnsureProvisioned(EnsureAevatarOAuthClientProvisionedCommand cmd)
     {
+        await HandleEnsureProvisionedAsync(cmd, allowPendingRetryBypass: false).ConfigureAwait(false);
+    }
+
+    private async Task HandleEnsureProvisionedAsync(
+        EnsureAevatarOAuthClientProvisionedCommand cmd,
+        bool allowPendingRetryBypass)
+    {
         ArgumentNullException.ThrowIfNull(cmd);
+        if (!allowPendingRetryBypass && HasPendingProvisioningRetryNotDue(DateTimeOffset.UtcNow))
+        {
+            Logger.LogInformation(
+                "Ignoring duplicate external aevatar OAuth client provisioning ensure while actor-owned retry is pending: attempt={Attempt}, due_unix_ms={DueUnixMs}",
+                State.ProvisioningRetryAttempt,
+                State.ProvisioningRetryDueUnixMs);
+            return;
+        }
+
+        try
+        {
+            await TryEnsureProvisionedAsync(cmd).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await ScheduleProvisioningRetryAsync(cmd, ex).ConfigureAwait(false);
+        }
+    }
+
+    private async Task TryEnsureProvisionedAsync(EnsureAevatarOAuthClientProvisionedCommand cmd)
+    {
+        // Refactor (iter53/issue-906-oauth-bootstrap):
+        //   Old pattern: Hosted service ran a Task.Run + Task.Delay retry loop driving OAuth client provisioning lifecycle from outside the actor turn.
+        //   New principle: Bootstrap is one-shot signal publisher; AevatarOAuthClientGAgent owns retry/backoff via durable self-callbacks and drift reconciliation in actor turn.
         if (string.IsNullOrWhiteSpace(cmd.NyxidAuthority))
         {
             Logger.LogWarning("EnsureProvisioned rejected: nyxid_authority is required");
@@ -102,32 +143,22 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
             // Returning here is intentional: HmacKeyRotatedEvent itself
-            // re-publishes the state root, so the projector materializes the
+            // publishes the committed state root, so the projector materializes the
             // readmodel without needing an additional rebuild trigger.
             if (State.HmacKey.Length == 0)
             {
                 await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+                await ClearProvisioningRetryAsync("hmac_seeded_existing_client");
                 Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
                 return;
             }
 
-            // Steady-state branch: nothing changed at NyxID, but a freshly-
-            // booted silo may have an empty projection (codex PR #539 P1 —
-            // happens after the projection-scope-activation fix is deployed
-            // to a cluster whose actor was already provisioned by an earlier
-            // build that never activated the scope). Persist a no-op rebuild
-            // event so the now-attached projector has a state-root
-            // publication to materialize. Apply is identity, so the OAuth
-            // client facts are not mutated.
-            await PersistDomainEventAsync(new AevatarOAuthClientProjectionRebuildRequestedEvent
-            {
-                Reason = "ensure_already_provisioned",
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
+            await ClearProvisioningRetryAsync("ensure_already_provisioned");
             Logger.LogInformation(
-                "Requested aevatar OAuth client projection rebuild: actorId={ActorId}, authority={Authority}",
+                "Aevatar OAuth client already provisioned: actorId={ActorId}, authority={Authority}; no OAuth client fact changed",
                 Id,
                 cmd.NyxidAuthority);
+            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -151,9 +182,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
         if (registrar is null)
         {
-            Logger.LogError(
-                "EnsureProvisioned cannot resolve NyxIdDynamicClientRegistrationClient; DI is missing the registrar");
-            return;
+            throw new InvalidOperationException(
+                "EnsureProvisioned cannot resolve NyxIdDynamicClientRegistrationClient; DI is missing the registrar.");
         }
 
         // CancellationToken.None is the contract here: the framework's
@@ -179,6 +209,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // store before invoking the callback, and there is no protected
         // "replay state" helper a future handler could misuse outside an
         // active commit path (PR #552 review codex/glm-5.1).
+        var previousRedirectUri = State.RedirectUri;
+        var previousOauthScope = State.OauthScope;
         await PersistDomainEventAsync(
             new AevatarOAuthClientProvisionedEvent
             {
@@ -196,7 +228,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // peer's id, this handler must NOT continue with the post-
         // Provisioned HMAC seed against state we did not produce.
         if (!string.Equals(State.ClientId, registration.ClientId, StringComparison.Ordinal))
+        {
+            if (StateMatchesProvisioningIntent(cmd))
+                await ClearProvisioningRetryAsync("ensure_provisioned_by_peer").ConfigureAwait(false);
             return;
+        }
+
+        await PersistDriftReconciledEventsAsync(
+            redirectUriDrifted,
+            oauthScopeDrifted,
+            previousRedirectUri,
+            previousOauthScope);
 
         Logger.LogInformation(
             "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
@@ -218,7 +260,195 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 onOptimisticConcurrencyConflict: AbsorbPeerHmacSeedAsync);
             Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
+
+        await ClearProvisioningRetryAsync("ensure_provisioned");
     }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleProvisioningRetryFired(AevatarOAuthClientProvisioningRetryFiredEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!RetryFiredMatchesPendingState(evt))
+        {
+            Logger.LogInformation(
+                "Ignoring stale aevatar OAuth client provisioning retry callback: callback_id={CallbackId}, attempt={Attempt}, due_unix_ms={DueUnixMs}",
+                evt.CallbackId,
+                evt.Attempt,
+                evt.DueUnixMs);
+            return;
+        }
+
+        await HandleEnsureProvisionedAsync(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = State.ProvisioningRetryAuthority,
+            RedirectUri = State.ProvisioningRetryRedirectUri,
+            ClientName = State.ProvisioningRetryClientName,
+        }, allowPendingRetryBypass: true).ConfigureAwait(false);
+    }
+
+    private bool HasPendingProvisioningRetryNotDue(DateTimeOffset now) =>
+        State.ProvisioningRetryAttempt > 0
+        && State.ProvisioningRetryDueUnixMs > now.ToUnixTimeMilliseconds();
+
+    private bool RetryFiredMatchesPendingState(AevatarOAuthClientProvisioningRetryFiredEvent evt)
+    {
+        if (State.ProvisioningRetryAttempt <= 0)
+            return false;
+
+        if (!string.Equals(evt.CallbackId, State.ProvisioningRetryCallbackId, StringComparison.Ordinal)
+            || evt.Attempt != State.ProvisioningRetryAttempt
+            || evt.DueUnixMs != State.ProvisioningRetryDueUnixMs
+            || !string.Equals(evt.NyxidAuthority, State.ProvisioningRetryAuthority, StringComparison.Ordinal)
+            || !string.Equals(evt.RedirectUri, State.ProvisioningRetryRedirectUri, StringComparison.Ordinal)
+            || !string.Equals(evt.ClientName, State.ProvisioningRetryClientName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (ActiveInboundEnvelope is not null &&
+            RuntimeCallbackEnvelopeStateReader.TryRead(ActiveInboundEnvelope, out var callbackState))
+        {
+            return string.Equals(callbackState.CallbackId, State.ProvisioningRetryCallbackId, StringComparison.Ordinal)
+                   && callbackState.Generation == State.ProvisioningRetryCallbackGeneration;
+        }
+
+        return evt.CallbackGeneration <= 0 || evt.CallbackGeneration == State.ProvisioningRetryCallbackGeneration;
+    }
+
+    private bool StateMatchesProvisioningIntent(EnsureAevatarOAuthClientProvisionedCommand cmd) =>
+        !string.IsNullOrEmpty(State.ClientId)
+        && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
+        && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+        && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
+        && State.HmacKey.Length > 0;
+
+    private async Task ScheduleProvisioningRetryAsync(
+        EnsureAevatarOAuthClientProvisionedCommand cmd,
+        Exception error)
+    {
+        var normalized = NormalizeEnsureProvisionedCommand(cmd);
+        if (normalized is null)
+        {
+            Logger.LogWarning(
+                error,
+                "Aevatar OAuth client provisioning failed but retry was not scheduled because command fields are invalid");
+            return;
+        }
+
+        var nextAttempt = State.ProvisioningRetryAttempt > 0 ? State.ProvisioningRetryAttempt + 1 : 1;
+        var delay = ComputeRetryDelay(nextAttempt);
+        var due = DateTimeOffset.UtcNow.Add(delay);
+        var callbackId = BuildProvisioningRetryCallbackId();
+        var callbackPayload = new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = nextAttempt,
+            DueUnixMs = due.ToUnixTimeMilliseconds(),
+            NyxidAuthority = normalized.NyxidAuthority,
+            RedirectUri = normalized.RedirectUri,
+            ClientName = normalized.ClientName,
+            CallbackId = callbackId,
+            FiredAtUnixMs = due.ToUnixTimeMilliseconds(),
+        };
+        var lease = await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                delay,
+                callbackPayload,
+                ct: CancellationToken.None)
+            .ConfigureAwait(false);
+
+        await PersistDomainEventAsync(new AevatarOAuthClientProvisioningRetryScheduledEvent
+        {
+            Attempt = nextAttempt,
+            DueUnixMs = due.ToUnixTimeMilliseconds(),
+            NyxidAuthority = normalized.NyxidAuthority,
+            RedirectUri = normalized.RedirectUri,
+            ClientName = normalized.ClientName,
+            CallbackId = lease.CallbackId,
+            CallbackGeneration = lease.Generation,
+            LastError = error.Message,
+            ScheduledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }).ConfigureAwait(false);
+
+        Logger.LogWarning(
+            error,
+            "Aevatar OAuth client provisioning failed; actor-owned retry scheduled in {DelaySeconds}s (attempt={Attempt}, callback_generation={Generation}).",
+            (int)delay.TotalSeconds,
+            nextAttempt,
+            lease.Generation);
+    }
+
+    private async Task ClearProvisioningRetryAsync(string reason)
+    {
+        if (State.ProvisioningRetryAttempt <= 0)
+            return;
+
+        await PersistDomainEventAsync(new AevatarOAuthClientProvisioningRetryClearedEvent
+        {
+            Reason = reason,
+            ClearedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }).ConfigureAwait(false);
+    }
+
+    private async Task PersistDriftReconciledEventsAsync(
+        bool redirectUriDrifted,
+        bool oauthScopeDrifted,
+        string previousRedirectUri,
+        string previousOauthScope)
+    {
+        var events = new List<IMessage>(capacity: 2);
+        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        if (redirectUriDrifted)
+        {
+            events.Add(new AevatarOAuthClientDriftReconciledEvent
+            {
+                DriftKind = "redirect_uri",
+                PreviousValue = previousRedirectUri ?? string.Empty,
+                ExpectedValue = State.RedirectUri,
+                ActiveClientId = State.ClientId,
+                ReconciledAt = now,
+            });
+        }
+        if (oauthScopeDrifted)
+        {
+            events.Add(new AevatarOAuthClientDriftReconciledEvent
+            {
+                DriftKind = "oauth_scope",
+                PreviousValue = previousOauthScope ?? string.Empty,
+                ExpectedValue = State.OauthScope,
+                ActiveClientId = State.ClientId,
+                ReconciledAt = now,
+            });
+        }
+
+        if (events.Count > 0)
+            await PersistDomainEventsAsync(events).ConfigureAwait(false);
+    }
+
+    private static EnsureAevatarOAuthClientProvisionedCommand? NormalizeEnsureProvisionedCommand(
+        EnsureAevatarOAuthClientProvisionedCommand cmd)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.NyxidAuthority) || string.IsNullOrWhiteSpace(cmd.RedirectUri))
+            return null;
+
+        return new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = cmd.NyxidAuthority.Trim(),
+            RedirectUri = cmd.RedirectUri.Trim(),
+            ClientName = string.IsNullOrWhiteSpace(cmd.ClientName) ? "aevatar" : cmd.ClientName.Trim(),
+        };
+    }
+
+    private static TimeSpan ComputeRetryDelay(int attempt)
+    {
+        var exponent = Math.Max(0, Math.Min(attempt - 1, 20));
+        var ticks = InitialRetryDelay.Ticks;
+        for (var i = 0; i < exponent && ticks < MaxRetryDelay.Ticks; i++)
+            ticks = Math.Min(ticks * 2, MaxRetryDelay.Ticks);
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    private static string BuildProvisioningRetryCallbackId() =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(ProvisioningRetryCallbackPrefix, WellKnownId);
 
     private Task<bool> AbsorbPeerDcrProvisioningAsync(
         EnsureAevatarOAuthClientProvisionedCommand cmd,
@@ -249,7 +479,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         }
 
         Logger.LogError(
-            "Aevatar OAuth client OCC race did not converge on the desired shape after replay; rethrowing so the bootstrap retry path can re-evaluate. "
+            "Aevatar OAuth client OCC race did not converge on the desired shape after replay; actor-owned retry will re-evaluate. "
             + "stored_client_id={StoredClientId}, stored_redirect_uri={StoredRedirect}, expected_redirect_uri={ExpectedRedirect}, "
             + "orphan_client_id={OrphanClientId}, expected_version={Expected}, actual_version={Actual}.",
             State.ClientId,
@@ -275,7 +505,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         }
 
         Logger.LogError(
-            "Aevatar OAuth client HMAC-seed OCC fired but the post-replay state has no HMAC key; rethrowing so the bootstrap retry path can complete the seed. "
+            "Aevatar OAuth client HMAC-seed OCC fired but the post-replay state has no HMAC key; actor-owned retry will complete the seed. "
             + "active_client_id={ClientId}, expected_version={Expected}, actual_version={Actual}.",
             State.ClientId,
             occ.ExpectedVersion,
@@ -432,6 +662,20 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         return $"v{now.ToUnixTimeSeconds()}";
     }
 
+    private Task EnsureCommittedStateActivatedAsync()
+    {
+        var activation = Services.GetService(typeof(IChannelIdentityCommittedStateActivationService))
+            as IChannelIdentityCommittedStateActivationService;
+        if (activation == null || string.IsNullOrWhiteSpace(Id) || EventSourcing == null)
+            return Task.CompletedTask;
+
+        return activation.EnsureAevatarOAuthClientCommittedStateActivatedAsync(
+            Id,
+            State.Clone(),
+            EventSourcing.CurrentVersion,
+            CancellationToken.None);
+    }
+
     // ─── State transitions ───
 
     private static AevatarOAuthClientState ApplyProvisioned(
@@ -472,6 +716,39 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var next = current.Clone();
         next.BrokerCapabilityObserved = true;
         next.BrokerCapabilityObservedAtUnix = evt.ObservedAtUnix;
+        return next;
+    }
+
+    private static AevatarOAuthClientState ApplyProvisioningRetryScheduled(
+        AevatarOAuthClientState current,
+        AevatarOAuthClientProvisioningRetryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        next.ProvisioningRetryAttempt = evt.Attempt;
+        next.ProvisioningRetryDueUnixMs = evt.DueUnixMs;
+        next.ProvisioningRetryAuthority = evt.NyxidAuthority ?? string.Empty;
+        next.ProvisioningRetryRedirectUri = evt.RedirectUri ?? string.Empty;
+        next.ProvisioningRetryClientName = evt.ClientName ?? string.Empty;
+        next.ProvisioningRetryCallbackId = evt.CallbackId ?? string.Empty;
+        next.ProvisioningRetryCallbackGeneration = evt.CallbackGeneration;
+        next.ProvisioningRetryLastError = evt.LastError ?? string.Empty;
+        return next;
+    }
+
+    private static AevatarOAuthClientState ApplyProvisioningRetryCleared(
+        AevatarOAuthClientState current,
+        AevatarOAuthClientProvisioningRetryClearedEvent evt)
+    {
+        _ = evt;
+        var next = current.Clone();
+        next.ProvisioningRetryAttempt = 0;
+        next.ProvisioningRetryDueUnixMs = 0;
+        next.ProvisioningRetryAuthority = string.Empty;
+        next.ProvisioningRetryRedirectUri = string.Empty;
+        next.ProvisioningRetryClientName = string.Empty;
+        next.ProvisioningRetryCallbackId = string.Empty;
+        next.ProvisioningRetryCallbackGeneration = 0;
+        next.ProvisioningRetryLastError = string.Empty;
         return next;
     }
 }

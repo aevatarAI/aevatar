@@ -36,6 +36,15 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
 
     public ILogger Logger => _inner.Logger;
 
+    // Refactor (iter89/cluster-089-workflow-module-clock-state):
+    //   Old: Workflow modules used process wall clock/Stopwatch directly.
+    //   New: Modules consume the workflow execution context clock so tests
+    //        and runtimes can inject business time and monotonic duration.
+    public DateTimeOffset UtcNow => Clock.GetUtcNow();
+
+    private TimeProvider Clock =>
+        _inner.Services.GetService(typeof(TimeProvider)) as TimeProvider ?? TimeProvider.System;
+
     public static WorkflowExecutionContextAdapter Create(
         IEventHandlerContext context,
         IWorkflowExecutionStateHost stateHost)
@@ -44,6 +53,11 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
         ArgumentNullException.ThrowIfNull(stateHost);
         return new WorkflowExecutionContextAdapter(context, stateHost);
     }
+
+    public long GetTimestamp() => Clock.GetTimestamp();
+
+    public TimeSpan GetElapsedTime(long startingTimestamp) =>
+        Clock.GetElapsedTime(startingTimestamp);
 
     public TState LoadState<TState>(string scopeKey)
         where TState : class, IMessage<TState>, new()

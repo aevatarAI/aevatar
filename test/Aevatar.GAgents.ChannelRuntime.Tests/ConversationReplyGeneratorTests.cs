@@ -14,6 +14,29 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ConversationReplyGeneratorTests
 {
+    private static LLMControlContext Control(
+        string? model = null,
+        string? route = null,
+        int? rounds = null,
+        string? token = null,
+        string? senderToken = null) =>
+        new(
+            NyxIdAccessToken: token,
+            NyxIdOrgToken: token,
+            SenderNyxIdAccessToken: senderToken,
+            ModelOverride: model,
+            NyxIdRoutePreference: route,
+            MaxToolRoundsOverride: rounds,
+            UserMemoryPrompt: null);
+
+    private static AgentToolExecutionContext? ToolContext(string? senderBindingId) =>
+        string.IsNullOrWhiteSpace(senderBindingId)
+            ? null
+            : AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext(senderBindingId),
+            };
+
     [Fact]
     public async Task GenerateReplyAsync_UsesConfiguredRelayCallbackUrlInSystemPrompt()
     {
@@ -48,6 +71,8 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().Contain("chrono-ai-daily");
+        systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
+        systemPrompt.Should().Contain("ornn_search_skills");
     }
 
     [Fact]
@@ -198,42 +223,40 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithSkillRegistryButNoRemoteFetcher_LogsWarningOnlyOnceAcrossTurns()
+    public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
-        var skillRegistry = new SkillRegistry();
-        skillRegistry.Register(new SkillDefinition
+        var localSkillCatalog = new LocalSkillCatalog();
+        localSkillCatalog.Register(new SkillDefinition
         {
-            Name = "remote-skill",
-            Description = "Remote skill",
-            Instructions = "Does remote work",
-            Source = SkillSource.Remote,
-            RemoteId = "remote-skill-id",
+            Name = "local-skill",
+            Description = "Local skill",
+            Instructions = "Does local work",
+            Source = SkillSource.Local,
         });
+        var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
-            new RecordingProviderFactory(),
-            skillRegistry: skillRegistry,
+            providerFactory,
+            localSkillCatalog: localSkillCatalog,
             remoteSkillFetcher: null,
             logger: logger);
 
-        for (var i = 0; i < 2; i++)
-        {
-            var reply = await generator.GenerateReplyAsync(
-                new ChatActivity
-                {
-                    Id = $"msg-warning-{i}",
-                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-warning-{i}" },
-                    Content = new MessageContent { Text = "hello" },
-                },
-                new Dictionary<string, string>(),
-                streamingSink: null,
-                CancellationToken.None);
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-local-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-local-skill" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
 
-            reply.Text.Should().Be("ok");
-        }
-
-        logger.WarningMessages.Should().ContainSingle(message =>
-            message.Contains("SkillRegistry is registered without IRemoteSkillFetcher", StringComparison.Ordinal));
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("local-skill");
+        logger.WarningMessages.Should().BeEmpty();
     }
 
     [Fact]
@@ -267,6 +290,41 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithToolCallPreamble_DoesNotStreamProcessNarration()
+    {
+        var providerFactory = new ToolCallingPreambleProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-tool-preamble",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-preamble" },
+                Content = new MessageContent { Text = "/daily eanzhao" },
+            },
+            new Dictionary<string, string>(),
+            sink,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("最终日报");
+        sink.Emissions.Should().Equal("…", "最终日报");
+        sink.Emissions.Should().NotContain(text => text.Contains("开始执行", StringComparison.Ordinal));
+        sink.Emissions.Should().NotContain(text => text.Contains("先查目录", StringComparison.Ordinal));
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[1].Messages.Any(message =>
+            message.Role == "assistant" &&
+            message.Content == "开始执行 chrono-ai-daily，先查目录结构。" &&
+            message.ToolCalls is { Count: 1 }).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
@@ -293,15 +351,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                // Owner prefs pre-pinned upstream (mirrors what
-                // OwnerLlmConfigApplier writes from the registration scope).
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 9),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -334,12 +386,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-only-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
             streamingSink: null,
             CancellationToken.None);
 
@@ -371,13 +420,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-fallback-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-fallback-model", "owner-route", 5),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -416,16 +461,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
-                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-                [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token", "sender-token"),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -439,7 +477,7 @@ public sealed class ConversationReplyGeneratorTests
         senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
         senderMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("sender-token");
         senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
-        senderMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        senderMetadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken].Should().Be("sender-token");
 
         var ownerRequest = providerFactory.Requests[1];
         ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -476,15 +514,9 @@ public sealed class ConversationReplyGeneratorTests
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
                 Content = new MessageContent { Text = "hello" },
             },
-            new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
-                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
-                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
-                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
-            },
+            new Dictionary<string, string>(),
+            Control("owner-model", "/api/v1/proxy/s/owner", 5, "owner-token"),
+            ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
 
@@ -554,18 +586,16 @@ public sealed class ConversationReplyGeneratorTests
         }
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (bindingState != MatrixUnbound)
-            metadata[LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender";
+        var toolContext = bindingState == MatrixUnbound ? null : ToolContext("bnd_sender");
 
+        LLMControlContext? control = null;
         switch (ownerState)
         {
             case MatrixOwnerPartial:
-                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                control = Control(model: "owner-model");
                 break;
             case MatrixOwnerFull:
-                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner";
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9";
+                control = Control("owner-model", "/api/v1/proxy/s/owner", 9);
                 break;
         }
 
@@ -578,6 +608,8 @@ public sealed class ConversationReplyGeneratorTests
                 Content = new MessageContent { Text = "hello" },
             },
             metadata,
+            control,
+            toolContext,
             streamingSink: null,
             CancellationToken.None);
 
@@ -591,7 +623,7 @@ public sealed class ConversationReplyGeneratorTests
 
         if (bindingState == MatrixUnbound)
             prefsStore.Lookups.Should().BeEmpty(
-                "no binding-id in metadata → generator must not consult the prefs store");
+                "no typed sender binding → generator must not consult the prefs store");
         else
             prefsStore.Lookups.Should().ContainSingle().Which.Should().Be("bnd_sender");
     }
@@ -726,6 +758,46 @@ public sealed class ConversationReplyGeneratorTests
                 yield break;
             }
 
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-calling-preamble";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (request.Messages.Any(static message => message.Role == "tool"))
+            {
+                yield return new LLMStreamChunk { DeltaContent = "最终日报" };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "开始执行 chrono-ai-daily，先查目录结构。" };
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall

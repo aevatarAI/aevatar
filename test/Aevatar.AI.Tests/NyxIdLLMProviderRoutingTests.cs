@@ -24,7 +24,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(LLMRequestMetadataKeys.NyxIdRoutePreference, "gateway"));
+            CreateRequest(routePreference: "gateway"));
 
         route.RouteName.Should().Be("nyxid");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
@@ -36,7 +36,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(LLMRequestMetadataKeys.NyxIdRoutePreference, "auto"));
+            CreateRequest(routePreference: "auto"));
 
         route.RouteName.Should().Be("nyxid");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
@@ -48,7 +48,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(LLMRequestMetadataKeys.NyxIdRoutePreference, "chrono-llm"));
+            CreateRequest(routePreference: "chrono-llm"));
 
         route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
@@ -73,10 +73,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = null,
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            },
+            LlmControl = CreateControl(),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -124,10 +121,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            ToolContext = AgentToolExecutionContext.Empty with
-            {
-                Credentials = new AgentToolCredentials("tool-context-bearer", null, null),
-            },
+            LlmControl = CreateControl(accessToken: "tool-context-bearer"),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -147,10 +141,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-bearer",
-            },
+            LlmControl = CreateControl(accessToken: "metadata-bearer"),
             CallerContext = new LLMRequestCallerContext(
                 "scope-1",
                 "owner-1",
@@ -213,11 +204,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-                [LLMRequestMetadataKeys.ModelOverride] = "gpt-4-turbo",
-            },
+            LlmControl = CreateControl(modelOverride: "gpt-4-turbo"),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -234,10 +221,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            },
+            LlmControl = CreateControl(),
             RoutingContext = new LLMRequestRoutingContext(
                 ModelOverride: "gpt-4-turbo",
                 NyxIdRoutePreference: null,
@@ -259,10 +243,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            },
+            LlmControl = CreateControl(),
             RoutingContext = new LLMRequestRoutingContext(
                 ModelOverride: null,
                 NyxIdRoutePreference: "chrono-llm",
@@ -292,10 +273,7 @@ public sealed class NyxIdLLMProviderRoutingTests
             Messages = [ChatMessage.User("hi")],
             Model = model,
             Temperature = 0,
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            },
+            LlmControl = CreateControl(),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -315,10 +293,7 @@ public sealed class NyxIdLLMProviderRoutingTests
             Messages = [ChatMessage.User("hi")],
             Model = model,
             Temperature = 0.2,
-            Metadata = new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-            },
+            LlmControl = CreateControl(),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -332,7 +307,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(LLMRequestMetadataKeys.NyxIdRoutePreference, "https://evil.com"));
+            CreateRequest(routePreference: "https://evil.com"));
 
         route.RouteName.Should().Be("nyxid");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
@@ -344,7 +319,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
-            CreateRequest(LLMRequestMetadataKeys.NyxIdRoutePreference, "/custom/path"));
+            CreateRequest(routePreference: "/custom/path"));
 
         route.RouteName.Should().Be("/custom/path");
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/custom/path"));
@@ -357,21 +332,24 @@ public sealed class NyxIdLLMProviderRoutingTests
             nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
             accessTokenAccessor: static () => null);
 
-    private static LLMRequest CreateRequest(string? metadataKey = null, string? metadataValue = null)
-    {
-        var metadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
-        };
-
-        if (!string.IsNullOrWhiteSpace(metadataKey) && metadataValue != null)
-            metadata[metadataKey] = metadataValue;
-
-        return new LLMRequest
+    private static LLMRequest CreateRequest(string? routePreference = null) =>
+        new()
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            Metadata = metadata,
+            LlmControl = CreateControl(routePreference: routePreference),
         };
-    }
+
+    private static LLMControlContext CreateControl(
+        string accessToken = "test-token",
+        string? modelOverride = null,
+        string? routePreference = null) =>
+        new(
+            NyxIdAccessToken: accessToken,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: modelOverride,
+            NyxIdRoutePreference: routePreference,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
 }

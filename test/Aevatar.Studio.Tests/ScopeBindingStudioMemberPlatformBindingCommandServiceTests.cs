@@ -760,7 +760,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         public TaskCompletionSource<object?> DispatchAttempted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             DispatchAttempts++;
             DispatchAttempted.TrySetResult(null);
@@ -770,7 +770,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             var dispatch = new DispatchedCommand(actorId, envelope);
             Dispatches.Add(dispatch);
             NextDispatch.TrySetResult(dispatch);
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public async Task<TPayload> WaitForPayloadAsync<TPayload>()

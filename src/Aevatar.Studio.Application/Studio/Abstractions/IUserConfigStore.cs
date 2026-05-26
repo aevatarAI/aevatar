@@ -30,6 +30,41 @@ public static class UserConfigLlmRoute
     }
 }
 
+public readonly record struct UserConfigLlmModelRoute(string RouteSlug, string Model);
+
+public static class UserConfigLlmModel
+{
+    public static UserConfigLlmModelRoute? TryParseRouteModel(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var slashIndex = trimmed.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= trimmed.Length - 1)
+            return null;
+
+        var prefix = trimmed[..slashIndex];
+        if (!LooksLikeSlug(prefix))
+            return null;
+
+        return new UserConfigLlmModelRoute(prefix, trimmed[(slashIndex + 1)..]);
+    }
+
+    private static bool LooksLikeSlug(string value)
+    {
+        if (value.Length is < 2 or > 64) return false;
+        if (!char.IsAsciiLetterLower(value[0])) return false;
+        foreach (var c in value)
+        {
+            if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-'))
+                return false;
+        }
+
+        return true;
+    }
+}
+
 public static class UserConfigRuntimeDefaults
 {
     public const string LocalMode = "local";

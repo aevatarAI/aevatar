@@ -55,6 +55,8 @@ public sealed record WorkflowHumanInputRequestEventData
     public string? VariableName { get; init; }
     public string? Content { get; init; }
     public string? DeliveryTargetId { get; init; }
+    public bool? Secure { get; init; }
+    public string? RedactedOutput { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 
@@ -164,6 +166,34 @@ public static class WorkflowCustomEventParser
             return false;
         }
 
+        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
+        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        var rawMetadata = TryReadStringMap(obj, "metadata", "Metadata");
+        var metadata = FilterReservedHumanInputMetadata(rawMetadata);
+        var variableName = WorkflowSdkJson.TryReadString(obj, "variableName", "VariableName");
+        var secure = TryReadBoolean(obj, "secure", "Secure");
+        var redactedOutput = WorkflowSdkJson.TryReadString(obj, "redactedOutput", "RedactedOutput");
+
+        if (string.IsNullOrWhiteSpace(variableName) &&
+            rawMetadata?.TryGetValue("variable", out var legacyVariableName) == true)
+        {
+            variableName = legacyVariableName;
+        }
+
+        if (!secure.HasValue &&
+            rawMetadata?.TryGetValue("secure", out var legacySecure) == true &&
+            bool.TryParse(legacySecure, out var parsedSecure))
+        {
+            secure = parsedSecure;
+        }
+
+        if (string.IsNullOrWhiteSpace(redactedOutput) &&
+            rawMetadata?.TryGetValue("redacted_output", out var legacyRedactedOutput) == true)
+        {
+            redactedOutput = legacyRedactedOutput;
+        }
+
         data = new WorkflowHumanInputRequestEventData
         {
             RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
@@ -171,12 +201,31 @@ public static class WorkflowCustomEventParser
             SuspensionType = WorkflowSdkJson.TryReadString(obj, "suspensionType", "SuspensionType"),
             Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
             TimeoutSeconds = TryReadInt(obj, "timeoutSeconds", "TimeoutSeconds"),
-            VariableName = WorkflowSdkJson.TryReadString(obj, "variableName", "VariableName"),
+            VariableName = variableName,
             Content = WorkflowSdkJson.TryReadString(obj, "content", "Content"),
             DeliveryTargetId = WorkflowSdkJson.TryReadString(obj, "deliveryTargetId", "DeliveryTargetId"),
-            Metadata = TryReadStringMap(obj, "metadata", "Metadata"),
+            Secure = secure,
+            RedactedOutput = redactedOutput,
+            Metadata = metadata,
         };
         return true;
+    }
+
+    private static Dictionary<string, string>? FilterReservedHumanInputMetadata(IDictionary<string, string>? metadata)
+    {
+        if (metadata == null)
+            return null;
+
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            if (key is "variable" or "secure" or "input_mode" or "redacted_output")
+                continue;
+
+            filtered[key] = value;
+        }
+
+        return filtered;
     }
 
     public static bool TryParseWaitingSignal(WorkflowOutputFrame frame, out WorkflowWaitingSignalEventData data) =>

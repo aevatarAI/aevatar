@@ -205,9 +205,10 @@ internal sealed class GAgentApprovalObservationLifecycle
         CommandDispatchExecution<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: approval binder attached terminal/live projections during command preparation.
-        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
+        // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+        //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+        //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+        //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -218,26 +219,27 @@ internal sealed class GAgentApprovalObservationLifecycle
 
         try
         {
-            terminalProjectionLease = await _terminalProjectionPort.EnsureProjectionAsync(
+            terminalProjectionLease = await _terminalProjectionPort.AttachExistingProjectionAsync(
                 target.ActorId,
                 context.CorrelationId,
                 GAgentRunTerminalInteractionKind.Approval,
                 ct);
+            if (terminalProjectionLease == null)
+                return await FailProjectionUnavailableAsync(sink);
+
             target.BindTerminalProjection(terminalProjectionLease);
 
-            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.ActorId,
-                    context.CorrelationId,
-                    token),
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CorrelationId,
                 sink,
                 ct);
 
             if (attachment == null)
             {
-                sink.Complete();
-                await sink.DisposeAsync();
-                throw new InvalidOperationException("GAgent approval projection pipeline is unavailable.");
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+                return await FailProjectionUnavailableAsync(sink);
             }
 
             target.BindLiveObservation(
@@ -259,6 +261,15 @@ internal sealed class GAgentApprovalObservationLifecycle
             await sink.DisposeAsync();
             throw;
         }
+    }
+
+    private static async Task<CommandObservationBindingResult<GAgentApprovalStartError>> FailProjectionUnavailableAsync(
+        IEventSink<AGUIEvent> sink)
+    {
+        sink.Complete();
+        await sink.DisposeAsync();
+        return CommandObservationBindingResult<GAgentApprovalStartError>.Failure(
+            GAgentApprovalStartError.ProjectionUnavailable);
     }
 }
 

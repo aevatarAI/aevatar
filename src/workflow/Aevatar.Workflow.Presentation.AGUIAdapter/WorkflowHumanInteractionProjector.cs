@@ -35,9 +35,10 @@ public sealed class WorkflowHumanInteractionProjector
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 
-        var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in evt.Metadata)
-            annotations[key] = value;
+        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
+        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        var annotations = BuildAnnotations(evt);
 
         var request = new HumanInteractionRequest
         {
@@ -66,4 +67,21 @@ public sealed class WorkflowHumanInteractionProjector
             "secure_input" => ["submit"],
             _ => Array.Empty<string>(),
         };
+
+    private static Dictionary<string, string> BuildAnnotations(WorkflowSuspendedEvent evt)
+    {
+        var annotations = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveVariableName(evt.VariableName, evt.Metadata);
+        var secure = WorkflowSuspendedSecureInputMetadata.ResolveSecure(evt.Secure, evt.Metadata);
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveRedactedOutput(evt.RedactedOutput, evt.Metadata);
+
+        if (!string.IsNullOrWhiteSpace(variableName))
+            annotations["variable"] = variableName;
+        if (secure)
+            annotations["secure"] = "true";
+        if (!string.IsNullOrWhiteSpace(redactedOutput))
+            annotations["redacted_output"] = redactedOutput;
+
+        return annotations;
+    }
 }

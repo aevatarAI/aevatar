@@ -1,8 +1,10 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Microsoft.Extensions.Configuration;
@@ -34,7 +36,9 @@ public static class StatusDashboardServiceCollectionExtensions
         // Default executors — additional executors / freshness sources can be
         // registered with TryAddEnumerable by other modules without touching
         // this extension.
+        services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient();
+        services.TryAddSingleton<StatusProbeAuthorizationResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, ReadmodelFreshnessProbeExecutor>());
         services.TryAddSingleton<IHealthProbeExecutorRegistry, HealthProbeExecutorRegistry>();
@@ -56,7 +60,13 @@ public static class StatusDashboardServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>,
             HealthProbeTargetDocumentMetadataProvider>();
         services.TryAddSingleton<IHealthStatusQueryPort, HealthStatusQueryPort>();
-        services.TryAddSingleton<HealthProbeProjectionPort>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            HealthProbeCommittedStateProjectionActivationPlanProvider>());
         services.AddHostedService<HealthProbeStartupService>();
 
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(

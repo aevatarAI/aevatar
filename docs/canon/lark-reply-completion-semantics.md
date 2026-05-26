@@ -6,7 +6,7 @@ owner: eanzhao
 
 # Lark Reply Chain Completion Semantics
 
-ADR-0021 决策的工程参考。本文档面向实现者，给出每个阶段的可观察 state、事件时序、故障矩阵、状态机图与实现 checklist。决策依据见 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)。
+ADR-0021 决策的工程参考。本文档面向实现者，给出每个阶段的可观察 state、事件时序、故障矩阵、状态机图与实现 checklist。基础决策见 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)；dispatcher plain `Task` handoff 修订见 [`docs/adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md`](../adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)。
 
 ## 1. 链路与四阶段定位
 
@@ -51,8 +51,8 @@ sequenceDiagram
     U->>CGA: inbound message
     CGA->>CGA: raise NeedsLlmReplyEvent<br/>(accepted)
     CGA->>D: DispatchAsync(evt)
-    D-->>CGA: DispatchOutcome{Phase=Accepted}
-    D->>ARG: AgentRunStartRequested (via inbox stream)
+    D-->>CGA: normal return (accepted for dispatch)
+    D->>ARG: AgentRunStartRequested (via IActorDispatchPort)
     ARG->>CR: ChatStreamAsync(...)
     loop streaming chunks
         CR-->>ARG: LLMStreamChunk(delta)
@@ -126,7 +126,8 @@ sequenceDiagram
 
 | 故障发生时所处阶段 | 故障类型 | 终态 status | last_reply_delivery | 上抛事件 | 责任 actor |
 |---|---|---|---|---|---|
-| accepted | dispatcher 拒绝（stale / dup） | — (Conv not advanced) | — | `DispatchOutcome.Phase = Rejected*` | dispatcher |
+| accepted → committed | duplicate run start | 不变（terminal duplicate no-op / retry path keeps `REPLY_PRODUCED`） | 不变 | log only or persisted retry handoff | AgentRunGAgent |
+| accepted → committed | stale run age > MaxRunRequestAgeMs | `AgentRunStatus.DROPPED` | `null` | `AgentRunDroppedEvent` + `DeferredLlmReplyDroppedEvent` | AgentRunGAgent |
 | accepted → committed | LLM provider error | `AgentRunStatus.FAILED` | `null` | `AgentRunFailedEvent` + `ConversationContinueFailedEvent` | AgentRunGAgent |
 | accepted → committed | run age > MaxRunRequestAgeMs | `AgentRunStatus.DROPPED` | `null` | `AgentRunDroppedEvent` + `DeferredLlmReplyDroppedEvent` | AgentRunGAgent |
 | accepted → committed | missing relay reply_token | `AgentRunStatus.DROPPED` | `null` | `AgentRunDroppedEvent` | AgentRunGAgent |
@@ -210,7 +211,6 @@ internal static bool IsTerminal(AgentRunState s) =>
 5. `ReDispatchProducedReplyAsync`：终态 → 取消未来 retry，return
 
 **Stale signal 判定**：
-- 通过 `commandId` 不一致 → 视为 stale
 - 通过 `runId` 不一致 → 视为 stale
 - 通过 `nowMs - request.RequestedAtUnixMs > MaxRunRequestAgeMs` → 视为 stale，但仅在 STARTED 入口检查
 
@@ -224,8 +224,8 @@ internal static bool IsTerminal(AgentRunState s) =>
 - [ ] `agents/Aevatar.GAgents.NyxidChat/Protos/agent_run.proto`：扩 `AgentRunStatus` 加 `REPLY_HANDED_OFF`；`reply_dispatched` 标 `reserved`；加 `cleanup_completed_at`、`reply_produced_at_unix_ms`
 - [ ] `agents/Aevatar.GAgents.Channel.Runtime/Protos/conversation_state.proto`：新增 `ReplyDeliveryStatus` 消息 + `ConversationState.last_reply_delivery` 字段
 - [ ] 新增 domain event：`LlmReplyDeliveredEvent` / `LlmReplyDeliveryFailedEvent`（在 `Aevatar.GAgents.Channel.Runtime`）
-- [ ] `IChannelLlmReplyRunDispatcher.DispatchAsync` 改 `Task<DispatchOutcome>`；新增 `DispatchOutcome` / `DispatchPhase`
-- [ ] `AgentRunDispatcher` 实现按新签名返回 `Accepted{commandId, runActorId, acceptedAtMs}` / `RejectedStale` / `RejectedDuplicate`
+- [x] `IChannelLlmReplyRunDispatcher.DispatchAsync` 返回 plain `Task`；删除 `DispatchOutcome` / `DispatchPhase`
+- [x] `AgentRunDispatcher` 仅创建 run actor 并通过 `IActorDispatchPort.DispatchAsync` handoff；不做 dispatcher-local stale / duplicate admission
 - [ ] `AgentRunGAgent`：
   - [ ] 新增 `IsTerminal()` helper
   - [ ] 替换 cs:114-124 隐式终态判定
@@ -240,7 +240,8 @@ internal static bool IsTerminal(AgentRunState s) =>
   - [ ] 实现 Usage 重排（early-usage buffer + merge to last chunk）
   - [ ] 保证 stream-local 唯一 `IsLast = true` chunk
 - [ ] 测试：
-  - [ ] `DispatchOutcome` 三态各 1 测试
+  - [x] dispatcher handoff 测试：typed `run_id` 派生 actor id / envelope id / dedup operation id
+  - [x] duplicate / stale admission 测试落在 `AgentRunGAgent`
   - [ ] AgentRunGAgent terminal short-circuit 五类 late signal 各 1 测试
   - [ ] `ConversationGAgent` 失败 delivery 路径测试（lark 4xx / 5xx）
   - [ ] `ChatRuntime` Usage 重排测试（provider 中段发 Usage）
@@ -250,7 +251,7 @@ internal static bool IsTerminal(AgentRunState s) =>
 
 下列模式视为契约违反，应在 review 时拒收：
 
-- 调用方依赖 `DispatchAsync` 返回 `Task`（无 `DispatchOutcome`）做后续推进决定
+- 调用方依赖 `DispatchAsync` 正常返回推断 run admitted / committed / delivered
 - 任何 handler 内通过 `_pendingRuns.ContainsKey(runId)` 或类似进程内字典判断 stale
 - 在 `ConversationGAgent` 内直接调用 lark API 但不 raise delivery event
 - `AgentRunGAgent` 在 `Status == DROPPED` 后仍执行 `ScheduleTerminalCleanupAsync` 内部副作用
@@ -260,6 +261,7 @@ internal static bool IsTerminal(AgentRunState s) =>
 ## 12. 参考
 
 - ADR-0021 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)
+- ADR-0027 [`docs/adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md`](../adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)
 - Issue #647 / #648 / #649
 - 关联 ADR-0009 channel-bot-callback-architecture（callback 流上下游）
 - 关联 ADR-0014 interactive-reply-abstraction

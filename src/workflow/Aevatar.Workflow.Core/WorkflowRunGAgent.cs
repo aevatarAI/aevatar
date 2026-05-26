@@ -27,6 +27,9 @@ namespace Aevatar.Workflow.Core;
 //                bag for request metadata, LLM overrides, authorization, secure values
 //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
 //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+// Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
+//   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
+//   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -36,7 +39,6 @@ public sealed class WorkflowRunGAgent
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
     private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
-    private const string WorkflowScopeIdMetadataKey = "workflow.scope_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -151,6 +153,7 @@ public sealed class WorkflowRunGAgent
         RebuildCompiledWorkflowCache();
         InstallCognitiveModules();
         await base.OnActivateAsync(ct);
+        await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
     }
 
     public async Task BindWorkflowRunDefinitionAsync(
@@ -227,6 +230,9 @@ public sealed class WorkflowRunGAgent
         }
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(this, toolContext);
 
         await EnsureAgentTreeAsync();
 
@@ -239,7 +245,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
+            ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -544,19 +550,12 @@ public sealed class WorkflowRunGAgent
         if (_childAgentIds.Count > 0 || _compiledWorkflow == null)
             return;
 
-        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
-        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
-        {
-            throw new InvalidOperationException(
-                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-        }
-
         foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
             var roleId = role.Id;
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
-                        ?? await _runtime.CreateAsync(roleAgentType, childActorId);
+                        ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
             await _dispatchPort.DispatchAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
@@ -572,6 +571,24 @@ public sealed class WorkflowRunGAgent
         }
 
         Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
+    }
+
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    private async Task<IActor> CreateRoleActorAsync(RoleDefinition role, string childActorId)
+    {
+        if (!string.IsNullOrWhiteSpace(role.AgentKind))
+            return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
+
+        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
+        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
+        {
+            throw new InvalidOperationException(
+                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
+        }
+
+        return await _runtime.CreateAsync(roleAgentType, childActorId);
     }
 
     private string BuildChildActorId(string roleId)
@@ -671,6 +688,7 @@ public sealed class WorkflowRunGAgent
             .On<SubWorkflowDefinitionResolutionClearedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionCleared)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
+            .On<SubWorkflowInvocationHandoffAdvancedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationHandoffAdvanced)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
             .OrCurrent();
 
@@ -973,25 +991,11 @@ public sealed class WorkflowRunGAgent
 
     private static string ResolveScopeId(
         string? requestedScopeId,
-        Google.Protobuf.Collections.MapField<string, string>? metadata,
         string? fallbackScopeId)
     {
+        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         if (!string.IsNullOrWhiteSpace(requestedScopeId))
             return requestedScopeId.Trim();
-
-        if (metadata != null &&
-            metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
-            !string.IsNullOrWhiteSpace(workflowScopeId))
-        {
-            return workflowScopeId.Trim();
-        }
-
-        if (metadata != null &&
-            metadata.TryGetValue("scope_id", out var legacyScopeId) &&
-            !string.IsNullOrWhiteSpace(legacyScopeId))
-        {
-            return legacyScopeId.Trim();
-        }
 
         return fallbackScopeId?.Trim() ?? string.Empty;
     }

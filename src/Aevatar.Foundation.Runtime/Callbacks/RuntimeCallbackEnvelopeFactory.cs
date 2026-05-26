@@ -12,7 +12,8 @@ public static class RuntimeCallbackEnvelopeFactory
         string callbackId,
         long generation,
         long fireIndex,
-        EventEnvelope triggerEnvelope)
+        EventEnvelope triggerEnvelope,
+        int slotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(generation, 0);
@@ -35,6 +36,7 @@ public static class RuntimeCallbackEnvelopeFactory
         callback.Generation = generation;
         callback.FireIndex = fireIndex;
         callback.FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        callback.SlotEpoch = slotEpoch;
         return envelope;
     }
 
@@ -44,7 +46,8 @@ public static class RuntimeCallbackEnvelopeFactory
         long generation,
         long fireIndex,
         EventEnvelope triggerEnvelope,
-        RuntimeCallbackDeliveryMode deliveryMode)
+        RuntimeCallbackDeliveryMode deliveryMode,
+        int slotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         return deliveryMode switch
         {
@@ -53,7 +56,8 @@ public static class RuntimeCallbackEnvelopeFactory
                 callbackId,
                 generation,
                 fireIndex,
-                triggerEnvelope),
+                triggerEnvelope,
+                slotEpoch),
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery => CreateEnvelopeRedelivery(actorId, triggerEnvelope),
             _ => throw new ArgumentOutOfRangeException(nameof(deliveryMode), deliveryMode, "Unknown callback delivery mode."),
         };

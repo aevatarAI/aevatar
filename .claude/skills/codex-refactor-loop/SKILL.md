@@ -104,6 +104,25 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
 
+### Controller 严禁自升 escalate(强制 — 防偷懒标人)
+
+Per Auric 2026-05-22 "大量标记 auto-loop-stuck 的实际并不需要人介入":controller 严格按 judge marker + hardcoded trigger 判 escalate,**不允许**自己以"累了/round 多"等理由直接 label `🆘 human:卡死`。
+
+**判定铁律**:
+
+| Judge marker | Controller 动作 | 不允许 |
+|---|---|---|
+| `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
+| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `🆘 human` |
+| `escalate:philosophy:<reason>` | **必须先 reflector 评估**是否真命中 7 个 hardcoded trigger(top-level CLAUDE.md / new core abstraction / docs/canon / rule exception 扩大 / cross-cluster coupling / perf unverifiable / philosophy keyword);命中才 label 人,不命中走 reflector retry-fix | ❌ judge 一说 philosophy 就 label 人 |
+| `escalate:<其他>` | 派 reflector + PushNotification | ❌ 直接 label |
+| `consensus` | 派 implement | — |
+| 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
+
+**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `🆘 human:卡死` + ASCII A/B/C banner。
+
+事故记录:2026-05-22 我把 5 issue 全 label `🆘 human:卡死`,实际只有 #800(new-actor-topology)#801(top-level CLAUDE.md change)真命中 trigger。#779(judge 是 converge,我硬升 escalate)、#796(judge 是 stalled,应 reflector)、#797(judge philosophy 但实际是 organize existing patterns,reflector 应能解)三个标错。3/5 false-positive 率。
+
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
 任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash tools/refactor-loop/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
@@ -141,6 +160,24 @@ disown
 - ❌ wakeup ScheduleWakeup 但本 turn 0 codex spawn(等 wakeup 才动 = lazy / 死循环)
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
+
+### Auto-merge 后必须 close 关联 issue(强制,per Auric 2026-05-25 "为什么很多 issues 没及时关闭")
+
+**问题**:`gh pr merge` 不会自动 close `closes #N` 关联的 issue,因为 PR base = `auto-refact-dev` 非 default branch(`dev`/`master`)— GitHub auto-close 只在 PR base = default branch 时触发。
+
+**铁律**:每次 `gh pr merge` 成功后,controller **必须**手动 `gh issue close <linked-issue>` + label transition `🎉 phase:merged`,不依赖 GitHub auto-close。
+
+```bash
+# 标准 merge 流程(必须 chain issue close)
+gh pr merge $PR --squash --delete-branch
+ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
+if [ -n "$ISSUE" ]; then
+  gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
+  gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --add-label "🎉 phase:merged"
+fi
+```
+
+事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。每次 wakeup sweep 见 `🚀 phase:pr-open` label 但关联 PR 已 merged → 必须立即补 close。
 
 ### Controller helper 库:`tools/refactor-loop/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
 
@@ -186,6 +223,42 @@ rollup PR(#690-style):
   open → 🚀 phase:pr-open + 🤖 human:auto-推进     (passive integration)
   注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
 ```
+
+### ❌ 禁止嵌套 dispatcher pattern(强制,per 2026-05-25 9-codex 假装 spawn 事故)
+
+**反模式**:把多个 spawn 包在一个 Bash `run_in_background: true` 里:
+
+```bash
+# ❌ BAD — silent fail
+for role in architect tests quality; do
+  cat > prompt.md << EOF
+  ...
+EOF
+  spawn-codex.sh ... &  # 后台跑
+done
+wait                     # 等所有 spawn 完成
+```
+
+**为什么坏**:
+- `<<EOF` heredoc 在嵌套 `&` 子 shell 里写文件**可能丢**(zsh + bash interaction race)
+- spawn-codex.sh 通过 `&` 启动后,harness 看不到内层进程(只看到 wrapper Bash),task-notification 不会针对内层 codex fire
+- wrapper Bash 完成 → harness 报 "completed" → controller 以为 spawn 成功 → 实际 0 codex 真在跑 → concurrency floor 立刻失保
+
+**正确模式**:每个 codex spawn **独立** Bash tool call with `run_in_background: true`:
+
+```bash
+# Step 1: 用 Write tool 或 printf 写 prompt 文件(同步 Bash 不嵌套)
+printf '%s' '<prompt content>' > .refactor-loop/prompts/review-prN-role.md
+
+# Step 2: 每 spawn 独立 Bash tool call
+Bash(
+  command=".claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd ... --prompt ... --log ... --timeout 3600",
+  run_in_background=True
+)
+# 3 reviewers = 3 独立 Bash 调用
+```
+
+**事故记录(2026-05-25)**:9 个 r2 reviewer(#995/#996/#997 各 3)用嵌套 dispatcher → controller 以为已派 → 实际 spawn-codex.sh 全 exit 2(因 prompt file 不存在) → 9 codex 全失败 → floor=0。controller 当 turn 内必须发现 + 单独重派。
 
 ### Spawn pattern — Bash `run_in_background: true`(强制,per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到")
 
@@ -487,7 +560,7 @@ Create top-level TaskCreate items: audit / dispatch / merge.
      --timeout 3600
    ```
 
-   Use Bash with `run_in_background: true`. 3600s (60 min) is the project-wide minimum for codex jobs (see CLAUDE.md "Codex CLI 调用规范"); audit may legitimately need most of it to complete the coverage manifest.
+   Use Bash with `run_in_background: true`. 3600s (60 min) is the project-wide minimum for codex jobs (see this skill's spawn wrapper rules); audit may legitimately need most of it to complete the coverage manifest.
 
 4. Schedule wakeup 1500–1800s as safety net (task notification is primary wake).
 5. **End turn.**
@@ -949,6 +1022,62 @@ In `state.json`:
 ## Phase 7 — Design-issue watch (sweep on every wakeup)
 
 Runs **after Phase 6 sync** and **before** any new Phase 2 / 3 / 4 / 5 cluster work on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
+
+### 外部 issue 接入(强制,per Auric 2026-05-23 "外部 issues,非系统主动提的,能否接入流程")
+
+**问题**:audit codex 自动产生的 design issue 走完 Phase 9 链路;但 maintainer 或其他人手动开的 issue(无 `auto-loop` label)不接入,controller 看不见。
+
+**两条 onboarding path**:
+
+#### Path A — 手动 label opt-in(已现成支持)
+
+maintainer 在外部 issue 上加 **4 label**:`auto-loop` + `phase9-auto-solve` + `🔍 phase:design-solving` + `🤖 human:auto-推进`
+
+Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-solve" --state open`,把它当 Phase 9 candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
+
+**前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
+
+#### Path B — Triage codex(推荐,更安全)
+
+maintainer 只加 1 label:`auto-loop-triage`
+
+**Daemon 自包含**(per Auric 2026-05-23 "不用单独一个脚本吧,复用现有脚本就好"):
+
+`tools/refactor-loop/triage-monitor.sh` 60s 周期:
+- 扫 `gh issue list --label "auto-loop-triage" --state open`
+- 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
+- triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
+- daemon 不依赖 controller 中转,无中间 event log
+- state 存 `.refactor-loop/triage-monitor-state.json` 防重复
+- 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
+- Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+- Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
+- Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
+
+**事故记录**:2026-05-23 #560 maintainer 加 `auto-loop-triage` label,初版 daemon 只 emit event 到 `.controller-pending-events.log` 等 controller 中转,**但 controller 没 sweep pending-events**,#560 漏读 20min,maintainer 问"为什么没自动扫到"。修法:daemon 直接 spawn codex,移除中转环节(daemon = comment-monitor.sh eyes-react pattern,自己 take action 不让 controller 中转)。
+
+Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
+1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
+   - 是否属于本 refactor loop 范畴(违反 CLAUDE/AGENTS 条款)?
+   - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
+   - 若否 → 评论"非 refactor loop 范畴(原因 XXX),退出 auto-loop";移除 `auto-loop-triage` label;不再处理
+2. Triage codex 完成后 issue 进 Phase 9 标准链路
+
+**triage codex 输出 marker**:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
+
+**优势 vs Path A**:
+- maintainer 只加 1 label(易记)
+- body reshaping 由 codex 自动做(maintainer 不用学 design-issue body 模板)
+- 非 refactor 范畴会被自动拒绝(防 controller 把任意 issue 当 cluster 跑)
+- triage codex 调研代码补 evidence,solver 后续准
+
+### 反面(❌ 禁止)
+
+- ❌ controller 无 sweep `auto-loop-triage` label → 外部 issue 加 label 也无人接
+- ❌ Path B triage codex 直接派 solver 而不 reshape body → solver 找不到 evidence
+- ❌ triage codex 接受 non-refactor issue(产品需求 / bug 报告 / feature request)→ Phase 9 完全错位
+- ❌ 加 `auto-loop` label 但忘加 `phase9-auto-solve` → controller 当普通 design issue 等 maintainer,不自动派 solver
+
 
 ### Sweep procedure
 
@@ -1652,6 +1781,66 @@ Concretely, this means:
 - iter16 implement / verify / Phase 8 review runs in parallel with iter15 rollup PR being reviewed.
 - If iter15 rollup PR gets rejected by human, iter16 work stays on auto-refact-dev (which now contains iter15 + iter16 deltas); we re-do iter15 rework on top and ship combined.
 
+### Concurrency floor = 5 codex(强制,per Auric 2026-05-23 "并发数保持至少5个codex" + "如果并行codex太少则应该开启下一轮次")
+
+**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的 5+。
+
+**规则**:**活跃 codex < 5 时主动派额外工作填满 floor**,不等当前 phase 完成。
+
+| 活跃 codex 数 | 动作 |
+|---|---|
+| `>= 5` | 不抢资源,保持现状 |
+| `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
+
+**填 floor 优先级**(从高到低):
+
+1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
+2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
+3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
+4. **tools/refactor-loop self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
+5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
+6. **CI guard completeness codex** — 检查 `tools/ci/*_guard.sh` 是否覆盖所有 CLAUDE 条款
+
+**反面禁止**:
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
+- ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
+- ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+
+**判定脚本**(controller wakeup step 1.5):
+
+```bash
+ACTIVE=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+NEEDED=$(( 5 - ACTIVE ))
+[ "$NEEDED" -le 0 ] && return  # floor 已满
+
+# 按优先级派 NEEDED 个 codex,优先 audit,其次 retrospective / self-audit
+# (具体派什么由 controller 根据 priority 表决定)
+```
+
+**判定脚本**(controller wakeup step 1.5):
+
+```bash
+ACTIVE=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
+NEXT_ITER=$((LAST_ITER + 1))
+NEXT_LOG=".refactor-loop/logs/audit-iter-${NEXT_ITER}.log"
+
+if (( ACTIVE <= 2 )) && [ -f ".refactor-loop/runs/audit-iter-${LAST_ITER}.md" ] && [ ! -f "$NEXT_LOG" ]; then
+  # 派 iter N+1 audit,即使 iter N 的 cluster PR 还没全 merge
+  ITERATION=${NEXT_ITER} envsubst < .claude/skills/codex-refactor-loop/prompts/audit.md > .refactor-loop/prompts/audit-iter-${NEXT_ITER}.md
+  spawn-audit-codex
+fi
+```
+
+**反面禁止**:
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派 audit 提升并发
+- ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
+- ❌ "iter N 还没完"作为不派 N+1 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
+
+事故记录:2026-05-23 cluster-044 fix-r2 期间只剩 1 codex,Auric 直接指令"如果并行codex太少则应该开启下一轮次"。原 skill "merge-driven iteration boundary" 是不够的——concurrency-driven trigger 才是 INFINITE loop 应有的并行优化。
+
 ### Sync to remote in time (强制)
 
 Per Auric (2026-05-19): "及时与远程同步."
@@ -1822,7 +2011,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 **约束**:
 - 问题 ASCII 图**画当前架构的违反点**——数据流 / 状态归属 / 调用链 / 生命周期等;**不画**reflector / round 路径(那是过程,不是问题)
-- 用 box-drawing(`─│┌┐└┘▶▼◀▲`)+ 空格对齐;**禁用 mermaid**(per CLAUDE.md "GitHub issue/PR comment mermaid 禁忌")
+- 用 box-drawing(`─│┌┐└┘▶▼◀▲`)+ 空格对齐;**禁用 mermaid**(per this skill's GitHub banner rendering rules)
 - 历史 round 信息**降级为表格一行**(`r1+reflector+r2 仍 escalate`),不占主视觉
 - 决策选项 2-4 个,每个 Plan / 影响 / Tradeoff 三栏(file:line 级别)
 - "为什么不是机械重构能解"段是**根因**而非 *recap*(maintainer 看一眼知道为什么 AI 不接手)
@@ -1901,6 +2090,20 @@ Controller 读 marker 后路由:
 - ❌ reflector 也写代码 → 它的职责是 question framing,不是 propose fix
 - ❌ reflector 决议 `re-design` 但 controller 继续派 fix → 框架失效
 - ❌ 临时 `max_fix_rounds = 5` 滥用 → 仅 reflector 明确 `retry-fix` 时允许,且不超过 5
+
+### CLAUDE/AGENTS rule-interpretation splits(强制,per #939 4-round + reflector consensus retro 2026-05-24)
+
+**问题**:Phase 9 / Phase 8 卡死常常**根本是 solver 对同一 CLAUDE/AGENTS 条款理解不一致**(e.g. #939 minimal 认为 `Task.Run` 信号化合规,structural 认为必须移除)。如果 reflector 不先 settle 规则解读,后续 round 只是各自重复实施偏好,永远不收敛。
+
+**铁律**:如果 Phase 9/8 stall 根因是 solvers/reviewers 对同一 CLAUDE.md / AGENTS.md 条款解读不同,**reflector 必须先 verbatim quote 该条款 + 给 narrow ruling**:
+- 争议 pattern 是 allowed / forbidden / allowed-under-listed-constraints?
+- 实际违反点是什么 behavior(不是该 pattern 本身)?
+- 从此 ruling 推出的 implementation boundary?
+- 下轮 retry-fix(narrowed)还是 escalate-human(条款本身需改)?
+
+**不允许**在规则解读未 settle 前再派一轮 solver 让 ta 们继续重申实施偏好。
+
+事故记录:#939 r1/r2/r3 三轮 minimal vs structural 分歧不动,本质是"`Task.Run` 在 actor 内是否允许"的 CLAUDE 条款解读分歧。reflector r1 终于 verbatim quote "回调只发信号" 条款 + ruling(信号化 Task.Run 允许,违反在 actor 外构造 rich continuation)→ r4 立即 3/3 consensus。
 
 ## CI 监控即时推进 — 强制(per Auric 2026-05-19 "ci 监控,应该红了就及时推进")
 
@@ -2099,11 +2302,12 @@ Bash(
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — NyxID / chrono-* are out of scope.
 3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
-4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
+4. **No `commit`/`push`/`checkout`/`gh pr create`/`git branch` inside codex prompts** — the controller owns git topology(branch 创建、commit、push、PR 开均由 controller 做)。事故记录:#952 codex 自开 PR 默认 `base=dev`(而非 `auto-refact-dev`)→ 与 dev CONFLICTING + 误对外发布。如不显式禁止,`gh pr create` 默认 base = repo default branch 错误。**Implement/fix/test-add prompt template 必须 verbatim 含此禁令**(不只在 SKILL hint,要在 prompt 里写明)。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
 8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
+9. **gh pr merge 前必须 CI 全 required check 绿**(per Auric 2026-05-25 "改一下分支保护，必须ci 绿了才能合并"). auto-refact-dev 已设 branch protection(8 required:`fast-gates` / `console-web` / `coverage-quality` / `projection-provider-e2e` / `kafka-transport-integration` / `event-sourcing-regression` / `host-composition-smoke` / `slow-test-guards`,`strict: true`,`enforce_admins: true`)。**禁止**用 `--admin` / `--bypass` flag 绕过(已不可能;enforce_admins=true)。每次 `gh pr merge` 前 controller **必须** verify:`gh pr checks <PR> --required --json bucket --jq 'all(.[]; .bucket == "pass")'` 返回 `true`,否则**等 CI 完成**(arm Monitor watch + ScheduleWakeup,不要立即重试 merge)。事故记录:2026-05-25 session 11 个 cluster PR 全在 reviewer 3/3 approve 后 squash merge,**没等 GitHub Actions CI** → trunk auto-refact-dev 5 个 integration test 挂(hotfix `ef7962d` 修)。今后此情形不可能发生(branch protection 拦)。
 
 ## 工作语言规则(默认中文)
 
@@ -2144,6 +2348,68 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 ### 例外
 
 `docs/canon/*.md` 与 `docs/adr/*.md` 在仓库内的文档仍按 [docs/canon/architecture-vocabulary.md](docs/canon/architecture-vocabulary.md) 既有惯例(混排,不归本规则管辖)。CLAUDE.md / AGENTS.md 仍是中英混排,不动。
+
+---
+
+## Auto-stop / Throttle 条件(强制,per Auric 2026-05-25 "设置一下停止条件或者降速条件吧")
+
+Controller 每 wakeup 在 sweep 之后、派 codex 之前,evaluate 下列条件。**stop** 优先于 throttle。
+
+### Stop(硬停 — controller 不再派任何 codex,仅 push notification + 写 `.refactor-loop/.auto-stopped` 标记)
+
+任一命中即 stop:
+
+1. **Audit 干涸**:最近 2 次 audit 报告 `AUDIT_DONE:iter-N:0`(0 cluster)。
+2. **Intake 池空**:open `auto-loop` 标签 issue 中,非 `🎉 phase:merged` 且非 `🆘 human:卡死` 的 actionable 数 == 0,且 open `auto-loop` PR 数 == 0。
+3. **Reflector 连续 escalate**:最近 3 次 reflector 决议都是 `META_RESOLVED:escalate-human`(说明 CLAUDE.md 规则解释跨多 cluster 都需人决策)。
+4. **PR 吞吐崩**:最近 48h 0 PR merged 且最近 24h 0 fix 收敛(只在死循环 fix/reject)。
+5. **Loop 标记文件**:仓库根存在 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`(maintainer 手动 touch)。
+
+stop 触发动作:
+- post PushNotification 给 user(中文):"auto-loop 停止,原因 X,Y 个 in-flight codex 自然完成后不再续派"
+- 写 `.refactor-loop/.auto-stopped` 含 timestamp + reason
+- ScheduleWakeup **不调用**(loop 真停)
+- 不 kill 在跑 codex(让自然完成,各自的 fix/merge 流程走完)
+
+### Throttle(降速 — 仍派 codex 但降并发或换角度)
+
+任一命中即 throttle(可叠加):
+
+1. **Audit 候选少**:最近 audit `AUDIT_DONE:iter-N:1`(只 1 cluster)→ 不再 prefetch 下一 audit,等当前 cluster 进 Phase 8 才派 audit-N+1。
+2. **Reflector 频繁**:最近 5 PR 里 >= 2 PR 需要 reflector → 暂停新 design issue intake(只跑 in-flight fix/review),concurrency floor 5→3。
+3. **Reviewer reject 率高**:最近 3 PR 累计 reviewer reject 率 >= 60% → 暂停新 implement 派出,集中 fix loop。
+4. **Triage eligible 率低**:最近 5 个 triage `TRIAGE_DONE:N:not-eligible` 占 >= 60% → 不再主动 scan open issue,等 maintainer 显式 label。
+5. **0 codex 但有 actionable**:concurrency_monitor `zero_streak >= 5` → 强制 wakeup 立即派(已有规则,此为保留兼容)。
+
+throttle 触发动作:
+- post 中文 status banner 到任一最近活跃 PR/issue(说明降速 + 原因)
+- concurrency floor 调整 5→3,wakeup heartbeat 1500s→2400s
+- 不写 `.auto-stopped`(loop 仍存活)
+
+### Resume(从 stop 恢复)
+
+stop 后 loop 不会自动 resume。**只有以下信号**才重启:
+- maintainer 删 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`
+- maintainer 显式 `/loop` 命令重启
+- maintainer 把 `phase9-auto-solve` 加到 fresh issue(monitor daemon 不主动接,等 manual resume)
+
+恢复后 controller wakeup 第一动作:删除 stop 标记文件 + post "resumed at <ts> by <signal>" banner。
+
+### 自检
+
+Controller 每 wakeup 第一动作:
+```bash
+[[ -f .refactor-loop/.auto-stopped || -f .refactor-loop/.pause ]] && { echo STOP_MARKER_FOUND; cat .refactor-loop/.auto-stopped 2>/dev/null; exit 0; }
+```
+
+无标记继续 sweep 流程;有标记直接 ScheduleWakeup omit + push notification 重申状态。
+
+### 反面(❌ 严禁)
+
+- ❌ stop 后仍派 codex(违反"controller 不再派任何 codex")
+- ❌ throttle 时把 concurrency floor 降到 0(应至少保 1 codex 处理 in-flight fix)
+- ❌ 自动 resume(无 maintainer 信号 = stay stopped)
+- ❌ 把 `🆘 human` issue 数算入 actionable 池(那是等人,不是 actionable)
 
 ---
 

@@ -112,6 +112,9 @@ public sealed class ActorInspectTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: the graph action exposed workflow run graph data as an actor current-state graph query.
+    //   New principle: workflow history/report/graph are workflow-run artifacts or exports, not current-state readmodels.
     private async Task<string> GetGraphAsync(ToolArgs args, CancellationToken ct)
     {
         var actorId = args.Str("actor_id");
@@ -121,7 +124,7 @@ public sealed class ActorInspectTool : IAgentTool
         var depth = Math.Clamp(args.Int("graph_depth") ?? _options.MaxGraphDepth, 1, 5);
         var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
 
-        var subgraph = await _queryService.GetActorGraphSubgraphAsync(actorId, depth, take, ct: ct);
+        var subgraph = await _queryService.GetWorkflowRunGraphExportSubgraphAsync(actorId, depth, take, ct: ct);
 
         return JsonSerializer.Serialize(new
         {

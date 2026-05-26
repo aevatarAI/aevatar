@@ -20,6 +20,15 @@ public interface IActorRuntime
     /// <param name="id">Optional ID. Auto-generated when null.</param>
     Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default);
 
+    /// <summary>Creates and registers an actor for the specified stable agent kind.</summary>
+    /// <param name="agentKind">Stable agent kind token.</param>
+    /// <param name="id">Optional ID. Auto-generated when null.</param>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default) =>
+        throw new NotSupportedException("This actor runtime does not support kind-based actor creation.");
+
     /// <summary>Destroys the actor with the specified ID.</summary>
     Task DestroyAsync(string id, CancellationToken ct = default);
 

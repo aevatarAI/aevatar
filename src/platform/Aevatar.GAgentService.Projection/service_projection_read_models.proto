@@ -20,10 +20,7 @@ message ServiceCatalogReadModel {
   string service_id = 8;
   string display_name = 9;
   string default_serving_revision_id = 10;
-  string active_serving_revision_id = 11;
-  string deployment_id = 12;
-  string primary_actor_id = 13;
-  string deployment_status = 14;
+  reserved 11 to 14;
   google.protobuf.Timestamp updated_at_utc_value = 15;
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 16;
   repeated string policy_id_entries = 17;
@@ -240,6 +237,7 @@ message LlmSessionCurrentStateReadModel {
   google.protobuf.Timestamp cancelled_at_utc_value = 13;
   int64 ttl_seconds = 14;
   repeated LlmSessionForwardedToolCallReadModel forwarded_tool_call_entries = 15;
+  LlmSessionCompletionReadModel completion = 16;
 }
 
 message LlmSessionForwardedToolCallReadModel {
@@ -253,6 +251,27 @@ message LlmSessionForwardedToolCallReadModel {
   google.protobuf.Timestamp emitted_at_utc_value = 8;
   google.protobuf.Timestamp received_at_utc_value = 9;
   google.protobuf.Timestamp resolved_at_utc_value = 10;
+}
+
+message LlmSessionCompletedToolCallReadModel {
+  string call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Value result = 3;
+}
+
+message LlmSessionCompletionReadModel {
+  string output_text = 1;
+  repeated LlmSessionCompletedToolCallReadModel tool_call_entries = 2;
+  google.protobuf.Timestamp completed_at_utc_value = 3;
+  string failure_code = 4;
+  string failure_message = 5;
+  LlmSessionTokenUsageReadModel usage = 6;
+}
+
+message LlmSessionTokenUsageReadModel {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
 }
 
 // --- ResponsesAgentToolStateCurrentStateReadModel ---

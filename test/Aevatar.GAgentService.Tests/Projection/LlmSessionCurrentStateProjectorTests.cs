@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -48,6 +49,17 @@ public sealed class LlmSessionCurrentStateProjectorTests
         doc.ForwardedToolCalls.Should().ContainSingle();
         doc.ForwardedToolCalls[0].CallId.Should().Be("call_1");
         doc.ForwardedToolCalls[0].Status.Should().Be((int)LlmSessionForwardedToolCallStatus.Received);
+        doc.Completion.Should().NotBeNull();
+        doc.Completion!.OutputText.Should().Be("completed text");
+        doc.Completion.ToolCalls.Should().ContainSingle();
+        doc.Completion.ToolCalls[0].CallId.Should().Be("call_done");
+        ResponsesJsonValues.ToBoundaryJson(doc.Completion.ToolCalls[0].Result)
+            .Should().Be("""{"result":true}""");
+        doc.Completion.Usage.Should().NotBeNull();
+        doc.Completion.Usage!.PromptTokens.Should().Be(10);
+        doc.Completion.Usage.CompletionTokens.Should().Be(11);
+        doc.Completion.Usage.TotalTokens.Should().Be(21);
+        doc.Completion.FailureCode.Should().BeEmpty();
 
         var snapshot = await reader.GetByResponseIdAsync("resp_1");
         snapshot.Should().NotBeNull();
@@ -55,6 +67,58 @@ public sealed class LlmSessionCurrentStateProjectorTests
         snapshot.Status.Should().Be(LlmSessionStatus.Completed);
         snapshot.ForwardedToolCalls.Should().ContainSingle();
         snapshot.ForwardedToolCalls![0].ResultJson.Should().Be("""{"temperature":28}""");
+        snapshot.Completion.Should().NotBeNull();
+        snapshot.Completion!.OutputText.Should().Be("completed text");
+        snapshot.Completion.Usage.Should().Be(new TokenUsage(10, 11, 21));
+        snapshot.Completion.ToolCalls.Should().ContainSingle()
+            .Which.ResultJson.Should().Be("""{"result":true}""");
+    }
+
+    [Fact]
+    public async Task QueryReader_ShouldMapCompletionToolResultJson_AndFailureFields()
+    {
+        var store = new RecordingDocumentStore<LlmSessionCurrentStateReadModel>(x => x.Id);
+        var reader = new LlmSessionQueryReader(store);
+        await store.UpsertAsync(new LlmSessionCurrentStateReadModel
+        {
+            Id = LlmSessionIds.BuildKey("resp_failed"),
+            ResponseId = "resp_failed",
+            ScopeId = "user-1",
+            OwnerSubject = "user-1",
+            OriginKind = (int)LlmSessionOriginKind.ApiKey,
+            Status = (int)LlmSessionStatus.Failed,
+            ActorId = ActorId,
+            StateVersion = 4,
+            LastEventId = "evt-failed",
+            CreatedAt = DateTimeOffset.Parse("2026-04-27T01:00:00+00:00"),
+            TtlSeconds = (long)TimeSpan.FromHours(1).TotalSeconds,
+            Completion = new LlmSessionCompletionReadModel
+            {
+                OutputText = "partial",
+                CompletedAt = DateTimeOffset.Parse("2026-04-27T01:01:00+00:00"),
+                FailureCode = "gagent_invocation_failed",
+                FailureMessage = "GAgent invocation failed.",
+                ToolCalls =
+                {
+                    new LlmSessionCompletedToolCallReadModel
+                    {
+                        CallId = "call_failed",
+                        ToolName = "WebFetch",
+                        Result = ResponsesJsonValues.ParseBoundaryPayload("""{"error":"boom"}"""),
+                    },
+                },
+            },
+        });
+
+        var snapshot = await reader.GetByResponseIdAsync("resp_failed");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Completion.Should().NotBeNull();
+        snapshot.Completion!.OutputText.Should().Be("partial");
+        snapshot.Completion.FailureCode.Should().Be("gagent_invocation_failed");
+        snapshot.Completion.FailureMessage.Should().Be("GAgent invocation failed.");
+        snapshot.Completion.ToolCalls.Should().ContainSingle()
+            .Which.ResultJson.Should().Be("""{"error":"boom"}""");
     }
 
     [Fact]
@@ -157,6 +221,26 @@ public sealed class LlmSessionCurrentStateProjectorTests
             ReceivedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-1)),
             Expiry = Timestamp.FromDateTimeOffset(observedAt.AddHours(1)),
         });
+        state.Completion = new LlmSessionCompletion
+        {
+            OutputText = "completed text",
+            CompletedAt = Timestamp.FromDateTimeOffset(observedAt),
+            Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = 10,
+                CompletionTokens = 11,
+                TotalTokens = 21,
+            },
+            ToolCalls =
+            {
+                new LlmSessionCompletedToolCall
+                {
+                    CallId = "call_done",
+                    ToolName = "get_weather",
+                    Result = ResponsesJsonValues.ParseBoundaryPayload("""{"result":true}"""),
+                },
+            },
+        };
         return new EventEnvelope
         {
             Id = $"outer-{eventId}",

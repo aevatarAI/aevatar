@@ -28,6 +28,9 @@ public sealed class LLMRequest
     /// <summary>Typed model/route/tool-round controls used before provider metadata fallback.</summary>
     public LLMRequestRoutingContext? RoutingContext { get; init; }
 
+    /// <summary>Typed NyxID/model/route controls for this LLM call.</summary>
+    public LLMControlContext? LlmControl { get; init; }
+
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 

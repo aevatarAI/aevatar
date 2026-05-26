@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -45,7 +46,10 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         CancellationToken ct)
     {
         var payload = SerializePayload(readModel, keyValue);
-        var startedAt = DateTimeOffset.UtcNow;
+        // Refactor (iter89/cluster-089-projection-provider-elapsed-clock):
+        // Old: elapsedMs used DateTimeOffset.UtcNow subtraction, so wall-clock changes could skew duration logs.
+        // New: elapsedMs uses a monotonic Stopwatch timestamp; projection clocks remain for semantic timestamps only.
+        var startedAtTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -55,7 +59,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
                 var result = ProjectionWriteResultEvaluator.Evaluate(existing.ReadModel, readModel);
                 if (!result.IsApplied)
                 {
-                    LogWriteSkipped(keyValue, startedAt, result);
+                    LogWriteSkipped(keyValue, startedAtTimestamp, result);
                     return result;
                 }
 
@@ -63,7 +67,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
                 using var response = await _httpClient.SendAsync(request, ct);
                 if (response.IsSuccessStatusCode)
                 {
-                    LogWriteCompleted(keyValue, startedAt);
+                    LogWriteCompleted(keyValue, startedAtTimestamp);
                     return ProjectionWriteResult.Applied();
                 }
 
@@ -83,7 +87,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
             var reconciledResult = ProjectionWriteResultEvaluator.Evaluate(reconciled.ReadModel, readModel);
             if (!reconciledResult.IsApplied)
             {
-                LogWriteSkipped(keyValue, startedAt, reconciledResult);
+                LogWriteSkipped(keyValue, startedAtTimestamp, reconciledResult);
                 return reconciledResult;
             }
 
@@ -92,7 +96,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         }
         catch (Exception ex)
         {
-            LogWriteFailure(keyValue, startedAt, ex);
+            LogWriteFailure(keyValue, startedAtTimestamp, ex);
             throw;
         }
     }
@@ -182,9 +186,9 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         return payload.ToJsonString();
     }
 
-    private void LogWriteCompleted(string keyValue, DateTimeOffset startedAt)
+    private void LogWriteCompleted(string keyValue, long startedAtTimestamp)
     {
-        var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
         _logger.LogInformation(
             "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
             ProviderName,
@@ -194,9 +198,9 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
             ProjectionWriteDisposition.Applied);
     }
 
-    private void LogWriteSkipped(string keyValue, DateTimeOffset startedAt, ProjectionWriteResult result)
+    private void LogWriteSkipped(string keyValue, long startedAtTimestamp, ProjectionWriteResult result)
     {
-        var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
         _logger.LogInformation(
             "Projection read-model write skipped. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
             ProviderName,
@@ -206,9 +210,9 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
             result.Disposition);
     }
 
-    private void LogWriteFailure(string keyValue, DateTimeOffset startedAt, Exception ex)
+    private void LogWriteFailure(string keyValue, long startedAtTimestamp, Exception ex)
     {
-        var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
         _logger.LogError(
             ex,
             "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",

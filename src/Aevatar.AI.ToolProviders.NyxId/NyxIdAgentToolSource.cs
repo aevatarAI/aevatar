@@ -70,17 +70,19 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         // ssh_exec is opt-in. The tool's Auto/RequiresApproval=true contract relies on the
         // host wiring an approval middleware around tool execution; without that middleware,
         // a host would let the LLM run remote shell commands directly. Make hosts opt in
-        // explicitly so that exposure is a deliberate decision.
+        // explicitly so that exposure is a deliberate decision. A deployment may also opt
+        // into BypassSshExecApproval, in which case this source does not require a local
+        // approval handler because the tool deliberately returns RequiresApproval=false.
         if (_options.EnableSshExecTool)
         {
-            if (!_toolApprovalHandlerAvailable)
+            if (!_options.BypassSshExecApproval && !_toolApprovalHandlerAvailable)
             {
                 throw new InvalidOperationException(
                     "NyxID ssh_exec is enabled but no IToolApprovalHandler is registered. " +
-                    "Register a local approval handler before exposing ssh_exec.");
+                    "Register a local approval handler or explicitly set BypassSshExecApproval before exposing ssh_exec.");
             }
 
-            tools.Add(new NyxIdSshExecTool(_client, _logger));
+            tools.Add(new NyxIdSshExecTool(_client, _options, _logger));
         }
 
         _logger.LogInformation(

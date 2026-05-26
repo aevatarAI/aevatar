@@ -2,7 +2,11 @@
 
 本文只整理当前仓库里 `Streaming Proxy` 这条真实实现链路，对应宿主是 `Aevatar.Mainnet.Host.Api`，入口是 `/api/scopes/{scopeId}/streaming-proxy/...`。
 
+2026-05-25 更新：`Streaming Proxy` route 保留用于 backward compatibility，但已软废弃，sunset 日期为 2026-11-25 00:00:00 GMT。所有 response 都会带 `Deprecation: true`、`Sunset: Wed, 25 Nov 2026 00:00:00 GMT` 与指向 `/v1/responses` 的 `Link: rel="successor-version"` header。迁移时，直接模型 streaming / tool / continuation 场景改走 `/v1/responses`；Streaming Proxy 的 room CRUD、participant join/post、room fan-out 语义不等价于 `/v1/responses`，依赖这些语义的客户端不能把 `/v1/responses` 当作无损替代。
+
 2026-04-27 更新：room ownership 已切换到 [GAgent Registry Ownership](canon/gagent-registry-ownership.md) 定义的 registry command/query/admission ports。下文若出现 `StreamingProxyActorStore` 或 `IGAgentActorStore`，应视为旧实现残留描述，不再对应当前代码里的真实类型或文件路径。
+
+2026-05-23 更新：participant membership 的唯一权威状态是每个 room 的 `StreamingProxyGAgentState.Participants`。旧 `IStreamingProxyParticipantStore` / `StreamingProxyParticipantGAgent` singleton / singleton participant readmodel 已删除；participant 查询读取 room current-state projection。
 
 目标是回答三个问题：
 
@@ -18,7 +22,7 @@
 | `StreamingProxyEndpoints` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs` | 提供 room CRUD、`:chat`、`messages`、`messages:stream`、participant 管理 HTTP/SSE 入口 |
 | `StreamingProxyGAgent` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyGAgent.cs` | 房间 actor，本质上是 group chat broker；持久化事件、更新房间内消息/参与者状态、向订阅者发布事件 |
 | `IGAgentActorRegistryCommandPort` / `IGAgentActorRegistryQueryPort` / `IScopeResourceAdmissionPort` | `src/platform/Aevatar.GAgentService.Abstractions/ScopeGAgents/GAgentRegistryPorts.cs` | room ownership 的写入、列表查询与 command admission 边界 |
-| `IStreamingProxyParticipantStore` | `src/Aevatar.Studio.Application/Studio/Abstractions/IStreamingProxyParticipantStore.cs` | room participant 的持久化索引，供 participant 查询、自动加入与失败移除时使用 |
+| `IStreamingProxyRoomParticipantService` / `IStreamingProxyRoomParticipantsQueryPort` | `agents/Aevatar.GAgents.StreamingProxy/Application/Rooms/StreamingProxyRoomParticipantService.cs` / `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyRoomParticipantsQueryPort.cs` | 从 room current-state projection 读取 participant 列表；写入仍由 `StreamingProxyGAgent` 事件提交 |
 | `StreamingProxyNyxParticipantCoordinator` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs` | 在带 Bearer Token 时发现 Nyx 可用 provider，把它们自动加入房间并生成多轮回复 |
 | `StreamingProxySseWriter` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs` | 把 actor 事件映射成 SSE frame 输出给客户端 |
 
@@ -29,9 +33,9 @@
 flowchart TB
     CL["Client / OpenClaw"] --> API["StreamingProxyEndpoints\n/api/scopes/{scopeId}/streaming-proxy/..."]
     API --> REG["GAgent registry ports\ncommand / query / admission"]
-    API --> PSTORE["IStreamingProxyParticipantStore\nparticipant index"]
-    API --> RT["IActorRuntime"]
-    RT --> ACT["StreamingProxyGAgent\nroom actor"]
+    API --> PARTQ["Room participants query port\nroom current-state readmodel"]
+    API --> ROOMCMD["Room command service"]
+    ROOMCMD --> ACT["StreamingProxyGAgent\nroom actor"]
     API --> SUB["IActorEventSubscriptionProvider"]
     ACT --> EVT["GroupChat* events"]
     EVT --> SUB
@@ -43,10 +47,12 @@ flowchart TB
     NYX --> KEYS["Nyx /api/v1/keys"]
     NYX --> MODELS["Nyx provider proxy /models"]
     NYX --> LLM["NyxID LLM Provider\nChatAsync"]
-    LLM --> ACT
+    LLM --> ROOMCMD
 ```
 
 ## 3. 对外接口
+
+状态：deprecated，retained until `Sunset: Wed, 25 Nov 2026 00:00:00 GMT`。
 
 | 接口 | 作用 |
 |---|---|

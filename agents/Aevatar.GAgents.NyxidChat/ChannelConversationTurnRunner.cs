@@ -27,6 +27,25 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
     private const string DailySkillName = "chrono-ai-daily";
+    private static readonly HashSet<string> LocalSlashCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "approve",
+        "reject",
+        "submit",
+        "init",
+        "unbind",
+        "whoami",
+        "model",
+        "models",
+        "llm",
+        "route",
+        "agents",
+        "agent-status",
+        "run-agent",
+        "disable-agent",
+        "enable-agent",
+        "delete-agent",
+    };
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
 
@@ -674,9 +693,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (cardAction is null)
             return false;
 
+        var payload = cardAction.LlmSelection;
+        if (payload is not null && !string.IsNullOrWhiteSpace(payload.Action))
+        {
+            action = payload.Action.Trim();
+            value = action switch
+            {
+                TextUserLlmOptionsRenderer.SelectServiceAction => payload.ServiceId?.Trim() ?? string.Empty,
+                TextUserLlmOptionsRenderer.ApplyPresetAction => payload.PresetId?.Trim() ?? string.Empty,
+                _ => string.Empty,
+            };
+            return true;
+        }
+
         if (!inbound.Extra.TryGetValue(TextUserLlmOptionsRenderer.LlmActionArgument, out var actionValue) ||
             string.IsNullOrWhiteSpace(actionValue))
         {
+            // Deprecated inbound compatibility only. New producers must use LlmSelectionActionPayload.
             action = cardAction.ActionId switch
             {
                 TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
@@ -945,8 +978,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         AgentBuilderFlowDecision? decision = null;
         var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
             inboundEvent,
-            out decision,
-            _slashCommandRegistry);
+            out decision);
         if (!relayDecisionMatched &&
             ((decision = await AgentBuilderCardFlow.TryResolveAsync(
                     inboundEvent,
@@ -1383,22 +1415,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
-        // Mirror SkillRunnerGAgent / WorkflowAgentGAgent: pin the bot owner's UserConfig
-        // (DefaultModel + PreferredLlmRoute + MaxToolRounds) onto outbound LLM metadata so the
-        // channel inbound → LLM path honors the same per-owner LLM routing the scheduled agents
-        // do. Without this, channel-bot LLM turns fall through to NyxIdLLMProvider's compile-time
-        // defaults and 400 against a bot owner who pre-configured a custom NyxID service. Source
-        // is bound once via constructor injection — no per-execution Services.GetService<>
-        // lookup, per codex's PR #509 partial dissent on r3159047120.
-        await OwnerLlmConfigApplier.ApplyAsync(
-            metadata,
-            inboundEvent.RegistrationScopeId,
-            _ownerLlmConfigSource,
-            _logger,
-            actorLabel: "Channel turn runner",
-            actorId: inboundEvent.MessageId,
-            ct);
-
         return metadata;
     }
 
@@ -1427,7 +1443,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ArgumentNullException.ThrowIfNull(activity);
 
         var extra = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (activity.Type == ActivityType.CardAction && activity.Content?.CardAction is { } cardAction)
+        var cardAction = activity.Type == ActivityType.CardAction
+            ? activity.Content?.CardAction
+            : null;
+        if (cardAction is not null)
         {
             if (cardAction.Arguments.TryGetValue("agent_builder_action", out var builderAction) &&
                 !string.IsNullOrWhiteSpace(builderAction))
@@ -1458,6 +1477,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = ResolveChatType(activity.Conversation, activity.Type),
             OutboundDelivery = activity.OutboundDelivery?.Clone(),
             TransportExtras = activity.TransportExtras?.Clone(),
+            CardAction = cardAction?.Clone(),
             Extra = extra,
         };
     }
@@ -1522,49 +1542,133 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
+        request.LlmControl = (await BuildOwnerLlmControlAsync(
+                inboundEvent,
+                LLMControlContextMapper.FromPayload(request.LlmControl),
+                ct)
+            .ConfigureAwait(false)).ToPayload();
+
         // Tag the request with the sender's binding-id and a short-lived token
         // so the downstream reply generator can try the sender's own LLM
         // route first. Missing token/binding is not an error: the generator
         // falls back to the bot owner's upstream-pinned LLM config.
         if (senderBinding is not null)
         {
-            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBinding.BindingId;
+            request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+            {
+                SenderBinding = new AgentToolSenderBindingContext(senderBinding.BindingId),
+            }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
-                request.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = senderAccessToken;
+            {
+                var currentControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+                request.LlmControl = new LLMControlContext(
+                    currentControl.NyxIdAccessToken,
+                    currentControl.NyxIdOrgToken,
+                    senderAccessToken.Trim(),
+                    currentControl.ModelOverride,
+                    currentControl.NyxIdRoutePreference,
+                    currentControl.MaxToolRoundsOverride,
+                    currentControl.UserMemoryPrompt).ToPayload();
+            }
         }
 
         return request;
     }
 
-    private static ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
+    private async Task<LLMControlContext> BuildOwnerLlmControlAsync(
+        ChannelInboundEvent inboundEvent,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        return await OwnerLlmConfigApplier.ApplyAsync(
+                control,
+                inboundEvent.RegistrationScopeId,
+                _ownerLlmConfigSource,
+                _logger,
+                actorLabel: "Channel turn runner",
+                actorId: inboundEvent.MessageId,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
     {
         var requestActivity = activity.Clone();
         if (requestActivity.Content is null)
             return requestActivity;
 
-        if (TryBuildDailySkillInvocationPrompt(inboundText, out var prompt))
+        if (TryBuildSkillInvocationPrompt(inboundText, out var prompt))
             requestActivity.Content.Text = prompt;
 
         return requestActivity;
     }
 
-    private static bool TryBuildDailySkillInvocationPrompt(string? text, out string prompt)
+    private bool TryBuildSkillInvocationPrompt(string? text, out string prompt)
     {
         prompt = string.Empty;
-        if (!TryParseSlashCommand(text, out var commandName, out var argumentText) ||
-            !string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
+        if (!TryParseSlashCommand(text, out var commandName, out var argumentText))
         {
             return false;
         }
 
+        if (string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
+            return TryBuildDailySkillInvocationPrompt(text, argumentText, out prompt);
+
+        return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
+    }
+
+    private static bool TryBuildDailySkillInvocationPrompt(
+        string? text,
+        string argumentText,
+        out string prompt)
+    {
         var argsJson = JsonSerializer.Serialize(argumentText);
         var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
         prompt =
             "The user invoked the Lark `/daily` shortcut.\n" +
-            $"Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}, " +
-            "then follow the loaded skill instructions to complete the request.\n" +
+            $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
+            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}. Do not search for this skill first.\n" +
+            "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
+            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
+            "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            "The only final user-visible answer should be the completed daily report or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
+            $"Original command: {originalJson}";
+        return true;
+    }
+
+    private bool TryBuildSlashSkillDiscoveryPrompt(
+        string? text,
+        string commandName,
+        string argumentText,
+        out string prompt)
+    {
+        prompt = string.Empty;
+        if (string.IsNullOrWhiteSpace(commandName) ||
+            LocalSlashCommands.Contains(commandName) ||
+            ResolveSlashCommandHandler(commandName) is not null)
+        {
+            return false;
+        }
+
+        var normalizedCommand = commandName.Trim();
+        var skillQuery = normalizedCommand.TrimStart('/');
+        if (string.IsNullOrWhiteSpace(skillQuery))
+            return false;
+
+        var queryJson = JsonSerializer.Serialize(skillQuery);
+        var argsJson = JsonSerializer.Serialize(argumentText);
+        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
+        prompt =
+            $"The user invoked the Lark `/{normalizedCommand}` shortcut.\n" +
+            "This slash command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
+            $"First call `ornn_search_skills` with `query` = {queryJson} and `scope` = `mixed`.\n" +
+            $"Then call `use_skill` for the best matching skill and pass `args` = {argsJson}. Prefer an exact or near-exact command/skill name match when available.\n" +
+            "After the skill is loaded, follow its instructions exactly and continue using tools until the command's final result is ready.\n" +
+            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
+            "If no matching skill is found, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
+            "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";
         return true;
     }

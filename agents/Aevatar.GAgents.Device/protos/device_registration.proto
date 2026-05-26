@@ -10,7 +10,7 @@ import "google/protobuf/timestamp.proto";
 
 message DeviceRegistrationEntry {
   string id = 1;
-  string scope_id = 2;                    // Maps to household-{scope_id} actor
+  string scope_id = 2;                    // Device registration scope
   string hmac_key = 3;                    // HMAC-SHA256 signing key for NyxID relay verification
   string nyx_conversation_id = 4;         // NyxID conversation ID
   string description = 5;                 // Human-readable label
@@ -21,6 +21,7 @@ message DeviceRegistrationEntry {
   // .DeleteAsync. Housekeeping cleans watermark-passed entries.
   bool tombstoned = 7;
   int64 tombstone_state_version = 8;
+  string device_event_target_actor_id = 9; // Explicit callback target selected during registration admission
 }
 
 message DeviceRegistrationState {
@@ -43,6 +44,7 @@ message DeviceRegisterCommand {
   string hmac_key = 2;
   string nyx_conversation_id = 3;
   string description = 4;
+  string device_event_target_actor_id = 5;
 }
 
 message DeviceUnregisterCommand {
@@ -69,4 +71,5 @@ message DeviceRegistrationDocument {
   string last_event_id = 7;
   google.protobuf.Timestamp updated_at_utc = 8;
   string actor_id = 9;                    // Source actor ID
+  string device_event_target_actor_id = 10;
 }

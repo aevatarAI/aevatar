@@ -317,7 +317,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
             return Task.FromResult(Actor);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();
@@ -325,6 +325,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
                 throw new InvalidOperationException("Actor not configured.");
 
             await Actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) => throw new NotSupportedException();

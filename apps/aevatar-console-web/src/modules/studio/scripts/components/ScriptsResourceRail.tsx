@@ -8,7 +8,7 @@ import { formatScriptDateTime, isScopeDetailDirty } from '@/shared/studio/script
 import type {
   ScriptDraft,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScopedScriptDetail,
 } from '@/shared/studio/scriptsModels';
 import {
@@ -26,7 +26,7 @@ type ScriptsResourceRailProps = {
   scopeSelectionId: string;
   scopeScripts: ScopedScriptDetail[];
   scopeScriptsLoading: boolean;
-  runtimeSnapshots: ScriptReadModelSnapshot[];
+  runtimeSnapshots: ScriptRuntimeActivitySnapshot[];
   runtimeSnapshotsLoading: boolean;
   selectedRuntimeActorId: string;
   proposalDecisions: ScriptPromotionDecision[];
@@ -37,7 +37,7 @@ type ScriptsResourceRailProps = {
   onRefreshScopeScripts: () => void;
   onOpenScopeScript: (detail: ScopedScriptDetail) => void;
   onRefreshRuntimeSnapshots: () => void;
-  onSelectRuntime: (snapshot: ScriptReadModelSnapshot) => void;
+  onSelectRuntime: (snapshot: ScriptRuntimeActivitySnapshot) => void;
   onSelectProposal: (decision: ScriptPromotionDecision) => void;
 };
 

@@ -19,7 +19,7 @@ public class ScriptingActorRequestEnvelopeFactoryTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-1",
-                SourceText = "return 1;",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("return 1;"),
                 SourceHash = "hash-1",
             });
 
@@ -33,7 +33,7 @@ public class ScriptingActorRequestEnvelopeFactoryTests
         var payload = envelope.Payload.Unpack<UpsertScriptDefinitionRequestedEvent>();
         payload.ScriptId.Should().Be("script-1");
         payload.ScriptRevision.Should().Be("rev-1");
-        payload.SourceText.Should().Be("return 1;");
+        payload.ScriptPackage.GetPrimaryCSharpSource().Should().Be("return 1;");
         payload.SourceHash.Should().Be("hash-1");
     }
 

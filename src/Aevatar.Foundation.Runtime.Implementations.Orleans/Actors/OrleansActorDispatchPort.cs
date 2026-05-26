@@ -7,13 +7,17 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 public sealed class OrleansActorDispatchPort : IActorDispatchPort
 {
     private readonly IGrainFactory _grainFactory;
+    private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
-    public OrleansActorDispatchPort(IGrainFactory grainFactory)
+    public OrleansActorDispatchPort(
+        IGrainFactory grainFactory,
+        Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
     }
 
-    public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(envelope);
@@ -23,8 +27,7 @@ public sealed class OrleansActorDispatchPort : IActorDispatchPort
         if (!await grain.IsInitializedAsync())
             throw new InvalidOperationException($"Actor {actorId} is not initialized.");
 
-        var dispatchEnvelope = envelope.Clone();
-        dispatchEnvelope.EnsureRuntime().EnsureDispatch().PropagateFailure = true;
-        await grain.HandleEnvelopeAsync(dispatchEnvelope.ToByteArray());
+        await _streams.GetStream(actorId).ProduceAsync(envelope.Clone(), ct);
+        return DispatchAdmissionFactory.Create(actorId, envelope);
     }
 }

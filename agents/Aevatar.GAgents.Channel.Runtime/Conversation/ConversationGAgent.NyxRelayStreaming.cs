@@ -39,6 +39,11 @@ public sealed partial class ConversationGAgent
         Finalize,
     }
 
+    private sealed record NyxRelayTextOperationInFlight(
+        NyxRelayTextOperationKind Operation,
+        long Sequence,
+        long Generation);
+
     /// <summary>
     /// Actor-scoped streaming state for one conversation turn, backed by
     /// ConversationGAgentState.ActiveReplyLifecycles.
@@ -48,10 +53,27 @@ public sealed partial class ConversationGAgent
         string? PlatformMessageId,
         string LastFlushedText,
         int EditCount,
-        string? TerminalReason)
+        string? TerminalReason,
+        NyxRelayTextOperationInFlight? InFlight,
+        long OperationGeneration,
+        string? PendingAccumulatedText,
+        string? PendingFinalizeText,
+        string? PendingFinalizeCommandId,
+        LlmReplyTerminalState PendingTerminalState)
     {
         public static NyxRelayStreamingState Initial { get; } =
-            new(NyxRelayStreamingPhase.Idle, null, string.Empty, 0, null);
+            new(
+                NyxRelayStreamingPhase.Idle,
+                PlatformMessageId: null,
+                LastFlushedText: string.Empty,
+                EditCount: 0,
+                TerminalReason: null,
+                InFlight: null,
+                OperationGeneration: 0,
+                PendingAccumulatedText: null,
+                PendingFinalizeText: null,
+                PendingFinalizeCommandId: null,
+                PendingTerminalState: LlmReplyTerminalState.Unspecified);
 
         public bool AllowsInterimEdit =>
             Phase is NyxRelayStreamingPhase.Idle
@@ -76,9 +98,11 @@ public sealed partial class ConversationGAgent
     private static bool IsLegalNyxRelayStreamingTransition(NyxRelayStreamingPhase from, NyxRelayStreamingPhase to) =>
         (from, to) switch
         {
+            (NyxRelayStreamingPhase.Idle, NyxRelayStreamingPhase.Idle) => true,
             (NyxRelayStreamingPhase.Idle, NyxRelayStreamingPhase.PlaceholderSent) => true,
             (NyxRelayStreamingPhase.Idle, NyxRelayStreamingPhase.DisabledPreSend) => true,
 
+            (NyxRelayStreamingPhase.PlaceholderSent, NyxRelayStreamingPhase.PlaceholderSent) => true,
             (NyxRelayStreamingPhase.PlaceholderSent, NyxRelayStreamingPhase.Streaming) => true,
             (NyxRelayStreamingPhase.PlaceholderSent, NyxRelayStreamingPhase.SuppressingInterim) => true,
             (NyxRelayStreamingPhase.PlaceholderSent, NyxRelayStreamingPhase.TerminalSucceeded) => true,
@@ -89,6 +113,7 @@ public sealed partial class ConversationGAgent
             (NyxRelayStreamingPhase.Streaming, NyxRelayStreamingPhase.TerminalSucceeded) => true,
             (NyxRelayStreamingPhase.Streaming, NyxRelayStreamingPhase.TerminalPartial) => true,
 
+            (NyxRelayStreamingPhase.SuppressingInterim, NyxRelayStreamingPhase.SuppressingInterim) => true,
             (NyxRelayStreamingPhase.SuppressingInterim, NyxRelayStreamingPhase.TerminalSucceeded) => true,
             (NyxRelayStreamingPhase.SuppressingInterim, NyxRelayStreamingPhase.TerminalPartial) => true,
 
@@ -109,7 +134,18 @@ public sealed partial class ConversationGAgent
             NormalizeOptional(lifecycle.PlatformMessageId),
             lifecycle.LastFlushedText ?? string.Empty,
             lifecycle.EditCount,
-            NormalizeOptional(lifecycle.TerminalReason));
+            NormalizeOptional(lifecycle.TerminalReason),
+            lifecycle.NyxRelayInFlightOperation == NyxRelayTextOperationKind.Unspecified
+                ? null
+                : new NyxRelayTextOperationInFlight(
+                    lifecycle.NyxRelayInFlightOperation,
+                    lifecycle.NyxRelayInFlightSequence,
+                    lifecycle.NyxRelayOperationGeneration),
+            lifecycle.NyxRelayOperationGeneration,
+            NormalizeOptional(lifecycle.PendingAccumulatedText),
+            NormalizeOptional(lifecycle.PendingFinalizeText),
+            NormalizeOptional(lifecycle.PendingFinalizeCommandId),
+            lifecycle.PendingNyxRelayTerminalState);
     }
 
     /// <summary>
@@ -141,9 +177,9 @@ public sealed partial class ConversationGAgent
     /// updated state, and returns it. Illegal transitions are logged at warn level and
     /// return the unchanged current state — actor turns must keep making progress.
     /// </summary>
-    // Refactor (iter20/cluster-004):
-    //   Old pattern: Phase transitions mutated a private in-memory streaming dictionary.
-    //   New principle: Persist every lifecycle phase change as a typed actor event owned by ConversationGAgent.
+    // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
+    //   Old pattern: ConversationReplyLifecycleChangedEvent carried full ConversationReplyLifecycleState
+    //   New principle: event describes transition facts; reducer derives current state from event + actor state
     private async Task<NyxRelayStreamingState> TransitionNyxRelayStreamingPhaseAsync(
         string correlationId,
         NyxRelayStreamingState current,
@@ -163,15 +199,19 @@ public sealed partial class ConversationGAgent
         var updated = carried with
         {
             Phase = next,
+            InFlight = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.InFlight,
+            PendingAccumulatedText = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingAccumulatedText,
+            PendingFinalizeText = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingFinalizeText,
+            PendingFinalizeCommandId = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingFinalizeCommandId,
+            PendingTerminalState = IsTerminalNyxRelayStreamingPhase(next)
+                ? LlmReplyTerminalState.Unspecified
+                : carried.PendingTerminalState,
             TerminalReason = IsTerminalNyxRelayStreamingPhase(next)
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
         };
-        await PersistDomainEventAsync(new ConversationReplyLifecycleChangedEvent
-        {
-            Lifecycle = ToLifecycleState(correlationId, updated),
-            ChangedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        });
+        var changedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await PersistDomainEventAsync(ToLifecycleChangedEvent(correlationId, current, updated, changedAtUnixMs));
         return updated;
     }
 
@@ -212,18 +252,82 @@ public sealed partial class ConversationGAgent
             _ => ConversationReplyLifecyclePhase.TextIdle,
         };
 
-    private static ConversationReplyLifecycleState ToLifecycleState(
+    private static ConversationReplyLifecycleChangedEvent ToLifecycleChangedEvent(
         string correlationId,
-        NyxRelayStreamingState state) =>
-        new()
+        NyxRelayStreamingState current,
+        NyxRelayStreamingState updated,
+        long changedAtUnixMs)
+    {
+        var evt = new ConversationReplyLifecycleChangedEvent
         {
             CorrelationId = correlationId,
             Mode = ConversationReplyLifecycleMode.NyxRelayText,
-            Phase = ToLifecyclePhase(state.Phase),
-            PlatformMessageId = state.PlatformMessageId ?? string.Empty,
-            LastFlushedText = state.LastFlushedText ?? string.Empty,
-            EditCount = state.EditCount,
-            TerminalReason = state.TerminalReason ?? string.Empty,
-            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            PreviousPhase = ToLifecyclePhase(current.Phase),
+            Phase = ToLifecyclePhase(updated.Phase),
+            ChangedAtUnixMs = changedAtUnixMs,
         };
+
+        if (!string.Equals(current.PlatformMessageId, updated.PlatformMessageId, StringComparison.Ordinal))
+            evt.PlatformMessageIdAssigned = updated.PlatformMessageId ?? string.Empty;
+        if (!string.Equals(current.LastFlushedText, updated.LastFlushedText, StringComparison.Ordinal))
+            evt.FlushedTextDelta = updated.LastFlushedText ?? string.Empty;
+        if (current.EditCount != updated.EditCount)
+            evt.EditCountDelta = updated.EditCount - current.EditCount;
+        if (!string.Equals(current.TerminalReason, updated.TerminalReason, StringComparison.Ordinal))
+            evt.TerminalReason = updated.TerminalReason ?? string.Empty;
+
+        var currentOperation = current.InFlight?.Operation ?? NyxRelayTextOperationKind.Unspecified;
+        var updatedOperation = updated.InFlight?.Operation ?? NyxRelayTextOperationKind.Unspecified;
+        if (currentOperation != updatedOperation)
+            evt.NyxRelayOperation = updatedOperation;
+
+        var currentSequence = current.InFlight?.Sequence ?? 0;
+        var updatedSequence = updated.InFlight?.Sequence ?? 0;
+        if (currentSequence != updatedSequence)
+            evt.OperationSequence = updatedSequence;
+
+        if (current.OperationGeneration != updated.OperationGeneration ||
+            currentOperation != updatedOperation ||
+            currentSequence != updatedSequence)
+            evt.OperationGeneration = updated.OperationGeneration;
+        if (!string.Equals(current.PendingAccumulatedText, updated.PendingAccumulatedText, StringComparison.Ordinal))
+            evt.QueuedAccumulatedText = updated.PendingAccumulatedText ?? string.Empty;
+        if (!string.Equals(current.PendingFinalizeText, updated.PendingFinalizeText, StringComparison.Ordinal))
+            evt.FinalizeText = updated.PendingFinalizeText ?? string.Empty;
+        if (!string.Equals(current.PendingFinalizeCommandId, updated.PendingFinalizeCommandId, StringComparison.Ordinal))
+            evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
+        if (current.PendingTerminalState != updated.PendingTerminalState)
+            evt.NyxRelayTerminalState = updated.PendingTerminalState;
+
+        return evt;
+    }
+
+    private long NextNyxRelayTextOperationGeneration(NyxRelayStreamingState state) =>
+        Math.Max(state.OperationGeneration, state.InFlight?.Generation ?? 0) + 1;
+
+    private static string BuildNyxRelayTextOperationTimeoutCallbackId(
+        string correlationId,
+        NyxRelayTextOperationKind operation,
+        long generation) =>
+        $"conversation-nyx-relay-text:{correlationId}:{operation}:{generation}";
+
+    private static string BuildNyxRelayTextOperationId(
+        string correlationId,
+        NyxRelayTextOperationKind operation,
+        long sequence,
+        long generation) =>
+        $"{correlationId}:{operation}:{sequence}:{generation}";
+
+    private static bool MatchesNyxRelayTextInFlight(
+        NyxRelayStreamingState state,
+        NyxRelayTextOperationKind operation,
+        long sequence,
+        long generation)
+    {
+        if (state.InFlight is not { } inFlight)
+            return false;
+        return inFlight.Operation == operation &&
+               inFlight.Sequence == sequence &&
+               inFlight.Generation == generation;
+    }
 }

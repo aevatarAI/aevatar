@@ -17,6 +17,13 @@ public sealed class ServiceInvokeOptions
     /// <summary>Whether to enable the invoke_service tool.</summary>
     public bool EnableInvoke { get; set; } = true;
 
+    /// <summary>
+    /// When <c>true</c>, <c>invoke_service</c> returns <c>RequiresApproval=false</c>
+    /// so the local tool approval middleware executes the invocation immediately.
+    /// Defaults to false because service commands can advance actor-owned business state.
+    /// </summary>
+    public bool BypassInvokeApproval { get; set; }
+
     /// <summary>When true, tools resolve scope dynamically from AgentToolRequestContext at execution time,
     /// allowing registration even when TenantId/AppId/Namespace are not statically configured.</summary>
     public bool EnableDynamicScopeResolution { get; set; }

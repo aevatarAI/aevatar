@@ -8,4 +8,6 @@ public sealed class ChatRoutingOptions
 public sealed class ChatRoutingDefaultsOptions
 {
     public string FallbackModel { get; init; } = string.Empty;
+
+    public string DefaultForwardToModelToolSetName { get; set; } = string.Empty;
 }

@@ -610,9 +610,13 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in evt.Metadata)
-            metadata[key] = value;
+        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
+        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        var metadata = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveVariableName(evt.VariableName, evt.Metadata);
+        var secure = WorkflowSuspendedSecureInputMetadata.ResolveSecure(evt.Secure, evt.Metadata);
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveRedactedOutput(evt.RedactedOutput, evt.Metadata);
 
         events =
         [
@@ -629,9 +633,11 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                         SuspensionType = evt.SuspensionType,
                         Prompt = evt.Prompt,
                         TimeoutSeconds = evt.TimeoutSeconds,
-                        VariableName = evt.VariableName,
+                        VariableName = variableName,
                         Content = evt.Content,
                         DeliveryTargetId = evt.DeliveryTargetId,
+                        Secure = secure,
+                        RedactedOutput = redactedOutput,
                         Metadata = { metadata },
                     }),
                 },
@@ -639,6 +645,46 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         ];
         return true;
     }
+}
+
+internal static class WorkflowSuspendedSecureInputMetadata
+{
+    private static readonly HashSet<string> ReservedLegacyKeys =
+    [
+        "variable",
+        "secure",
+        "input_mode",
+        "redacted_output",
+    ];
+
+    public static Dictionary<string, string> FilterOpenExtensionMetadata(
+        IDictionary<string, string> metadata)
+    {
+        var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            if (!ReservedLegacyKeys.Contains(key))
+                filtered[key] = value;
+        }
+
+        return filtered;
+    }
+
+    public static string ResolveVariableName(string? typedValue, IDictionary<string, string> metadata) =>
+        !string.IsNullOrWhiteSpace(typedValue)
+            ? typedValue
+            : metadata.TryGetValue("variable", out var legacy) ? legacy : string.Empty;
+
+    public static bool ResolveSecure(bool typedValue, IDictionary<string, string> metadata) =>
+        typedValue ||
+        (metadata.TryGetValue("secure", out var legacy) &&
+         bool.TryParse(legacy, out var parsed) &&
+         parsed);
+
+    public static string ResolveRedactedOutput(string? typedValue, IDictionary<string, string> metadata) =>
+        !string.IsNullOrWhiteSpace(typedValue)
+            ? typedValue
+            : metadata.TryGetValue("redacted_output", out var legacy) ? legacy : string.Empty;
 }
 
 public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler

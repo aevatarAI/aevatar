@@ -126,6 +126,39 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
+    public void Compose_with_typed_llm_selection_projects_callback_arguments()
+    {
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            Label = "Fast",
+            LlmSelection = new LlmSelectionActionPayload
+            {
+                Action = "x",
+                ServiceId = "s",
+                PresetId = "p",
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var callbackData = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0]
+            .GetProperty("callback_data")
+            .GetString();
+        callbackData.ShouldNotBeNull();
+        Encoding.UTF8.GetByteCount(callbackData!).ShouldBeLessThanOrEqualTo(64);
+        using var callbackDocument = JsonDocument.Parse(callbackData!);
+        var value = callbackDocument.RootElement.GetProperty("v");
+        value.GetProperty("llm_action").GetString().ShouldBe("x");
+        value.GetProperty("service_id").GetString().ShouldBe("s");
+        value.GetProperty("preset_id").GetString().ShouldBe("p");
+    }
+
+    [Fact]
     public void Compose_omits_button_when_callback_data_cannot_carry_submitted_value()
     {
         var longServiceId = new string('x', 80);

@@ -34,6 +34,7 @@ public class LarkToolsTests
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             document.RootElement.GetProperty("message_id").GetString().Should().Be("om_123");
             document.RootElement.GetProperty("target_type").GetString().Should().Be("chat_id");
+            client.LastSendToken.Should().Be("token-123");
             client.LastSendRequest.Should().NotBeNull();
             client.LastSendRequest!.MessageType.Should().Be("text");
         }
@@ -41,6 +42,74 @@ public class LarkToolsTests
         {
             AgentToolRequestContext.CurrentMetadata = null;
         }
+    }
+
+    [Fact]
+    public async Task LarkMessagesSendTool_PropagatesTypedCallerScope()
+    {
+        var client = new StubLarkNyxClient
+        {
+            SendResponse = """{"code":0,"data":{"message_id":"om_123"}}""",
+        };
+        var tool = new LarkMessagesSendTool(client);
+        using var _ = new AgentToolRequestContextScope(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("caller-token", null, null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)));
+
+        var result = await tool.ExecuteAsync(
+            """{"target_type":"chat_id","target_id":"oc_456","message_type":"text","text":"Hello from caller scope"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        client.LastSendToken.Should().Be("caller-token");
+        client.LastSendRequest.Should().NotBeNull();
+        client.LastSendRequest!.TargetId.Should().Be("oc_456");
+    }
+
+    [Fact]
+    public async Task LarkMessagesSendTool_DoesNotLetPayloadOrExternalMetadataOverrideCallerScope()
+    {
+        var client = new StubLarkNyxClient
+        {
+            SendResponse = """{"code":0,"data":{"message_id":"om_123"}}""",
+        };
+        var tool = new LarkMessagesSendTool(client);
+        using var _ = new AgentToolRequestContextScope(new AgentToolExecutionContext(
+            AgentToolRequestIdentity.Empty,
+            new AgentToolCredentials("trusted-caller-token", null, null),
+            AgentToolCallerContext.Empty,
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            LLMRequestRoutingContext.Empty,
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "external-metadata-token",
+            }));
+
+        var result = await tool.ExecuteAsync(
+            """
+            {
+              "target_type": "chat_id",
+              "target_id": "oc_456",
+              "message_type": "text",
+              "text": "Hello from caller scope",
+              "nyx_id_access_token": "payload-token",
+              "headers": {
+                "x-nyxid-access-token": "payload-header-token"
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        client.LastSendToken.Should().Be("trusted-caller-token");
     }
 
     [Fact]
@@ -1328,6 +1397,7 @@ public class LarkToolsTests
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
 
+        public string? LastSendToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -1342,6 +1412,7 @@ public class LarkToolsTests
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
+            LastSendToken = token;
             LastSendRequest = request;
             return Task.FromResult(SendResponse);
         }
@@ -1426,6 +1497,22 @@ public class LarkToolsTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return _responder(request);
+        }
+    }
+
+    private sealed class AgentToolRequestContextScope : IDisposable
+    {
+        private readonly AgentToolExecutionContext? _previous;
+
+        public AgentToolRequestContextScope(AgentToolExecutionContext context)
+        {
+            _previous = AgentToolRequestContext.Current;
+            AgentToolRequestContext.Current = context;
+        }
+
+        public void Dispose()
+        {
+            AgentToolRequestContext.Current = _previous;
         }
     }
 

@@ -16,11 +16,11 @@ public sealed class UserAgentCatalogStartupServiceTests
     {
         var operations = new ConcurrentQueue<string>();
         var activationService = new RecordingActivationService(operations);
-        var projectionPort = new UserAgentCatalogProjectionPort(activationService);
+        var projectionActivator = new UserAgentCatalogProjectionBootstrapActivator(activationService);
         var actorRuntime = new RecordingActorRuntime(operations, legacyScopeExists: true);
         var streamProvider = new RecordingStreamProvider(operations);
         var service = new UserAgentCatalogStartupService(
-            projectionPort,
+            projectionActivator,
             actorRuntime,
             streamProvider,
             NullLogger<UserAgentCatalogStartupService>.Instance);
@@ -38,9 +38,9 @@ public sealed class UserAgentCatalogStartupServiceTests
             $"stream:remove-relay:{UserAgentCatalogGAgent.WellKnownId}->{legacyScopeActorId}",
             $"runtime:exists:{legacyScopeActorId}",
             $"runtime:destroy:{legacyScopeActorId}",
-            $"projection:ensure:{UserAgentCatalogGAgent.WellKnownId}:{UserAgentCatalogProjectionPort.ProjectionKind}");
+            $"projection:ensure:{UserAgentCatalogGAgent.WellKnownId}:{UserAgentCatalogProjectionBootstrapActivator.ProjectionKind}");
         activationService.LastRequest.Should().NotBeNull();
-        activationService.LastRequest!.ProjectionKind.Should().Be(UserAgentCatalogProjectionPort.ProjectionKind);
+        activationService.LastRequest!.ProjectionKind.Should().Be(UserAgentCatalogProjectionBootstrapActivator.ProjectionKind);
         streamProvider.Stream.RemovedRelayTargets.Should().ContainSingle().Which.Should().Be(legacyScopeActorId);
         actorRuntime.DestroyedActorIds.Should().ContainSingle().Which.Should().Be(legacyScopeActorId);
     }

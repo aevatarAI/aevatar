@@ -10,11 +10,14 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: execution listing/detail/start/stop mixed local workspace reads with service-run orchestration details.
-//   New principle: executions route through service invocation/run query ports; workspace settings are read only as a fallback for runtime URL defaults.
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class ExecutionService
 {
+    private const int ExecutionListTake = 50;
+    private const int ExecutionLookupTake = 100;
+
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> _resumeDispatchService;
@@ -48,10 +51,11 @@ public sealed class ExecutionService
             return [];
 
         var runs = await _serviceRunQueryPort.ListAsync(
-            new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: 50),
+            new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: ExecutionListTake),
             cancellationToken);
         return runs
             .OrderByDescending(run => run.CreatedAt)
+            .Take(ExecutionListTake)
             .Select(ToSummary)
             .ToList();
     }
@@ -71,8 +75,9 @@ public sealed class ExecutionService
         if (byCommand != null)
             return await ToDetailAsync(byCommand, cancellationToken);
 
+        // Bounded fallback for callers that pass runId instead of commandId.
         var runs = await _serviceRunQueryPort.ListAsync(
-            new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: 100),
+            new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: ExecutionLookupTake),
             cancellationToken);
         var run = runs.FirstOrDefault(item =>
             string.Equals(item.RunId, normalizedExecutionId, StringComparison.Ordinal) ||
@@ -121,7 +126,7 @@ public sealed class ExecutionService
         return new ExecutionDetail(
             ExecutionId: string.IsNullOrWhiteSpace(receipt.CommandId) ? executionId : receipt.CommandId,
             WorkflowName: string.IsNullOrWhiteSpace(request.WorkflowName) ? request.WorkflowId.Trim() : request.WorkflowName.Trim(),
-            Prompt: prompt,
+            Prompt: string.Empty,
             RuntimeBaseUrl: runtimeBaseUrl,
             Status: "accepted",
             StartedAtUtc: startedAtUtc,
@@ -180,8 +185,9 @@ public sealed class ExecutionService
             cancellationToken);
         if (run is null)
         {
+            // Bounded fallback for callers that pass runId instead of commandId.
             var runs = await _serviceRunQueryPort.ListAsync(
-                new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: 100),
+                new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: ExecutionLookupTake),
                 cancellationToken);
             run = runs.FirstOrDefault(item =>
                 string.Equals(item.RunId, normalizedExecutionId, StringComparison.Ordinal) ||

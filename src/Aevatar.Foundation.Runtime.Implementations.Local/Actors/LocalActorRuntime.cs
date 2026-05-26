@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -117,6 +118,91 @@ public sealed class LocalActorRuntime : IActorRuntime
         }
         catch (Exception ex)
         {
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
+    }
+
+    /// <summary>Creates actor by stable agent kind and records local activation index.</summary>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    public async Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
+        var registry = _services.GetRequiredService<IAgentKindRegistry>();
+        var implementation = registry.Resolve(agentKind.Trim());
+        var actorId = id ?? $"{implementation.Metadata.Kind}:{Guid.NewGuid():N}";
+
+        if (_actors.TryGetValue(actorId, out var existing))
+        {
+            if (!string.Equals(
+                    existing.Agent.GetType().FullName,
+                    implementation.Metadata.ImplementationClrTypeName,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' already exists with agent type '{existing.Agent.GetType().FullName}', expected kind '{implementation.Metadata.Kind}'.");
+            }
+
+            return existing;
+        }
+
+        var agent = implementation.Factory(_services);
+        var agentType = agent.GetType();
+        var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
+        var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
+        var deduplicator = _services.GetService<IEventDeduplicator>();
+        var actor = new LocalActor(
+            agent,
+            actorId,
+            _streams,
+            logger,
+            _deactivationHookDispatcher,
+            deduplicator);
+        var publisher = new LocalActorPublisher(
+            actorId,
+            () => actor.ParentId,
+            () => actor.ChildrenCount,
+            _streams,
+            propagationPolicy);
+
+        InjectDependencies(agent, publisher, actorId, logger);
+
+        if (!_actors.TryAdd(actorId, actor))
+        {
+            var authoritative = _actors.GetValueOrDefault(actorId);
+            if (authoritative != null)
+            {
+                if (!string.Equals(
+                        authoritative.Agent.GetType().FullName,
+                        implementation.Metadata.ImplementationClrTypeName,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' already exists with agent type '{authoritative.Agent.GetType().FullName}', expected kind '{implementation.Metadata.Kind}'.");
+                }
+
+                return authoritative;
+            }
+
+            throw new InvalidOperationException($"Actor '{actorId}' already exists.");
+        }
+
+        using var activity = AevatarActivitySource.StartAgentSpawn(actorId, implementation.Metadata.Kind);
+        try
+        {
+            await _activationIndexStore.UpsertAsync(actorId, implementation.Metadata.ImplementationClrTypeName, ct);
+            await actor.ActivateAsync(ct);
+            AgentMetrics.ActiveActors.Add(1);
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+            _logger.LogInformation("Actor {Id} ({Kind}) created", actorId, implementation.Metadata.Kind);
+            return actor;
+        }
+        catch (Exception ex)
+        {
+            _actors.TryRemove(actorId, out _);
+            await _activationIndexStore.DeleteAsync(actorId, ct);
             AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             throw;
         }

@@ -15,6 +15,27 @@ public sealed class WorkflowRunGAgentSourceRegressionTests
         source.Should().NotContain("Task.Run(");
     }
 
+    [Fact]
+    public async Task WorkflowStepTargetAgentResolver_Source_ShouldNotContainRawLifecycleImplementation()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var sourcePath = Path.Combine(
+            repoRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Core",
+            "Primitives",
+            "WorkflowStepTargetAgentResolver.cs");
+
+        var executableSource = StripLineComments(await File.ReadAllTextAsync(sourcePath));
+
+        executableSource.Should().NotContain("agent_type");
+        executableSource.Should().NotContain("agent_id");
+        executableSource.Should().NotContain("Type.GetType");
+        executableSource.Should().NotContain("AppDomain.CurrentDomain");
+        executableSource.Should().NotContain("IWorkflowAgentTypeAliasProvider");
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -28,4 +49,10 @@ public sealed class WorkflowRunGAgentSourceRegressionTests
 
         throw new InvalidOperationException("Repository root could not be resolved.");
     }
+
+    private static string StripLineComments(string source) =>
+        string.Join(
+            Environment.NewLine,
+            source.Split([Environment.NewLine], StringSplitOptions.None)
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
 }

@@ -1,6 +1,7 @@
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Studio.Application.Studio.Authoring;
 
@@ -24,7 +25,8 @@ public sealed record StudioAuthoringPreviewRequest(
     string? CurrentSource = null,
     AppScriptPackage? CurrentPackage = null,
     string? CurrentFilePath = null,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    LLMControlContext? LlmControl = null);
 
 // Refactor (iter21/cluster-001):
 //   Old pattern: Host generator progress enums were split by fake workflow/script service shells.
@@ -62,7 +64,8 @@ public sealed record StudioAuthoringLLMRequest(
     StudioAuthoringKind Kind,
     string Prompt,
     string RequestId,
-    IReadOnlyDictionary<string, string>? Metadata);
+    IReadOnlyDictionary<string, string>? Metadata,
+    LLMControlContext? LlmControl = null);
 
 // Refactor (iter21/cluster-001):
 //   Old pattern: Host aggregated provider stream chunks and leaked terminal bookkeeping into endpoint flow.

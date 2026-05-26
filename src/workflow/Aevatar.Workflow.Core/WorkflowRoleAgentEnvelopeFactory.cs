@@ -22,7 +22,6 @@ internal static class WorkflowRoleAgentEnvelopeFactory
             MaxTokens = role.MaxTokens ?? 0,
             MaxToolRounds = role.MaxToolRounds ?? 0,
             MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
             EventModules = role.EventModules ?? string.Empty,
             EventRoutes = role.EventRoutes ?? string.Empty,
         };

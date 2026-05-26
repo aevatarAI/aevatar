@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -20,6 +21,14 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
+    }
+
+    public static void SetToolContext(
+        IWorkflowExecutionStateHost stateHost,
+        AgentToolExecutionContext? toolContext)
+    {
+        ArgumentNullException.ThrowIfNull(stateHost);
+        stateHost.RuntimeContext.ApplyToolContext(toolContext);
     }
 
     // Refactor (iter16/cluster-031):

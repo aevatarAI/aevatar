@@ -85,4 +85,19 @@ public sealed class VoicePresenceStateMachine
         State = VoicePresenceState.ResponseInProgress;
         return CurrentResponseId;
     }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public void Restore(
+        VoicePresenceState state,
+        int currentResponseId,
+        int lastDrainAckResponseId,
+        long lastDrainAckPlayoutSequence)
+    {
+        State = state;
+        CurrentResponseId = currentResponseId;
+        LastDrainAckResponseId = lastDrainAckResponseId;
+        LastDrainAckPlayoutSequence = lastDrainAckPlayoutSequence;
+    }
 }

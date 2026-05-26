@@ -29,4 +29,7 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
+  </ItemGroup>
 </Project>

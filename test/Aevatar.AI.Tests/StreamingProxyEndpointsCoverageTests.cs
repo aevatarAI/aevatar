@@ -1,10 +1,8 @@
 using System.Reflection;
 using System.Security.Claims;
 using System.Text;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -12,7 +10,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using AppStreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 
 namespace Aevatar.AI.Tests;
 
@@ -96,14 +93,15 @@ public sealed class StreamingProxyEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnStoredParticipants()
+    public async Task HandleListParticipantsAsync_ShouldReturnRoomProjectionParticipants()
     {
-        var participantStore = new RecordingParticipantStore
+        var participantService = new RecordingRoomParticipantService
         {
-            Participants =
-            [
-                new AppStreamingProxyParticipant("agent-1", "Bot", DateTimeOffset.Parse("2026-04-14T10:00:00+08:00")),
-            ],
+            Result = new StreamingProxyRoomParticipantListResult(
+                "room-1",
+                5,
+                DateTimeOffset.Parse("2026-04-14T10:00:00+08:00"),
+                [new StreamingProxyRoomParticipantEntry("agent-1", "Bot", DateTimeOffset.Parse("2026-04-14T10:00:00+08:00"))]),
         };
         var loggerFactory = LoggerFactory.Create(_ => { });
 
@@ -111,7 +109,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            participantService,
             loggerFactory,
             CancellationToken.None);
 
@@ -120,12 +118,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
         statusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("agent-1");
         body.Should().Contain("Bot");
+        participantService.Queries.Should().ContainSingle()
+            .Which.Should().Be(new StreamingProxyRoomParticipantListQuery("room-1"));
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenStoreThrows()
+    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenParticipantServiceThrows()
     {
-        var participantStore = new RecordingParticipantStore
+        var participantService = new RecordingRoomParticipantService
         {
             ThrowOnList = new InvalidOperationException("list failed"),
         };
@@ -135,7 +135,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantStore,
+            participantService,
             loggerFactory,
             CancellationToken.None);
 
@@ -172,14 +172,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
-        var participantStore = new RecordingParticipantStore();
+        var participantService = new RecordingRoomParticipantService();
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             "room-1",
-            participantStore,
+            participantService,
             loggerFactory,
             CancellationToken.None);
 
@@ -206,13 +206,13 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         string roomId,
-        IStreamingProxyParticipantStore participantStore,
+        IStreamingProxyRoomParticipantService participantService,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantStore, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantService, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -317,157 +317,87 @@ public sealed class StreamingProxyEndpointsCoverageTests
             Commands.Add(command);
             return Task.FromResult(result);
         }
-    }
 
-    private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
-    {
-        public Exception? ThrowOnList { get; init; }
-        public IReadOnlyList<AppStreamingProxyParticipant> Participants { get; init; } = [];
-
-        public Task<IReadOnlyList<AppStreamingProxyParticipant>> ListAsync(
-            string roomId,
+        public Task<StreamingProxyRoomPostMessageResult> PostMessageAsync(
+            StreamingProxyRoomPostMessageCommand command,
             CancellationToken cancellationToken = default)
         {
-            _ = roomId;
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomPostMessageResult(
+                StreamingProxyRoomPostMessageStatus.Accepted));
+        }
+
+        public Task<StreamingProxyRoomJoinResult> JoinAsync(
+            StreamingProxyRoomJoinCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomJoinResult(
+                StreamingProxyRoomJoinStatus.Accepted,
+                command.AgentId?.Trim(),
+                command.DisplayName?.Trim()));
+        }
+
+        public Task<StreamingProxyRoomLeaveResult> LeaveAsync(
+            StreamingProxyRoomLeaveCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomLeaveResult(
+                StreamingProxyRoomLeaveStatus.Accepted,
+                command.AgentId?.Trim()));
+        }
+
+        public Task PublishTerminalStateAsync(
+            StreamingProxyRoomTerminalStateCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingRoomParticipantService : IStreamingProxyRoomParticipantService
+    {
+        public List<StreamingProxyRoomParticipantListQuery> Queries { get; } = [];
+        public Exception? ThrowOnList { get; init; }
+        public StreamingProxyRoomParticipantListResult? Result { get; init; }
+
+        public Task<StreamingProxyRoomParticipantListResult> ListAsync(
+            StreamingProxyRoomParticipantListQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (ThrowOnList is not null)
                 throw ThrowOnList;
 
-            return Task.FromResult(Participants);
+            Queries.Add(query);
+            return Task.FromResult(Result ?? new StreamingProxyRoomParticipantListResult(
+                query.RoomId,
+                0,
+                DateTimeOffset.MinValue,
+                []));
         }
 
-        public Task AddAsync(
-            string roomId,
-            string agentId,
-            string displayName,
+        public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureNyxParticipantsJoinedAsync(
+            StreamingProxyRoomNyxParticipantJoinCommand command,
             CancellationToken cancellationToken = default)
         {
-            _ = roomId;
-            _ = agentId;
-            _ = displayName;
-            return Task.CompletedTask;
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<StreamingProxyNyxParticipantDefinition>>([]);
         }
 
-        public Task RemoveParticipantAsync(
-            string roomId,
-            string agentId,
+        public Task<int> GenerateNyxRepliesAsync(
+            StreamingProxyRoomNyxReplyCommand command,
             CancellationToken cancellationToken = default)
         {
-            _ = roomId;
-            _ = agentId;
-            return Task.CompletedTask;
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(0);
         }
-
-        public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
-        {
-            _ = roomId;
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingActorRuntime(List<string> operations, IActor actor) : IActorRuntime
-    {
-        public Exception? ThrowOnCreate { get; init; }
-        public List<string> DestroyedActorIds { get; } = [];
-        public RecordingActor? LastCreatedActor { get; private set; }
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
-
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
-        {
-            _ = agentType;
-            ct.ThrowIfCancellationRequested();
-
-            var actorId = id ?? throw new InvalidOperationException("Actor id is required for this test.");
-            operations.Add($"runtime:create:{actorId}");
-            if (ThrowOnCreate is not null)
-                throw ThrowOnCreate;
-
-            LastCreatedActor = actor is RecordingActor recordingActor && recordingActor.Id == actorId
-                ? recordingActor
-                : new RecordingActor(actorId, operations);
-            return Task.FromResult<IActor>(LastCreatedActor);
-        }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            operations.Add($"runtime:destroy:{id}");
-            DestroyedActorIds.Add(id);
-            return Task.CompletedTask;
-        }
-
-        public Task<IActor?> GetAsync(string id)
-        {
-            _ = id;
-            return Task.FromResult<IActor?>(null);
-        }
-
-        public Task<bool> ExistsAsync(string id)
-        {
-            _ = id;
-            return Task.FromResult(false);
-        }
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
-        {
-            _ = parentId;
-            _ = childId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default)
-        {
-            _ = childId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingActor(string id, List<string>? operations = null) : IActor
-    {
-        public List<EventEnvelope> ReceivedEnvelopes { get; } = [];
-
-        public string Id { get; } = id;
-
-        public IAgent Agent { get; } = new StubAgent(id);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            operations?.Add($"actor:init:{Id}");
-            ReceivedEnvelopes.Add(envelope);
-            return Task.CompletedTask;
-        }
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = envelope;
-            return Task.CompletedTask;
-        }
-
-        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
-
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<System.Type>>([]);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

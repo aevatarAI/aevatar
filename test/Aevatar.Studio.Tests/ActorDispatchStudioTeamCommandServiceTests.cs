@@ -18,7 +18,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -52,8 +52,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     [Fact]
     public async Task CreateAsync_ShouldGenerateTeamId_WhenRequestOmitsIt()
     {
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), new RecordingDispatchPort());
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(new RecordingDispatchPort()));
 
         var summary = await service.CreateAsync(
             ScopeId,
@@ -68,8 +67,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task UpdateAsync_ShouldDispatchUpdatedEvent_WhenDisplayNameChanges()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.UpdateAsync(
             ScopeId, "t-1",
@@ -87,8 +85,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task UpdateAsync_ShouldDispatchUpdatedEvent_WhenDescriptionChanges()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.UpdateAsync(
             ScopeId, "t-1",
@@ -106,8 +103,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task UpdateAsync_ShouldNoOp_WhenNothingToChange()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.UpdateAsync(
             ScopeId, "t-1",
@@ -121,8 +117,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task UpdateAsync_ShouldDispatchBothFields_WhenBothPresent()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.UpdateAsync(
             ScopeId, "t-1",
@@ -144,7 +139,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(bootstrap, dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
         await service.ArchiveAsync(ScopeId, "t-1", CancellationToken.None);
 
@@ -161,8 +156,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task SetEntryMemberAsync_ShouldDispatchEntryMemberChangedEvent()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.SetEntryMemberAsync(ScopeId, "t-1", "m-1", CancellationToken.None);
 
@@ -178,8 +172,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public async Task ClearEntryMemberAsync_ShouldDispatchEntryMemberChangedEventWithoutMemberId()
     {
         var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioTeamCommandService(
-            new RecordingBootstrap(), dispatch);
+        var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
         await service.ClearEntryMemberAsync(ScopeId, "t-1", CancellationToken.None);
 
@@ -194,7 +187,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     public void Constructor_ShouldRejectNullDependencies()
     {
         FluentActions.Invoking(() =>
-                new ActorDispatchStudioTeamCommandService(null!, new RecordingDispatchPort()))
+                new ActorDispatchStudioTeamCommandService(null!, CreateCommandDispatch(new RecordingDispatchPort())))
             .Should().Throw<ArgumentNullException>();
         FluentActions.Invoking(() =>
                 new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), null!))
@@ -230,12 +223,32 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatches.Add(new DispatchedCommand(actorId, envelope));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
+    }
+
+    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
+    {
+        var service = new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchService<
+            StudioProjectionActorCommand,
+            StudioProjectionActorCommandTarget,
+            StudioProjectionActorCommandReceipt,
+            StudioProjectionActorCommandStartError>(
+            new Aevatar.CQRS.Core.Commands.DefaultCommandDispatchPipeline<
+                StudioProjectionActorCommand,
+                StudioProjectionActorCommandTarget,
+                StudioProjectionActorCommandReceipt,
+                StudioProjectionActorCommandStartError>(
+                new StudioProjectionActorCommandTargetResolver(),
+                new Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy(),
+                new StudioProjectionActorCommandEnvelopeFactory(),
+                new Aevatar.CQRS.Core.Commands.ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
+                new StudioProjectionActorCommandReceiptFactory()));
+        return new StudioProjectionActorCommandDispatch(service);
     }
 }

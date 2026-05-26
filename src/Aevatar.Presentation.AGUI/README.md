@@ -5,21 +5,17 @@
 ## 职责
 
 - 定义标准 AG-UI 事件模型（运行、步骤、文本流、工具调用、自定义事件）
-- 提供线程安全有界事件通道 `AGUIEventChannel`
 - 提供 SSE 序列化写出器 `AGUISseWriter`
-- 抽象事件接收接口 `IAGUIEventSink`
+- 作为 HTTP/SSE presentation adapter 消费上游 CQRS/projection 已发布的 `AGUIEvent`
 
 ## 核心类型
 
-- `AGUIEvents.cs`：`RunStartedEvent`、`TextMessageContentEvent` 等事件定义
-- `AGUIEventChannel`：基于有界 `Channel<T>` 的事件聚合与异步读取（支持容量与满队列策略）
-  - `Push`：同步非阻塞写入（满队列时抛错）
-  - `PushAsync`：异步写入（`FullMode=Wait` 时执行背压等待）
+- `agui_events.proto`：`RunStartedEvent`、`TextMessageContentEvent` 等事件定义
 - `AGUISseWriter`：将 `AGUIEvent` 序列化为 `data: {json}\n\n` 输出
 
 ## 使用场景
 
-- API 层收到 Agent 事件后，投影为 `AGUIEvent` 并通过 SSE 推送给前端
+- API 层从 CQRS/projection interaction stream 收到 `AGUIEvent` 后，通过 SSE 推送给前端
 - 作为协议层被 `Aevatar.Workflow.Host.Api` 引用
 
 ## 依赖

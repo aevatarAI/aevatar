@@ -57,7 +57,6 @@ public sealed class ClaimReadModelProjectorTests
                 },
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
-            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
         var state = ScriptCommittedEnvelopeFactory.CreateState(
@@ -128,6 +127,25 @@ public sealed class ClaimReadModelProjectorTests
         InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher) =>
         new(
             dispatcher,
+            StubScriptProjectionPayloadMaterializer.WithReadModel(new ClaimReadModel
+            {
+                HasValue = true,
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                DecisionStatus = "ManualReview",
+                ManualReviewRequired = true,
+                AiSummary = "high-risk-profile",
+                Search = new ClaimSearchIndex
+                {
+                    LookupKey = "case-b:policy-b",
+                    DecisionKey = "manualreview",
+                },
+                Refs = new ClaimRefs
+                {
+                    PolicyId = "POLICY-B",
+                    OwnerActorId = "claim-runtime-manual",
+                },
+            }),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
 
     private static ScriptExecutionMaterializationContext CreateContext(string rootActorId) =>

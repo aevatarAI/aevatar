@@ -5,27 +5,11 @@ package aevatar.gagents.scheduled;
 option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
+import "agent_messages.proto";
 
-// ─── Owner scope (caller identity tuple) ───
-//
-// Carries the (NyxID user, surface platform, registration scope, channel
-// sender) tuple that uniquely identifies an agent's owner across cli/web/
-// lark/telegram. Replaces the scattered `owner_nyx_user_id` / `platform` /
-// `scope_id` fields scattered across catalog/state/event messages, so a
-// caller-scoped read is a single typed full-tuple equality.
-//
-// `platform` is a closed canonical string set: "nyxid" (native cli/web),
-// "lark", "telegram". Empty is invalid at the resolver output and at command
-// ingress.
-//
-// `registration_scope_id` and `sender_id` are required iff `platform != "nyxid"`
-// (non-native surfaces). For native NyxID surfaces both are empty strings.
-message OwnerScope {
-  string nyx_user_id = 1;
-  string platform = 2;
-  string registration_scope_id = 3;
-  string sender_id = 4;
-}
+// Refactor (iter91/cluster-091-owner-scope-foundation):
+//   Old: this proto declared OwnerScope locally even though the tuple is foundational caller identity.
+//   New: fields below use canonical aevatar.OwnerScope from Foundation.Abstractions.
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
 
@@ -80,7 +64,7 @@ message UserAgentCatalogEntry {
   // Caller scope captured at create time. New writes always populate this;
   // the deprecated platform/owner_nyx_user_id fields are kept readable for
   // legacy state (issue #466 migration plan).
-  OwnerScope owner_scope = 26;
+  aevatar.OwnerScope owner_scope = 26;
 }
 
 message UserAgentCatalogState {
@@ -112,7 +96,7 @@ message UserAgentCatalogUpsertCommand {
   string lark_receive_id_fallback = 16;
   string lark_receive_id_type_fallback = 17;
   // Caller scope captured at create time. Required for new writes.
-  OwnerScope owner_scope = 18;
+  aevatar.OwnerScope owner_scope = 18;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -159,11 +143,8 @@ message UserAgentCatalogDocument {
   string api_key_id = 16;
   string schedule_cron = 17;
   string schedule_timezone = 18;
-  string status = 19;
-  google.protobuf.Timestamp last_run_at_utc = 20;
-  google.protobuf.Timestamp next_run_at_utc = 21;
-  int32 error_count = 22;
-  string last_error = 23;
+  reserved 19, 20, 21, 22, 23;
+  reserved "status", "last_run_at_utc", "next_run_at_utc", "error_count", "last_error";
   // Mirrors UserAgentCatalogEntry.lark_receive_id*. Required so catalog-backed
   // outbound senders (FeishuCardHumanInteractionPort) read the typed target
   // through the projection rather than re-deriving from conversation_id.
@@ -178,15 +159,9 @@ message UserAgentCatalogDocument {
   // this; legacy rows may have only owner_nyx_user_id+platform set, in which
   // case the caller-scoped query port lazily synthesizes owner_scope on read
   // for the nyxid surface (issue #466 migration plan).
-  OwnerScope owner_scope = 28;
-  // Source watermarks for the merged catalog read model. Catalog membership
-  // state and runner execution state are owned by different actors, so the
-  // document exposes both authority versions and derives state_version from
-  // their committed watermarks instead of inventing a local projection counter.
-  int64 catalog_source_version = 29;
-  string catalog_last_event_id = 30;
-  int64 runner_source_version = 31;
-  string runner_last_event_id = 32;
+  aevatar.OwnerScope owner_scope = 28;
+  reserved 29, 30, 31, 32;
+  reserved "catalog_source_version", "catalog_last_event_id", "runner_source_version", "runner_last_event_id";
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.

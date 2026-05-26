@@ -228,6 +228,186 @@ public sealed class StreamingProxyRoomCommandServiceTests
         destroyIndex.Should().BeGreaterThan(unregisterIndex);
     }
 
+    [Fact]
+    public async Task PostMessageAsync_ShouldLookupRoomAndDispatchTypedMessage()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("room-a", operations);
+        var runtime = new RecordingActorRuntime(operations, actor);
+        await runtime.CreateAsync<StreamingProxyGAgent>("room-a");
+        operations.Clear();
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.PostMessageAsync(
+            new StreamingProxyRoomPostMessageCommand("room-a", " agent-1 ", null, " hello ", null),
+            CancellationToken.None);
+
+        result.Status.Should().Be(StreamingProxyRoomPostMessageStatus.Accepted);
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var message = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyParticipantMessageRequested>();
+        message.AgentId.Should().Be("agent-1");
+        message.AgentName.Should().Be("agent-1");
+        message.Content.Should().Be("hello");
+        message.SessionId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task PostMessageAsync_ShouldReturnRoomNotFound_WhenRoomIsMissing()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.PostMessageAsync(
+            new StreamingProxyRoomPostMessageCommand("missing-room", "agent-1", null, "hello", null),
+            CancellationToken.None);
+
+        result.Status.Should().Be(StreamingProxyRoomPostMessageStatus.RoomNotFound);
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task JoinAsync_ShouldLookupRoomAndDispatchTypedJoin()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("room-a", operations);
+        var runtime = new RecordingActorRuntime(operations, actor);
+        await runtime.CreateAsync<StreamingProxyGAgent>("room-a");
+        operations.Clear();
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.JoinAsync(
+            new StreamingProxyRoomJoinCommand("room-a", " agent-1 ", " Alice "),
+            CancellationToken.None);
+
+        result.Should().Be(new StreamingProxyRoomJoinResult(
+            StreamingProxyRoomJoinStatus.Accepted,
+            "agent-1",
+            "Alice"));
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var joined = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyParticipantJoinRequested>();
+        joined.AgentId.Should().Be("agent-1");
+        joined.DisplayName.Should().Be("Alice");
+    }
+
+    [Fact]
+    public async Task JoinAsync_ShouldReturnRoomNotFound_WhenRoomIsMissing()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.JoinAsync(
+            new StreamingProxyRoomJoinCommand("missing-room", "agent-1", "Alice"),
+            CancellationToken.None);
+
+        result.Should().Be(new StreamingProxyRoomJoinResult(
+            StreamingProxyRoomJoinStatus.RoomNotFound,
+            null,
+            null));
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LeaveAsync_ShouldLookupRoomAndDispatchTypedLeaveRequest()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("room-a", operations);
+        var runtime = new RecordingActorRuntime(operations, actor);
+        await runtime.CreateAsync<StreamingProxyGAgent>("room-a");
+        operations.Clear();
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.LeaveAsync(
+            new StreamingProxyRoomLeaveCommand("room-a", " agent-1 ", " unavailable "),
+            CancellationToken.None);
+
+        result.Should().Be(new StreamingProxyRoomLeaveResult(
+            StreamingProxyRoomLeaveStatus.Accepted,
+            "agent-1"));
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var left = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyParticipantLeaveRequested>();
+        left.AgentId.Should().Be("agent-1");
+        left.Reason.Should().Be("unavailable");
+    }
+
+    [Fact]
+    public async Task LeaveAsync_ShouldReturnRoomNotFound_WhenRoomIsMissing()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.LeaveAsync(
+            new StreamingProxyRoomLeaveCommand("missing-room", "agent-1", "unavailable"),
+            CancellationToken.None);
+
+        result.Should().Be(new StreamingProxyRoomLeaveResult(
+            StreamingProxyRoomLeaveStatus.RoomNotFound,
+            null));
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PublishTerminalStateAsync_ShouldDispatchTypedTerminalStateWithoutRuntimeLookup()
+    {
+        var operations = new List<string>();
+        var actor = new RecordingActor("room-a", operations);
+        var runtime = new RecordingActorRuntime(operations, actor);
+        await runtime.CreateAsync<StreamingProxyGAgent>("room-a");
+        operations.Clear();
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        await service.PublishTerminalStateAsync(
+            new StreamingProxyRoomTerminalStateCommand(
+                " room-a ",
+                " session-1 ",
+                StreamingProxyChatSessionTerminalStatus.Failed,
+                "failed"),
+            CancellationToken.None);
+
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var terminal = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxySessionTerminalStateRequested>();
+        terminal.SessionId.Should().Be("session-1");
+        terminal.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
+        terminal.ErrorMessage.Should().Be("failed");
+    }
+
     private sealed class RecordingGAgentActorRegistryCommandPort(List<string> operations)
         : IGAgentActorRegistryCommandPort
     {
@@ -328,13 +508,14 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             operations.Add($"dispatch:{actorId}");
             Dispatches.Add((actorId, envelope));
             var actor = await runtime.GetAsync(actorId);
             if (actor is not null)
                 await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 

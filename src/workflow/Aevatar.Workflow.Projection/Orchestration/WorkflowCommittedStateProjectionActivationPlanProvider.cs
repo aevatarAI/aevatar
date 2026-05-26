@@ -7,6 +7,9 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// <summary>
 /// Maps workflow committed state events to existing durable projection scopes.
 /// </summary>
+// Refactor (iter46/issue-871-workflow-file-catalog-query-port):
+//   Old pattern: Workflow catalog/capabilities query port discovered files, parsed YAML, loaded connector config, and cached results in singleton process memory during query execution.
+//   New principle: WorkflowGAgent per-definition authority; query ports only read freshness-bearing readmodels; file discovery/parsing happens at startup/import time, not in query path.
 // Refactor (iter18/cluster-006):
 //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
 //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
