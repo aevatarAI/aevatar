@@ -2526,11 +2526,11 @@ Controller 每 wakeup 第一动作:
 - ❌ 自动 resume(无 maintainer 信号 = stay stopped)
 - ❌ 把 `🆘 human` issue 数算入 actionable 池(那是等人,不是 actionable)
 
-### Hard floor = 2 codex(强制,per Auric 2026-05-25 "强制检测最少2个codex在运行吧")
+### Hard floor = 5 codex(强制,per Auric 2026-05-26 "把最小并发数改回5",此前 2026-05-25 一度降到 2 后已回滚)
 
-**铁律**:**`ps -ef | grep "timeout (3600|5400) codex" | wc -l` 必须 >= 2**(除非 stop 标记激活)。每次 controller wakeup 第一动作之后 + 每次 spawn / merge / banner 完成后,**必须立即 verify** `active_codex >= 2`,否则**当 turn 内**派满到 2 才允许 ScheduleWakeup / end-turn。
+**铁律**:**`ps -ef | grep "codex exec" | wc -l` 必须 >= 5**(除非 stop 标记激活)。每次 controller wakeup 第一动作之后 + 每次 spawn / merge / banner 完成后,**必须立即 verify** `active_codex >= 5`,否则**当 turn 内**派满到 5 才允许 ScheduleWakeup / end-turn。
 
-throttle floor 5→3 之后,**最低底线 2** 不能再降。Stop 状态(`.refactor-loop/.auto-stopped` 存在)是唯一允许 0 codex 的合法情况。
+throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正常 floor 5,绝对底线 throttle 3**。Stop 状态(`.refactor-loop/.auto-stopped` 存在)是唯一允许 0 codex 的合法情况。
 
 **派什么填底线**(优先级,从前往后选):
 1. **当前 fix loop / hotfix 在跑** → 自然满足(等待 task-notification 即可)
@@ -2539,24 +2539,32 @@ throttle floor 5→3 之后,**最低底线 2** 不能再降。Stop 状态(`.refa
 4. **active Phase 9 issue 等 judge** → 派 judge
 5. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex,但事件驱动 wake;同时确保至少 1 个 codex 在某处工作)
 6. **审计 backlog**:派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在)
+7. **Phase 10 advisory review**(新 phase):扫 eligible open PR 派 3 reviewer
+8. **Phase 11 issue intake**:label `auto-loop-triage` 给 eligible open issue
+9. **next-next iter audit**(speculative parallel)
 
 **自检脚本**(每 wakeup 第一动作之后):
 ```bash
-ACTIVE=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+ACTIVE=$(ps -ef | grep "codex exec" | grep -v grep | wc -l | tr -d ' ')
 if [ -f .refactor-loop/.auto-stopped ] || [ -f .refactor-loop/.pause ]; then
   : # stop 状态允许 0
-elif (( ACTIVE < 2 )); then
-  echo "FLOOR_VIOLATION: active=$ACTIVE < 2 — must dispatch before end-turn"
-  # 按上面优先级派
+elif (( ACTIVE < 5 )); then
+  echo "FLOOR_VIOLATION: active=$ACTIVE < 5 — must dispatch before end-turn"
+  # 按上面优先级派 (5 - ACTIVE) 个
 fi
 ```
 
+注:per Auric 2026-05-26 "ps grep timeout" undercount(spawn-codex 启动 codex exec subprocess,wrapper 不同 timeout 包装层级)→ 改用 `grep "codex exec"` 直接抓 codex exec 进程,更准。
+
 **反面**:
-- ❌ wakeup 结束时 `ACTIVE < 2` 且无 stop 标记 + 无 ScheduleWakeup → 死循环不前进
+- ❌ wakeup 结束时 `ACTIVE < 5` 且无 stop / throttle 标记 + 无 ScheduleWakeup → 死循环不前进
 - ❌ "等 CI 跑完"作为 0 codex 理由 → CI 跑时 controller 应该派下一波 Phase 9 r1(triaged 池有);CI Monitor 是 wake 信号不是 codex
 - ❌ 跨 turn 累积"等 r4 完成"+"等 Monitor"双重等待 0 codex → 必须主动派
+- ❌ floor 2 借口"等其他在跑"→ 主动派出新 audit / Phase 10 / Phase 11 填到 5
 
-事故记录(2026-05-25):hotfix r3/r4 期间 controller 0 codex 等 Monitor,Auric 提醒"修好了么 / 状态" 多次,因为 codex 没 visibility。Auric 直接指令"最少2个 codex" — 把这条加 hard rule 防再犯。
+事故记录:
+- 2026-05-25 一度把 hard floor 从 5 降到 2(per "强制检测最少2个 codex"),实际跑下来 floor 频繁 hit 1-2 critical violation,响应慢
+- 2026-05-26 Auric 显式指令"把最小并发数改回5",回滚到 5。throttle 3 是降速档,不是日常 floor
 
 ---
 
