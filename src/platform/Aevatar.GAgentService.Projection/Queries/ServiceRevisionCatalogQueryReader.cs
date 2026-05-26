@@ -55,7 +55,8 @@ public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQ
                     x.PreparedAt,
                     x.PublishedAt,
                     x.RetiredAt,
-                    BuildImplementationSnapshot(x)))
+                    BuildImplementationSnapshot(x),
+                    x.PreparedArtifact?.Clone()))
                 .ToList(),
             readModel.UpdatedAt,
             readModel.StateVersion,

@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "service_revision.proto";
 
 // --- ServiceCatalogReadModel ---
 
@@ -87,6 +88,7 @@ message ServiceRevisionEntryReadModel {
   string workflow_name = 17;
   string workflow_definition_actor_id = 18;
   int32 workflow_inline_workflow_count = 19;
+  aevatar.gagentservice.PreparedServiceRevisionArtifact prepared_artifact = 21;
 }
 
 // --- ServiceRolloutReadModel ---

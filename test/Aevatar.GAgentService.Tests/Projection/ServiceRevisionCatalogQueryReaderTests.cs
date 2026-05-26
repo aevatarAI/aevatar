@@ -1,4 +1,6 @@
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -143,5 +145,65 @@ public sealed class ServiceRevisionCatalogQueryReaderTests
             .BeEquivalentTo(new ServiceRevisionStaticSnapshot("Tests.StaticActor, Tests", "static-actor-1"));
         snapshot.Revisions.Single(x => x.RevisionId == "r-script").Implementation!.Scripting.Should()
             .BeEquivalentTo(new ServiceRevisionScriptingSnapshot("script-a", "7", "script-def-1", "hash-a"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldMapPreparedArtifactAndCloneIt()
+    {
+        var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var preparedArtifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
+            identity,
+            "r1",
+            GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
+        await store.UpsertAsync(new ServiceRevisionCatalogReadModel
+        {
+            Id = ServiceKeys.Build(identity),
+            Revisions =
+            {
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = "r1",
+                    ImplementationKind = ServiceImplementationKind.Static.ToString(),
+                    Status = ServiceRevisionStatus.Prepared.ToString(),
+                    ArtifactHash = "hash-1",
+                    PreparedArtifact = preparedArtifact.Clone(),
+                    Endpoints =
+                    {
+                        new ServiceCatalogEndpointReadModel
+                        {
+                            EndpointId = "chat",
+                            DisplayName = "Chat",
+                            Kind = ServiceEndpointKind.Chat.ToString(),
+                            RequestTypeUrl = "type.googleapis.com/test.chat.request",
+                            ResponseTypeUrl = "type.googleapis.com/test.chat.response",
+                            Description = "chat endpoint",
+                        },
+                    },
+                },
+            },
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        var reader = new ServiceRevisionCatalogQueryReader(store);
+
+        var snapshot = await reader.GetAsync(identity);
+
+        snapshot.Should().NotBeNull();
+        var revision = snapshot!.Revisions.Should().ContainSingle().Subject;
+        revision.PreparedArtifact.Should().NotBeNull();
+        revision.PreparedArtifact.Should().NotBeSameAs(preparedArtifact);
+        revision.PreparedArtifact!.RevisionId.Should().Be("r1");
+        revision.PreparedArtifact.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
+        revision.Endpoints.Should().ContainSingle(x =>
+            x.EndpointId == "chat" &&
+            x.DisplayName == "Chat" &&
+            x.Kind == ServiceEndpointKind.Chat.ToString() &&
+            x.RequestTypeUrl == "type.googleapis.com/test.chat.request" &&
+            x.ResponseTypeUrl == "type.googleapis.com/test.chat.response" &&
+            x.Description == "chat endpoint");
+
+        revision.PreparedArtifact.RevisionId = "mutated";
+        var reread = await reader.GetAsync(identity);
+        reread!.Revisions.Single().PreparedArtifact!.RevisionId.Should().Be("r1");
     }
 }
