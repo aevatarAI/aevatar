@@ -565,9 +565,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 return Task.CompletedTask;
             },
             detachTransportAsync: static (_, _) => Task.CompletedTask,
-            pcmSampleRateHz: 24000,
-            selfEventDispatcher: (_, _) => Task.CompletedTask,
-            module: null);
+            pcmSampleRateHz: 24000);
     }
 
     private sealed class StaticFallbackProvider(string modelName) : IChatRouteFallbackProvider

@@ -47,8 +47,6 @@ public class VoicePresenceSessionResolverTests
         resolution.ObservedStateVersion.ShouldBe(5);
         var session = resolution.Session;
         session.ShouldNotBeNull();
-        session.Module.ShouldBeNull();
-        session.SelfEventDispatcher.ShouldBeNull();
         session.PcmSampleRateHz.ShouldBe(16000);
         session.IsInitialized.ShouldBeTrue();
         session.IsTransportAttached.ShouldBeFalse();
