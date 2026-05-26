@@ -53,6 +53,7 @@ import {
 } from '@/shared/runs/draftRunSession';
 import {
   buildScopeConsoleServiceOptions,
+  isChatServiceEndpoint,
   scopeServiceAppId,
   scopeServiceNamespace,
 } from '@/shared/runs/scopeConsole';
@@ -2337,6 +2338,7 @@ function resolveStudioServiceDefaultEndpointId(
         readonly endpoints?:
           | readonly {
               readonly endpointId: string;
+              readonly kind: string;
             }[]
           | null;
       }
@@ -2348,8 +2350,7 @@ function resolveStudioServiceDefaultEndpointId(
   }
 
   return (
-    service.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-      ?.endpointId ||
+    service.endpoints.find(isChatServiceEndpoint)?.endpointId ||
     service.endpoints[0]?.endpointId ||
     ''
   );
@@ -7066,6 +7067,12 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
+  const workbenchMemberIsTeamEntry = Boolean(
+    workbenchStudioMemberId &&
+      resolvedStudioTeamId &&
+      trimOptional(studioTeamSummaryQuery.data?.entryMemberId) ===
+        trimOptional(workbenchStudioMemberId),
+  );
   const resolveTeamEntryCandidate = useCallback((): StudioTeamEntryCandidate | null => {
     const memberId =
       trimOptional(teamEntryCandidate?.memberId) ||
@@ -7133,6 +7140,22 @@ const StudioPage: React.FC = () => {
 
       setTeamEntryActionBusy(true);
       try {
+        const alreadyEntry =
+          trimOptional(studioTeamSummaryQuery.data?.entryMemberId) ===
+          trimOptional(candidate.memberId);
+        if (alreadyEntry && options?.test) {
+          history.push(
+            buildTeamDetailHref({
+              memberId: candidate.memberId,
+              scopeId: candidate.scopeId,
+              tab: 'overview',
+              testTeam: true,
+              teamId: candidate.teamId,
+            }),
+          );
+          return;
+        }
+
         const updatedTeam = await studioApi.setTeamEntryMember(
           candidate.scopeId,
           candidate.teamId,
@@ -7182,7 +7205,13 @@ const StudioPage: React.FC = () => {
         setTeamEntryActionBusy(false);
       }
     },
-    [queryClient, resolveTeamEntryCandidate, waitForTeamEntryVisibility],
+    [
+      history,
+      queryClient,
+      resolveTeamEntryCandidate,
+      studioTeamSummaryQuery.data?.entryMemberId,
+      waitForTeamEntryVisibility,
+    ],
   );
   useEffect(() => {
     if (studioSurface !== 'build' || buildSurface !== 'editor') {
@@ -7921,23 +7950,19 @@ const StudioPage: React.FC = () => {
     invokeTargetServiceId ||
     '';
   const invokeTargetDefaultEndpointId = useMemo(() => {
-    if (!invokeTargetService) {
-      return '';
-    }
-
-    return (
-      invokeTargetService.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-        ?.endpointId ||
-      invokeTargetService.endpoints[0]?.endpointId ||
-      ''
-    );
+    return resolveStudioServiceDefaultEndpointId(invokeTargetService);
   }, [invokeTargetService]);
+  const invokeTargetHasDefaultChatEndpoint = Boolean(
+    invokeTargetService?.endpoints.some(isChatServiceEndpoint),
+  );
   const invokeInitialEndpointId =
     currentInvokeSelectionServiceId === invokeTargetServiceId &&
-    currentInvokeSelectionEndpointId
+    currentInvokeSelectionEndpointId &&
+    !invokeTargetHasDefaultChatEndpoint
       ? currentInvokeSelectionEndpointId
       : currentBindingSelectionServiceId === invokeTargetServiceId &&
-          currentBindingSelectionEndpointId
+          currentBindingSelectionEndpointId &&
+          !invokeTargetHasDefaultChatEndpoint
         ? currentBindingSelectionEndpointId
         : invokeTargetDefaultEndpointId;
   const invokeEmptyState = useMemo(() => {
@@ -8049,7 +8074,8 @@ const StudioPage: React.FC = () => {
 
     const currentBindingSelection =
       bindingSelectionRef.current.serviceId === preferredServiceId &&
-      bindingSelectionRef.current.endpointId
+      bindingSelectionRef.current.endpointId &&
+      !selectedService.endpoints.some(isChatServiceEndpoint)
         ? bindingSelectionRef.current.endpointId
         : fallbackEndpointId;
 
@@ -8414,11 +8440,9 @@ const StudioPage: React.FC = () => {
               ? `script:${selectedScriptIdForMember}`
               : normalizedMemberKey;
 
-        const defaultEndpointId =
-          selectedService.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-            ?.endpointId ||
-          selectedService.endpoints[0]?.endpointId ||
-          '';
+        const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
+          selectedService,
+        );
         bindingSelectionRef.current = {
           serviceId: selectedMemberServiceId,
           endpointId: defaultEndpointId,
@@ -9649,8 +9673,8 @@ const StudioPage: React.FC = () => {
           resolvedStudioTeamId && workbenchStudioMemberId
             ? {
                 busy: teamEntryActionBusy,
+                isEntryMember: workbenchMemberIsTeamEntry,
                 memberId: workbenchStudioMemberId,
-                onSetEntry: () => void handleSetTeamEntryFromStudio(),
                 onSetEntryAndTest: () =>
                   void handleSetTeamEntryFromStudio({ test: true }),
               }
