@@ -14,6 +14,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
@@ -201,6 +202,7 @@ public class WorkflowIntegrationTests
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
         await using var _ = sp;
+        var eventStore = sp.GetRequiredService<IEventStore>();
         var actorSuffix = Guid.NewGuid().ToString("N")[..8];
         var definitionActorId = $"wf-{actorSuffix}";
         var runActorId = $"wf-{actorSuffix}-run";
@@ -276,17 +278,20 @@ public class WorkflowIntegrationTests
         children.Should().Contain(reviewerActorId);
         children.Should().Contain(writerActorId);
 
-        // 验证每个 RoleGAgent 的配置
-        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
-            async _ =>
-            {
-                var researcherActor = await runtime.GetAsync(researcherActorId);
-                return researcherActor?.Agent as RoleGAgent;
-            },
-            agent => agent?.RoleName == "Researcher",
+        // 验证每个 RoleGAgent 的配置。The child actor can be cleaned up after
+        // workflow completion, so assert the actor-owned initialization fact.
+        var researcherInitialized = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            token => eventStore.GetEventsAsync(researcherActorId, ct: token),
+            events => events.Any(evt =>
+                evt.EventData?.Is(InitializeRoleAgentEvent.Descriptor) == true &&
+                evt.EventData.Unpack<InitializeRoleAgentEvent>().RoleName == "Researcher"),
             $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
             CancellationToken.None);
-        researcher!.RoleName.Should().Be("Researcher");
+        researcherInitialized.Any(evt =>
+                evt.EventData?.Is(InitializeRoleAgentEvent.Descriptor) == true &&
+                evt.EventData.Unpack<InitializeRoleAgentEvent>().RoleName == "Researcher")
+            .Should()
+            .BeTrue();
     }
 
     // ═══════════════════════════════════════════════════════════
