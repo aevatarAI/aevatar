@@ -260,6 +260,28 @@ public sealed class InMemoryStreamCoverageTests
         called.Should().BeTrue();
     }
 
+    [Fact]
+    public void InMemoryStream_must_not_reintroduce_fire_and_forget_concurrent_dispatch()
+    {
+        var sourceFiles = new[]
+        {
+            FindRepoFile("src/Aevatar.Foundation.Runtime/Streaming/InMemoryStream.cs"),
+            FindRepoFile("src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamOptions.cs"),
+        };
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            var source = File.ReadAllText(sourceFile);
+
+            source.Should().NotContain(
+                "DispatchSubscribersConcurrently",
+                "deleted per iter109/cluster-109-inmemory-stream-inline-dispatch; fire-and-forget concurrent dispatch must not return");
+            source.Should().NotContain(
+                "Task.Run(static state => subscriber",
+                "no fire-and-forget subscriber Task.Run");
+        }
+    }
+
     private static Task GetDispatchLoop(InMemoryStream stream)
     {
         var field = typeof(InMemoryStream).GetField("_dispatchLoop", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -267,5 +289,20 @@ public sealed class InMemoryStreamCoverageTests
         var dispatchLoop = field!.GetValue(stream);
         dispatchLoop.Should().BeAssignableTo<Task>();
         return (Task)dispatchLoop!;
+    }
+
+    private static string FindRepoFile(string relativePath)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(dir.FullName, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate repository file '{relativePath}'.");
     }
 }

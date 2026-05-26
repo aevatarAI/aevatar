@@ -13,8 +13,8 @@ namespace Aevatar.Foundation.Runtime.Streaming;
 
 // DEV/TEST ONLY transport - production must use a durable Orleans/Kafka stream provider.
 // Refactor (iter109/cluster-109-inmemory-stream-inline-dispatch):
-//   Old pattern: Local stream runtime keeps actor-id stream registries and uses background Task.Run loops to invoke subscribers (DispatchSubscribersConcurrently fire-and-forgets each subscriber).
-//   New principle: InMemoryStream is dev/test-only transport (usage proves no production registration); delete DispatchSubscribersConcurrently + fire-and-forget subscriber Task.Run; keep stream/forwarding registry but remove concurrent dispatch path; no new admission abstraction.
+//   Old pattern: Local stream runtime keeps actor-id stream registries and can fan out subscribers via fire-and-forget background work.
+//   New principle: InMemoryStream is dev/test-only transport (usage proves no production registration); keep stream/forwarding registry but remove concurrent subscriber fire-and-forget dispatch; no new admission abstraction.
 /// <summary>In-memory event stream for actor-to-actor delivery and broadcast.</summary>
 public sealed class InMemoryStream : IStream
 {
