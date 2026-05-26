@@ -1414,9 +1414,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
 
         var now = _options.TimeProvider.GetUtcNow();
-        var decision = EventPolicy.Evaluate(envelope, now);
-        if (decision != VoicePresenceEventPolicyDecision.Admit)
+        // Refactor (iter104/cluster-3): Old pattern: VoicePresenceEventPolicy kept module-local in-memory recent-event dedupe set. New principle: dedupe fence in VoicePresenceRuntimeState (actor-owned); policy is pure evaluator over passed-in actor state.
+        var verdict = EventPolicy.Evaluate(envelope, now, state.EventDedupeFence);
+        var fenceChanged = ReplaceEventDedupeFence(state, EventPolicy.BuildFence(state.EventDedupeFence, verdict, now));
+        if (verdict.Decision != VoicePresenceEventPolicyDecision.Admit)
+        {
+            await PersistRuntimeStateIfChangedAsync(ctx, state, fenceChanged, ct);
             return;
+        }
 
         var injection = BuildPendingInjection(envelope, now);
         if (!IsReadyToInject(state))
@@ -1426,8 +1431,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
-        if (await TryInjectEventAsync(state, injection, ct))
-            await PersistRuntimeStateAsync(ctx, state, ct);
+        await TryInjectEventAsync(state, injection, ct);
+        await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
     private bool ShouldInjectExternalEvent(EventEnvelope envelope, string agentId)
@@ -1474,6 +1479,27 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
         state.PendingInjections.Add(injection);
     }
+
+    private static bool ReplaceEventDedupeFence(
+        VoicePresenceRuntimeState state,
+        IReadOnlyList<VoicePresenceEventDedupeFenceEntry> fence)
+    {
+        if (state.EventDedupeFence.Count == fence.Count &&
+            state.EventDedupeFence.Zip(fence).All(static pair => DedupeFenceEntryEquals(pair.First, pair.Second)))
+        {
+            return false;
+        }
+
+        state.EventDedupeFence.Clear();
+        state.EventDedupeFence.AddRange(fence.Select(static entry => entry.Clone()));
+        return true;
+    }
+
+    private static bool DedupeFenceEntryEquals(
+        VoicePresenceEventDedupeFenceEntry left,
+        VoicePresenceEventDedupeFenceEntry right) =>
+        string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
+        Equals(left.RecordedAt, right.RecordedAt);
 
     private async Task FlushPendingEventInjectionsAsync(VoicePresenceRuntimeState state, CancellationToken ct)
     {
