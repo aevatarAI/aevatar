@@ -2,32 +2,58 @@ using System.Text.Json.Serialization;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-public sealed record SaveUserLlmPreferenceCommand(
-    string? ServiceId = null,
-    string? RouteValue = null,
-    string? Model = null,
-    string? PresetId = null,
-    bool? Reset = null);
+public sealed record SaveUserLlmSettingsCommand(
+    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("model")] string? Model = null);
 
-public sealed record UserLlmOptionsView(
-    [property: JsonPropertyName("current")] UserLlmOption? Current,
-    [property: JsonPropertyName("available")] IReadOnlyList<UserLlmOption> Available,
-    [property: JsonPropertyName("setupHint")] UserLlmSetupHint? SetupHint)
+public sealed record UserLlmSettingsView(
+    [property: JsonPropertyName("savedRoute")] string SavedRoute,
+    [property: JsonPropertyName("savedRouteLabel")] string SavedRouteLabel,
+    [property: JsonPropertyName("effectiveRoute")] string EffectiveRoute,
+    [property: JsonPropertyName("effectiveRouteLabel")] string EffectiveRouteLabel,
+    [property: JsonPropertyName("routeFallbackActive")] bool RouteFallbackActive,
+    [property: JsonPropertyName("fallbackReason")] string? FallbackReason,
+    [property: JsonPropertyName("routeOptions")] IReadOnlyList<UserLlmRouteOption> RouteOptions,
+    [property: JsonPropertyName("modelGroupsByRoute")] IReadOnlyList<UserLlmModelGroup> ModelGroupsByRoute,
+    [property: JsonPropertyName("catalogStatus")] string CatalogStatus,
+    [property: JsonPropertyName("capabilities")] UserLlmSettingsCapabilities Capabilities,
+    [property: JsonPropertyName("defaultModel")] string DefaultModel,
+    [property: JsonPropertyName("setupHint")] UserLlmSetupHint? SetupHint);
+
+public sealed record UserLlmRouteOption(
+    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("allowed")] bool Allowed,
+    [property: JsonPropertyName("ready")] bool Ready,
+    [property: JsonPropertyName("serviceId")] string? ServiceId,
+    [property: JsonPropertyName("serviceSlug")] string? ServiceSlug,
+    [property: JsonPropertyName("description")] string? Description);
+
+public sealed record UserLlmModelGroup(
+    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("groupId")] string GroupId,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("models")] IReadOnlyList<string> Models);
+
+public sealed record UserLlmSettingsCapabilities(
+    [property: JsonPropertyName("canEditRoute")] bool CanEditRoute,
+    [property: JsonPropertyName("canEditModel")] bool CanEditModel,
+    [property: JsonPropertyName("canSave")] bool CanSave,
+    [property: JsonPropertyName("canRetryCatalog")] bool CanRetryCatalog);
+
+public sealed class UserLlmSettingsOptions
 {
-    public static readonly UserLlmOptionsView Empty = new(null, [], null);
+    public string GatewayRouteLabel { get; set; } = "NyxID Gateway";
 }
 
-public sealed record UserLlmOption(
-    [property: JsonPropertyName("serviceId")] string ServiceId,
-    [property: JsonPropertyName("serviceSlug")] string ServiceSlug,
-    [property: JsonPropertyName("displayName")] string DisplayName,
-    [property: JsonPropertyName("routeValue")] string RouteValue,
-    [property: JsonPropertyName("defaultModel")] string? DefaultModel,
-    [property: JsonPropertyName("availableModels")] IReadOnlyList<string> AvailableModels,
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("source")] string Source,
-    [property: JsonPropertyName("allowed")] bool Allowed,
-    [property: JsonPropertyName("description")] string? Description);
+public static class UserLlmCatalogStatus
+{
+    public const string Ready = "ready";
+    public const string Empty = "empty";
+    public const string Unavailable = "unavailable";
+}
 
 public sealed record UserLlmSetupHint(
     [property: JsonPropertyName("setupUrl")] string SetupUrl,
@@ -86,10 +112,10 @@ public interface IUserLlmCatalogPort
 
 public interface IUserLlmPreferenceService
 {
-    Task<UserLlmOptionsView> GetOptionsAsync(string? bearerToken, CancellationToken ct);
+    Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
 
-    Task<UserConfig> SaveAsync(
+    Task<UserConfig> SaveSettingsAsync(
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        SaveUserLlmSettingsCommand command,
         CancellationToken ct);
 }

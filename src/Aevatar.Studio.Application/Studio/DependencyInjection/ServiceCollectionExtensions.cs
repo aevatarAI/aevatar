@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
+        services.AddOptions<UserLlmSettingsOptions>();
         services.Replace(ServiceDescriptor.Singleton<ITeamEntryMemberResolver, StudioTeamEntryMemberResolver>());
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
 

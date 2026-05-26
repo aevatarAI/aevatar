@@ -24,6 +24,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Tools.Cli.Tests;
 
@@ -512,7 +513,7 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_UsesNyxIdLlmServicesEndpoint()
+    public async Task UserConfigController_GetLlmSettings_UsesNyxIdLlmServicesEndpoint()
     {
         var httpHandler = new RecordingHttpHandler("""
         {
@@ -546,13 +547,24 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
-        payload.Available.Should().ContainSingle().Which.ServiceId.Should().Be("svc-openai");
-        payload.Current.Should().NotBeNull();
-        payload.Current!.DisplayName.Should().Be("OpenAI Work");
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Ready);
+        payload.SavedRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.RouteFallbackActive.Should().BeFalse();
+        payload.DefaultModel.Should().Be("gpt-5.4");
+        var route = payload.RouteOptions.Should()
+            .Contain(option => option.ServiceId == "svc-openai")
+            .Which;
+        route.Label.Should().Be("OpenAI Work");
+        route.Source.Should().Be(NyxIdLlmProviderSource.UserService);
+        route.Ready.Should().BeTrue();
+        payload.RouteOptions.Should().Contain(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
+        payload.ModelGroupsByRoute.Should()
+            .Contain(group => group.RouteValue == "/api/v1/proxy/s/openai-work" && group.Models.Contains("gpt-5.4"));
         httpHandler.Requests.Select(request => request.Path)
             .Should()
             .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");
@@ -560,7 +572,48 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_FallsBackToNyxIdLlmStatusEndpoint()
+    public async Task UserConfigController_GetLlmSettings_UsesConfiguredGatewayRouteLabel()
+    {
+        var httpHandler = new RecordingHttpHandler("""
+        {
+          "services": [
+            {
+              "user_service_id": "svc-openai",
+              "service_slug": "openai-work",
+              "display_name": "OpenAI Work",
+              "route_value": "/api/v1/proxy/s/openai-work",
+              "models": ["gpt-5.4"],
+              "status": "ready",
+              "source": "user",
+              "allowed": true
+            }
+          ]
+        }
+        """);
+        var controller = CreateController(
+            new StubUserConfigQueryPort(),
+            new RecordingUserConfigCommandService(),
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1",
+            llmSettingsOptions: new UserLlmSettingsOptions
+            {
+                GatewayRouteLabel = "Aevatar Gateway",
+            });
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.SavedRouteLabel.Should().Be("Aevatar Gateway");
+        payload.EffectiveRouteLabel.Should().Be("Aevatar Gateway");
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
+            .Which.Label.Should().Be("Aevatar Gateway");
+    }
+
+    [Fact]
+    public async Task UserConfigController_GetLlmSettings_FallsBackToNyxIdLlmStatusEndpoint()
     {
         var httpHandler = new RecordingHttpHandler(
             (HttpStatusCode.NotFound, """{"error":"not_found"}"""),
@@ -584,15 +637,14 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
-        var option = payload.Available.Should().ContainSingle().Subject;
-        option.ServiceId.Should().Be("openai");
-        option.RouteValue.Should().Be("/api/v1/llm/openai/v1");
-        option.Source.Should().Be(NyxIdLlmProviderSource.GatewayProvider);
-        option.Allowed.Should().BeTrue();
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.RouteOptions.Should().ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
+        payload.ModelGroupsByRoute.Should()
+            .ContainSingle(group => group.RouteValue == UserConfigLlmRouteDefaults.Gateway)
+            .Which.Models.Should().Equal("gpt-5.4");
         httpHandler.Requests.Select(request => request.Path)
             .Should()
             .Equal(
@@ -602,7 +654,7 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_MergesProxyLlmRouteCandidates()
+    public async Task UserConfigController_GetLlmSettings_MergesProxyLlmRouteCandidates()
     {
         var httpHandler = new RecordingHttpHandler(
             (HttpStatusCode.OK, """
@@ -672,30 +724,27 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
-        payload.Available.Should().HaveCount(2);
-        var chrono = payload.Available.Should()
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.RouteOptions.Should().HaveCount(3);
+        var chrono = payload.RouteOptions.Should()
             .Contain(option => option.ServiceSlug == "chrono-llm")
             .Which;
         chrono.ServiceId.Should().Be("svc-chrono");
-        chrono.DisplayName.Should().Be("Chrono LLM");
+        chrono.Label.Should().Be("Chrono LLM");
         chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
         chrono.Source.Should().Be(NyxIdLlmProviderSource.ProxyService);
         chrono.Status.Should().Be("ready");
         chrono.Allowed.Should().BeTrue();
-        payload.Available.Should().NotContain(option => option.ServiceSlug == "api-github");
-        payload.Available.Should().NotContain(option => option.ServiceSlug == "api-openai-webhook");
-        payload.Available.Should().NotContain(option => option.ServiceSlug == "admin-openai");
-        httpHandler.Requests.Select(request => request.Path)
-            .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");
+        payload.RouteOptions.Should().NotContain(option => option.ServiceSlug == "api-github");
+        payload.RouteOptions.Should().NotContain(option => option.ServiceSlug == "api-openai-webhook");
+        payload.RouteOptions.Should().NotContain(option => option.ServiceSlug == "admin-openai");
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_PrefersReadyProxyRouteOverLegacyNotConnectedDuplicate()
+    public async Task UserConfigController_GetLlmSettings_PrefersReadyProxyRouteOverLegacyNotConnectedDuplicate()
     {
         var httpHandler = new RecordingHttpHandler(
             (HttpStatusCode.NotFound, """{"error":"not_found"}"""),
@@ -736,149 +785,51 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
-        var chrono = payload.Available.Should().ContainSingle().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        var chrono = payload.RouteOptions.Should()
+            .Contain(option => option.ServiceSlug == "chrono-llm")
+            .Which;
         chrono.ServiceId.Should().Be("svc-chrono");
-        chrono.ServiceSlug.Should().Be("chrono-llm");
-        chrono.DisplayName.Should().Be("Chrono LLM");
+        chrono.Label.Should().Be("Chrono LLM");
         chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
         chrono.Source.Should().Be(NyxIdLlmProviderSource.ProxyService);
         chrono.Status.Should().Be("ready");
         chrono.Allowed.Should().BeTrue();
-        httpHandler.Requests.Select(request => request.Path)
-            .Should()
-            .Equal(
-                "/api/v1/llm/services",
-                "/api/v1/llm/status",
-                "/api/v1/proxy/services?per_page=100");
     }
 
     [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithServiceId_WritesConfirmedRoute()
-    {
-        var httpHandler = new RecordingHttpHandler("""
-        {
-          "services": [
-            {
-              "user_service_id": "svc-openai",
-              "service_slug": "openai-work",
-              "display_name": "OpenAI Work",
-              "route_value": "/api/v1/proxy/s/openai-work",
-              "default_model": "gpt-5.4",
-              "models": ["gpt-5.4"],
-              "status": "ready",
-              "source": "user",
-              "allowed": true
-            }
-          ]
-        }
-        """);
-        var queryPort = new StubUserConfigQueryPort
-        {
-            ConfigToReturn = new UserConfig("old-model", "/api/v1/proxy/s/old"),
-        };
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(
-            queryPort,
-            commandService,
-            new StubHttpClientFactory(httpHandler),
-            BuildNyxIdConfiguration(),
-            bearerToken: "user-token-1");
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(ServiceId: "svc-openai"),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<OkObjectResult>();
-        commandService.SavedConfig.Should().NotBeNull();
-        commandService.SavedConfig!.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
-        commandService.SavedConfig.DefaultModel.Should().Be("gpt-5.4");
-        httpHandler.Requests.Should().ContainSingle(request => request.Path == "/api/v1/llm/services");
-    }
-
-    [Fact]
-    public async Task UserConfigController_GetModels_MapsLlmServicesToLegacyShape()
-    {
-        var httpHandler = new RecordingHttpHandler("""
-        {
-          "items": [
-            {
-              "userServiceId": "svc-openai",
-              "serviceSlug": "openai-work",
-              "displayName": "OpenAI Work",
-              "routeValue": "/api/v1/proxy/s/openai-work",
-              "models": ["gpt-5.4", "gpt-5.4", "gpt-4.1"],
-              "status": "ready",
-              "source": "user",
-              "allowed": true
-            },
-            {
-              "userServiceId": "svc-openai-backup",
-              "serviceSlug": "openai-work",
-              "displayName": "OpenAI Work Backup",
-              "routeValue": "/api/v1/proxy/s/openai-work-backup",
-              "models": ["gpt-5.5"],
-              "status": "ready",
-              "source": "user",
-              "allowed": true
-            },
-            {
-              "userServiceId": "svc-anthropic",
-              "serviceSlug": "anthropic-work",
-              "serviceName": "Anthropic Work",
-              "proxyUrl": "/api/v1/proxy/s/anthropic-work",
-              "availableModels": ["claude-sonnet-4-5"],
-              "status": "ready",
-              "allowed": true
-            }
-          ]
-        }
-        """);
-        var controller = CreateController(
-            new StubUserConfigQueryPort(),
-            new RecordingUserConfigCommandService(),
-            new StubHttpClientFactory(httpHandler),
-            new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Cli:App:NyxId:Authority"] = "https://nyxid.example/api/v1/llm/gateway/v1",
-                })
-                .Build(),
-            bearerToken: "user-token-1");
-
-        var response = await controller.GetModels(CancellationToken.None);
-
-        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<NyxIdLlmStatusResponse>().Subject;
-        payload.GatewayUrl.Should().Be("https://nyxid.example/api/v1/llm/gateway/v1");
-        payload.Providers.Should().HaveCount(2);
-        payload.Providers![1].ProviderName.Should().Be("Anthropic Work");
-        payload.ModelsByProvider!["openai-work"].Should().Equal("gpt-4.1", "gpt-5.4", "gpt-5.5");
-        payload.SupportedModels.Should().Equal("gpt-4.1", "gpt-5.4", "gpt-5.5", "claude-sonnet-4-5");
-    }
-
-    [Fact]
-    public async Task UserConfigController_GetModels_WhenNyxIdFails_ReturnsEmptyLegacyShape()
+    public async Task UserConfigController_GetLlmSettings_WhenCatalogFails_ReturnsDegradedView()
     {
         var httpHandler = new RecordingHttpHandler((HttpStatusCode.BadGateway, """{"error":"offline"}"""));
         var controller = CreateController(
-            new StubUserConfigQueryPort(),
+            new StubUserConfigQueryPort
+            {
+                ConfigToReturn = new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            },
             new RecordingUserConfigCommandService(),
             new StubHttpClientFactory(httpHandler),
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.GetModels(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        ok.Value.Should().BeSameAs(NyxIdLlmStatusResponse.Empty);
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Unavailable);
+        payload.SavedRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.FallbackReason.Should().Be("catalog_unavailable");
+        payload.RouteOptions.Should().ContainSingle().Which.Ready.Should().BeFalse();
+        payload.Capabilities.CanEditRoute.Should().BeFalse();
+        payload.Capabilities.CanSave.Should().BeFalse();
+        payload.Capabilities.CanRetryCatalog.Should().BeTrue();
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_WithoutBearer_ReturnsEmptyWithoutNyxRequest()
+    public async Task UserConfigController_GetLlmSettings_WithoutBearer_ReturnsDegradedViewWithoutNyxRequest()
     {
         var httpHandler = new RecordingHttpHandler("""{"services":[]}""");
         var controller = CreateController(
@@ -887,50 +838,40 @@ public sealed class UserConfigProjectionAndControllerTests
             new StubHttpClientFactory(httpHandler),
             BuildNyxIdConfiguration());
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        ok.Value.Should().BeSameAs(UserLlmOptionsView.Empty);
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Unavailable);
         httpHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task UserConfigController_GetLlmOptions_WhenNyxIdAuthorityMissing_ReturnsBadRequest()
+    public async Task UserConfigController_GetRuntime_ReturnsBackendRuntimeContract()
     {
         var controller = CreateController(
-            new StubUserConfigQueryPort(),
-            new RecordingUserConfigCommandService(),
-            new StubHttpClientFactory(new RecordingHttpHandler("""{"services":[]}""")),
-            new ConfigurationBuilder().Build(),
-            bearerToken: "user-token-1");
+            new StubUserConfigQueryPort
+            {
+                ConfigToReturn = new UserConfig(
+                    DefaultModel: string.Empty,
+                    RuntimeMode: "REMOTE",
+                    LocalRuntimeBaseUrl: "http://127.0.0.1:5080/",
+                    RemoteRuntimeBaseUrl: "https://runtime.example.com/"),
+            },
+            new RecordingUserConfigCommandService());
 
-        var response = await controller.GetLlmOptions(CancellationToken.None);
+        var response = await controller.GetRuntime(CancellationToken.None);
 
-        response.Result.Should().BeOfType<BadRequestObjectResult>();
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserConfigRuntimeView>().Subject;
+        payload.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
+        payload.ActiveRuntimeBaseUrl.Should().Be("https://runtime.example.com");
+        payload.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
+        payload.RuntimeDefaults.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
     }
 
     [Fact]
-    public async Task UserConfigController_SaveLlmPreference_Reset_ClearsSelection()
-    {
-        var queryPort = new StubUserConfigQueryPort
-        {
-            ConfigToReturn = new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
-        };
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(queryPort, commandService);
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(Reset: true),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<OkObjectResult>();
-        commandService.SavedConfig.Should().NotBeNull();
-        commandService.SavedConfig!.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        commandService.SavedConfig.DefaultModel.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithGatewayRoute_PreservesExplicitModel()
+    public async Task UserConfigController_SaveLlmSettings_WithGatewayRoute_SavesEmptyRoute()
     {
         var queryPort = new StubUserConfigQueryPort
         {
@@ -944,10 +885,8 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(
-                RouteValue: " gateway ",
-                Model: " gpt-5.4 "),
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsCommand(RouteValue: string.Empty, Model: " gpt-5.4 "),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<OkObjectResult>();
@@ -957,7 +896,7 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithRouteValue_WritesConfirmedServiceRoute()
+    public async Task UserConfigController_SaveLlmSettings_WithRouteValue_WritesConfirmedServiceRoute()
     {
         var httpHandler = new RecordingHttpHandler(SingleReadyServiceJson());
         var commandService = new RecordingUserConfigCommandService();
@@ -968,9 +907,10 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(
-                RouteValue: "/api/v1/proxy/s/openai-work"),
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsCommand(
+                RouteValue: "/api/v1/proxy/s/openai-work",
+                Model: " gpt-5.4 "),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<OkObjectResult>();
@@ -980,32 +920,7 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithModelOnly_PreservesRoute()
-    {
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(
-            new StubUserConfigQueryPort
-            {
-                ConfigToReturn = new UserConfig("old-model", "/api/v1/proxy/s/openai-work"),
-            },
-            commandService);
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(Model: " claude-sonnet "),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<OkObjectResult>();
-        commandService.SavedConfig.Should().NotBeNull();
-        commandService.SavedConfig!.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
-        commandService.SavedConfig.DefaultModel.Should().Be("claude-sonnet");
-    }
-
-    [Theory]
-    [InlineData("missing", null)]
-    [InlineData(null, "/api/v1/proxy/s/missing")]
-    public async Task UserConfigController_SaveLlmPreference_WithUnknownServiceOrRoute_ReturnsBadRequest(
-        string? serviceId,
-        string? routeValue)
+    public async Task UserConfigController_SaveLlmSettings_WithUnknownRoute_ReturnsBadRequest()
     {
         var controller = CreateController(
             new StubUserConfigQueryPort(),
@@ -1014,10 +929,8 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(
-                ServiceId: serviceId,
-                RouteValue: routeValue),
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsCommand(RouteValue: "/api/v1/proxy/s/missing"),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -1026,7 +939,7 @@ public sealed class UserConfigProjectionAndControllerTests
     [Theory]
     [InlineData(false, "ready")]
     [InlineData(true, "pending")]
-    public async Task UserConfigController_SaveLlmPreference_WithUnselectableService_ReturnsBadRequest(
+    public async Task UserConfigController_SaveLlmSettings_WithUnselectableRoute_ReturnsBadRequest(
         bool allowed,
         string status)
     {
@@ -1037,136 +950,8 @@ public sealed class UserConfigProjectionAndControllerTests
             BuildNyxIdConfiguration(),
             bearerToken: "user-token-1");
 
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(ServiceId: "svc-openai"),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<BadRequestObjectResult>();
-    }
-
-    [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithExistingPreset_WritesPresetRouteAndModel()
-    {
-        var httpHandler = new RecordingHttpHandler("""
-        {
-          "services": [
-            {
-              "user_service_id": "svc-openai",
-              "service_slug": "openai-work",
-              "display_name": "OpenAI Work",
-              "route_value": "/api/v1/proxy/s/openai-work",
-              "default_model": "gpt-5.4",
-              "models": ["gpt-5.4"],
-              "status": "ready",
-              "source": "user",
-              "allowed": true
-            }
-          ],
-          "setup_hint": {
-            "setupUrl": "https://nyxid.example/setup",
-            "presets": [
-              {
-                "id": "shared-openai",
-                "title": "Shared OpenAI",
-                "description": "Use existing shared service",
-                "activation": {
-                  "type": "use-existing-service",
-                  "serviceId": "svc-openai",
-                  "routeValue": "/api/v1/proxy/s/openai-work",
-                  "defaultModel": "gpt-4.1"
-                }
-              }
-            ]
-          }
-        }
-        """);
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(
-            new StubUserConfigQueryPort(),
-            commandService,
-            new StubHttpClientFactory(httpHandler),
-            BuildNyxIdConfiguration(),
-            bearerToken: "user-token-1");
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(PresetId: "shared-openai"),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<OkObjectResult>();
-        commandService.SavedConfig.Should().NotBeNull();
-        commandService.SavedConfig!.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
-        commandService.SavedConfig.DefaultModel.Should().Be("gpt-4.1");
-    }
-
-    [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithProvisionPreset_PostsProvisionEndpoint()
-    {
-        var httpHandler = new RecordingHttpHandler(
-            (HttpStatusCode.OK, """
-            {
-              "services": [],
-              "setup_hint": {
-                "setup_url": "https://nyxid.example/setup",
-                "presets": [
-                  {
-                    "id": "chrono-shared",
-                    "activation_type": "provision",
-                    "provision_endpoint_id": "chrono-llm/shared"
-                  }
-                ]
-              }
-            }
-            """),
-            (HttpStatusCode.OK, """
-            {
-              "service": {
-                "userServiceId": "svc-provisioned",
-                "serviceSlug": "chrono-llm",
-                "displayName": "Chrono LLM",
-                "proxyUrl": "/api/v1/proxy/s/chrono-llm",
-                "defaultModel": "chrono-default",
-                "availableModels": ["chrono-default"],
-                "status": "ready",
-                "allowed": true,
-                "description": "Provisioned shared LLM"
-              }
-            }
-            """));
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(
-            new StubUserConfigQueryPort(),
-            commandService,
-            new StubHttpClientFactory(httpHandler),
-            BuildNyxIdConfiguration(),
-            bearerToken: "user-token-1");
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(
-                PresetId: "chrono-shared",
-                Model: " chrono-default "),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<OkObjectResult>();
-        commandService.SavedConfig.Should().NotBeNull();
-        commandService.SavedConfig!.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
-        commandService.SavedConfig.DefaultModel.Should().Be("chrono-default");
-        httpHandler.Requests.Select(request => request.Path)
-            .Should()
-            .Equal(
-                "/api/v1/llm/services",
-                "/api/v1/proxy/services?per_page=100",
-                "/api/v1/llm/services/chrono-llm%2Fshared");
-        httpHandler.Requests[2].Method.Should().Be("POST");
-        httpHandler.Requests[2].Body.Should().Be("{}");
-    }
-
-    [Fact]
-    public async Task UserConfigController_SaveLlmPreference_WithEmptyRequest_ReturnsBadRequest()
-    {
-        var controller = CreateController(new StubUserConfigQueryPort(), new RecordingUserConfigCommandService());
-
-        var response = await controller.SaveLlmPreference(
-            new UserConfigController.SaveUserLlmPreferenceRequest(),
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsCommand(RouteValue: "/api/v1/proxy/s/openai-work"),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -1197,7 +982,8 @@ public sealed class UserConfigProjectionAndControllerTests
         IUserConfigCommandService commandService,
         IHttpClientFactory? httpClientFactory = null,
         IConfiguration? configuration = null,
-        string? bearerToken = null)
+        string? bearerToken = null,
+        UserLlmSettingsOptions? llmSettingsOptions = null)
     {
         var effectiveHttpClientFactory = httpClientFactory ?? new StubHttpClientFactory();
         var effectiveConfiguration = configuration ?? new ConfigurationBuilder().Build();
@@ -1207,12 +993,12 @@ public sealed class UserConfigProjectionAndControllerTests
             new NyxIdLlmCatalogHttpClient(
                 effectiveHttpClientFactory,
                 effectiveConfiguration,
-                NullLogger<NyxIdLlmCatalogHttpClient>.Instance));
+                NullLogger<NyxIdLlmCatalogHttpClient>.Instance),
+            Options.Create(llmSettingsOptions ?? new UserLlmSettingsOptions()));
         var controller = new UserConfigController(
             queryPort,
             commandService,
             llmPreferenceService,
-            effectiveConfiguration,
             NullLogger<UserConfigController>.Instance)
         {
             ControllerContext = new ControllerContext

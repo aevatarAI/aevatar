@@ -23,17 +23,13 @@ import React from "react";
 import {
   LLM_MODEL_HEADER_KEY,
   LLM_ROUTE_HEADER_KEY,
-  USER_CONFIG_PROVIDER_SOURCE_GATEWAY,
-  USER_CONFIG_PROVIDER_SOURCE_SERVICE,
   buildConversationModelGroups,
   buildConversationRouteOptions,
   decodeConversationRouteSelectValue,
   describeConversationRoute,
   encodeConversationRouteSelectValue,
-  formatConversationProviderLabel,
+  findConversationRouteOption,
   normalizeUserLlmRoute,
-  resolveReadyConversationRoute,
-  routePathFromProviderSlug,
   trimConversationValue,
 } from "@/pages/chat/chatConversationConfig";
 import {
@@ -43,13 +39,12 @@ import {
 } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
 import type {
-  StudioUserConfig,
-  StudioUserConfigProviderStatus,
+  StudioUserLlmRouteOption,
+  StudioUserLlmSettings,
 } from "@/shared/studio/models";
 import {
   formatStudioUserConfigRuntimeModeLabel,
   normalizeStudioUserConfigRuntimeMode,
-  resolveStudioUserConfigRuntimeBaseUrl,
 } from "@/shared/studio/userConfigRuntime";
 import {
   aevatarMonoFontFamily,
@@ -196,10 +191,10 @@ function buildSettingsHref(section: SettingsSection): string {
   return section === llmTabKey ? "/settings" : `/settings?section=${section}`;
 }
 
-function normalizeUserConfigDraft(config?: StudioUserConfig): SettingsDraft {
+function normalizeUserConfigDraft(config?: StudioUserLlmSettings): SettingsDraft {
   return {
     defaultModel: trimConversationValue(config?.defaultModel) ?? "",
-    preferredLlmRoute: normalizeUserLlmRoute(config?.preferredLlmRoute),
+    preferredLlmRoute: normalizeUserLlmRoute(config?.savedRoute),
   };
 }
 
@@ -211,59 +206,19 @@ function draftsEqual(left: SettingsDraft, right: SettingsDraft): boolean {
   );
 }
 
-function isProviderReady(provider: StudioUserConfigProviderStatus): boolean {
-  return provider.status.trim().toLowerCase() === "ready";
-}
-
-function isServiceProviderSource(source?: string): boolean {
-  return source === USER_CONFIG_PROVIDER_SOURCE_SERVICE;
-}
-
-function isGatewayProviderSource(source?: string): boolean {
-  return !isServiceProviderSource(source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY);
-}
-
-function resolveRouteScopedProviders(
-  route: string,
-  readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
-  readyServiceProviders: readonly StudioUserConfigProviderStatus[],
-): StudioUserConfigProviderStatus[] {
-  if (route === "") {
-    return [...readyGatewayProviders];
-  }
-
-  return readyServiceProviders.filter(
-    (provider) => routePathFromProviderSlug(provider.providerSlug) === route,
-  );
-}
-
-function isRouteAvailable(
-  route: string,
-  readyGatewayProviders: readonly StudioUserConfigProviderStatus[],
-  readyServiceProviders: readonly StudioUserConfigProviderStatus[],
-): boolean {
-  if (route === "") {
-    return readyGatewayProviders.length > 0;
-  }
-
-  return readyServiceProviders.some(
-    (provider) => routePathFromProviderSlug(provider.providerSlug) === route,
-  );
-}
-
 function formatProviderHealth(
-  providers: readonly StudioUserConfigProviderStatus[],
+  options: readonly StudioUserLlmRouteOption[],
 ): {
   readonly tone: "default" | "error" | "success" | "warning";
   readonly value: string;
 } {
-  const readyCount = providers.filter(isProviderReady).length;
-  const unavailableCount = Math.max(0, providers.length - readyCount);
+  const readyCount = options.filter((option) => option.ready && option.allowed).length;
+  const unavailableCount = Math.max(0, options.length - readyCount);
 
   if (readyCount === 0) {
     return {
       tone: "error",
-      value: providers.length > 0 ? "No ready providers" : "No providers connected",
+      value: options.length > 0 ? "No ready routes" : "No routes connected",
     };
   }
 
@@ -276,56 +231,8 @@ function formatProviderHealth(
 
   return {
     tone: "success",
-    value: `${readyCount} providers ready`,
+    value: `${readyCount} routes ready`,
   };
-}
-
-function buildProviderSlugCountMap(
-  providers: readonly StudioUserConfigProviderStatus[],
-): Record<string, number> {
-  const counts: Record<string, number> = {};
-
-  for (const provider of providers) {
-    const key = provider.providerSlug.trim();
-    if (!key) {
-      continue;
-    }
-
-    counts[key] = (counts[key] ?? 0) + 1;
-  }
-
-  return counts;
-}
-
-function formatProviderSourceLabel(
-  source: string | undefined,
-): string {
-  return isServiceProviderSource(source) ? "User service" : "Gateway provider";
-}
-
-function formatConnectedProviderLabel(
-  provider: StudioUserConfigProviderStatus,
-  duplicateSlugCount: number,
-): string {
-  const baseLabel = formatConversationProviderLabel(provider);
-  if (duplicateSlugCount <= 1) {
-    return baseLabel;
-  }
-
-  return isServiceProviderSource(provider.source)
-    ? `${baseLabel} Service`
-    : `${baseLabel} Gateway`;
-}
-
-function isProviderActiveForRoute(
-  provider: StudioUserConfigProviderStatus,
-  route: string,
-): boolean {
-  if (route === "") {
-    return isGatewayProviderSource(provider.source);
-  }
-
-  return routePathFromProviderSlug(provider.providerSlug) === route;
 }
 
 const ScopeChip: React.FC<ScopeChipProps> = ({ icon, label }) => {
@@ -406,14 +313,13 @@ const FieldMetaPill: React.FC<FieldMetaPillProps> = ({
 };
 
 const ConnectedProviderChip: React.FC<{
-  readonly duplicateSlugCount: number;
-  readonly provider: StudioUserConfigProviderStatus;
+  readonly option: StudioUserLlmRouteOption;
   readonly selected: boolean;
-}> = ({ duplicateSlugCount, provider, selected }) => {
+}> = ({ option, selected }) => {
   const { token } = theme.useToken();
-  const ready = isProviderReady(provider);
-  const sourceLabel = formatProviderSourceLabel(provider.source);
-  const label = formatConnectedProviderLabel(provider, duplicateSlugCount);
+  const ready = option.ready && option.allowed;
+  const sourceLabel = option.source === "user_service" ? "User service" : "Gateway provider";
+  const label = option.label;
   const background = selected
     ? ready
       ? token.colorSuccessBg
@@ -490,18 +396,18 @@ const SettingsPage: React.FC = () => {
     [token],
   );
 
-  const userConfigQuery = useQuery({
-    queryKey: ["settings", "user-config"],
-    queryFn: () => studioApi.getUserConfig(),
+  const userLlmSettingsQuery = useQuery({
+    queryKey: ["settings", "user-llm-settings"],
+    queryFn: () => studioApi.getUserLlmSettings(),
   });
-  const userConfigModelsQuery = useQuery({
-    queryKey: ["settings", "user-config-models"],
-    queryFn: () => studioApi.getUserConfigModels(),
+  const userRuntimeQuery = useQuery({
+    queryKey: ["settings", "user-config-runtime"],
+    queryFn: () => studioApi.getUserConfigRuntime(),
   });
 
   const loadedDraft = React.useMemo(
-    () => normalizeUserConfigDraft(userConfigQuery.data),
-    [userConfigQuery.data],
+    () => normalizeUserConfigDraft(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data],
   );
   const [draft, setDraft] = React.useState<SettingsDraft>(loadedDraft);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -512,7 +418,7 @@ const SettingsPage: React.FC = () => {
   );
 
   React.useEffect(() => {
-    if (!userConfigQuery.isSuccess) {
+    if (!userLlmSettingsQuery.isSuccess) {
       return;
     }
 
@@ -525,19 +431,19 @@ const SettingsPage: React.FC = () => {
     if (!draftDirty) {
       setDraft(loadedDraft);
     }
-  }, [draftDirty, loadedDraft, userConfigQuery.isSuccess]);
+  }, [draftDirty, loadedDraft, userLlmSettingsQuery.isSuccess]);
 
   const saveMutation = useMutation({
     mutationFn: async (nextDraft: SettingsDraft) =>
-      studioApi.saveUserConfig({
-        defaultModel: trimConversationValue(nextDraft.defaultModel) ?? "",
-        preferredLlmRoute: normalizeUserLlmRoute(nextDraft.preferredLlmRoute),
+      studioApi.saveUserLlmSettings({
+        routeValue: normalizeUserLlmRoute(nextDraft.preferredLlmRoute),
+        model: trimConversationValue(nextDraft.defaultModel) ?? "",
       }),
-    onSuccess: (savedConfig) => {
-      const normalized = normalizeUserConfigDraft(savedConfig);
-      queryClient.setQueryData(["settings", "user-config"], savedConfig);
-      queryClient.setQueryData(["studio-user-config"], savedConfig);
-      queryClient.setQueryData(["chat", "user-config"], savedConfig);
+    onSuccess: (savedSettings) => {
+      const normalized = normalizeUserConfigDraft(savedSettings);
+      queryClient.setQueryData(["settings", "user-llm-settings"], savedSettings);
+      queryClient.setQueryData(["studio-user-llm-settings"], savedSettings);
+      queryClient.setQueryData(["chat", "user-llm-settings"], savedSettings);
       setDraft(normalized);
       setSaveError(null);
     },
@@ -546,80 +452,48 @@ const SettingsPage: React.FC = () => {
     },
   });
 
-  const providers = userConfigModelsQuery.data?.providers ?? [];
-  const readyProviders = React.useMemo(
-    () => providers.filter(isProviderReady),
-    [providers],
-  );
-  const readyGatewayProviders = React.useMemo(
-    () =>
-      readyProviders.filter((provider) => isGatewayProviderSource(provider.source)),
-    [readyProviders],
-  );
-  const readyServiceProviders = React.useMemo(
-    () =>
-      readyProviders.filter((provider) => isServiceProviderSource(provider.source)),
-    [readyProviders],
-  );
+  const routeCatalogOptions = userLlmSettingsQuery.data?.routeOptions ?? [];
   const routeOptions = React.useMemo(
     () =>
       buildConversationRouteOptions(
-        userConfigModelsQuery.data,
+        userLlmSettingsQuery.data,
         loadedDraft.preferredLlmRoute,
         draft.preferredLlmRoute,
       ),
     [
       draft.preferredLlmRoute,
       loadedDraft.preferredLlmRoute,
-      userConfigModelsQuery.data,
+      userLlmSettingsQuery.data,
     ],
   );
-  const preferredRouteAvailable = React.useMemo(
-    () =>
-      isRouteAvailable(
-        draft.preferredLlmRoute,
-        readyGatewayProviders,
-        readyServiceProviders,
-      ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
+  const savedRouteOption = React.useMemo(
+    () => findConversationRouteOption(userLlmSettingsQuery.data, draft.preferredLlmRoute),
+    [draft.preferredLlmRoute, userLlmSettingsQuery.data],
   );
+  const preferredRouteAvailable = Boolean(savedRouteOption?.ready && savedRouteOption.allowed);
   const effectiveRoute = React.useMemo(
     () =>
-      resolveReadyConversationRoute(
-        draft.preferredLlmRoute,
-        readyGatewayProviders[0] ?? null,
-        readyServiceProviders,
-      ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
+      draftsEqual(draft, loadedDraft)
+        ? normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute)
+        : draft.preferredLlmRoute,
+    [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const routeFallbackActive = effectiveRoute !== draft.preferredLlmRoute;
+  const routeFallbackActive = draftsEqual(draft, loadedDraft)
+    ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
+    : false;
   const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
   const preferredRouteLabel = describeConversationRoute(
     draft.preferredLlmRoute,
     routeOptions,
-  );
-  const routeScopedProviders = React.useMemo(
-    () =>
-      resolveRouteScopedProviders(
-        draft.preferredLlmRoute,
-        readyGatewayProviders,
-        readyServiceProviders,
-      ),
-    [draft.preferredLlmRoute, readyGatewayProviders, readyServiceProviders],
   );
   const modelGroups = React.useMemo(
     () =>
       buildConversationModelGroups({
         conversationModel: draft.defaultModel,
         effectiveRoute: draft.preferredLlmRoute,
-        models: {
-          gatewayUrl: userConfigModelsQuery.data?.gatewayUrl ?? "",
-          modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
-          providers: routeScopedProviders,
-          supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
-        },
+        settings: userLlmSettingsQuery.data,
       }),
-    [draft.defaultModel, draft.preferredLlmRoute, routeScopedProviders, userConfigModelsQuery.data],
+    [draft.defaultModel, draft.preferredLlmRoute, userLlmSettingsQuery.data],
   );
   const liveModelGroups = React.useMemo(
     () => modelGroups.filter((group) => group.id !== "__current__"),
@@ -637,54 +511,47 @@ const SettingsPage: React.FC = () => {
     [liveModelGroups.length, modelGroups],
   );
   const displayedRuntimeBaseUrl = React.useMemo(
-    () => resolveStudioUserConfigRuntimeBaseUrl(userConfigQuery.data),
-    [userConfigQuery.data],
+    () => userRuntimeQuery.data?.activeRuntimeBaseUrl ?? "",
+    [userRuntimeQuery.data?.activeRuntimeBaseUrl],
   );
   const persistedRuntimeMode = React.useMemo(
-    () => normalizeStudioUserConfigRuntimeMode(userConfigQuery.data?.runtimeMode),
-    [userConfigQuery.data?.runtimeMode],
+    () => normalizeStudioUserConfigRuntimeMode(userRuntimeQuery.data?.runtimeMode),
+    [userRuntimeQuery.data?.runtimeMode],
   );
   const runtimeModeLabel = React.useMemo(
     () => formatStudioUserConfigRuntimeModeLabel(persistedRuntimeMode),
     [persistedRuntimeMode],
   );
   const providerHealth = React.useMemo(
-    () => formatProviderHealth(providers),
-    [providers],
+    () => formatProviderHealth(routeCatalogOptions),
+    [routeCatalogOptions],
   );
-  const readyProviderCount = readyProviders.length;
-  const unavailableProviderCount = Math.max(0, providers.length - readyProviderCount);
-  const providerSlugCountMap = React.useMemo(
-    () => buildProviderSlugCountMap(providers),
-    [providers],
-  );
+  const readyProviderCount = routeCatalogOptions.filter((option) => option.ready && option.allowed).length;
+  const unavailableProviderCount = Math.max(0, routeCatalogOptions.length - readyProviderCount);
   const providerDisplayList = React.useMemo(
     () =>
-      [...providers].sort((left, right) => {
-        const leftSelected = isProviderActiveForRoute(
-          left,
-          effectiveRoute,
-        );
-        const rightSelected = isProviderActiveForRoute(
-          right,
-          effectiveRoute,
-        );
+      [...routeCatalogOptions].sort((left, right) => {
+        const leftSelected = normalizeUserLlmRoute(left.routeValue) === effectiveRoute;
+        const rightSelected = normalizeUserLlmRoute(right.routeValue) === effectiveRoute;
         if (leftSelected !== rightSelected) {
           return leftSelected ? -1 : 1;
         }
 
-        const leftReady = isProviderReady(left);
-        const rightReady = isProviderReady(right);
+        const leftReady = left.ready && left.allowed;
+        const rightReady = right.ready && right.allowed;
         if (leftReady !== rightReady) {
           return leftReady ? -1 : 1;
         }
 
-        return formatConversationProviderLabel(left).localeCompare(
-          formatConversationProviderLabel(right),
-        );
+        return left.label.localeCompare(right.label);
       }),
-    [effectiveRoute, providers],
+    [effectiveRoute, routeCatalogOptions],
   );
+  const llmCapabilities = userLlmSettingsQuery.data?.capabilities;
+  const canEditRoute = Boolean(llmCapabilities?.canEditRoute);
+  const canEditModel = Boolean(llmCapabilities?.canEditModel);
+  const canSaveLlmSettings = Boolean(llmCapabilities?.canSave);
+  const catalogUnavailable = userLlmSettingsQuery.data?.catalogStatus === "unavailable";
   const defaultModelPlaceholder = React.useMemo(() => {
     if (modelOptions && modelOptions.length > 0) {
       return `Search models for ${preferredRouteLabel || "the selected route"}`;
@@ -717,59 +584,37 @@ const SettingsPage: React.FC = () => {
   );
 
   const routeSelectOptions = React.useMemo<SelectProps["options"]>(() => {
-    const gatewayLabel = readyGatewayProviders.length > 0
-      ? "NyxID Gateway"
-      : "NyxID Gateway (fallback unavailable)";
-    const serviceOptions = readyServiceProviders.map((provider) => ({
-      label: formatConversationProviderLabel(provider),
-      value: encodeConversationRouteSelectValue(
-        routePathFromProviderSlug(provider.providerSlug),
-      ),
-    }));
-    const staleGroup =
-      draft.preferredLlmRoute && !preferredRouteAvailable
+    const readyOptions = routeCatalogOptions
+      .filter((option) => option.ready && option.allowed)
+      .map((option) => ({
+        label: option.label,
+        value: encodeConversationRouteSelectValue(normalizeUserLlmRoute(option.routeValue)),
+      }));
+    const hasDraftRoute = readyOptions.some(
+      (option) =>
+        decodeConversationRouteSelectValue(String(option.value)) === draft.preferredLlmRoute,
+    );
+
+    return [
+      {
+        label: "Routes",
+        options: readyOptions,
+      },
+      ...(draft.preferredLlmRoute && !hasDraftRoute
         ? [
             {
               label: "Current saved route",
               options: [
                 {
                   label: `${preferredRouteLabel} (unavailable)`,
-                  value: encodeConversationRouteSelectValue(
-                    draft.preferredLlmRoute,
-                  ),
+                  value: encodeConversationRouteSelectValue(draft.preferredLlmRoute),
                 },
               ],
             },
           ]
-        : [];
-
-    return [
-      {
-        label: "Gateway",
-        options: [
-          {
-            label: gatewayLabel,
-            value: encodeConversationRouteSelectValue(""),
-          },
-        ],
-      },
-      ...(serviceOptions.length > 0
-        ? [
-            {
-              label: "User services",
-              options: serviceOptions,
-            },
-          ]
         : []),
-      ...staleGroup,
     ];
-  }, [
-    draft.preferredLlmRoute,
-    preferredRouteAvailable,
-    preferredRouteLabel,
-    readyGatewayProviders.length,
-    readyServiceProviders,
-  ]);
+  }, [draft.preferredLlmRoute, preferredRouteLabel, routeCatalogOptions]);
 
   const advancedItems = React.useMemo<CollapseProps["items"]>(
     () => [
@@ -855,20 +700,10 @@ const SettingsPage: React.FC = () => {
       const nextRoute = normalizeUserLlmRoute(
         decodeConversationRouteSelectValue(nextValue),
       );
-      const nextRouteProviders = resolveRouteScopedProviders(
-        nextRoute,
-        readyGatewayProviders,
-        readyServiceProviders,
-      );
       const nextRouteGroups = buildConversationModelGroups({
         conversationModel: draft.defaultModel,
         effectiveRoute: nextRoute,
-        models: {
-          gatewayUrl: userConfigModelsQuery.data?.gatewayUrl ?? "",
-          modelsByProvider: userConfigModelsQuery.data?.modelsByProvider,
-          providers: nextRouteProviders,
-          supportedModels: userConfigModelsQuery.data?.supportedModels ?? [],
-        },
+        settings: userLlmSettingsQuery.data,
       });
       const currentModel = trimConversationValue(draft.defaultModel);
       const nextLiveRouteGroups = nextRouteGroups.filter(
@@ -887,9 +722,7 @@ const SettingsPage: React.FC = () => {
     },
     [
       draft.defaultModel,
-      readyGatewayProviders,
-      readyServiceProviders,
-      userConfigModelsQuery.data,
+      userLlmSettingsQuery.data,
     ],
   );
 
@@ -900,9 +733,9 @@ const SettingsPage: React.FC = () => {
   }, []);
 
   const llmLoadError =
-    userConfigQuery.isError || userConfigModelsQuery.isError
+    userLlmSettingsQuery.isError || userRuntimeQuery.isError
       ? describeError(
-          userConfigQuery.error || userConfigModelsQuery.error,
+          userLlmSettingsQuery.error || userRuntimeQuery.error,
           "Failed to load LLM defaults.",
         )
       : null;
@@ -918,7 +751,7 @@ const SettingsPage: React.FC = () => {
           Reset
         </Button>
         <Button
-          disabled={!draftDirty}
+          disabled={!draftDirty || !canSaveLlmSettings}
           loading={saveMutation.isPending}
           onClick={handleSave}
           type="primary"
@@ -1010,6 +843,26 @@ const SettingsPage: React.FC = () => {
               />
             ) : null}
 
+            {catalogUnavailable ? (
+              <Alert
+                action={
+                  userLlmSettingsQuery.data?.capabilities.canRetryCatalog ? (
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() => userLlmSettingsQuery.refetch()}
+                      size="small"
+                    >
+                      Retry
+                    </Button>
+                  ) : undefined
+                }
+                message="LLM catalog is unavailable"
+                description="Saved route and model are shown from your stored settings. Route and model editing are temporarily disabled until the catalog responds."
+                showIcon
+                type="warning"
+              />
+            ) : null}
+
             {routeFallbackActive ? (
               <Alert
                 message={`Effective route is currently ${routeSummaryLabel}.`}
@@ -1030,7 +883,7 @@ const SettingsPage: React.FC = () => {
                   style={settingsPanelStyle}
                   title="Edit defaults"
                 >
-                  {userConfigQuery.isLoading || userConfigModelsQuery.isLoading ? (
+                  {userLlmSettingsQuery.isLoading || userRuntimeQuery.isLoading ? (
                     <div style={{ padding: 20 }}>
                       <Typography.Text type="secondary">
                         Loading your current defaults...
@@ -1053,6 +906,7 @@ const SettingsPage: React.FC = () => {
                         </Typography.Text>
                         <Select
                           aria-label="Preferred route"
+                          disabled={!canEditRoute}
                           onChange={handlePreferredRouteChange}
                           optionFilterProp="label"
                           options={routeSelectOptions}
@@ -1095,21 +949,11 @@ const SettingsPage: React.FC = () => {
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
                           <div style={providerRailStyle}>
-                            {providerDisplayList.map((provider) => (
+                            {providerDisplayList.map((option) => (
                               <ConnectedProviderChip
-                                duplicateSlugCount={
-                                  providerSlugCountMap[provider.providerSlug] ?? 1
-                                }
-                                key={`${
-                                  isServiceProviderSource(provider.source)
-                                    ? USER_CONFIG_PROVIDER_SOURCE_SERVICE
-                                    : USER_CONFIG_PROVIDER_SOURCE_GATEWAY
-                                }-${provider.providerSlug}`}
-                                provider={provider}
-                                selected={isProviderActiveForRoute(
-                                  provider,
-                                  effectiveRoute,
-                                )}
+                                key={`${option.source}-${option.routeValue}`}
+                                option={option}
+                                selected={normalizeUserLlmRoute(option.routeValue) === effectiveRoute}
                               />
                             ))}
                           </div>
@@ -1139,6 +983,7 @@ const SettingsPage: React.FC = () => {
                           <Select
                             aria-label="Default model"
                             allowClear
+                            disabled={!canEditModel}
                             onChange={(nextValue) =>
                               setDraft((currentDraft) => ({
                                 ...currentDraft,
@@ -1154,6 +999,7 @@ const SettingsPage: React.FC = () => {
                         ) : (
                           <Input
                             aria-label="Default model"
+                            disabled={!canEditModel}
                             onChange={(event) =>
                               setDraft((currentDraft) => ({
                                 ...currentDraft,
@@ -1292,6 +1138,9 @@ const SettingsPage: React.FC = () => {
       defaultModelPlaceholder,
       draft.defaultModel,
       displayedRuntimeBaseUrl,
+      canEditModel,
+      canEditRoute,
+      catalogUnavailable,
       llmLoadError,
       liveModelGroups,
       modelOptions,
@@ -1301,7 +1150,6 @@ const SettingsPage: React.FC = () => {
       providerHealth.tone,
       providerHealth.value,
       providerDisplayList,
-      providerSlugCountMap,
       readyProviderCount,
       routeFallbackActive,
       handlePreferredRouteChange,
@@ -1315,8 +1163,10 @@ const SettingsPage: React.FC = () => {
       token.colorFillQuaternary,
       token.borderRadiusLG,
       unavailableProviderCount,
-      userConfigModelsQuery.isLoading,
-      userConfigQuery.isLoading,
+      userLlmSettingsQuery.data?.capabilities.canRetryCatalog,
+      userLlmSettingsQuery.isLoading,
+      userLlmSettingsQuery.refetch,
+      userRuntimeQuery.isLoading,
       runtimeModeLabel,
     ],
   );

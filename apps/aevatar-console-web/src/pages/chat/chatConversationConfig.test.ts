@@ -1,102 +1,94 @@
 import {
   buildConversationModelGroups,
-  resolveReadyConversationRoute,
-  routePathFromProviderSlug,
+  buildConversationRouteOptions,
   USER_LLM_ROUTE_GATEWAY,
 } from "./chatConversationConfig";
 
-describe("resolveReadyConversationRoute", () => {
-  it("keeps the preferred service route when that provider is ready", () => {
-    expect(
-      resolveReadyConversationRoute(
-        routePathFromProviderSlug("openai"),
-        null,
-        [{ providerSlug: "openai" }]
-      )
-    ).toBe(routePathFromProviderSlug("openai"));
-  });
+const llmSettings = {
+  savedRoute: USER_LLM_ROUTE_GATEWAY,
+  savedRouteLabel: "NyxID Gateway",
+  effectiveRoute: USER_LLM_ROUTE_GATEWAY,
+  effectiveRouteLabel: "NyxID Gateway",
+  routeFallbackActive: false,
+  fallbackReason: null,
+  catalogStatus: "ready",
+  defaultModel: "",
+  capabilities: {
+    canEditRoute: true,
+    canEditModel: true,
+    canSave: true,
+    canRetryCatalog: false,
+  },
+  routeOptions: [
+    {
+      routeValue: USER_LLM_ROUTE_GATEWAY,
+      label: "NyxID Gateway",
+      source: "gateway_provider",
+      status: "ready",
+      allowed: true,
+      ready: true,
+      serviceId: null,
+      serviceSlug: null,
+      description: null,
+    },
+    {
+      routeValue: "/api/v1/proxy/s/anthropic-team",
+      label: "Anthropic Team Service",
+      source: "user_service",
+      status: "ready",
+      allowed: true,
+      ready: true,
+      serviceId: "svc-anthropic",
+      serviceSlug: "anthropic-team",
+      description: null,
+    },
+  ],
+  modelGroupsByRoute: [
+    {
+      routeValue: USER_LLM_ROUTE_GATEWAY,
+      groupId: "openai",
+      label: "OpenAI Gateway",
+      models: ["gpt-4o"],
+    },
+    {
+      routeValue: USER_LLM_ROUTE_GATEWAY,
+      groupId: "anthropic",
+      label: "Anthropic Gateway",
+      models: ["claude-3-5-sonnet"],
+    },
+    {
+      routeValue: "/api/v1/proxy/s/anthropic-team",
+      groupId: "anthropic-team",
+      label: "Anthropic Team Service",
+      models: ["claude-3-haiku"],
+    },
+  ],
+};
 
-  it("falls back to the gateway when the preferred service route is stale", () => {
-    expect(
-      resolveReadyConversationRoute(
-        routePathFromProviderSlug("openai"),
-        { providerSlug: "gateway-openai" },
-        [{ providerSlug: "anthropic" }]
-      )
-    ).toBe(USER_LLM_ROUTE_GATEWAY);
-  });
-
-  it("falls back to the first ready service route when the gateway is unavailable", () => {
-    expect(
-      resolveReadyConversationRoute(
-        USER_LLM_ROUTE_GATEWAY,
-        null,
-        [{ providerSlug: "anthropic" }, { providerSlug: "openai" }]
-      )
-    ).toBe(routePathFromProviderSlug("anthropic"));
+describe("buildConversationRouteOptions", () => {
+  it("uses backend route options without deriving routes from provider slugs", () => {
+    expect(buildConversationRouteOptions(llmSettings).map((option) => option.label)).toEqual([
+      "NyxID Gateway",
+      "Anthropic Team Service",
+    ]);
   });
 });
 
 describe("buildConversationModelGroups", () => {
-  it("keeps gateway route models as the union of all ready gateway providers", () => {
+  it("keeps gateway route models from backend-provided model groups", () => {
     expect(
       buildConversationModelGroups({
         effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-        models: {
-          gatewayUrl: "https://nyx.example/gateway",
-          modelsByProvider: {
-            openai: ["gpt-4o"],
-            anthropic: ["claude-3-5-sonnet"],
-          },
-          providers: [
-            {
-              providerName: "OpenAI Gateway",
-              providerSlug: "openai",
-              proxyUrl: "https://nyx.example/gateway/openai",
-              source: "gateway_provider",
-              status: "ready",
-            },
-            {
-              providerName: "Anthropic Gateway",
-              providerSlug: "anthropic",
-              proxyUrl: "https://nyx.example/gateway/anthropic",
-              source: "gateway_provider",
-              status: "ready",
-            },
-          ],
-          supportedModels: ["gpt-4o", "claude-3-5-sonnet"],
-        },
+        settings: llmSettings,
       }).map((group) => group.label)
     ).toEqual(["OpenAI Gateway", "Anthropic Gateway"]);
   });
 
-  it("does not reuse the global supported model union for a service route", () => {
+  it("does not invent a service-specific catalog when backend sends no group for the route", () => {
     expect(
       buildConversationModelGroups({
-        effectiveRoute: routePathFromProviderSlug("anthropic-team"),
-        models: {
-          gatewayUrl: "https://nyx.example/gateway",
-          modelsByProvider: {
-            openai: ["gpt-4o"],
-          },
-          providers: [
-            {
-              providerName: "OpenAI Gateway",
-              providerSlug: "openai",
-              proxyUrl: "https://nyx.example/gateway/openai",
-              source: "gateway_provider",
-              status: "ready",
-            },
-            {
-              providerName: "Anthropic Team Service",
-              providerSlug: "anthropic-team",
-              proxyUrl: "https://nyx.example/service/anthropic-team",
-              source: "user_service",
-              status: "ready",
-            },
-          ],
-          supportedModels: ["gpt-4o", "claude-3-haiku"],
-        },
+        effectiveRoute: "/api/v1/proxy/s/missing",
+        settings: llmSettings,
       })
     ).toEqual([]);
   });

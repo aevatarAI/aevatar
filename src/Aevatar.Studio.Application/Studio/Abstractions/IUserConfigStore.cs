@@ -73,6 +73,19 @@ public static class UserConfigRuntime
     }
 }
 
+public sealed record UserConfigRuntimeDefaultsView(
+    string LocalRuntimeBaseUrl,
+    string RemoteRuntimeBaseUrl,
+    string LocalMode,
+    string RemoteMode);
+
+public sealed record UserConfigRuntimeView(
+    string RuntimeMode,
+    string ActiveRuntimeBaseUrl,
+    string LocalRuntimeBaseUrl,
+    string RemoteRuntimeBaseUrl,
+    UserConfigRuntimeDefaultsView RuntimeDefaults);
+
 public sealed record UserConfig(
     string DefaultModel,
     string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,

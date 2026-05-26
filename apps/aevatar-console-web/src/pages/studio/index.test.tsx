@@ -704,22 +704,59 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    getUserConfig: jest.fn(async () => ({
+    getUserLlmSettings: jest.fn(async () => ({
+      savedRoute: "",
+      savedRouteLabel: "NyxID Gateway",
+      effectiveRoute: "",
+      effectiveRouteLabel: "NyxID Gateway",
+      routeFallbackActive: false,
+      fallbackReason: null,
+      catalogStatus: "ready",
       defaultModel: "gpt-4.1-mini",
-      runtimeBaseUrl: "",
-    })),
-    saveUserConfig: jest.fn(async (input: { defaultModel: string; runtimeBaseUrl: string }) => input),
-    getUserConfigModels: jest.fn(async () => ({
-      providers: [
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: "openai",
-          providerName: "OpenAI",
+          routeValue: "",
+          label: "NyxID Gateway",
+          source: "gateway_provider",
           status: "ready",
-          proxyUrl: "https://nyx-api.example/openai",
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          label: "OpenAI",
+          source: "user_service",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: "svc-openai",
+          serviceSlug: "openai",
+          description: null,
         },
       ],
-      gatewayUrl: "https://nyx-api.example/gateway",
-      supportedModels: ["gpt-4.1-mini", "gpt-5.4-mini"],
+      modelGroupsByRoute: [
+        {
+          routeValue: "",
+          groupId: "openai-gateway",
+          label: "OpenAI Gateway",
+          models: ["gpt-4.1-mini", "gpt-5.4-mini"],
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          groupId: "openai",
+          label: "OpenAI",
+          models: ["gpt-4.1-mini", "gpt-5.4-mini"],
+        },
+      ],
     })),
     listMembers: jest.fn(async () => ({
       scopeId: "scope-1",
@@ -3329,27 +3366,54 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Workflow description")).toBeTruthy();
   });
 
-  it("falls back to a ready route when the preferred workflow dry-run route is stale", async () => {
-    (studioApi.getUserConfig as jest.Mock).mockResolvedValueOnce({
-      defaultModel: "gpt-4.1-mini",
-      preferredLlmRoute: "/api/v1/proxy/s/stale-openai",
-      runtimeBaseUrl: "",
-    });
-    (studioApi.getUserConfigModels as jest.Mock).mockResolvedValueOnce({
-      providers: [
+  it("uses the backend effective route when the saved workflow dry-run route is stale", async () => {
+    (studioApi.getUserLlmSettings as jest.Mock).mockResolvedValueOnce({
+      savedRoute: "/api/v1/proxy/s/stale-openai",
+      savedRouteLabel: "/api/v1/proxy/s/stale-openai",
+      effectiveRoute: "",
+      effectiveRouteLabel: "NyxID Gateway",
+      routeFallbackActive: true,
+      fallbackReason: "saved_route_unavailable",
+      catalogStatus: "ready",
+      defaultModel: "gpt-5.4-mini",
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: "openai",
-          providerName: "OpenAI",
-          status: "ready",
-          proxyUrl: "https://nyx-api.example/gateway/openai",
+          routeValue: "",
+          label: "NyxID Gateway",
           source: "gateway_provider",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          label: "OpenAI",
+          source: "user_service",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: "svc-openai",
+          serviceSlug: "openai",
+          description: null,
         },
       ],
-      gatewayUrl: "https://nyx-api.example/gateway",
-      modelsByProvider: {
-        openai: ["gpt-5.4-mini"],
-      },
-      supportedModels: ["gpt-5.4-mini"],
+      modelGroupsByRoute: [
+        {
+          routeValue: "",
+          groupId: "openai-gateway",
+          label: "OpenAI Gateway",
+          models: ["gpt-5.4-mini"],
+        },
+      ],
     });
 
     renderStudioPage("/studio");
