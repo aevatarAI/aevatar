@@ -133,6 +133,10 @@ message AgentRunReplyStepState {
 // scheduler callback payloads.
 message AgentRunStartRequested {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 1;
+  // Refactor (iter101/cluster-105):
+  //   Old pattern: derive run_id by parsing AgentRun actor id prefix.
+  //   New principle: start command carries run_id as typed data; actor id remains opaque.
+  string run_id = 2;
 }
 
 // Durable output-dispatch retry signal emitted by the callback scheduler.
