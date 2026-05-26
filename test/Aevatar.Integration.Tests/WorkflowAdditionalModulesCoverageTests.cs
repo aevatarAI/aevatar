@@ -1274,11 +1274,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();
-        resumedState.Captured.Should().BeEmpty();
-        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
-            new KeyValuePair<CapturedSecureInputKey, string>(
-                new CapturedSecureInputKey("run-secure", "api_key"),
-                "top-secret-value"));
+        resumedState.Captured.Should().ContainKey("run-secure::api_key");
+        resumedState.Captured["run-secure::api_key"].Value.Should().Be("top-secret-value");
 
         await resumedModule.HandleAsync(
             Envelope(new WorkflowCompletedEvent
@@ -1289,7 +1286,6 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
-        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     [Fact]
@@ -1326,10 +1322,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
-            new KeyValuePair<CapturedSecureInputKey, string>(
-                new CapturedSecureInputKey("run-secure-recapture", "api_key"),
-                "old-secret"));
+        var capturedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
+        capturedState.Captured["run-secure-recapture::api_key"].Value.Should().Be("old-secret");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1346,7 +1340,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
+        ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey)
+            .Captured.Should().NotContainKey("run-secure-recapture::api_key");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1362,7 +1357,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         failed.Success.Should().BeFalse();
         failed.Error.Should().Contain("timed out");
-        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
+        ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey)
+            .Captured.Should().NotContainKey("run-secure-recapture::api_key");
     }
 
     [Fact]
@@ -2002,13 +1998,13 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
                 ["trace-id"] = " trace-abc ",
             });
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             AgentToolExecutionContext.Empty with
             {
@@ -2047,7 +2043,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
@@ -2074,6 +2070,42 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         connector.LastRequest!.Metadata.Should().Contain(
             ConnectorRequest.HttpAuthorizationMetadataKey,
             "Bearer token-123");
+    }
+
+    [Fact]
+    public async Task ConnectorCallModule_ShouldResolveCapturedSecureValueAfterFreshRuntimeContext()
+    {
+        var connector = new RecordingConnector("secure-state");
+        var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
+        var services = new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider();
+        var agent = new TestAgent("workflow-secure-state-agent", "run-secure-state");
+        var captureCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+
+        await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
+            captureCtx,
+            "run-secure-state",
+            "api_key",
+            "sk-state",
+            CancellationToken.None);
+
+        var callCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "connector-secure-state",
+                StepType = "secure_connector_call",
+                RunId = "run-secure-state",
+                Parameters =
+                {
+                    ["connector"] = "secure-state",
+                    ["stdin_template"] = """{"apiKey":"[[secure:api_key]]"}""",
+                },
+            }),
+            callCtx,
+            CancellationToken.None);
+
+        connector.LastRequest.Should().NotBeNull();
+        connector.LastRequest!.Payload.Should().Be("""{"apiKey":"sk-state"}""");
     }
 
     [Fact]

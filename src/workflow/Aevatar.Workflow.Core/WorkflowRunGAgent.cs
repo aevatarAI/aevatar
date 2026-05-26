@@ -22,11 +22,11 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+// Refactor (iter115/cluster-3):
+//   Old pattern: WorkflowRunGAgent kept durable control/security facts in
+//                process-local runtime context.
+//   New principle: durable control/security facts live in typed WorkflowRunState;
+//                  runtime context carries only same-turn passthrough metadata.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
@@ -110,6 +110,35 @@ public sealed class WorkflowRunGAgent
         : State.RunId;
 
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
+
+    // Refactor (iter115/cluster-3): Old pattern: callers received the mutable
+    // State.ExecutionContext object and could bypass PersistDomainEventAsync.
+    // New principle: callers only receive a snapshot; writes enter the event log
+    // through WorkflowRunExecutionContextUpdatedEvent/ClearedEvent reducers.
+    WorkflowRunExecutionContextState IWorkflowExecutionStateHost.ExecutionContextSnapshot =>
+        State.ExecutionContext?.Clone() ?? new WorkflowRunExecutionContextState();
+
+    Task IWorkflowExecutionStateHost.UpdateExecutionContextAsync(
+        WorkflowRunExecutionContextDelta delta,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(delta);
+        return PersistDomainEventAsync(
+            new WorkflowRunExecutionContextUpdatedEvent
+            {
+                RunId = RunId,
+                ExecutionContextDelta = delta,
+            },
+            ct);
+    }
+
+    Task IWorkflowExecutionStateHost.ClearExecutionContextAsync(CancellationToken ct) =>
+        PersistDomainEventAsync(
+            new WorkflowRunExecutionContextClearedEvent
+            {
+                RunId = RunId,
+            },
+            ct);
 
     public Any? GetExecutionState(string scopeKey)
     {
@@ -232,16 +261,18 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
+        var metadataDelta = WorkflowRunExecutionContextStateAccess.BuildRequestMetadataDelta(request.Metadata);
+        _runtimeContext.ApplyRequestMetadata(request.Metadata);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(this, toolContext);
+        var toolContextDelta = WorkflowRunExecutionContextStateAccess.BuildToolContextDelta(toolContext);
 
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var executionContextDelta = MergeExecutionContextDeltas(metadataDelta, toolContextDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -249,6 +280,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
+            ExecutionContextDelta = executionContextDelta,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -687,6 +719,8 @@ public sealed class WorkflowRunGAgent
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
             .On<WorkflowCommandObservedEvent>(ApplyWorkflowCommandObserved)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
+            .On<WorkflowRunExecutionContextUpdatedEvent>(ApplyWorkflowRunExecutionContextUpdated)
+            .On<WorkflowRunExecutionContextClearedEvent>(ApplyWorkflowRunExecutionContextCleared)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
@@ -722,6 +756,7 @@ public sealed class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
@@ -757,11 +792,82 @@ public sealed class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ExecutionContext ??= new WorkflowRunExecutionContextState();
+        ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
             next.DefinitionActorId = evt.DefinitionActorId.Trim();
         if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId.Trim();
         return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunExecutionContextUpdated(
+        WorkflowRunState current,
+        WorkflowRunExecutionContextUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        next.ExecutionContext ??= new WorkflowRunExecutionContextState();
+        ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunExecutionContextCleared(
+        WorkflowRunState current,
+        WorkflowRunExecutionContextClearedEvent _)
+    {
+        var next = current.Clone();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
+        return next;
+    }
+
+    private static WorkflowRunExecutionContextDelta MergeExecutionContextDeltas(
+        params WorkflowRunExecutionContextDelta[] deltas)
+    {
+        var merged = new WorkflowRunExecutionContextDelta();
+        foreach (var delta in deltas)
+        {
+            if (delta.ClearLlm)
+                merged.ClearLlm = true;
+            if (delta.ClearConnector)
+                merged.ClearConnector = true;
+            if (delta.Llm != null)
+                merged.Llm = delta.Llm.Clone();
+            if (delta.Connector != null)
+                merged.Connector = delta.Connector.Clone();
+        }
+
+        return merged;
+    }
+
+    private static void ApplyExecutionContextDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta? delta)
+    {
+        if (delta == null)
+            return;
+
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken?.Trim() ?? string.Empty,
+                ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference?.Trim() ?? string.Empty,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization?.Trim() ?? string.Empty,
+            };
+        }
     }
 
     private static WorkflowRunState ApplyWorkflowCommandObserved(WorkflowRunState current, WorkflowCommandObservedEvent evt)
@@ -801,6 +907,7 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
@@ -815,6 +922,7 @@ public sealed class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         return next;
@@ -828,6 +936,7 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();

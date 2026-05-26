@@ -333,32 +333,22 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+    // Refactor (iter115/cluster-3):
+    //   Old pattern: LLM control values were recovered from process-local runtime context.
+    //   New principle: LLM control values are typed actor state and survive actor replay.
     private static void ApplyTypedLlmControl(
         IWorkflowExecutionContext ctx,
         ChatRequestEvent chatRequest)
     {
-        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+        if (!WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
             return;
-
-        var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
-        if (string.IsNullOrWhiteSpace(overrides.NyxIdAccessToken) &&
-            string.IsNullOrWhiteSpace(overrides.ModelOverride) &&
-            string.IsNullOrWhiteSpace(overrides.NyxIdRoutePreference))
-        {
-            return;
-        }
 
         chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: Normalize(overrides.NyxIdAccessToken),
+            NyxIdAccessToken: Normalize(llm.NyxidAccessToken),
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
-            ModelOverride: Normalize(overrides.ModelOverride),
-            NyxIdRoutePreference: Normalize(overrides.NyxIdRoutePreference),
+            ModelOverride: Normalize(llm.ModelOverride),
+            NyxIdRoutePreference: Normalize(llm.NyxidRoutePreference),
             MaxToolRoundsOverride: null,
             UserMemoryPrompt: null).ToPayload();
     }
