@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserConfigCommandAckStage
@@ -8,12 +6,12 @@ public static class UserConfigCommandAckStage
 }
 
 public sealed record UserConfigSaveReceipt(
-    [property: JsonPropertyName("accepted")] bool Accepted,
-    [property: JsonPropertyName("commandId")] string CommandId,
-    [property: JsonPropertyName("ackStage")] string AckStage,
-    [property: JsonPropertyName("actorId")] string ActorId,
-    [property: JsonPropertyName("correlationId")] string CorrelationId,
-    [property: JsonPropertyName("ackedAtUtc")] DateTimeOffset AckedAtUtc);
+    bool Accepted,
+    string CommandId,
+    string AckStage,
+    string ActorId,
+    string CorrelationId,
+    DateTimeOffset AckedAtUtc);
 
 public sealed record SaveUserConfigCommand(
     string? DefaultModel = null,

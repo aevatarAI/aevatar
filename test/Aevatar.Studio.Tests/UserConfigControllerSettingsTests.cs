@@ -42,7 +42,7 @@ public sealed class UserConfigControllerSettingsTests
         var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
         payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Ready);
         payload.SavedRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
@@ -71,7 +71,7 @@ public sealed class UserConfigControllerSettingsTests
         var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
         payload.SavedRouteLabel.Should().Be("Aevatar Gateway");
         payload.EffectiveRouteLabel.Should().Be("Aevatar Gateway");
         payload.RouteOptions.Should()
@@ -90,13 +90,139 @@ public sealed class UserConfigControllerSettingsTests
         var response = await controller.GetLlmSettings(CancellationToken.None);
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
-        var payload = ok.Value.Should().BeOfType<UserLlmSettingsView>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
         payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Unavailable);
         payload.SavedRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.FallbackReason.Should().Be("catalog_unavailable");
         payload.RouteOptions.Should().ContainSingle().Which.Ready.Should().BeFalse();
         payload.Capabilities.CanSave.Should().BeFalse();
         payload.Capabilities.CanRetryCatalog.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_WhenSavedRouteUnavailable_ShouldFallbackToGateway()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/missing"),
+            httpHandler: new RecordingHttpHandler(SingleReadyServiceJson()),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.SavedRoute.Should().Be("/api/v1/proxy/s/missing");
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        payload.RouteFallbackActive.Should().BeTrue();
+        payload.FallbackReason.Should().Be(UserLlmFallbackReason.SavedRouteUnavailable);
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_WhenCatalogIsEmpty_ShouldExposeClosedEmptyCapabilities()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", UserConfigLlmRouteDefaults.Gateway),
+            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.CatalogStatus.Should().Be(UserLlmCatalogStatus.Empty);
+        payload.RouteOptions.Should().ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
+        payload.ModelGroupsByRoute.Should().BeEmpty();
+        payload.Capabilities.CanEditRoute.Should().BeFalse();
+        payload.Capabilities.CanEditModel.Should().BeFalse();
+        payload.Capabilities.CanSave.Should().BeTrue();
+        payload.Capabilities.CanRetryCatalog.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_WhenRouteIsReadyButNotAllowed_ShouldNotTreatItAsSaveableOrEffective()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            httpHandler: new RecordingHttpHandler("""
+            {
+              "services": [
+                {
+                  "user_service_id": "svc-openai",
+                  "service_slug": "openai-work",
+                  "display_name": "OpenAI Work",
+                  "route_value": "/api/v1/proxy/s/openai-work",
+                  "default_model": "gpt-5.4",
+                  "models": ["gpt-5.4"],
+                  "status": "ready",
+                  "source": "user",
+                  "allowed": false
+                }
+              ]
+            }
+            """),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        payload.RouteFallbackActive.Should().BeTrue();
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == "/api/v1/proxy/s/openai-work")
+            .Which.Should().Match<UserLlmRouteOptionResponse>(option =>
+                option.Status == UserLlmRouteStatus.Ready &&
+                !option.Allowed &&
+                !option.Ready);
+        payload.Capabilities.CanSave.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_ShouldNotLeakUnknownExternalRouteStatusOrSource()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            httpHandler: new RecordingHttpHandler("""
+            {
+              "services": [
+                {
+                  "user_service_id": "svc-openai",
+                  "service_slug": "openai-work",
+                  "display_name": "OpenAI Work",
+                  "route_value": "/api/v1/proxy/s/openai-work",
+                  "default_model": "gpt-5.4",
+                  "models": ["gpt-5.4"],
+                  "status": "nyxid_custom_state",
+                  "source": "external_vendor_source",
+                  "allowed": true
+                }
+              ]
+            }
+            """),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.RouteOptions.Should().NotContain(option =>
+            option.Status == "nyxid_custom_state" ||
+            option.Source == "external_vendor_source");
+        var allowedStatuses = new HashSet<string>(StringComparer.Ordinal)
+        {
+            UserLlmRouteStatus.Ready,
+            UserLlmRouteStatus.Unavailable,
+            UserLlmRouteStatus.Unknown,
+        };
+        var allowedSources = new HashSet<string>(StringComparer.Ordinal)
+        {
+            UserLlmRouteSource.GatewayProvider,
+            UserLlmRouteSource.UserService,
+            UserLlmRouteSource.ProxyService,
+            UserLlmRouteSource.Unknown,
+        };
+        payload.RouteOptions.Select(option => option.Status).Should().OnlyContain(status => allowedStatuses.Contains(status));
+        payload.RouteOptions.Select(option => option.Source).Should().OnlyContain(source => allowedSources.Contains(source));
     }
 
     [Fact]
@@ -111,11 +237,11 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsCommand(RouteValue: string.Empty, Model: " gpt-5.4 "),
+            new SaveUserLlmSettingsRequest(RouteValue: string.Empty, Model: " gpt-5.4 "),
             CancellationToken.None);
 
         var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
-        var payload = accepted.Value.Should().BeOfType<UserConfigSaveReceipt>().Subject;
+        var payload = accepted.Value.Should().BeOfType<UserConfigSaveReceiptResponse>().Subject;
         payload.Accepted.Should().BeTrue();
         payload.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
         commandService.Saved.Should().ContainSingle()
@@ -134,8 +260,21 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsCommand(RouteValue: null, Model: "gpt-5.4"),
+            new SaveUserLlmSettingsRequest(RouteValue: null, Model: "gpt-5.4"),
             CancellationToken.None);
+
+        response.Result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task SaveLlmSettings_WhenRequestBodyIsMissing_ShouldReturnBadRequest()
+    {
+        var controller = CreateController(
+            current: new UserConfig(string.Empty),
+            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            bearerToken: "user-token-1");
+
+        var response = await controller.SaveLlmSettings(null, CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
     }
@@ -149,7 +288,7 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsCommand(RouteValue: "/api/v1/proxy/s/missing"),
+            new SaveUserLlmSettingsRequest(RouteValue: "/api/v1/proxy/s/missing"),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();

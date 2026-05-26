@@ -89,6 +89,9 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         };
 
         var admission = await _dispatchPort.DispatchAsync(actor.Id, envelope, ct).ConfigureAwait(false);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("User config command was not accepted by the actor dispatch port.");
+
         return new UserConfigSaveReceipt(
             Accepted: admission.Accepted,
             CommandId: admission.CommandId,

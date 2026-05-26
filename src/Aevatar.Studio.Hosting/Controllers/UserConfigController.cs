@@ -44,7 +44,7 @@ public sealed class UserConfigController : ControllerBase
     }
 
     [HttpPut]
-    public async Task<ActionResult<UserConfigSaveReceipt>> Save(
+    public async Task<ActionResult<UserConfigSaveReceiptResponse>> Save(
         [FromBody] SaveUserConfigRequest request,
         CancellationToken cancellationToken)
     {
@@ -61,7 +61,7 @@ public sealed class UserConfigController : ControllerBase
                     request.GithubUsername,
                     request.MaxToolRounds),
                 cancellationToken);
-            return Accepted(receipt);
+            return Accepted(UserConfigSaveReceiptResponse.FromApplication(receipt));
         }
         catch (InvalidOperationException exception)
         {
@@ -84,13 +84,14 @@ public sealed class UserConfigController : ControllerBase
         [property: JsonPropertyName("maxToolRounds")] int? MaxToolRounds = null);
 
     [HttpGet("llm")]
-    public async Task<ActionResult<UserLlmSettingsView>> GetLlmSettings(CancellationToken cancellationToken)
+    public async Task<ActionResult<UserLlmSettingsResponse>> GetLlmSettings(CancellationToken cancellationToken)
     {
         try
         {
-            return Ok(await _llmPreferenceService
+            var view = await _llmPreferenceService
                 .GetSettingsAsync(ExtractBearerToken(), cancellationToken)
-                .ConfigureAwait(false));
+                .ConfigureAwait(false);
+            return Ok(UserLlmSettingsResponse.FromApplication(view));
         }
         catch (InvalidOperationException exception)
         {
@@ -104,8 +105,8 @@ public sealed class UserConfigController : ControllerBase
     }
 
     [HttpPut("llm")]
-    public async Task<ActionResult<UserConfigSaveReceipt>> SaveLlmSettings(
-        [FromBody] SaveUserLlmSettingsCommand? request,
+    public async Task<ActionResult<UserConfigSaveReceiptResponse>> SaveLlmSettings(
+        [FromBody] SaveUserLlmSettingsRequest? request,
         CancellationToken cancellationToken)
     {
         try
@@ -118,11 +119,9 @@ public sealed class UserConfigController : ControllerBase
 
             var receipt = await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
-                new SaveUserLlmPreferenceCommand(
-                    RouteValue: request.RouteValue,
-                    Model: request.Model),
+                request.ToCommand(),
                 cancellationToken).ConfigureAwait(false);
-            return Accepted(receipt);
+            return Accepted(UserConfigSaveReceiptResponse.FromApplication(receipt));
         }
         catch (InvalidOperationException exception)
         {
