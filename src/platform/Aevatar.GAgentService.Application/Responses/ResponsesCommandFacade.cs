@@ -188,8 +188,6 @@ public sealed class ResponsesCommandFacade(
 
         try
         {
-            await DispatchRunAsync(plan, ct);
-            await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
             var admission = await DispatchRunAsync(plan, ct);
             await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
             return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));

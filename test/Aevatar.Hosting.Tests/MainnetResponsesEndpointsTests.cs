@@ -141,9 +141,9 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.completed");
         body.Should().NotContain("stream-secret");
 
-        provider.StreamCallCount.Should().Be(2);
+        provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
-        sessions.RecordedCompletions.Should().HaveCount(2);
+        sessions.RecordedCompletions.Should().ContainSingle();
         sessions.RecordedCompletions.Should().OnlyContain(record => record.Completion.OutputText == "pong");
     }
 

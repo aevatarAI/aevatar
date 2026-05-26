@@ -19,8 +19,10 @@ public sealed class ResponsesCommandFacadeTests
     public async Task CreateAsync_ShouldRegisterSession_AndReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
             sessionPort: sessions,
+            dispatchPort: dispatch,
             routeResolver: new StaticResponsesRouteResolver("route-value"),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
 
@@ -40,6 +42,12 @@ public sealed class ResponsesCommandFacadeTests
         result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
         sessions.RecordedCompletions.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be(result.Accepted.Admission.ActorId);
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
+        command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
+        command.Model.Should().Be("gpt-5");
     }
 
     [Fact]
@@ -202,7 +210,8 @@ public sealed class ResponsesCommandFacadeTests
     public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(sessionPort: sessions);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
         var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
 
@@ -211,6 +220,12 @@ public sealed class ResponsesCommandFacadeTests
         result.Completion.Should().BeNull();
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be("actor-resp_stream");
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be("resp_stream");
+        command.RunId.Should().Be("resp_stream:llm-run");
+        command.Model.Should().Be("model");
     }
 
     [Fact]
@@ -307,17 +322,17 @@ public sealed class ResponsesCommandFacadeTests
         ILlmSessionQueryPort? queryPort = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesRouteResolver? routeResolver = null,
-        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null)
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
+        RecordingActorDispatchPort? dispatchPort = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
-        var dispatch = new RecordingActorDispatchPort();
         return new ResponsesCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             routeResolver ?? new StaticResponsesRouteResolver(null),
             effectiveSessionPort,
             queryPort ?? (effectiveSessionPort as RecordingSessionPort)?.QueryPort ?? new RecordingSessionQueryPort(),
-            dispatch,
+            dispatchPort ?? new RecordingActorDispatchPort(),
             [],
             NullLogger<ResponsesCommandFacade>.Instance);
     }

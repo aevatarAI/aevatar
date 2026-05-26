@@ -16,7 +16,8 @@ public sealed class MessagesCommandFacadeTests
     public async Task CreateAsync_ShouldRegisterSession_AndReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(sessionPort: sessions);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
         var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
 
@@ -26,6 +27,12 @@ public sealed class MessagesCommandFacadeTests
         result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.PreviousResponseId.Should().BeEmpty();
         sessions.RecordedCompletions.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be(result.Accepted.Admission.ActorId);
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
+        command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
+        command.Model.Should().Be("claude-sonnet");
     }
 
     [Fact]
@@ -93,7 +100,8 @@ public sealed class MessagesCommandFacadeTests
     public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(sessionPort: sessions);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
         var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
 
@@ -102,6 +110,12 @@ public sealed class MessagesCommandFacadeTests
         result.Completion.Should().BeNull();
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be("actor-msg_stream");
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be("msg_stream");
+        command.RunId.Should().Be("msg_stream:llm-run");
+        command.Model.Should().Be("claude-sonnet");
     }
 
     private static MessagesCommandRequest BuildRequest(string model, bool stream = false) =>
@@ -121,16 +135,16 @@ public sealed class MessagesCommandFacadeTests
 
     private static MessagesCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
-        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null)
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
+        RecordingActorDispatchPort? dispatchPort = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
-        var dispatch = new RecordingActorDispatchPort();
         return new MessagesCommandFacade(
             new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
-            dispatch,
+            dispatchPort ?? new RecordingActorDispatchPort(),
             NullLogger<MessagesCommandFacade>.Instance);
     }
 
@@ -190,8 +204,11 @@ public sealed class MessagesCommandFacadeTests
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            Calls.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
