@@ -4,7 +4,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
-/// Event-sink specialized lifecycle port base with runtime lease resolution hook.
+/// Event-sink specialized attach/release port base with runtime lease resolution hook.
 /// </summary>
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
@@ -13,33 +13,20 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     where TEvent : class
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
     private readonly IProjectionScopeReleaseService<TRuntimeLease> _releaseService;
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionScopeActivationService<TRuntimeLease> activationService,
         IProjectionScopeReleaseService<TRuntimeLease> releaseService,
         IProjectionSessionEventHub<TEvent> sessionEventHub)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
-        _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
         _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
         _sessionEventHub = sessionEventHub ?? throw new ArgumentNullException(nameof(sessionEventHub));
     }
 
     public bool ProjectionEnabled => _projectionEnabledAccessor();
-
-    protected async Task<TLeaseContract?> EnsureProjectionAsync(
-        ProjectionScopeStartRequest request,
-        CancellationToken ct = default)
-    {
-        if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))
-            return null;
-
-        return await _activationService.EnsureAsync(request, ct);
-    }
 
     public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
         TLeaseContract lease,
@@ -53,6 +40,7 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return null;
 
+        // Refactor (iter101/cluster-104): Old lifecycle base exposed EnsureProjectionAsync to derived request-facing ports; new ports only attach sinks to leases that projection-owned activation already created.
         var runtimeLease = ResolveRuntimeLease(lease);
         if (runtimeLease is not IProjectionPortSessionLease portLease)
         {

@@ -118,8 +118,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     }
 
     [EventHandler]
-    public async Task HandleRebuildProjection(ChannelBotRebuildProjectionCommand cmd)
+    private async Task HandleRebuildProjection(ChannelBotRebuildProjectionCommand cmd)
     {
+        // Refactor (iter101/cluster-104): Old rebuild handler was public and callable as a direct command surface; new handler is private actor inbox protocol for startup refresh only.
         await PersistDomainEventAsync(new ChannelBotProjectionRebuildRequestedEvent
         {
             Reason = cmd.Reason ?? string.Empty,
