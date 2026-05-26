@@ -78,8 +78,7 @@ public sealed class StudioMemberServiceTeamTests
         await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new UpdateStudioMemberRequest(
-                TeamId: PatchValue<string>.Of("new-team")));
+            new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("new-team")));
 
         commandPort.ReassignCalls.Should().Be(1);
         commandPort.LastFromTeamId.Should().Be("old-team");
@@ -98,8 +97,7 @@ public sealed class StudioMemberServiceTeamTests
         var result = await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new UpdateStudioMemberRequest(
-                TeamId: PatchValue<string>.Of(TeamId)));
+            new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of(TeamId)));
 
         commandPort.ReassignCalls.Should().Be(0);
     }
@@ -113,8 +111,7 @@ public sealed class StudioMemberServiceTeamTests
         var act = () => service.UpdateAsync(
             ScopeId,
             MemberId,
-            new UpdateStudioMemberRequest(
-                TeamId: PatchValue<string>.Of("  ")));
+            new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("  ")));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*teamId must not be empty*");
@@ -132,49 +129,11 @@ public sealed class StudioMemberServiceTeamTests
         await service.UpdateAsync(
             ScopeId,
             MemberId,
-            new UpdateStudioMemberRequest(
-                TeamId: PatchValue<string>.Of(null)));
+            new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of(null)));
 
         commandPort.ReassignCalls.Should().Be(1);
         commandPort.LastFromTeamId.Should().Be(TeamId);
         commandPort.LastToTeamId.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ShouldDispatchRename_WhenDisplayNameChanges()
-    {
-        var detail = NewDetail();
-        var commandPort = new RecordingMemberCommandPort();
-        var service = NewService(
-            commandPort: commandPort,
-            memberQueryPort: new InMemoryMemberQueryPort(detail));
-
-        await service.UpdateAsync(
-            ScopeId,
-            MemberId,
-            new UpdateStudioMemberRequest(
-                DisplayName: PatchValue<string>.Of("Renamed member"),
-                Description: PatchValue<string>.Of("Updated description")));
-
-        commandPort.RenameCalls.Should().Be(1);
-        commandPort.LastDisplayName.Should().Be("Renamed member");
-        commandPort.LastDescription.Should().Be("Updated description");
-        commandPort.ReassignCalls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ShouldRejectEmptyDisplayName()
-    {
-        var service = NewService(memberQueryPort: new InMemoryMemberQueryPort(NewDetail()));
-
-        var act = () => service.UpdateAsync(
-            ScopeId,
-            MemberId,
-            new UpdateStudioMemberRequest(
-                DisplayName: PatchValue<string>.Of("  ")));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*displayName must not be empty*");
     }
 
     [Fact]
@@ -185,8 +144,7 @@ public sealed class StudioMemberServiceTeamTests
         var act = () => service.UpdateAsync(
             ScopeId,
             "missing-member",
-            new UpdateStudioMemberRequest(
-                TeamId: PatchValue<string>.Of("t-1")));
+            new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("t-1")));
 
         await act.Should().ThrowAsync<StudioMemberNotFoundException>();
     }
@@ -289,10 +247,7 @@ public sealed class StudioMemberServiceTeamTests
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {
         public int CreateCalls { get; private set; }
-        public int RenameCalls { get; private set; }
         public int ReassignCalls { get; private set; }
-        public string? LastDisplayName { get; private set; }
-        public string? LastDescription { get; private set; }
         public string? LastFromTeamId { get; private set; }
         public string? LastToTeamId { get; private set; }
 
@@ -317,19 +272,6 @@ public sealed class StudioMemberServiceTeamTests
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             Task.CompletedTask;
-
-        public Task RenameAsync(
-            string scopeId,
-            string memberId,
-            string displayName,
-            string? description,
-            CancellationToken ct = default)
-        {
-            RenameCalls++;
-            LastDisplayName = displayName;
-            LastDescription = description;
-            return Task.CompletedTask;
-        }
 
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,

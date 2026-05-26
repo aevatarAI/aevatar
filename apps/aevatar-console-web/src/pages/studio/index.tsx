@@ -5794,86 +5794,6 @@ const StudioPage: React.FC = () => {
     ],
   );
 
-  const handleRenameInventoryMember = useCallback(
-    async (memberKey: string) => {
-      const normalizedMemberKey = trimOptional(memberKey);
-      if (normalizedMemberKey.startsWith('workflow:')) {
-        await handleRenameWorkflowMember(normalizedMemberKey);
-        return;
-      }
-
-      if (!normalizedMemberKey.startsWith('member:')) {
-        return;
-      }
-
-      const memberSummary = resolveStudioMemberSummaryFromMemberKey(
-        normalizedMemberKey,
-        publishedScopeMembers,
-        studioScopeMembers,
-      );
-      const memberId =
-        trimOptional(memberSummary?.memberId) ||
-        readMemberIdFromMemberKey(normalizedMemberKey);
-      if (!resolvedStudioScopeId || !memberId) {
-        void message.warning('Select a backend member before renaming.');
-        return;
-      }
-
-      const currentDisplayName =
-        trimOptional(memberSummary?.displayName) || memberId;
-      const nextDisplayName = trimOptional(
-        window.prompt('Rename member', currentDisplayName) ?? '',
-      );
-      if (!nextDisplayName || nextDisplayName === currentDisplayName) {
-        return;
-      }
-
-      setInventoryBusyKey(normalizedMemberKey);
-      setInventoryBusyAction('rename');
-
-      try {
-        const detail = await studioApi.updateMember({
-          scopeId: resolvedStudioScopeId,
-          memberId,
-          displayName: nextDisplayName,
-          description: memberSummary?.description ?? undefined,
-          teamId: memberSummary?.teamId ?? undefined,
-        });
-        setOptimisticStudioMembers((current) =>
-          upsertStudioMemberSummary(current, detail.summary),
-        );
-        queryClient.setQueryData<StudioMemberRoster>(
-          studioMembersQueryKey,
-          (current) =>
-            upsertStudioMemberRosterMember(
-              current,
-              resolvedStudioScopeId,
-              detail.summary,
-            ),
-        );
-        void queryClient.invalidateQueries({
-          queryKey: studioMembersQueryKey,
-        });
-        void message.success(`Renamed member to ${nextDisplayName}.`);
-      } catch (error) {
-        void message.error(
-          error instanceof Error ? error.message : 'Failed to rename member.',
-        );
-      } finally {
-        setInventoryBusyKey('');
-        setInventoryBusyAction('');
-      }
-    },
-    [
-      handleRenameWorkflowMember,
-      publishedScopeMembers,
-      queryClient,
-      resolvedStudioScopeId,
-      studioMembersQueryKey,
-      studioScopeMembers,
-    ],
-  );
-
   const handleDeleteWorkflowMember = useCallback(
     (memberKey: string) => {
       const workflowId = resolveWorkflowIdFromRouteValue(
@@ -8528,10 +8448,8 @@ const StudioPage: React.FC = () => {
     visibleWorkflowSummaries,
   ]);
   const selectedInventoryCanRename = Boolean(
-    selectedInventoryMemberKey.startsWith('workflow:') ||
-      (selectedInventoryMemberKey.startsWith('member:') &&
-        resolvedStudioScopeId &&
-        selectedInventoryResolvedMemberId),
+    selectedInventoryMemberKey.startsWith('workflow:') &&
+      selectedInventoryWorkflowId,
   );
   const selectedInventoryCanDelete = Boolean(
     selectedInventoryMemberKey.startsWith('workflow:') &&
@@ -9643,8 +9561,8 @@ const StudioPage: React.FC = () => {
           disabled={!selectedInventoryCanRename || selectedInventoryMemberBusy}
           loading={selectedInventoryBusyAction === 'rename'}
           onClick={() =>
-            selectedInventoryMemberKey
-              ? void handleRenameInventoryMember(selectedInventoryMemberKey)
+            selectedInventoryCanRename
+              ? void handleRenameWorkflowMember(selectedInventoryMemberKey)
               : undefined
           }
           style={{

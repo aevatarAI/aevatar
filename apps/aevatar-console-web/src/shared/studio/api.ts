@@ -1547,36 +1547,6 @@ export const studioApi = {
     );
   },
 
-  updateMember(input: {
-    scopeId: string;
-    memberId: string;
-    displayName?: string | null;
-    description?: string | null;
-    teamId?: string | null;
-  }): Promise<StudioMemberDetail> {
-    return requestDecodedJson(
-      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
-      decodeStudioMemberDetail,
-      {
-        method: "PATCH",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(
-          compactObject({
-            displayName: trimOptional(input.displayName),
-            description:
-              input.description === null
-                ? null
-                : input.description === undefined
-                  ? undefined
-                  : input.description.trim(),
-            teamId:
-              input.teamId === null ? null : trimOptional(input.teamId),
-          })
-        ),
-      }
-    );
-  },
-
   createMember(input: {
     scopeId: string;
     displayName: string;

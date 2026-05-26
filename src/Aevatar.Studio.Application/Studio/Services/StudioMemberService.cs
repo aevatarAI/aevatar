@@ -283,46 +283,6 @@ public sealed class StudioMemberService : IStudioMemberService
         var currentDetail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
 
-        if (request.DisplayName.HasValue || request.Description.HasValue)
-        {
-            var nextDisplayName = request.DisplayName.HasValue
-                ? request.DisplayName.Value
-                : currentDetail.Summary.DisplayName;
-            if (string.IsNullOrWhiteSpace(nextDisplayName))
-            {
-                throw new InvalidOperationException(
-                    "displayName must not be empty when present.");
-            }
-
-            if (nextDisplayName.Length > StudioMemberInputLimits.MaxDisplayNameLength)
-            {
-                throw new InvalidOperationException(
-                    $"displayName must be at most {StudioMemberInputLimits.MaxDisplayNameLength} characters.");
-            }
-
-            var nextDescription = request.Description.HasValue
-                ? request.Description.Value ?? string.Empty
-                : currentDetail.Summary.Description;
-            if (nextDescription.Length > StudioMemberInputLimits.MaxDescriptionLength)
-            {
-                throw new InvalidOperationException(
-                    $"description must be at most {StudioMemberInputLimits.MaxDescriptionLength} characters.");
-            }
-
-            var normalizedDisplayName = nextDisplayName.Trim();
-            var normalizedDescription = nextDescription.Trim();
-            if (!string.Equals(currentDetail.Summary.DisplayName, normalizedDisplayName, StringComparison.Ordinal)
-                || !string.Equals(currentDetail.Summary.Description, normalizedDescription, StringComparison.Ordinal))
-            {
-                await _memberCommandPort.RenameAsync(
-                    scopeId,
-                    memberId,
-                    normalizedDisplayName,
-                    normalizedDescription,
-                    ct);
-            }
-        }
-
         if (request.TeamId.HasValue)
         {
             var requested = request.TeamId.Value;

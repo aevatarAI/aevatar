@@ -80,33 +80,6 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         summary.MemberId.Should().NotContain(":");
     }
 
-    [Fact]
-    public async Task RenameAsync_ShouldDispatchRenamedEventToCanonicalActor()
-    {
-        var bootstrap = new RecordingBootstrap();
-        var dispatch = new RecordingDispatchPort();
-        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
-
-        await service.RenameAsync(
-            ScopeId,
-            "m-alpha",
-            "Renamed Alpha",
-            "updated",
-            CancellationToken.None);
-
-        bootstrap.EnsuredActorIds.Should().ContainSingle()
-            .Which.Should().Be("studio-member:scope-1:m-alpha");
-        dispatch.Dispatches.Should().ContainSingle();
-
-        var dispatched = dispatch.Dispatches[0];
-        dispatched.ActorId.Should().Be("studio-member:scope-1:m-alpha");
-        dispatched.Envelope.Payload.Is(StudioMemberRenamedEvent.Descriptor).Should().BeTrue();
-        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberRenamedEvent>();
-        evt.DisplayName.Should().Be("Renamed Alpha");
-        evt.Description.Should().Be("updated");
-        evt.UpdatedAtUtc.Should().NotBeNull();
-    }
-
     // Note: input validation (length caps, slug pattern, empty display
     // name) is now enforced at the Application boundary in
     // StudioMemberCreateRequestValidator. The Projection-layer command

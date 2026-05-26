@@ -317,8 +317,6 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
-        public System.Text.Json.JsonElement? DisplayName { get; set; }
-        public System.Text.Json.JsonElement? Description { get; set; }
         public System.Text.Json.JsonElement? TeamId { get; set; }
     }
 
@@ -335,47 +333,6 @@ internal static class StudioMemberEndpoints
 
         if (body == null)
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
-
-        var displayNamePatch = PatchValue<string>.Absent;
-        if (body.DisplayName.HasValue)
-        {
-            var jsonValue = body.DisplayName.Value;
-            if (jsonValue.ValueKind != System.Text.Json.JsonValueKind.String)
-            {
-                return BadRequest(
-                    "INVALID_STUDIO_MEMBER_REQUEST",
-                    "displayName must be a non-empty string when present.");
-            }
-
-            var raw = jsonValue.GetString();
-            if (string.IsNullOrEmpty(raw))
-            {
-                return BadRequest(
-                    "INVALID_STUDIO_MEMBER_REQUEST",
-                    "displayName must be a non-empty string when present.");
-            }
-
-            displayNamePatch = PatchValue<string>.Of(raw);
-        }
-
-        var descriptionPatch = PatchValue<string>.Absent;
-        if (body.Description.HasValue)
-        {
-            var jsonValue = body.Description.Value;
-            switch (jsonValue.ValueKind)
-            {
-                case System.Text.Json.JsonValueKind.Null:
-                    descriptionPatch = PatchValue<string>.Of(null);
-                    break;
-                case System.Text.Json.JsonValueKind.String:
-                    descriptionPatch = PatchValue<string>.Of(jsonValue.GetString());
-                    break;
-                default:
-                    return BadRequest(
-                        "INVALID_STUDIO_MEMBER_REQUEST",
-                        "description must be a string, null, or absent.");
-            }
-        }
 
         // Translate the wire body into the application contract. JsonElement
         // semantics:
@@ -415,13 +372,7 @@ internal static class StudioMemberEndpoints
         try
         {
             var detail = await memberService.UpdateAsync(
-                scopeId,
-                memberId,
-                new UpdateStudioMemberRequest(
-                    displayNamePatch,
-                    descriptionPatch,
-                    teamIdPatch),
-                ct);
+                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
             return Results.Ok(detail);
         }
         catch (StudioMemberNotFoundException ex)
