@@ -678,6 +678,95 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task TelegramUserConnector_GetUpdates_ShouldRejectGetUpdatesWithNyxIdRelayGuidance()
+    {
+        var connector = new TelegramUserConnector(
+            "telegram-user-no-inbound",
+            apiId: 123456,
+            apiHash: "hash",
+            phoneNumber: "",
+            verificationCode: "",
+            password: "",
+            sessionPath: "",
+            deviceModel: "",
+            systemVersion: "",
+            appVersion: "",
+            systemLangCode: "",
+            langCode: "",
+            allowedOperations: ["/sendMessage"],
+            timeoutMs: 1000,
+            logger: NullLogger.Instance);
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/getUpdates",
+            Payload = """{"offset":1,"timeout":25}""",
+        });
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("/getUpdates was removed");
+        response.Error.Should().Contain("NyxID Channel Bot Relay");
+    }
+
+    [Fact]
+    public void TelegramUser_only_getUpdates_should_fallback_to_sendMessage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """
+            {
+              "connectors": [
+                {
+                  "name": "telegram_user_main",
+                  "type": "telegram_user",
+                  "telegramUser": {
+                    "allowedOperations": ["/getUpdates"]
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+
+            connectors.Should().ContainSingle()
+                .Which.TelegramUser.AllowedOperations.Should().Equal(["/sendMessage"],
+                    "filtering /getUpdates should fall back to /sendMessage when no allowed operations remain");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TelegramUserConnector_must_not_reintroduce_inbound_queue_or_polling_state()
+    {
+        var path = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Bootstrap",
+            "Connectors",
+            "TelegramUserConnector.cs"));
+        var source = File.ReadAllText(path);
+
+        source.Should().NotContain("TelegramInboundUpdate",
+            "deleted per iter113/cluster-1 - inbound goes through NyxID relay");
+        source.Should().NotContain("GetUpdatesPayload",
+            "/getUpdates implementation deleted");
+        source.Should().NotContain("MaxBufferedUpdates",
+            "in-memory buffer deleted");
+        source.Should().NotContain("Queue<",
+            "inbound queue state deleted");
+    }
+
+    [Fact]
     public async Task HttpConnectorBuilder_WithHttpClientFactory_ShouldUseNamedClient()
     {
         var handler = new StubHttpMessageHandler(_ =>
