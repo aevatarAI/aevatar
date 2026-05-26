@@ -211,6 +211,39 @@ public class CommandDispatchPipelineTests
 public class ActorCommandTargetDispatcherTests
 {
     [Fact]
+    public void Application_command_ports_must_not_reintroduce_handled_dispatch_contract()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        var repositoryRoot = directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+        var sourceRoot = Path.Combine(repositoryRoot, "src");
+        var paths = Directory.GetFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}test{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(p => !p.Contains("ArchitectureGuards", StringComparison.Ordinal))
+            .Where(p => !p.Contains("RegressionTest", StringComparison.Ordinal))
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(p => !p.EndsWith(".g.cs", StringComparison.Ordinal))
+            .Where(p => !p.EndsWith(".Designer.cs", StringComparison.Ordinal))
+            .OrderBy(p => p, StringComparer.Ordinal);
+
+        foreach (var path in paths)
+        {
+            var source = string.Join(
+                Environment.NewLine,
+                File.ReadLines(path).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+            source.Should().NotContain("IActorHandledDispatchPort", path);
+            source.Should().NotContain("DispatchAndWaitHandledAsync", path);
+        }
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldUseActorRuntimeDispatch()
     {
         var runtime = new RecordingActorRuntime();
