@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Infrastructure.Storage;
@@ -22,7 +23,9 @@ public sealed class ConnectorsController : ControllerBase
     {
         try
         {
-            return Ok(await _connectorService.GetCatalogAsync(cancellationToken));
+            var response = await _connectorService.GetCatalogAsync(cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -43,7 +46,9 @@ public sealed class ConnectorsController : ControllerBase
     {
         try
         {
-            return Ok(await _connectorService.GetDraftAsync(cancellationToken));
+            var response = await _connectorService.GetDraftAsync(cancellationToken);
+            ETagSupport.WriteETag(Response, response.Version);
+            return Ok(response);
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -64,9 +69,17 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorCatalogRequest request,
         CancellationToken cancellationToken)
     {
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
-            return Ok(await _connectorService.SaveCatalogAsync(request, cancellationToken));
+            var response = await _connectorService.SaveCatalogAsync(effectiveRequest, cancellationToken);
+            EmitETagIfDeterministic(response.Version);
+            return Ok(response);
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -112,9 +125,17 @@ public sealed class ConnectorsController : ControllerBase
         [FromBody] SaveConnectorDraftRequest request,
         CancellationToken cancellationToken)
     {
+        if (TryApplyIfMatch(request, out var effectiveRequest, out var malformed))
+            return malformed!;
         try
         {
-            return Ok(await _connectorService.SaveDraftAsync(request, cancellationToken));
+            var response = await _connectorService.SaveDraftAsync(effectiveRequest, cancellationToken);
+            EmitETagIfDeterministic(response.Version);
+            return Ok(response);
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -133,10 +154,19 @@ public sealed class ConnectorsController : ControllerBase
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
+        var status = ETagSupport.ParseIfMatch(Request, out var ifMatchVersion);
+        if (status == IfMatchStatus.Invalid)
+            return MalformedIfMatch();
+
+        long? expectedVersion = status == IfMatchStatus.Valid ? ifMatchVersion : null;
         try
         {
-            await _connectorService.DeleteDraftAsync(cancellationToken);
+            await _connectorService.DeleteDraftAsync(expectedVersion, cancellationToken);
             return NoContent();
+        }
+        catch (EventStoreOptimisticConcurrencyException exception)
+        {
+            return Conflict(new { code = "VERSION_CONFLICT", message = exception.Message });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -151,4 +181,82 @@ public sealed class ConnectorsController : ControllerBase
             return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
         }
     }
+
+    private bool TryApplyIfMatch(SaveConnectorCatalogRequest request, out SaveConnectorCatalogRequest effective, out ActionResult? malformed)
+    {
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
+        malformed = null;
+        return false;
+    }
+
+    private bool TryApplyIfMatch(SaveConnectorDraftRequest request, out SaveConnectorDraftRequest effective, out ActionResult? malformed)
+    {
+        var status = ETagSupport.ParseIfMatch(Request, out var headerVersion);
+        if (status == IfMatchStatus.Invalid)
+        {
+            effective = request;
+            malformed = MalformedIfMatch();
+            return true;
+        }
+
+        if (status == IfMatchStatus.Valid)
+        {
+            if (request.ExpectedVersion is { } bodyVersion && bodyVersion != headerVersion)
+            {
+                effective = request;
+                malformed = IfMatchBodyMismatch(headerVersion, bodyVersion);
+                return true;
+            }
+
+            effective = request with { ExpectedVersion = headerVersion };
+            malformed = null;
+            return false;
+        }
+
+        effective = request;
+        malformed = null;
+        return false;
+    }
+
+    private void EmitETagIfDeterministic(long version)
+    {
+        if (version > 0)
+            ETagSupport.WriteETag(Response, version);
+    }
+
+    private BadRequestObjectResult MalformedIfMatch() =>
+        BadRequest(new
+        {
+            code = "MALFORMED_IF_MATCH",
+            message = "If-Match must be a strong validator with a single non-negative integer version (e.g. \"5\").",
+        });
+
+    private BadRequestObjectResult IfMatchBodyMismatch(long headerVersion, long bodyVersion) =>
+        BadRequest(new
+        {
+            code = "IF_MATCH_BODY_MISMATCH",
+            message = $"If-Match header (\"{headerVersion}\") disagrees with body expectedVersion ({bodyVersion}). Send only one, or set them to the same value.",
+        });
 }

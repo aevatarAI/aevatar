@@ -27,7 +27,7 @@ public sealed class MockLLMProvider : ILLMProvider, ILLMProviderFactory
 
     public string Name => "mock";
 
-    public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+    private LLMResponse BuildResponse(LLMRequest request)
     {
         var systemPrompt = request.Messages.FirstOrDefault(m => m.Role == "system")?.Content ?? "";
         var userMessage = request.Messages.LastOrDefault(m => m.Role == "user")?.Content ?? "";
@@ -45,25 +45,27 @@ public sealed class MockLLMProvider : ILLMProvider, ILLMProviderFactory
 
         CallLog.Add((systemPrompt, userMessage, response));
 
-        return Task.FromResult(new LLMResponse
+        return new LLMResponse
         {
             Content = response,
             FinishReason = "stop",
             Usage = new TokenUsage(100, 50, 150),
-        });
+        };
     }
 
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var full = await ChatAsync(request, ct);
+        ct.ThrowIfCancellationRequested();
+        var full = BuildResponse(request);
         // 模拟逐字输出
         foreach (var ch in full.Content ?? "")
         {
             yield return new LLMStreamChunk { DeltaContent = ch.ToString() };
         }
         yield return new LLMStreamChunk { IsLast = true, Usage = full.Usage };
+        await Task.CompletedTask;
     }
 
     // ─── ILLMProviderFactory 实现 ───

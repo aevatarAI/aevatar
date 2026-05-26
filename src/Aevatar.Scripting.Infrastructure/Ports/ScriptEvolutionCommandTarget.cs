@@ -7,7 +7,6 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
@@ -18,20 +17,17 @@ public sealed class ScriptEvolutionCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IScriptEvolutionProjectionPort _projectionPort;
-    private readonly IScriptEvolutionReadModelActivationPort _readModelActivationPort;
 
     public ScriptEvolutionCommandTarget(
         IActor actor,
         string proposalId,
-        IScriptEvolutionProjectionPort projectionPort,
-        IScriptEvolutionReadModelActivationPort readModelActivationPort)
+        IScriptEvolutionProjectionPort projectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         ProposalId = string.IsNullOrWhiteSpace(proposalId)
             ? throw new ArgumentException("Proposal id is required.", nameof(proposalId))
             : proposalId;
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
     }
 
     public IActor Actor { get; }
@@ -39,21 +35,25 @@ public sealed class ScriptEvolutionCommandTarget
     public string TargetId => Actor.Id;
     public string SessionActorId => Actor.Id;
     public IScriptEvolutionProjectionLease? ProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<ScriptEvolutionSessionCompletedEvent>? LiveSink { get; private set; }
 
     public void BindLiveObservation(
         IScriptEvolutionProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<ScriptEvolutionSessionCompletedEvent> sink)
     {
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
     public IEventSink<ScriptEvolutionSessionCompletedEvent> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Script evolution live sink is not bound.");
-
-    public Task<bool> ActivateReadModelAsync(CancellationToken ct = default) =>
-        _readModelActivationPort.ActivateAsync(SessionActorId, ct);
 
     public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
         ReleaseAsync(ct);
@@ -78,6 +78,7 @@ public sealed class ScriptEvolutionCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     ProjectionLease,
+                    LiveSinkLease,
                     LiveSink,
                     onDetachedAsync: null,
                     ct);
@@ -88,6 +89,7 @@ public sealed class ScriptEvolutionCommandTarget
             }
 
             ProjectionLease = null;
+            LiveSinkLease = null;
             LiveSink = null;
         }
         else
@@ -97,6 +99,7 @@ public sealed class ScriptEvolutionCommandTarget
                 try
                 {
                     await LiveSink.DisposeAsync();
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
@@ -111,6 +114,7 @@ public sealed class ScriptEvolutionCommandTarget
                 try
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(ProjectionLease, ct);
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {

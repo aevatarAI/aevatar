@@ -20,6 +20,8 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
             StepId = stepId,
             Approved = command.Approved,
             UserInput = command.UserInput ?? string.Empty,
+            EditedContent = command.EditedContent ?? string.Empty,
+            Feedback = command.Feedback ?? string.Empty,
         };
         AppendMetadata(resumed.Metadata, command.Metadata);
 

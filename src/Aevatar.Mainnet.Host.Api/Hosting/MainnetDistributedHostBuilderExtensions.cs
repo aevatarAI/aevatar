@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -13,6 +14,19 @@ public static class MainnetDistributedHostBuilderExtensions
     public static WebApplicationBuilder AddMainnetDistributedOrleansHost(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(AppContext.BaseDirectory, "appsettings.Distributed.json"),
+            optional: true,
+            reloadOnChange: false);
+
+        // Re-add environment variables so they take precedence over Distributed.json.
+        // CreateBuilder and AddAevatarConfig register env var sources before this method,
+        // but Distributed.json (loaded above) would shadow them without this re-add.
+        // Both prefixed (AEVATAR_ActorRuntime__*, AEVATAR_Orleans__*) and bare
+        // (Projection__*, ASPNETCORE_ENVIRONMENT) are used by CI/cluster scripts.
+        builder.Configuration.AddEnvironmentVariables("AEVATAR_");
+        builder.Configuration.AddEnvironmentVariables();
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
         if (!string.Equals(runtimeOptions.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))

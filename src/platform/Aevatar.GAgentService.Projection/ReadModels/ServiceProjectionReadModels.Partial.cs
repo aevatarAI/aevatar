@@ -139,6 +139,21 @@ public sealed partial class ServiceRolloutStageReadModel
     }
 }
 
+public sealed partial class ServiceRolloutCommandObservationReadModel : IProjectionReadModel<ServiceRolloutCommandObservationReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => UpdatedAt;
+        set => UpdatedAt = value;
+    }
+}
+
 public sealed partial class ServiceServingTargetReadModel
 {
     public IList<string> EnabledEndpointIds
@@ -184,6 +199,205 @@ public sealed partial class ServiceTrafficEndpointReadModel
     {
         get => TargetEntries;
         set => ServiceProjectionReadModelSupport.ReplaceCollection(TargetEntries, value);
+    }
+}
+
+public sealed partial class ServiceRunCurrentStateReadModel : IProjectionReadModel<ServiceRunCurrentStateReadModel>
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
+public sealed partial class GAgentRunTerminalReadModel : IProjectionReadModel<GAgentRunTerminalReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ObservedAt;
+        set => ObservedAt = value;
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+public sealed partial class LlmSessionCurrentStateReadModel : IProjectionReadModel<LlmSessionCurrentStateReadModel>
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset? CancelledAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CancelledAtUtcValue);
+        set => CancelledAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public IList<LlmSessionForwardedToolCallReadModel> ForwardedToolCalls
+    {
+        get => ForwardedToolCallEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(ForwardedToolCallEntries, value);
+    }
+}
+
+public sealed partial class LlmSessionForwardedToolCallReadModel
+{
+    public DateTimeOffset? Expiry
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(ExpiryUtcValue);
+        set => ExpiryUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? EmittedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(EmittedAtUtcValue);
+        set => EmittedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? ReceivedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(ReceivedAtUtcValue);
+        set => ReceivedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? ResolvedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(ResolvedAtUtcValue);
+        set => ResolvedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+}
+
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+public sealed partial class LlmSessionCompletionReadModel
+{
+    public DateTimeOffset? CompletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CompletedAtUtcValue);
+        set => CompletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public IList<LlmSessionCompletedToolCallReadModel> ToolCalls
+    {
+        get => ToolCallEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(ToolCallEntries, value);
+    }
+}
+
+public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
+    : IProjectionReadModel<ResponsesAgentToolStateCurrentStateReadModel>
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public IList<ResponsesTodoItemReadModel> Todos
+    {
+        get => TodoItemEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(TodoItemEntries, value);
+    }
+
+    public IList<ResponsesTaskTraceReadModel> Tasks
+    {
+        get => TaskTraceEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(TaskTraceEntries, value);
+    }
+
+    public IList<ResponsesWebTraceReadModel> WebTraces
+    {
+        get => WebTraceEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(WebTraceEntries, value);
+    }
+
+    public IList<ResponsesWebCacheEntryReadModel> WebCacheEntries
+    {
+        get => WebCacheEntryEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(WebCacheEntryEntries, value);
+    }
+}
+
+public sealed partial class ResponsesTodoItemReadModel
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
+public sealed partial class ResponsesTaskTraceReadModel
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
+public sealed partial class ResponsesWebTraceReadModel
+{
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
+public sealed partial class ResponsesWebCacheEntryReadModel
+{
+    public DateTimeOffset CachedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CachedAtUtcValue);
+        set => CachedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset? LastHitAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(LastHitAtUtcValue);
+        set => LastHitAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 }
 

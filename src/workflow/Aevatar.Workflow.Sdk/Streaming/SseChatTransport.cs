@@ -19,6 +19,9 @@ public interface IWorkflowChatTransport
 
 public sealed class SseChatTransport : IWorkflowChatTransport
 {
+    // Refactor (iter82/cluster-082-workflow-sdk-library-await-cancellation):
+    //   Old pattern: SDK awaits without library-safe ConfigureAwait/WithCancellation; OperationCanceledException wrapped as Transport failure
+    //   New principle: library awaits ConfigureAwait(false), async-enumerable WithCancellation, preserve OperationCanceledException
     public async IAsyncEnumerable<WorkflowEvent> StreamAsync(
         HttpClient httpClient,
         ChatRunRequest request,
@@ -58,7 +61,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
             response = await httpClient.SendAsync(
                 requestMessage,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -73,7 +76,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
         {
             if (!response.IsSuccessStatusCode)
             {
-                var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+                var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 throw WorkflowSdkJson.BuildHttpException(
                     response.StatusCode,
                     rawPayload,
@@ -83,7 +86,11 @@ public sealed class SseChatTransport : IWorkflowChatTransport
             Stream stream;
             try
             {
-                stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -98,7 +105,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
                 string? line;
                 try
                 {
-                    line = await reader.ReadLineAsync(cancellationToken);
+                    line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {

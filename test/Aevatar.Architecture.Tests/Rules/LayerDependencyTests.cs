@@ -9,6 +9,19 @@ public class LayerDependencyTests
     private static readonly ArchitectureModel Arch = ArchitectureTestBase.ProductionArchitecture;
 
     [Fact]
+    public void StudioApplication_ShouldNot_DependOn_GAgentServiceApplication()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "src", "Aevatar.Studio.Application", "Aevatar.Studio.Application.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.DoesNotContain(
+            "Aevatar.GAgentService.Application.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkflowCore_ShouldNot_DependOn_AICore()
     {
         IArchRule rule = Types().That()
@@ -151,5 +164,19 @@ public class LayerDependencyTests
                 Types().That().ResideInNamespaceMatching(@"Aevatar\.GAgentService(\..+)?"))
             .Because("Projection Providers must not depend on GAgentService business layer");
         rule.Check(Arch);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Repository root was not found.");
     }
 }

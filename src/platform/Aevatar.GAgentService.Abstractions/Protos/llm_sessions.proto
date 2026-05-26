@@ -1,0 +1,490 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+enum LlmSessionOriginKind {
+  LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
+  LLM_SESSION_ORIGIN_KIND_API_KEY = 1;
+  LLM_SESSION_ORIGIN_KIND_CHANNEL = 2;
+}
+
+enum LlmSessionStatus {
+  LLM_SESSION_STATUS_UNSPECIFIED = 0;
+  LLM_SESSION_STATUS_ACCEPTED = 1;
+  LLM_SESSION_STATUS_COMPLETED = 2;
+  LLM_SESSION_STATUS_FAILED = 3;
+  LLM_SESSION_STATUS_CANCELLED = 4;
+  LLM_SESSION_STATUS_EXPIRED = 5;
+}
+
+enum LlmSessionForwardedToolCallStatus {
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_PENDING = 1;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_RECEIVED = 2;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_RESOLVED = 3;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_EXPIRED = 4;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_CANCELLED = 5;
+}
+
+message LlmSessionRecord {
+  string response_id = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  LlmSessionOriginKind origin_kind = 4;
+  string previous_response_id = 5;
+  LlmSessionStatus status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Duration ttl = 8;
+  google.protobuf.Timestamp cancelled_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// Forwarded tool call. External JSON is converted at the host/adapter boundary
+// into protobuf Value before entering actor state/events.
+message LlmSessionForwardedToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  string schema_hash = 3;
+  google.protobuf.Value arguments = 4;
+  LlmSessionForwardedToolCallStatus status = 5;
+  google.protobuf.Timestamp expiry = 6;
+  google.protobuf.Value result = 7;
+  google.protobuf.Timestamp emitted_at = 8;
+  google.protobuf.Timestamp received_at = 9;
+  google.protobuf.Timestamp resolved_at = 10;
+}
+
+message LlmSessionCompletedToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Value result = 3;
+}
+
+message LlmSessionCompletion {
+  string output_text = 1;
+  repeated LlmSessionCompletedToolCall tool_calls = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  string failure_code = 4;
+  string failure_message = 5;
+  LlmSessionTokenUsage usage = 6;
+}
+
+message LlmSessionTokenUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message LlmSessionState {
+  LlmSessionRecord record = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+  repeated LlmSessionForwardedToolCall forwarded_tool_calls = 4;
+  LlmSessionCompletion completion = 5;
+}
+
+message RegisterResponseSessionRequested {
+  LlmSessionRecord record = 1;
+}
+
+message LlmSessionRegisteredEvent {
+  LlmSessionRecord record = 1;
+}
+
+message UpdateResponseSessionStatusRequested {
+  string response_id = 1;
+  LlmSessionStatus status = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message LlmSessionStatusUpdatedEvent {
+  string response_id = 1;
+  LlmSessionStatus status = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message RecordResponseSessionCompletionRequested {
+  string response_id = 1;
+  LlmSessionCompletion completion = 2;
+}
+
+message LlmSessionCompletionRecordedEvent {
+  string response_id = 1;
+  LlmSessionCompletion completion = 2;
+}
+
+message ExpireResponseSessionRequested {
+  string response_id = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message RecordForwardedToolCallRequested {
+  string response_id = 1;
+  LlmSessionForwardedToolCall call = 2;
+}
+
+message LlmSessionForwardedToolCallEmittedEvent {
+  string response_id = 1;
+  LlmSessionForwardedToolCall call = 2;
+}
+
+message ReceiveForwardedToolResultRequested {
+  string response_id = 1;
+  string call_id = 2;
+  string schema_hash = 3;
+  google.protobuf.Value result = 4;
+  google.protobuf.Timestamp received_at = 5;
+}
+
+message LlmSessionForwardedToolResultReceivedEvent {
+  string response_id = 1;
+  string call_id = 2;
+  string schema_hash = 3;
+  google.protobuf.Value result = 4;
+  google.protobuf.Timestamp received_at = 5;
+}
+
+message ResolveForwardedToolResultRequested {
+  string response_id = 1;
+  string call_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+}
+
+message LlmSessionForwardedToolCallResolvedEvent {
+  string response_id = 1;
+  string call_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+}
+
+enum ChatRunSubRunTargetKind {
+  CHAT_RUN_SUB_RUN_TARGET_KIND_UNSPECIFIED = 0;
+  CHAT_RUN_SUB_RUN_TARGET_KIND_GAGENT = 1;
+  CHAT_RUN_SUB_RUN_TARGET_KIND_TEAM = 2;
+  CHAT_RUN_SUB_RUN_TARGET_KIND_WORKFLOW = 3;
+}
+
+enum ChatRunSubRunWaitMode {
+  CHAT_RUN_SUB_RUN_WAIT_MODE_UNSPECIFIED = 0;
+  CHAT_RUN_SUB_RUN_WAIT_MODE_ACK = 1;
+  CHAT_RUN_SUB_RUN_WAIT_MODE_STREAM = 2;
+  CHAT_RUN_SUB_RUN_WAIT_MODE_COMPLETE = 3;
+}
+
+message ChatRunMessageRecord {
+  string role = 1;
+  string content = 2;
+  repeated ChatRunContentPart content_parts = 3;
+  string tool_call_id = 4;
+  repeated ChatRunToolCallRecord assistant_tool_calls = 5;
+}
+
+message ChatRunContentPart {
+  string kind = 1;
+  string text = 2;
+  string data_base64 = 3;
+  string media_type = 4;
+  string uri = 5;
+  string name = 6;
+}
+
+message ChatRunToolCallRecord {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct arguments = 3;
+  string result_json = 4;
+  int32 llm_round = 5;
+  string run_id = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
+message ChatRunSubRunSubscription {
+  string run_id = 1;
+  google.protobuf.Timestamp started_at = 2;
+  ChatRunSubRunTargetKind target_kind = 3;
+  string target_id = 4;
+  ChatRunSubRunWaitMode wait_mode = 5;
+  string stream_topic = 6;
+  string caller_tool_call_id = 7;
+  string tool_name = 8;
+  string actor_id = 9;
+  string service_id = 10;
+  string endpoint_id = 11;
+  int32 llm_round = 12;
+}
+
+message ChatRunState {
+  string response_id = 1;
+  string model_name = 2;
+  repeated ChatRunMessageRecord messages = 3;
+  string assistant_content_draft = 4;
+  repeated ChatRunToolCallRecord tool_call_history = 5;
+  repeated ChatRunSubRunSubscription active_sub_run_subscriptions = 6;
+  int32 current_llm_round = 7;
+  google.protobuf.Timestamp initialized_at = 8;
+  google.protobuf.Timestamp last_activity_at = 9;
+  google.protobuf.Duration idle_ttl = 10;
+  bool terminated = 11;
+}
+
+message StartChatRunRequested {
+  string response_id = 1;
+  string model_name = 2;
+  repeated ChatRunMessageRecord messages = 3;
+  google.protobuf.Duration idle_ttl = 4;
+  google.protobuf.Timestamp started_at = 5;
+}
+
+message ChatRunStartedEvent {
+  string response_id = 1;
+  string model_name = 2;
+  repeated ChatRunMessageRecord messages = 3;
+  google.protobuf.Duration idle_ttl = 4;
+  google.protobuf.Timestamp started_at = 5;
+}
+
+message RecordChatRunAssistantDraftRequested {
+  string content = 1;
+  int32 llm_round = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+message ChatRunAssistantDraftRecordedEvent {
+  string content = 1;
+  int32 llm_round = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+message SubmitChatRunToolCallRequested {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct arguments = 3;
+  string result_json = 4;
+  string run_id = 5;
+  ChatRunSubRunTargetKind target_kind = 6;
+  string target_id = 7;
+  ChatRunSubRunWaitMode wait_mode = 8;
+  string stream_topic = 9;
+  string actor_id = 10;
+  string service_id = 11;
+  string endpoint_id = 12;
+  int32 llm_round = 13;
+  google.protobuf.Timestamp observed_at = 14;
+}
+
+message ChatRunToolCallSubmittedEvent {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct arguments = 3;
+  string result_json = 4;
+  string run_id = 5;
+  ChatRunSubRunTargetKind target_kind = 6;
+  string target_id = 7;
+  ChatRunSubRunWaitMode wait_mode = 8;
+  string stream_topic = 9;
+  string actor_id = 10;
+  string service_id = 11;
+  string endpoint_id = 12;
+  int32 llm_round = 13;
+  google.protobuf.Timestamp observed_at = 14;
+}
+
+message PrepareChatRunSubRunObservationRequested {
+  string run_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  google.protobuf.Struct arguments = 4;
+  ChatRunSubRunTargetKind target_kind = 5;
+  string target_id = 6;
+  ChatRunSubRunWaitMode wait_mode = 7;
+  string stream_topic = 8;
+  string actor_id = 9;
+  string service_id = 10;
+  string endpoint_id = 11;
+  int32 llm_round = 12;
+  google.protobuf.Timestamp observed_at = 13;
+}
+
+message ChatRunSubRunObservationStartedEvent {
+  string run_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  google.protobuf.Struct arguments = 4;
+  ChatRunSubRunTargetKind target_kind = 5;
+  string target_id = 6;
+  ChatRunSubRunWaitMode wait_mode = 7;
+  string stream_topic = 8;
+  string actor_id = 9;
+  string service_id = 10;
+  string endpoint_id = 11;
+  int32 llm_round = 12;
+  google.protobuf.Timestamp observed_at = 13;
+}
+
+message ChatRunSubRunTerminalObserved {
+  string run_id = 1;
+  string status = 2;
+  string result_json = 3;
+  string actor_id = 4;
+  string service_id = 5;
+  string endpoint_id = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
+message ChatRunSubRunTerminalFoldedEvent {
+  string run_id = 1;
+  string caller_tool_call_id = 2;
+  string tool_name = 3;
+  string result_json = 4;
+  int32 llm_round = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+message ChatRunToolResultReady {
+  string response_id = 1;
+  string run_id = 2;
+  string caller_tool_call_id = 3;
+  string tool_name = 4;
+  string result_json = 5;
+  int32 llm_round = 6;
+}
+
+message TerminateChatRunRequested {
+  string reason = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message ChatRunTerminatedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+enum ResponsesAgentToolTaskStatus {
+  RESPONSES_AGENT_TOOL_TASK_STATUS_UNSPECIFIED = 0;
+  RESPONSES_AGENT_TOOL_TASK_STATUS_ACCEPTED = 1;
+  RESPONSES_AGENT_TOOL_TASK_STATUS_REJECTED = 2;
+}
+
+message ResponsesAgentToolStateRecord {
+  string scope_id = 1;
+  string owner_subject = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message ResponsesTodoItem {
+  string id = 1;
+  string content = 2;
+  string status = 3;
+  string source_response_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message ResponsesTaskTrace {
+  string task_id = 1;
+  string source_response_id = 2;
+  string child_actor_id = 3;
+  string description = 4;
+  ResponsesAgentToolTaskStatus status = 5;
+  google.protobuf.Value arguments = 6;
+  google.protobuf.Value result = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message ResponsesWebTrace {
+  string trace_id = 1;
+  string source_response_id = 2;
+  string tool_name = 3;
+  string cache_key = 4;
+  string url = 5;
+  string query = 6;
+  bool cache_hit = 7;
+  google.protobuf.Value result = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}
+
+message ResponsesWebCacheEntry {
+  string cache_key = 1;
+  string tool_name = 2;
+  string url = 3;
+  string query = 4;
+  google.protobuf.Value result = 5;
+  google.protobuf.Timestamp cached_at = 6;
+  google.protobuf.Timestamp last_hit_at = 7;
+  int64 hit_count = 8;
+}
+
+message ResponsesAgentToolState {
+  ResponsesAgentToolStateRecord record = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+  repeated ResponsesTodoItem todo_items = 4;
+  repeated ResponsesTaskTrace task_traces = 5;
+  repeated ResponsesWebTrace web_traces = 6;
+  repeated ResponsesWebCacheEntry web_cache_entries = 7;
+}
+
+message RegisterResponsesAgentToolStateRequested {
+  ResponsesAgentToolStateRecord record = 1;
+}
+
+message ResponsesAgentToolStateRegisteredEvent {
+  ResponsesAgentToolStateRecord record = 1;
+}
+
+// todo_items is the canonical typed list parsed by the host/adapter. The
+// original boundary arguments are converted to protobuf Value before entering
+// actor state/events.
+message ApplyResponsesTodoWriteRequested {
+  string scope_id = 1;
+  string owner_subject = 2;
+  string source_response_id = 3;
+  google.protobuf.Value arguments = 4;
+  google.protobuf.Timestamp observed_at = 5;
+  repeated ResponsesTodoItem todo_items = 6;
+}
+
+message ResponsesTodoWriteAppliedEvent {
+  string source_response_id = 1;
+  google.protobuf.Value arguments = 2;
+  repeated ResponsesTodoItem todo_items = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message RecordResponsesTaskRequested {
+  string source_response_id = 1;
+  string task_id = 2;
+  string child_actor_id = 3;
+  string description = 4;
+  google.protobuf.Value arguments = 5;
+  google.protobuf.Value result = 6;
+  ResponsesAgentToolTaskStatus status = 7;
+  google.protobuf.Timestamp observed_at = 8;
+}
+
+message ResponsesTaskRecordedEvent {
+  ResponsesTaskTrace task = 1;
+}
+
+message RecordResponsesWebTraceRequested {
+  string source_response_id = 1;
+  string trace_id = 2;
+  string tool_name = 3;
+  string cache_key = 4;
+  string url = 5;
+  string query = 6;
+  bool cache_hit = 7;
+  google.protobuf.Value result = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}
+
+message ResponsesWebTraceRecordedEvent {
+  ResponsesWebTrace trace = 1;
+}

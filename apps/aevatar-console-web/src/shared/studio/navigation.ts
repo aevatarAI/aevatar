@@ -1,43 +1,158 @@
 export type StudioTab =
   | 'workflows'
   | 'studio'
+  | 'bindings'
+  | 'invoke'
   | 'scripts'
-  | 'executions'
-  | 'roles'
-  | 'connectors'
-  | 'settings';
+  | 'gagents'
+  | 'executions';
+
+export type StudioStep = 'build' | 'bind' | 'invoke' | 'observe';
+export type StudioBuildFocus = `workflow:${string}` | `script:${string}` | `template:${string}`;
+export type StudioIntent = 'create-member';
+export type StudioMemberKey =
+  | `member:${string}`
+  | `workflow:${string}`
+  | `script:${string}`;
 
 type StudioRouteOptions = {
-  workflowId?: string;
-  scriptId?: string;
-  template?: string;
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+  teamId?: string;
+  step?: StudioStep;
+  focus?: StudioBuildFocus;
   tab?: StudioTab;
-  draftMode?: 'new';
+  intent?: StudioIntent;
   prompt?: string;
-  legacySource?: 'playground';
   executionId?: string;
   logsMode?: 'popout';
-};
+  returnTo?: string;
+} & Record<string, unknown>;
+
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? '';
+}
+
+function readWorkflowFileStem(fileName: string | null | undefined): string {
+  return trimOptional(fileName).replace(/\.(ya?ml)$/i, '');
+}
+
+export function resolveStudioWorkflowMemberRouteValue(options?: {
+  workflowId?: string | null;
+  workflowName?: string | null;
+  fileName?: string | null;
+}): string {
+  const workflowId = trimOptional(options?.workflowId);
+  if (workflowId && workflowId.toLowerCase() !== 'default') {
+    return workflowId;
+  }
+
+  return (
+    trimOptional(options?.workflowName) ||
+    readWorkflowFileStem(options?.fileName) ||
+    workflowId
+  );
+}
+
+export function buildStudioWorkflowMemberKey(options?: {
+  workflowId?: string | null;
+  workflowName?: string | null;
+  fileName?: string | null;
+}): StudioMemberKey | undefined {
+  const routeValue = resolveStudioWorkflowMemberRouteValue(options);
+  return routeValue ? (`workflow:${routeValue}` as const) : undefined;
+}
+
+export function resolveStudioMemberRouteKey(input?: {
+  memberId?: string | null;
+  memberKey?: StudioMemberKey | string | null;
+  workflowId?: string | null;
+  scriptId?: string | null;
+}): StudioMemberKey | undefined {
+  const memberId = trimOptional(input?.memberId);
+  if (memberId) {
+    return `member:${memberId}`;
+  }
+
+  const memberKey = normalizeStudioMemberKey(input?.memberKey);
+  if (memberKey) {
+    return memberKey;
+  }
+
+  const workflowId = trimOptional(input?.workflowId);
+  if (workflowId) {
+    return `workflow:${workflowId}`;
+  }
+
+  const scriptId = trimOptional(input?.scriptId);
+  if (scriptId) {
+    return `script:${scriptId}`;
+  }
+
+  return undefined;
+}
+
+function normalizeStudioBuildFocus(
+  value: StudioBuildFocus | string | null | undefined,
+): StudioBuildFocus | undefined {
+  const normalizedValue = trimOptional(value);
+  if (
+    normalizedValue.startsWith('workflow:') ||
+    normalizedValue.startsWith('script:') ||
+    normalizedValue.startsWith('template:')
+  ) {
+    return normalizedValue as StudioBuildFocus;
+  }
+
+  return undefined;
+}
+
+function normalizeStudioMemberKey(
+  value: StudioMemberKey | string | null | undefined,
+  fallbackMemberId?: string | null | undefined,
+): StudioMemberKey | undefined {
+  const normalizedValue = trimOptional(value);
+  if (
+    normalizedValue.startsWith('member:') ||
+    normalizedValue.startsWith('workflow:') ||
+    normalizedValue.startsWith('script:')
+  ) {
+    return normalizedValue as StudioMemberKey;
+  }
+
+  const normalizedMemberId = trimOptional(fallbackMemberId);
+  return normalizedMemberId
+    ? (`member:${normalizedMemberId}` as const)
+    : undefined;
+}
 
 function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
   if (options?.tab?.trim()) {
     return options.tab.trim() as StudioTab;
   }
 
+  if (options?.step === 'invoke') {
+    return 'invoke';
+  }
+
+  if (options?.step === 'observe') {
+    return 'executions';
+  }
+
   if (options?.executionId?.trim()) {
     return 'executions';
   }
 
-  if (options?.scriptId?.trim()) {
+  const focus = normalizeStudioBuildFocus(options?.focus);
+  if (focus?.startsWith('script:')) {
     return 'scripts';
   }
 
   if (
-    options?.workflowId?.trim() ||
-    options?.template?.trim() ||
-    options?.draftMode === 'new' ||
-    options?.prompt?.trim() ||
-    options?.legacySource === 'playground'
+    focus?.startsWith('workflow:') ||
+    focus?.startsWith('template:') ||
+    options?.prompt?.trim()
   ) {
     return 'studio';
   }
@@ -47,27 +162,35 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
 
 export function buildStudioRoute(options?: StudioRouteOptions): string {
   const params = new URLSearchParams();
-  if (options?.workflowId?.trim()) {
-    params.set('workflow', options.workflowId.trim());
+  if (options?.scopeId?.trim()) {
+    params.set('scopeId', options.scopeId.trim());
   }
-  if (options?.scriptId?.trim()) {
-    params.set('script', options.scriptId.trim());
+  if (options?.teamId?.trim()) {
+    params.set('teamId', options.teamId.trim());
   }
-  if (options?.template?.trim()) {
-    params.set('template', options.template.trim());
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  if (memberKey) {
+    params.set('member', memberKey);
+  }
+  if (options?.step) {
+    params.set('step', options.step);
+  }
+  const focus = normalizeStudioBuildFocus(options?.focus);
+  if (focus) {
+    params.set('focus', focus);
   }
   const tab = resolveStudioTab(options);
   if (tab) {
     params.set('tab', tab);
   }
-  if (options?.draftMode === 'new') {
-    params.set('draft', 'new');
+  if (options?.intent === 'create-member') {
+    params.set('intent', options.intent);
   }
   if (options?.prompt?.trim()) {
     params.set('prompt', options.prompt.trim());
-  }
-  if (options?.legacySource === 'playground') {
-    params.set('legacy', 'playground');
   }
   if (options?.executionId?.trim()) {
     params.set('execution', options.executionId.trim());
@@ -75,35 +198,94 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.logsMode === 'popout') {
     params.set('logs', 'popout');
   }
+  if (options?.returnTo?.trim()) {
+    params.set('returnTo', options.returnTo.trim());
+  }
 
   const query = params.toString();
   return query ? `/studio?${query}` : '/studio';
 }
 
-export function buildStudioWorkflowWorkspaceRoute(): string {
-  return buildStudioRoute({
-    tab: 'workflows',
-  });
-}
-
-export function buildStudioWorkflowEditorRoute(options?: {
-  workflowId?: string;
-  template?: string;
-  draftMode?: 'new';
-  prompt?: string;
-  legacySource?: 'playground';
-}): string {
+export function buildStudioWorkflowWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+} & Record<string, unknown>): string {
   return buildStudioRoute({
     ...options,
     tab: 'studio',
   });
 }
 
-export function buildStudioScriptsWorkspaceRoute(options?: {
-  scriptId?: string;
-}): string {
+export function buildStudioWorkflowEditorRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+  workflowId?: string;
+  template?: string;
+  prompt?: string;
+} & Record<string, unknown>): string {
+  const workflowId = trimOptional(options?.workflowId);
+  const template = trimOptional(options?.template);
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const hasWorkflowMemberKey = memberKey?.startsWith('workflow:');
+  const workflowFocus = workflowId
+    ? (`workflow:${workflowId}` as const)
+    : undefined;
   return buildStudioRoute({
     ...options,
+    focus:
+      !hasWorkflowMemberKey && workflowFocus && workflowFocus !== memberKey
+        ? workflowFocus
+        : template
+        ? `template:${template}`
+        : undefined,
+    tab: 'studio',
+  });
+}
+
+export function buildStudioBindingWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+} & Record<string, unknown>): string {
+  return buildStudioRoute({
+    ...options,
+    step: 'bind',
+  });
+}
+
+export function buildStudioInvokeWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+} & Record<string, unknown>): string {
+  return buildStudioRoute({
+    ...options,
+    step: 'invoke',
+    tab: 'invoke',
+  });
+}
+
+export function buildStudioScriptsWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+  scriptId?: string;
+} & Record<string, unknown>): string {
+  const scriptId = trimOptional(options?.scriptId);
+  const memberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
+  return buildStudioRoute({
+    ...options,
+    focus:
+      scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
     tab: 'scripts',
   });
 }

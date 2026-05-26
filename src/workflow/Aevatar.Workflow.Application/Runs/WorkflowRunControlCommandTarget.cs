@@ -1,25 +1,24 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal sealed class WorkflowRunControlCommandTarget : IActorCommandDispatchTarget
+internal sealed class WorkflowRunControlCommandTarget : ICommandDispatchTarget
 {
     public WorkflowRunControlCommandTarget(
-        IActor actor,
+        string actorId,
         string runId)
     {
-        Actor = actor ?? throw new ArgumentNullException(nameof(actor));
+        ActorId = string.IsNullOrWhiteSpace(actorId)
+            ? throw new ArgumentException("Actor id is required.", nameof(actorId))
+            : actorId;
         RunId = string.IsNullOrWhiteSpace(runId)
             ? throw new ArgumentException("Run id is required.", nameof(runId))
             : runId;
     }
 
-    public IActor Actor { get; }
+    public string ActorId { get; }
 
     public string RunId { get; }
 
-    public string TargetId => Actor.Id;
-
-    public string ActorId => Actor.Id;
+    public string TargetId => ActorId;
 }

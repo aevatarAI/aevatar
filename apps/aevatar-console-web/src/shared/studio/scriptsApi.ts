@@ -4,10 +4,13 @@ import type {
   DraftRunResult,
   GeneratedScriptResult,
   ScopedScriptDetail,
+  ScopeScriptSaveObservationRequest,
+  ScopeScriptSaveObservationResult,
+  ScopeScriptUpsertAcceptedResponse,
   ScriptCatalogSnapshot,
   ScriptPackage,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
   ScriptValidationResult,
 } from './scriptsModels';
 
@@ -189,7 +192,7 @@ export const scriptsApi = {
   validateDraft(
     payload: {
       scriptId: string;
-      scriptRevision: string;
+      scriptRevision?: string;
       source?: string;
       package?: ScriptPackage | null;
     },
@@ -229,7 +232,7 @@ export const scriptsApi = {
       revisionId?: string;
       expectedBaseRevision?: string;
     },
-  ): Promise<ScopedScriptDetail> {
+  ): Promise<ScopeScriptUpsertAcceptedResponse> {
     return requestJson(
       `${scopePath(scopeId)}/scripts/${encodeURIComponent(payload.scriptId)}`,
       {
@@ -240,6 +243,21 @@ export const scriptsApi = {
           revisionId: payload.revisionId,
           expectedBaseRevision: payload.expectedBaseRevision,
         }),
+      },
+    );
+  },
+
+  observeSaveScript(
+    scopeId: string,
+    scriptId: string,
+    payload: ScopeScriptSaveObservationRequest,
+  ): Promise<ScopeScriptSaveObservationResult> {
+    return requestJson(
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(scriptId)}/save-observation`,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(payload),
       },
     );
   },
@@ -272,13 +290,13 @@ export const scriptsApi = {
     );
   },
 
-  listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
+  listRuntimes(take = 24): Promise<ScriptRuntimeActivitySnapshot[]> {
     return requestJson(`/api/app/scripts/runtimes?take=${take}`);
   },
 
-  getRuntimeReadModel(actorId: string): Promise<ScriptReadModelSnapshot> {
+  getRuntimeActivity(actorId: string): Promise<ScriptRuntimeActivitySnapshot> {
     return requestJson(
-      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
+      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/activity`,
     );
   },
 

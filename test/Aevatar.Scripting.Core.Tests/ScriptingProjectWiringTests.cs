@@ -9,6 +9,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.Metadata;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using FluentAssertions;
@@ -40,13 +41,36 @@ public sealed class ScriptingProjectWiringTests
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>>()
-            .Should().Contain(x => x is ScriptReadModelProjector)
-            .And.Contain(x => x is ScriptNativeDocumentProjector)
-            .And.Contain(x => x is ScriptNativeGraphProjector);
+            .Should().Contain(x => IsObservedCurrentStateMaterializerFor<ScriptReadModelProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptNativeDocumentProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptNativeGraphProjector>(x));
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>>()
-            .Should().Contain(x => x is ScriptDefinitionSnapshotProjector)
-            .And.Contain(x => x is ScriptCatalogEntryProjector);
+            .Should().Contain(x => IsObservedCurrentStateMaterializerFor<ScriptDefinitionSnapshotProjector>(x))
+            .And.Contain(x => IsObservedCurrentStateMaterializerFor<ScriptCatalogEntryProjector>(x));
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>>()
-            .Should().ContainSingle(x => x is ScriptEvolutionReadModelProjector);
+            .Should().ContainSingle(x => IsObservedCurrentStateMaterializerFor<ScriptEvolutionReadModelProjector>(x));
+        provider.GetServices<IProjectionActivationPlanProvider>()
+            .Should().ContainSingle(x => x is ScriptingCommittedStateProjectionActivationPlanProvider);
+    }
+
+    private static bool IsObservedCurrentStateMaterializerFor<TProjector>(object materializer)
+    {
+        var type = materializer.GetType();
+        return type.IsGenericType &&
+               type.Name.StartsWith("ObservedCurrentStateProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    [Fact]
+    public void ScriptCatalogEntryDocumentMetadataProvider_ShouldDeclareOpenIndexContract()
+    {
+        var provider = new ScriptCatalogEntryDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("script-catalog-entries");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Mappings.Should().NotContainKey("properties");
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
     }
 }

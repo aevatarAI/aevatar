@@ -1,0 +1,235 @@
+syntax = "proto3";
+package aevatar.studio.projection;
+option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+// ─── UserConfig Current State ReadModel ───
+
+message UserConfigCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // Business fields (projected from UserConfigGAgentState)
+  string default_model = 10;
+  string preferred_llm_route = 11;
+  string runtime_mode = 12;
+  string local_runtime_base_url = 13;
+  string remote_runtime_base_url = 14;
+  int32 max_tool_rounds = 15;
+  string github_username = 16;
+}
+
+// ─── GAgentRegistry Current State ReadModel ───
+
+message GAgentRegistryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ConnectorCatalog Current State ReadModel ───
+
+message ConnectorCatalogCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── RoleCatalog Current State ReadModel ───
+
+message RoleCatalogCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── UserMemory Current State ReadModel ───
+
+message UserMemoryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ChatHistoryIndex Current State ReadModel ───
+
+message ChatHistoryIndexCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ChatConversation Current State ReadModel ───
+
+message ChatConversationCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── StudioMember Current State ReadModel ───
+//
+// Materialized from StudioMemberGAgent committed events. Document id is the
+// actor id (<c>studio-member:{scopeId}:{memberId}</c>). scope_id is the prefix
+// used by query ports to list members per scope; published_service_id is the
+// stable per-member service id used by member binding orchestration.
+//
+// CLAUDE.md `状态镜像契约面向查询` — read-model payload is a query-shaped
+// strongly-typed contract. Implementation_ref and last_binding are
+// denormalized to top-level fields (not packed via google.protobuf.Any of
+// the actor's internal state) so the query port never has to peek at the
+// authority's internal state layout. wire-stable strings (e.g.
+// implementation_kind = "workflow") are preferred over int enum codes so a
+// stale document can never silently round-trip an out-of-range value.
+
+message StudioMemberCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // ── Identity / display ──
+  string member_id = 20;
+  string scope_id = 21;
+  string display_name = 22;
+  string description = 23;
+
+  // ── Lifecycle (wire-stable) ──
+  string implementation_kind = 24;       // "workflow" | "script" | "gagent" | ""
+  string lifecycle_stage = 25;           // "created" | "build_ready" | "bind_ready" | ""
+  string published_service_id = 26;
+  google.protobuf.Timestamp created_at = 28;
+
+  // ── Implementation ref (typed, only one of the *_id fields is set) ──
+  string implementation_workflow_id = 30;
+  string implementation_workflow_revision = 31;
+  string implementation_script_id = 32;
+  string implementation_script_revision = 33;
+  string implementation_actor_type_name = 34;
+
+  // ── Last-binding contract (denormalized) ──
+  string last_bound_published_service_id = 40;
+  string last_bound_revision_id = 41;
+  string last_bound_implementation_kind = 42; // wire-stable string
+  google.protobuf.Timestamp last_bound_at = 43;
+
+  // ── Team membership (ADR-0017) ──
+  // Optional. Absence = unassigned; empty string is not a valid serialized
+  // value (the application layer rejects empty `teamId` on the wire).
+  optional string team_id = 50;
+
+  // ── Async binding run status (projected from StudioMemberState.binding) ──
+  string binding_current_run_id = 60;
+  string binding_current_status = 61;
+  string binding_last_terminal_run_id = 62;
+  string binding_failure_code = 63;
+  string binding_failure_message = 64;
+  google.protobuf.Timestamp binding_failure_at = 65;
+  google.protobuf.Timestamp binding_updated_at = 66;
+}
+
+// ─── StudioMemberBindingRun Current State ReadModel ───
+//
+// Materialized from StudioMemberBindingRunGAgent committed events. Document id
+// is the run actor id (<c>studio-member-binding-run:{bindingRunId}</c>).
+// This read model is the status endpoint's authority-shaped query surface:
+// member documents may reference the active run, but they do not own the run's
+// accepted/platform-pending/succeeded/failed execution state.
+
+message StudioMemberBindingRunCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string binding_run_id = 20;
+  string scope_id = 21;
+  string member_id = 22;
+  string request_hash = 23;
+  string status = 24;
+  string platform_binding_command_id = 25;
+  int32 attempt_count = 26;
+
+  string failure_code = 30;
+  string failure_message = 31;
+  google.protobuf.Timestamp failure_at = 32;
+
+  string result_published_service_id = 40;
+  string result_revision_id = 41;
+  string result_implementation_kind = 42;
+  string result_expected_actor_id = 43;
+}
+
+// ─── StudioTeam Current State ReadModel ───
+//
+// Materialized from StudioTeamGAgent committed events (ADR-0017). Document id
+// is the actor id (<c>studio-team:{scopeId}:{teamId}</c>). scope_id is the
+// prefix used by query ports to list teams per scope. The full member roster
+// is intentionally NOT mirrored — listing members goes through the member
+// read model filtered by team_id (see ADR-0017 Non-Goals).
+
+message StudioTeamCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // ── Identity / display ──
+  string team_id = 20;
+  string scope_id = 21;
+  string display_name = 22;
+  string description = 23;
+
+  // ── Lifecycle (wire-stable string mirroring StudioTeamLifecycleStage). ──
+  string lifecycle_stage = 24;           // "active" | "archived" | ""
+  google.protobuf.Timestamp created_at = 25;
+
+  // ── Aggregate (derived from StudioTeamState.member_ids.size()). ──
+  int32 member_count = 30;
+
+  // Optional team-owned entry member selection. Binding readiness and
+  // published service identity stay on StudioMemberCurrentStateDocument.
+  optional string entry_member_id = 40;
+}
+
+// ─── StudioWorkspace Current State ReadModel ───
+//
+// Materialized from StudioWorkspaceGAgent. This is the actor-scoped current
+// state replica for editor workspace facts only. It intentionally excludes
+// connector/role catalogs, service-run execution state, workflow runtime state,
+// provider secrets, memory, and registry facts.
+
+message StudioWorkspaceCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}

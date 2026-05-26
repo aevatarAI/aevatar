@@ -6,6 +6,7 @@ import {
   parseInspectorBranches,
   parseInspectorParameters,
   removeStep,
+  removeSteps,
   suggestBranchLabelForStep,
 } from './document';
 import type { StudioWorkflowDocument } from './models';
@@ -220,6 +221,65 @@ describe('studio document helpers', () => {
         id: 'approve_step',
         branches: {
           retry: 'approve_step',
+        },
+      }),
+    ]);
+  });
+
+  it('removes multiple selected steps in document order and preserves rewired flow', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [],
+      steps: [
+        {
+          id: 'draft_step',
+          type: 'llm_call',
+          targetRole: 'assistant',
+          parameters: {},
+          next: 'review_step',
+          branches: {},
+        },
+        {
+          id: 'review_step',
+          type: 'connector_call',
+          targetRole: 'assistant',
+          parameters: {},
+          next: 'approve_step',
+          branches: {},
+        },
+        {
+          id: 'approve_step',
+          type: 'guard',
+          targetRole: null,
+          parameters: {},
+          next: 'publish_step',
+          branches: {},
+        },
+        {
+          id: 'publish_step',
+          type: 'emit',
+          targetRole: null,
+          parameters: {},
+          next: null,
+          branches: {
+            retry: 'review_step',
+          },
+        },
+      ],
+    };
+
+    const result = removeSteps(document, ['approve_step', 'review_step']);
+
+    expect(result.nodeId).toBe('step:publish_step');
+    expect(result.document.steps).toEqual([
+      expect.objectContaining({
+        id: 'draft_step',
+        next: 'publish_step',
+      }),
+      expect.objectContaining({
+        id: 'publish_step',
+        branches: {
+          retry: 'publish_step',
         },
       }),
     ]);

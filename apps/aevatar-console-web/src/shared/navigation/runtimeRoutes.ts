@@ -2,7 +2,9 @@ const runtimePaths = {
   workflows: "/runtime/workflows",
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
+  missionControl: "/runtime/mission-control",
   explorer: "/runtime/explorer",
+  explorerDetail: "/runtime/explorer/detail",
   gagents: "/runtime/gagents",
 } as const;
 
@@ -48,6 +50,7 @@ export function buildRuntimeRunsHref(options?: {
   route?: string;
   workflow?: string;
   prompt?: string;
+  runId?: string;
   scopeId?: string;
   serviceOverrideId?: string;
   serviceId?: string;
@@ -57,10 +60,12 @@ export function buildRuntimeRunsHref(options?: {
   payloadBase64?: string;
   actorId?: string;
   draftKey?: string;
+  returnTo?: string;
 }): string {
   return buildHref(runtimePaths.runs, {
     route: options?.route ?? options?.workflow,
     prompt: options?.prompt,
+    runId: options?.runId,
     scopeId: options?.scopeId,
     serviceOverrideId: options?.serviceOverrideId ?? options?.serviceId,
     endpointId: options?.endpointId,
@@ -69,6 +74,29 @@ export function buildRuntimeRunsHref(options?: {
     payloadBase64: options?.payloadBase64,
     actorId: options?.actorId,
     draftKey: options?.draftKey,
+    returnTo: options?.returnTo,
+  });
+}
+
+export function buildRuntimeMissionControlHref(options?: {
+  actorId?: string;
+  autoStream?: boolean;
+  endpointId?: string;
+  prompt?: string;
+  runId?: string;
+  scopeId?: string;
+  serviceId?: string;
+  serviceOverrideId?: string;
+}): string {
+  return buildHref(runtimePaths.missionControl, {
+    actorId: options?.actorId,
+    autoStream:
+      options?.autoStream === undefined ? undefined : String(options.autoStream),
+    endpointId: options?.endpointId,
+    prompt: options?.prompt,
+    runId: options?.runId,
+    scopeId: options?.scopeId,
+    serviceId: options?.serviceId ?? options?.serviceOverrideId,
   });
 }
 
@@ -79,7 +107,8 @@ export function buildRuntimeExplorerHref(options?: {
   serviceId?: string;
   serviceOverrideId?: string;
 }): string {
-  return buildHref(runtimePaths.explorer, {
+  const pathname = options?.actorId ? runtimePaths.explorerDetail : runtimePaths.explorer;
+  return buildHref(pathname, {
     actorId: options?.actorId,
     runId: options?.runId,
     scopeId: options?.scopeId,

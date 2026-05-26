@@ -21,6 +21,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionObservationLifecycle.
+//   Cluster intent: script evolution carries explicit live-sink projection leases through target binding and cleanup.
 public class RuntimeScriptInfrastructurePortsTests
 {
     [Fact]
@@ -128,7 +131,6 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldDispatchRunScriptRequestedEnvelope_WhenRuntimeActorExists()
     {
         RunScriptRequestedEvent? captured = null;
-        var activationPort = new NoOpScriptExecutionProjectionPort();
         var runtime = new TestActorRuntime();
         runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
         {
@@ -136,7 +138,7 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }));
-        var service = CreateRuntimeCommandService(runtime, activationPort);
+        var service = CreateRuntimeCommandService(runtime);
 
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -188,6 +190,40 @@ public class RuntimeScriptInfrastructurePortsTests
 
         captured.Should().NotBeNull();
         captured!.ScopeId.Should().Be("scope-7");
+    }
+
+    [Fact]
+    public async Task RunRuntimeAsync_ShouldPropagateExplicitCommandAndCorrelationIds_WhenProvided()
+    {
+        RunScriptRequestedEvent? captured = null;
+        var runtime = new TestActorRuntime();
+        runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
+        {
+            captured = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }));
+        var service = CreateRuntimeCommandService(runtime);
+
+        await service.RunRuntimeAsync(
+            runtimeActorId: "runtime-1",
+            runId: "run-1",
+            commandId: "explicit-command",
+            correlationId: "explicit-correlation",
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
+            scriptRevision: "rev-1",
+            definitionActorId: "definition-1",
+            requestedEventType: "chat.requested",
+            scopeId: "scope-7",
+            ct: CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.CommandId.Should().Be("explicit-command");
+        captured.CorrelationId.Should().Be("explicit-correlation");
     }
 
     [Fact]
@@ -294,7 +330,7 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-actual",
-                SourceText = "public sealed class RuntimeScript {}",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class RuntimeScript {}"),
             });
         var port = CreateDefinitionSnapshotPort(eventStore);
 
@@ -314,7 +350,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-1",
-                SourceText = "public sealed class RuntimeScript {}",
                 SourceHash = "hash-1",
                 ReadModelSchemaVersion = "v1",
                 ReadModelSchemaHash = "hash-v1",
@@ -341,7 +376,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-1",
-                SourceText = "old-source",
                 SourceHash = "hash-old",
                 ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("old-source"),
             },
@@ -349,7 +383,6 @@ public class RuntimeScriptInfrastructurePortsTests
             {
                 ScriptId = "script-1",
                 ScriptRevision = "rev-2",
-                SourceText = "new-source",
                 SourceHash = "hash-new",
                 ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("new-source"),
             });
@@ -375,21 +408,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(
-            runtime,
-            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
-                    new ScriptCatalogEntrySnapshot(
-                        scriptId,
-                        "rev-2",
-                        "definition-2",
-                        "hash-2",
-                        "rev-1",
-                        ["rev-2"],
-                        "proposal-1"));
-            }));
+        var service = CreateCatalogCommandService(runtime);
 
         await service.PromoteCatalogRevisionAsync(
             catalogActorId: null,
@@ -420,21 +439,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(
-            runtime,
-            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
-                    new ScriptCatalogEntrySnapshot(
-                        scriptId,
-                        "rev-1",
-                        string.Empty,
-                        string.Empty,
-                        "rev-2",
-                        ["rev-1", "rev-2"],
-                        "proposal-rollback"));
-            }));
+        var service = CreateCatalogCommandService(runtime);
 
         await service.RollbackCatalogRevisionAsync(
             catalogActorId: "catalog-custom",
@@ -768,6 +773,69 @@ public class RuntimeScriptInfrastructurePortsTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*projection is disabled*");
+        runtime.DispatchRequests.Should().BeEmpty();
+        projectionPort.DetachCount.Should().Be(0);
+        projectionPort.ReleaseCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ScriptEvolutionCommandTarget_ReleaseAsync_WhenOnlyProjectionLeaseIsBound_ShouldReleaseWithoutDetach()
+    {
+        var projectionPort = new TestProjectionPort();
+        var target = new ScriptEvolutionCommandTarget(
+            new TestActor("script-evolution-session:proposal-1"),
+            "proposal-1",
+            projectionPort);
+        var lease = new TestProjectionLease("script-evolution-session:proposal-1", "proposal-1");
+        target.BindLiveObservation(lease, new TestLiveSinkLease(), new ScriptEvolutionScopedEventSink("proposal-1", new EventChannel<ScriptEvolutionSessionCompletedEvent>()));
+        SetProperty(target, nameof(ScriptEvolutionCommandTarget.LiveSink), null);
+
+        await target.ReleaseAsync(CancellationToken.None);
+
+        projectionPort.DetachCount.Should().Be(0);
+        projectionPort.ReleaseCount.Should().Be(1);
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScriptEvolutionObservationLifecycle_ShouldReturnProjectionDisabled_WhenExistingProjectionIsUnavailable()
+    {
+        var projectionPort = new TestProjectionPort { ReturnNullLease = true };
+        var lifecycle = new ScriptEvolutionObservationLifecycle(projectionPort);
+        var target = new ScriptEvolutionCommandTarget(
+            new TestActor("script-evolution-session:proposal-disabled"),
+            "proposal-disabled",
+            projectionPort);
+        var context = new CommandContext(
+            "script-evolution-session:proposal-disabled",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>());
+
+        var result = await lifecycle.BindAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-disabled",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source-rev-2",
+                CandidateSourceHash: "hash-rev-2",
+                Reason: "rollout"),
+            new CommandDispatchExecution<ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt>
+            {
+                Target = target,
+                Context = context,
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = new ScriptEvolutionAcceptedReceipt(target.SessionActorId, target.ProposalId, context.CommandId, context.CorrelationId),
+            },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(ScriptEvolutionStartError.ProjectionDisabled);
+        target.ProjectionLease.Should().BeNull();
+        projectionPort.EnsureCount.Should().Be(0);
+        projectionPort.AttachExistingCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(0);
         projectionPort.ReleaseCount.Should().Be(0);
     }
@@ -833,12 +901,10 @@ public class RuntimeScriptInfrastructurePortsTests
         var targetResolver = new ScriptEvolutionCommandTargetResolver(
             actorAccessor,
             addressResolver,
-            projectionPort,
             projectionPort);
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
             new DefaultCommandContextPolicy(),
-            new ScriptEvolutionCommandTargetBinder(projectionPort),
             new ScriptEvolutionEnvelopeFactory(),
             new ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>(runtime),
             new ScriptEvolutionAcceptedReceiptFactory());
@@ -847,7 +913,9 @@ public class RuntimeScriptInfrastructurePortsTests
             new ScriptEvolutionTimedEventOutputStream(resolvedInteractionTimeoutOptions),
             new ScriptEvolutionCompletionPolicy(),
             new NoOpCommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>(),
-            new ScriptEvolutionDurableCompletionResolver(decisionReadPort));
+            new ScriptEvolutionDurableCompletionResolver(decisionReadPort),
+            observationLifecycle: new ScriptEvolutionObservationLifecycle(projectionPort),
+            receiptFactory: new ScriptEvolutionAcceptedReceiptFactory());
 
         return new RuntimeScriptEvolutionInteractionService(interactionService);
     }
@@ -886,20 +954,17 @@ public class RuntimeScriptInfrastructurePortsTests
             "schema-hash");
 
     private static RuntimeScriptCommandService CreateRuntimeCommandService(
-        TestActorRuntime runtime,
-        IScriptExecutionReadModelActivationPort? readModelActivationPort = null)
+        TestActorRuntime runtime)
     {
         return new RuntimeScriptCommandService(
             CreateDispatchService(
                 runtime,
                 new RunScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
-                new RunScriptRuntimeCommandEnvelopeFactory()),
-            readModelActivationPort ?? new NoOpScriptExecutionProjectionPort());
+                new RunScriptRuntimeCommandEnvelopeFactory()));
     }
 
     private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(
-        TestActorRuntime runtime,
-        ProjectionScriptCatalogQueryPort catalogQueryPort)
+        TestActorRuntime runtime)
     {
         return new RuntimeScriptCatalogCommandService(
             CreateDispatchService(
@@ -915,9 +980,7 @@ public class RuntimeScriptInfrastructurePortsTests
                     new StaticAddressResolver()),
                 new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
             new StaticAddressResolver(),
-            new RuntimeScriptActorAccessor(runtime),
-            new NoOpAuthorityReadModelActivationPort(),
-            catalogQueryPort);
+            new RuntimeScriptActorAccessor(runtime));
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
@@ -930,7 +993,6 @@ public class RuntimeScriptInfrastructurePortsTests
             new DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>(
                 resolver,
                 new DefaultCommandContextPolicy(),
-                new NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>(),
                 envelopeFactory,
                 new ActorCommandTargetDispatcher<ScriptingActorCommandTarget>(runtime),
                 new ScriptingCommandAcceptedReceiptFactory()));
@@ -985,18 +1047,19 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.FromResult(actor);
         }
 
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             DispatchRequests.Add(actorId);
             if (DispatchOverride != null)
             {
                 await DispatchOverride(actorId, envelope, ct);
-                return;
+                return DispatchAdmissionFactory.Create(actorId, envelope);
             }
 
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
@@ -1018,16 +1081,6 @@ public class RuntimeScriptInfrastructurePortsTests
 
         public Task RestoreAllAsync(CancellationToken ct = default)
         {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class NoOpAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
-    {
-        public Task ActivateAsync(string actorId, CancellationToken ct)
-        {
-            _ = actorId;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -1065,7 +1118,6 @@ public class RuntimeScriptInfrastructurePortsTests
                     case ScriptDefinitionUpsertedEvent upserted:
                         state.ScriptId = upserted.ScriptId ?? string.Empty;
                         state.Revision = upserted.ScriptRevision ?? string.Empty;
-                        state.SourceText = upserted.SourceText ?? string.Empty;
                         state.SourceHash = upserted.SourceHash ?? string.Empty;
                         state.ReadModelSchemaVersion = upserted.ReadModelSchemaVersion ?? string.Empty;
                         state.ReadModelSchemaHash = upserted.ReadModelSchemaHash ?? string.Empty;
@@ -1096,7 +1148,6 @@ public class RuntimeScriptInfrastructurePortsTests
             return new ScriptDefinitionSnapshot(
                 state.ScriptId,
                 state.Revision,
-                state.SourceText,
                 state.SourceHash,
                 state.ScriptPackage.Clone(),
                 state.StateTypeUrl,
@@ -1209,7 +1260,6 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             public string ScriptId { get; set; } = string.Empty;
             public string Revision { get; set; } = string.Empty;
-            public string SourceText { get; set; } = string.Empty;
             public string SourceHash { get; set; } = string.Empty;
             public string ReadModelSchemaVersion { get; set; } = string.Empty;
             public string ReadModelSchemaHash { get; set; } = string.Empty;
@@ -1337,8 +1387,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     private sealed class TestProjectionPort
-        : IScriptEvolutionProjectionPort,
-          IScriptEvolutionReadModelActivationPort
+        : IScriptEvolutionProjectionPort
     {
         private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
             new(StringComparer.Ordinal);
@@ -1346,6 +1395,10 @@ public class RuntimeScriptInfrastructurePortsTests
         public bool ProjectionEnabled => true;
 
         public bool ReturnNullLease { get; set; }
+
+        public int EnsureCount { get; private set; }
+
+        public int AttachExistingCount { get; private set; }
 
         public int DetachCount { get; private set; }
 
@@ -1357,35 +1410,51 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            EnsureCount++;
             if (ReturnNullLease)
                 return Task.FromResult<IScriptEvolutionProjectionLease?>(null);
             return Task.FromResult<IScriptEvolutionProjectionLease?>(
                 new TestProjectionLease(sessionActorId, proposalId));
         }
 
-        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-            await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
+        public async Task<EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string sessionActorId,
+            string proposalId,
+            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingCount++;
+            if (ReturnNullLease)
+                return null;
 
-        public Task AttachLiveSinkAsync(
+            var lease = new TestProjectionLease(sessionActorId, proposalId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IScriptEvolutionProjectionLease>(lease, liveSinkLease);
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,
             IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _sinks[lease.ActorId] = sink;
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
 
-        public Task DetachLiveSinkAsync(
-            IScriptEvolutionProjectionLease lease,
-            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = sink;
             ct.ThrowIfCancellationRequested();
             DetachCount++;
-            _sinks.Remove(lease.ActorId);
-            return Task.CompletedTask;
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
         }
 
         public Task ReleaseActorProjectionAsync(
@@ -1406,8 +1475,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     private sealed class NoOpScriptExecutionProjectionPort
-        : IScriptExecutionProjectionPort,
-          IScriptExecutionReadModelActivationPort
+        : IScriptExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
 
@@ -1419,25 +1487,24 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
         }
 
-        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-            await EnsureActorProjectionAsync(actorId, ct) != null;
-
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,
             IEventSink<EventEnvelope> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
 
-        public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
         }
 
         public Task ReleaseActorProjectionAsync(
@@ -1447,7 +1514,20 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+        private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
     }
 
-    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+    private sealed class TestLiveSinkLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private static void SetProperty(object instance, string propertyName, object? value)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        property.Should().NotBeNull();
+        property!.SetValue(instance, value);
+    }
 }

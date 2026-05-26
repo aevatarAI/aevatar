@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.identity.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Identity.Abstractions";
+
+// ExternalSubjectRef lives in Channel.Abstractions (channel_contracts.proto)
+// because Identity is a consumer of channel concepts — see ADR-0018 §Actor
+// Architecture. C# callers reach it via the `Aevatar.GAgents.Channel.Abstractions`
+// namespace; proto files reach it via `aevatar.gagents.channel.abstractions.ExternalSubjectRef`.
+
+// Opaque pointer issued by NyxID broker on successful binding completion.
+// aevatar holds binding_id in ExternalIdentityBindingGAgent state; the
+// underlying refresh_token never leaves NyxID. See ADR-0018 §Storage Boundary.
+message BindingId {
+  // Opaque identifier. Format owned by NyxID#549 (suggested prefix "bnd_").
+  string value = 1;
+}
+
+// Capability scope requested when issuing a short-lived access token via the
+// NyxID broker. Mirrors RFC 8693 token-exchange `scope` parameter — narrow
+// scope at issuance time so per-turn tokens are minimum-privilege.
+message CapabilityScope {
+  // Space-separated OAuth scope string (e.g. "openid profile" or
+  // provider-specific scopes the LLM tool will exercise).
+  string value = 1;
+}
+
+// Short-lived access token + expiry returned by IssueShortLivedAsync.
+// Lives only in per-turn AsyncLocal context (see AgentToolRequestContext);
+// never persisted. See ADR-0018 §Storage Boundary.
+message CapabilityHandle {
+  // Bearer access token for downstream LLM / tool calls.
+  string access_token = 1;
+  // UNIX seconds-since-epoch when the token expires (typically <= 5 min from issuance).
+  int64 expires_at_unix = 2;
+  // Effective scope granted by NyxID (may be narrower than requested).
+  string scope = 3;
+}
+
+// Returned by StartExternalBindingAsync. Carries the OAuth authorize URL
+// the caller must deliver via private channel (Lark DM, etc.) to the sender.
+message BindingChallenge {
+  // Fully-formed OAuth authorize URL with PKCE + HMAC-signed state token.
+  string authorize_url = 1;
+  // UNIX seconds-since-epoch when the challenge state_token expires.
+  int64 expires_at_unix = 2;
+}

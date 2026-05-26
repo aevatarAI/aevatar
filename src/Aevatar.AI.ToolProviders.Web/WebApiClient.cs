@@ -6,11 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Web;
 
 /// <summary>HTTP client for web search and fetch operations.</summary>
-public sealed class WebApiClient
+public sealed class WebApiClient : IWebApiClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public WebApiClient(
         WebToolOptions options,
@@ -18,7 +19,11 @@ public sealed class WebApiClient
         ILogger<WebApiClient>? logger = null)
     {
         _options = options;
-        _http = httpClient ?? new HttpClient();
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could self-create and pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
+        _http = httpClient ?? CreateDefaultHttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<WebApiClient>.Instance;
     }
 
@@ -48,43 +53,70 @@ public sealed class WebApiClient
     {
         try
         {
+            var validation = await WebFetchUrlGuard.ValidateResolvedAsync(url, ct);
+            if (!validation.IsAllowed)
+            {
+                return new FetchResult(
+                    0,
+                    "rejected",
+                    validation.RejectionCode ?? "url_rejected",
+                    null,
+                    url);
+            }
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(_options.FetchTimeoutSeconds));
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            request.Headers.UserAgent.ParseAdd("AevatarAgent/1.0");
-
-            if (!string.IsNullOrWhiteSpace(token))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            using var response = await _http.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "text/html";
-            var statusCode = (int)response.StatusCode;
-
-            if (!response.IsSuccessStatusCode)
+            var originalUrl = validation.NormalizedUrl!;
+            var currentUrl = originalUrl;
+            for (var redirectCount = 0; redirectCount < 5; redirectCount++)
             {
-                var errorBody = await ReadLimitedAsync(response, cts.Token);
-                return new FetchResult(statusCode, contentType, errorBody, null, url);
+                using var request = BuildFetchRequest(token, currentUrl);
+                using var response = await _http.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "text/html";
+                var statusCode = (int)response.StatusCode;
+
+                if (IsRedirect(statusCode) && response.Headers.Location != null)
+                {
+                    var redirectUri = ResolveRedirectUri(currentUrl, response.Headers.Location);
+                    var redirectValidation = await WebFetchUrlGuard.ValidateResolvedAsync(
+                        redirectUri.ToString(),
+                        cts.Token);
+                    if (!redirectValidation.IsAllowed)
+                    {
+                        return new FetchResult(
+                            statusCode,
+                            contentType,
+                            redirectValidation.RejectionCode ?? "url_rejected",
+                            redirectUri.ToString(),
+                            originalUrl);
+                    }
+
+                    if (!string.Equals(
+                            new Uri(currentUrl).Host,
+                            redirectUri.Host,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new FetchResult(statusCode, contentType, null, redirectUri.ToString(), originalUrl);
+                    }
+
+                    currentUrl = redirectValidation.NormalizedUrl!;
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorBody = await ReadLimitedAsync(response, cts.Token);
+                    return new FetchResult(statusCode, contentType, errorBody, null, originalUrl);
+                }
+
+                var body = await ReadLimitedAsync(response, cts.Token);
+                return new FetchResult(statusCode, contentType, body, null, originalUrl);
             }
 
-            if (response.RequestMessage?.RequestUri != null &&
-                !string.Equals(
-                    new Uri(url).Host,
-                    response.RequestMessage.RequestUri.Host,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return new FetchResult(
-                    statusCode, contentType, null,
-                    response.RequestMessage.RequestUri.ToString(), url);
-            }
-
-            var body = await ReadLimitedAsync(response, cts.Token);
-            return new FetchResult(statusCode, contentType, body, null, url);
+            return new FetchResult(0, "redirect", "Too many redirects", null, originalUrl);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -96,6 +128,32 @@ public sealed class WebApiClient
             return new FetchResult(0, "error", ex.Message, null, url);
         }
     }
+
+    private static HttpClient CreateDefaultHttpClient() =>
+        new(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+        });
+
+    private static HttpRequestMessage BuildFetchRequest(string token, string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("AevatarAgent/1.0");
+
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        return request;
+    }
+
+    private static Uri ResolveRedirectUri(string currentUrl, Uri location) =>
+        location.IsAbsoluteUri ? location : new Uri(new Uri(currentUrl), location);
+
+    private static bool IsRedirect(int statusCode) =>
+        statusCode is 301 or 302 or 303 or 307 or 308;
 
     private async Task<string> ReadLimitedAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -131,6 +189,12 @@ public sealed class WebApiClient
             _logger.LogWarning(ex, "Web API request failed: {Url}", url);
             return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
         }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }
 

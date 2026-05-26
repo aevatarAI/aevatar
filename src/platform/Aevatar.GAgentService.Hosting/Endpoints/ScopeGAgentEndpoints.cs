@@ -1,23 +1,14 @@
-using System.Reflection;
-using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.Hosting;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-using Type = System.Type;
-// AI Abstractions types (published by RoleGAgent) — aliased to avoid conflict with AGUI types
-using AiTextStart = Aevatar.AI.Abstractions.TextMessageStartEvent;
-using AiTextContent = Aevatar.AI.Abstractions.TextMessageContentEvent;
-using AiTextReasoning = Aevatar.AI.Abstractions.TextMessageReasoningEvent;
-using AiTextEnd = Aevatar.AI.Abstractions.TextMessageEndEvent;
-using AiToolCall = Aevatar.AI.Abstractions.ToolCallEvent;
-using AiToolResult = Aevatar.AI.Abstractions.ToolResultEvent;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -40,222 +31,103 @@ public static class ScopeGAgentEndpoints
         return app;
     }
 
-    // ─── List GAgent Types (reflection) ───
-
-    private static IResult HandleListGAgentTypesAsync()
+    // Refactor (iter39/cluster-039-gagent-reflection-catalog):
+    //   Old pattern: ScopeGAgentEndpoints 通过 AppDomain reflection + AIGAgentBase + [EventHandler] + protobuf descriptors 发现 GAgent 类型,把进程内加载的 CLR class 当成业务事实源。
+    //   New principle: GAgent type 列表必须来自 registered service revision catalog readmodel,不是反射偶然加载的 CLR class。保留 endpoint 路由,换实现为读 readmodel。
+    private static async Task<IResult> HandleListGAgentTypesAsync(
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct)
     {
-        var aiGAgentBaseType = FindOpenGenericBaseType("Aevatar.AI.Core.AIGAgentBase`1");
-        if (aiGAgentBaseType is null)
-        {
-            return Results.Ok(Array.Empty<object>());
-        }
+        var services = await catalogReader.QueryAllAsync(ct: ct);
+        var gAgentTypes = new Dictionary<string, GAgentTypeCatalogHttpResponse>(StringComparer.Ordinal);
 
-        var types = new List<object>();
-
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        foreach (var service in services)
         {
-            if (assembly.IsDynamic)
+            var identity = BuildServiceIdentity(service);
+            var revisions = await revisionCatalogReader.GetAsync(identity, ct);
+            if (revisions == null)
                 continue;
 
-            Type[] exportedTypes;
-            try
+            foreach (var revision in revisions.Revisions)
             {
-                exportedTypes = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                exportedTypes = ex.Types.Where(t => t is not null).ToArray()!;
-            }
-            catch
-            {
-                continue;
-            }
+                var actorTypeName = revision.Implementation?.Static?.ActorTypeName?.Trim() ?? string.Empty;
+                if (actorTypeName.Length == 0)
+                    continue;
 
-            foreach (var type in exportedTypes)
-            {
-                try
+                var endpoints = revision.Endpoints.Select(MapGAgentEndpoint).ToList();
+                if (gAgentTypes.TryGetValue(actorTypeName, out var existing))
                 {
-                    if (!type.IsClass || type.IsAbstract)
-                        continue;
-
-                    if (!DerivesFromOpenGeneric(type, aiGAgentBaseType))
-                        continue;
-
-                    types.Add(new
-                    {
-                        typeName = type.Name,
-                        fullName = type.FullName ?? type.Name,
-                        assemblyName = assembly.GetName().Name ?? assembly.FullName ?? string.Empty,
-                        endpoints = DiscoverEndpoints(type),
-                    });
+                    MergeEndpoints(existing.Endpoints, endpoints);
+                    continue;
                 }
-                catch
-                {
-                    // Skip individual types that fail to inspect — don't let one broken
-                    // GAgent type prevent the rest from being listed.
-                }
+
+                gAgentTypes[actorTypeName] = new GAgentTypeCatalogHttpResponse(
+                    ResolveTypeDisplayName(actorTypeName),
+                    actorTypeName,
+                    ResolveAssemblyName(actorTypeName),
+                    endpoints);
             }
         }
 
-        return Results.Ok(types);
+        return Results.Ok(gAgentTypes.Values
+            .OrderBy(x => x.TypeName, StringComparer.Ordinal)
+            .ThenBy(x => x.FullName, StringComparer.Ordinal)
+            .ToList());
     }
 
-    /// <summary>
-    /// Discovers available endpoints from a GAgent type by reflecting over [EventHandler] methods.
-    /// Any AIGAgentBase subclass always has a "chat" endpoint (ChatRequestEvent).
-    /// Additional endpoints are discovered from [EventHandler] methods whose parameter type
-    /// is NOT a base framework event (TextMessageStart/End/Content, ToolCall, etc.).
-    /// </summary>
-    private static object[] DiscoverEndpoints(Type gAgentType)
-    {
-        // Well-known base event types that are internal framework plumbing,
-        // not user-facing endpoints.
-        var frameworkEventTypes = new HashSet<Type>
+    private static ServiceIdentity BuildServiceIdentity(ServiceCatalogSnapshot service) =>
+        new()
         {
-            typeof(ChatRequestEvent),
-            typeof(ChatResponseEvent),
-            typeof(AiTextStart),
-            typeof(AiTextContent),
-            typeof(AiTextReasoning),
-            typeof(AiTextEnd),
-            typeof(AiToolCall),
-            typeof(ToolResultEvent),
-            typeof(InitializeRoleAgentEvent),
-            typeof(RoleChatSessionStartedEvent),
-            typeof(RoleChatSessionCompletedEvent),
+            TenantId = service.TenantId,
+            AppId = service.AppId,
+            Namespace = service.Namespace,
+            ServiceId = service.ServiceId,
         };
 
-        var endpoints = new List<object>();
+    private static GAgentEndpointCatalogHttpResponse MapGAgentEndpoint(ServiceEndpointSnapshot endpoint) =>
+        new(
+            endpoint.EndpointId,
+            string.IsNullOrWhiteSpace(endpoint.DisplayName) ? endpoint.EndpointId : endpoint.DisplayName,
+            NormalizeEndpointKind(endpoint.Kind),
+            endpoint.RequestTypeUrl,
+            endpoint.ResponseTypeUrl,
+            endpoint.Description,
+            Auto: false);
 
-        // Chat endpoint is always present for AIGAgentBase subclasses.
-        endpoints.Add(new
+    private static void MergeEndpoints(
+        List<GAgentEndpointCatalogHttpResponse> target,
+        IReadOnlyList<GAgentEndpointCatalogHttpResponse> source)
+    {
+        foreach (var endpoint in source)
         {
-            endpointId = "chat",
-            displayName = "chat",
-            kind = "chat",
-            requestTypeUrl = GetProtoTypeUrl(ChatRequestEvent.Descriptor),
-            description = "Default chat endpoint.",
-            auto = true,
-        });
-
-        // Walk the type hierarchy and discover [EventHandler] methods.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var current = gAgentType; current != null && current != typeof(object); current = current.BaseType)
-        {
-            MethodInfo[] methods;
-            try
-            {
-                methods = current.GetMethods(
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-            }
-            catch
-            {
-                // Type hierarchy reflection failed — skip this level.
+            if (target.Any(x => string.Equals(x.EndpointId, endpoint.EndpointId, StringComparison.Ordinal)))
                 continue;
-            }
 
-            foreach (var method in methods)
-            {
-                try
-                {
-                    var ehAttr = method.GetCustomAttribute<EventHandlerAttribute>();
-                    if (ehAttr is null)
-                        continue;
-
-                    var parameters = method.GetParameters();
-                    if (parameters.Length != 1)
-                        continue;
-
-                    var paramType = parameters[0].ParameterType;
-                    if (!typeof(IMessage).IsAssignableFrom(paramType) || paramType.IsAbstract)
-                        continue;
-
-                    // Skip framework/internal event types — they're not user-facing endpoints.
-                    if (frameworkEventTypes.Contains(paramType))
-                        continue;
-
-                    var typeUrl = TryGetProtoTypeUrl(paramType);
-                    var customName = ehAttr.EndpointName;
-                    var endpointId = !string.IsNullOrWhiteSpace(customName)
-                        ? customName
-                        : ToCamelCase(StripEventSuffix(paramType.Name));
-
-                    if (!seen.Add(endpointId))
-                        continue;
-
-                    endpoints.Add(new
-                    {
-                        endpointId,
-                        displayName = endpointId,
-                        kind = "command",
-                        requestTypeUrl = typeUrl ?? paramType.FullName ?? paramType.Name,
-                        description = $"Handles {paramType.Name}",
-                        auto = true,
-                    });
-                }
-                catch
-                {
-                    // Skip individual methods that fail — don't let one broken
-                    // handler prevent other endpoints from being discovered.
-                }
-            }
+            target.Add(endpoint);
         }
-
-        return endpoints.ToArray();
     }
 
-    private static string GetProtoTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
-        $"type.googleapis.com/{descriptor.FullName}";
-
-    private static string? TryGetProtoTypeUrl(Type messageType)
+    private static string ResolveTypeDisplayName(string actorTypeName)
     {
-        // Try to get the Protobuf Descriptor property to build the proper TypeUrl.
-        var descriptorProp = messageType.GetProperty(
-            "Descriptor",
-            BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
-        if (descriptorProp?.GetValue(null) is Google.Protobuf.Reflection.MessageDescriptor desc)
-            return $"type.googleapis.com/{desc.FullName}";
-        return null;
+        var typeName = actorTypeName.Split(',', 2)[0].Trim();
+        var lastDot = typeName.LastIndexOf('.');
+        return lastDot < 0 ? typeName : typeName[(lastDot + 1)..];
     }
 
-    private static string StripEventSuffix(string name) =>
-        name.EndsWith("Event", StringComparison.Ordinal) ? name[..^5] : name;
-
-    private static string ToCamelCase(string name) =>
-        string.IsNullOrEmpty(name) ? name : char.ToLowerInvariant(name[0]) + name[1..];
-
-    private static Type? FindOpenGenericBaseType(string fullName)
+    private static string ResolveAssemblyName(string actorTypeName)
     {
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        var separator = actorTypeName.IndexOf(',');
+        return separator < 0 ? string.Empty : actorTypeName[(separator + 1)..].Trim();
+    }
+
+    private static string NormalizeEndpointKind(string kind) =>
+        kind switch
         {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                var type = assembly.GetType(fullName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-
-        return null;
-    }
-
-    private static bool DerivesFromOpenGeneric(Type type, Type openGenericBase)
-    {
-        var current = type.BaseType;
-        while (current is not null)
-        {
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == openGenericBase)
-                return true;
-            current = current.BaseType;
-        }
-
-        return false;
-    }
+            nameof(ServiceEndpointKind.Chat) => "chat",
+            nameof(ServiceEndpointKind.Command) => "command",
+            _ => kind?.Trim().ToLowerInvariant() ?? string.Empty,
+        };
 
     // ─── Draft Run ───
 
@@ -263,537 +135,328 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         GAgentDraftRunHttpRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentDraftRunInteractionPort interactionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
-        var writer = new AGUISseWriter(http.Response);
+        var session = new DraftRunSseSession(http.Response);
 
         try
         {
-            if (string.IsNullOrWhiteSpace(request.ActorTypeName))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
-            }
 
-            if (string.IsNullOrWhiteSpace(request.Prompt))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            if (!TryValidateDraftRunRequest(http.Response, request))
                 return;
-            }
 
-            // Resolve agent type
-            var agentType = ResolveAgentType(request.ActorTypeName);
-            if (agentType is null)
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await WriteJsonErrorAsync(http.Response, "UNKNOWN_GAGENT_TYPE",
-                    $"GAgent type '{request.ActorTypeName}' could not be resolved.", ct);
-                return;
-            }
-
-            // Create or reuse actor
-            var preferredId = string.IsNullOrWhiteSpace(request.PreferredActorId)
-                ? null
-                : request.PreferredActorId.Trim();
-
-            IActor actor;
-            bool isNewActor;
-            if (preferredId is not null)
-            {
-                var existing = await actorRuntime.GetAsync(preferredId);
-                actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredId, ct);
-                isNewActor = existing is null;
-            }
-            else
-            {
-                actor = await actorRuntime.CreateAsync(agentType, null, ct);
-                isNewActor = true;
-            }
-
-            // Persist newly created actor to chrono-storage so it appears in actors.json
-            if (isNewActor)
-            {
-                try
-                {
-                    await actorStore.AddActorAsync(request.ActorTypeName.Trim(), actor.Id, ct);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to persist actor {ActorId} to actor store", actor.Id);
-                }
-            }
-
-            // Set up SSE response
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(ct);
-
-            // Write run started
-            var runId = Guid.NewGuid().ToString("N");
-            await writer.WriteAsync(new AGUIEvent
-            {
-                RunStarted = new RunStartedEvent
-                {
-                    ThreadId = actor.Id,
-                    RunId = runId,
-                },
-            }, ct);
-
-            // Subscribe to raw EventEnvelope on the actor's stream.
-            // RoleGAgent publishes individual event types (TextMessageStartEvent, etc.)
-            // with TopologyAudience.Parent. When no parent exists, events fall back to self stream.
-            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    try
-                    {
-                        var aguiEvent = TryMapEnvelopeToAguiEvent(envelope);
-                        if (aguiEvent is null)
-                            return;
-
-                        await writer.WriteAsync(aguiEvent, CancellationToken.None);
-
-                        // Detect completion: RoleGAgent ends with TextMessageEnd;
-                        // other agents may use RunFinished/RunError directly.
-                        if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                            or AGUIEvent.EventOneofCase.RunError
-                            or AGUIEvent.EventOneofCase.TextMessageEnd)
-                        {
-                            tcs.TrySetResult();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
-
-            // Dispatch ChatRequestEvent to the actor
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = request.Prompt.Trim(),
-                SessionId = request.SessionId ?? string.Empty,
-                ScopeId = scopeId,
-            };
-
-            // Forward caller's Bearer token so NyxID-backed GAgents can pass it
-            // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
-            var bearerToken = ExtractBearerToken(http);
-            if (!string.IsNullOrWhiteSpace(bearerToken))
-                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-
-            // Forward the user's preferred model from their config.
-            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
-            if (userConfigStore != null)
-            {
-                try
-                {
-                    var userConfig = await userConfigStore.GetAsync(ct);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-                }
-                catch
-                {
-                    // Best-effort
-                }
-            }
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for completion or timeout
+            var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
             var timeoutMs = request.TimeoutMs > 0 ? request.TimeoutMs : 120_000;
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs, ct));
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeoutMs);
 
-            if (completedTask == tcs.Task)
+            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
+            // Host keeps HTTP validation and SSE error mapping only.
+            // Application owns draft-run actor lifecycle and rollback around command interaction.
+            // This covers pre-dispatch observation failures without changing CQRS Core cleanup semantics.
+            var interaction = await interactionPort.ExecuteAsync(
+                new GAgentDraftRunInteractionRequest(
+                    ScopeId: scopeId,
+                    ActorTypeName: request.ActorTypeName,
+                    Prompt: request.Prompt,
+                    PreferredActorId: request.PreferredActorId,
+                    SessionId: request.SessionId,
+                    NyxIdAccessToken: ExtractBearerToken(http),
+                    ModelOverride: defaultModel,
+                    PreferredLlmRoute: preferredRoute),
+                session.EmitAsync,
+                session.WriteAcceptedAsync,
+                timeoutCts.Token);
+
+            if (!interaction.Succeeded)
             {
-                if (tcs.Task.IsFaulted)
-                {
-                    var faultEx = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    var isAuthRequired = IsNyxIdAuthenticationRequired(faultEx!);
-                    await writer.WriteAsync(new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = isAuthRequired
-                                ? "NyxID authentication required. Please sign in."
-                                : (faultEx?.Message ?? "An error occurred."),
-                            Code = isAuthRequired ? "authentication_required" : null,
-                        },
-                    }, CancellationToken.None);
-                }
-                else
-                {
-                    // Completed — write RunFinished to close the SSE stream
-                    await writer.WriteAsync(new AGUIEvent
-                    {
-                        RunFinished = new RunFinishedEvent
-                        {
-                            ThreadId = actor.Id,
-                            RunId = runId,
-                        },
-                    }, CancellationToken.None);
-                }
+                await WriteDraftRunStartErrorAsync(
+                    http.Response,
+                    interaction.Receipt,
+                    request.ActorTypeName,
+                    request.PreferredActorId,
+                    interaction.Error,
+                    ct);
+                return;
             }
-            else
+
+            if (!session.ResponseStarted && interaction.Receipt != null)
+                await session.WriteAcceptedAsync(interaction.Receipt, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            try
             {
-                // Timeout — write error and finish
-                await writer.WriteAsync(new AGUIEvent
-                {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = "GAgent draft-run timed out.",
-                    },
-                }, ct);
+                await session.WriteTimeoutAsync(CancellationToken.None);
+            }
+            catch
+            {
+                // Best-effort.
             }
         }
         catch (OperationCanceledException)
         {
-            // Client disconnected
+            // Client disconnected.
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
+            var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
+
+            if (!session.ResponseStarted)
+            {
+                await WriteDraftRunExceptionJsonAsync(http.Response, ex, isAuthRequired, ct);
+                return;
+            }
+
             try
             {
-                var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
-                await writer.WriteAsync(new AGUIEvent
-                {
-                    RunError = new RunErrorEvent
-                    {
-                        Message = isAuthRequired
-                            ? "NyxID authentication required. Please sign in."
-                            : ex.Message,
-                        Code = isAuthRequired ? "authentication_required" : null,
-                    },
-                }, CancellationToken.None);
+                await session.WriteRunErrorAsync(
+                    isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
+                    isAuthRequired ? "authentication_required" : null,
+                    CancellationToken.None);
             }
             catch
             {
-                // Best-effort
+                // Best-effort.
             }
         }
     }
 
-    /// <summary>
-    /// Maps an EventEnvelope payload to an AGUIEvent wrapper.
-    /// RoleGAgent publishes AI Abstractions event types (aevatar.ai.*);
-    /// this maps them to the AGUI presentation types for SSE streaming.
-    /// </summary>
-    internal static AGUIEvent? TryMapEnvelopeToAguiEvent(EventEnvelope envelope)
+    private static bool TryValidateDraftRunRequest(
+        HttpResponse response,
+        GAgentDraftRunHttpRequest request)
     {
-        var payload = envelope.Payload;
-        if (payload is null)
-            return null;
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(request);
 
-        // Match AI Abstractions types (published by RoleGAgent) → AGUI presentation types
-        if (payload.Is(AiTextStart.Descriptor))
+        if (string.IsNullOrWhiteSpace(request.ActorTypeName))
         {
-            var ai = payload.Unpack<AiTextStart>();
-            return new AGUIEvent
-            {
-                TextMessageStart = new Presentation.AGUI.TextMessageStartEvent
-                {
-                    MessageId = ai.SessionId,
-                    Role = "assistant",
-                },
-            };
+            response.StatusCode = StatusCodes.Status400BadRequest;
+            return false;
         }
 
-        if (payload.Is(AiTextContent.Descriptor))
+        if (string.IsNullOrWhiteSpace(request.Prompt))
         {
-            var ai = payload.Unpack<AiTextContent>();
-            return new AGUIEvent
-            {
-                TextMessageContent = new Presentation.AGUI.TextMessageContentEvent
-                {
-                    MessageId = ai.SessionId,
-                    Delta = ai.Delta,
-                },
-            };
+            response.StatusCode = StatusCodes.Status400BadRequest;
+            return false;
         }
 
-        if (payload.Is(AiTextReasoning.Descriptor))
-        {
-            // Map reasoning to a custom event (AGUI has no reasoning oneof field)
-            var ai = payload.Unpack<AiTextReasoning>();
-            return new AGUIEvent
-            {
-                Custom = new CustomEvent
-                {
-                    Name = "TEXT_MESSAGE_REASONING",
-                    Payload = Any.Pack(new Presentation.AGUI.TextMessageContentEvent
-                    {
-                        MessageId = ai.SessionId,
-                        Delta = ai.Delta,
-                    }),
-                },
-            };
-        }
-
-        if (payload.Is(AiTextEnd.Descriptor))
-        {
-            var ai = payload.Unpack<AiTextEnd>();
-            // RoleGAgent embeds LLM errors in TextMessageEnd.Content with known prefixes.
-            // Normal completion content also arrives here (duplicate of already-streamed deltas) — ignore it.
-            if (!string.IsNullOrEmpty(ai.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent { Message = ai.Content[llmErrorPrefix.Length..].Trim() },
-                    };
-                }
-
-                if (ai.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent { Message = ai.Content.Trim() },
-                    };
-                }
-            }
-
-            return new AGUIEvent
-            {
-                TextMessageEnd = new Presentation.AGUI.TextMessageEndEvent
-                {
-                    MessageId = ai.SessionId,
-                },
-            };
-        }
-
-        if (payload.Is(AiToolCall.Descriptor))
-        {
-            var ai = payload.Unpack<AiToolCall>();
-            return new AGUIEvent
-            {
-                ToolCallStart = new ToolCallStartEvent
-                {
-                    ToolCallId = ai.CallId,
-                    ToolName = ai.ToolName,
-                },
-            };
-        }
-
-        if (payload.Is(AiToolResult.Descriptor))
-        {
-            var ai = payload.Unpack<AiToolResult>();
-            return new AGUIEvent
-            {
-                ToolCallEnd = new ToolCallEndEvent
-                {
-                    ToolCallId = ai.CallId,
-                    Result = ai.ResultJson,
-                },
-            };
-        }
-
-        // ToolApprovalRequestEvent → AGUI CustomEvent.
-        // Use TypeUrl string match to avoid TypeRegistry issues (AI.Abstractions
-        // proto types are not registered in the AGUI SSE writer's TypeRegistry).
-        // Serialize fields into a Struct so the JSON formatter can handle it.
-        if (payload.TypeUrl.EndsWith("ToolApprovalRequestEvent", StringComparison.Ordinal))
-        {
-            var approvalPayload = BuildToolApprovalStruct(payload);
-            return new AGUIEvent
-            {
-                Custom = new CustomEvent
-                {
-                    Name = "TOOL_APPROVAL_REQUEST",
-                    Payload = Any.Pack(approvalPayload),
-                },
-            };
-        }
-
-        // Also accept pre-wrapped AGUIEvent
-        if (payload.Is(AGUIEvent.Descriptor))
-            return payload.Unpack<AGUIEvent>();
-
-        return null;
+        return true;
     }
 
-    /// <summary>
-    /// Decode ToolApprovalRequestEvent from raw Any bytes into a google.protobuf.Struct
-    /// so the AGUI SSE JsonFormatter can serialize it without needing the AI.Abstractions
-    /// type registered in its TypeRegistry.
-    /// </summary>
-    private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
+    private static async Task<(string? DefaultModel, string? PreferredRoute)> TryGetUserLlmDefaultsAsync(
+        HttpContext http,
+        CancellationToken ct)
     {
-        // Decode the raw bytes using the well-known field numbers from ai_messages.proto:
-        //   string request_id = 1; string session_id = 2; string tool_name = 3;
-        //   string tool_call_id = 4; string arguments_json = 5; string approval_mode = 6;
-        //   bool is_destructive = 7; int32 timeout_seconds = 8;
-        var s = new Google.Protobuf.WellKnownTypes.Struct();
+        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
+        if (userConfigStore is null)
+            return (null, null);
+
         try
         {
-            var input = new CodedInputStream(payload.Value.ToByteArray());
-            string requestId = "", toolName = "", toolCallId = "", argumentsJson = "";
-            bool isDestructive = false;
-            int timeoutSeconds = 15;
+            var userConfig = await userConfigStore.GetAsync(ct);
+            var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                ? null
+                : userConfig.PreferredLlmRoute.Trim();
+            var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                ? null
+                : userConfig.DefaultModel.Trim();
 
-            while (!input.IsAtEnd)
-            {
-                var tag = input.ReadTag();
-                switch (WireFormat.GetTagFieldNumber(tag))
-                {
-                    case 1: requestId = input.ReadString(); break;
-                    case 3: toolName = input.ReadString(); break;
-                    case 4: toolCallId = input.ReadString(); break;
-                    case 5: argumentsJson = input.ReadString(); break;
-                    case 7: isDestructive = input.ReadBool(); break;
-                    case 8: timeoutSeconds = input.ReadInt32(); break;
-                    default: input.SkipLastField(); break;
-                }
-            }
-
-            s.Fields["requestId"] = Value.ForString(requestId);
-            s.Fields["toolName"] = Value.ForString(toolName);
-            s.Fields["toolCallId"] = Value.ForString(toolCallId);
-            s.Fields["argumentsJson"] = Value.ForString(argumentsJson);
-            s.Fields["isDestructive"] = Value.ForBool(isDestructive);
-            s.Fields["timeoutSeconds"] = Value.ForNumber(timeoutSeconds);
+            return await UserLlmRouteModelResolver
+                .ResolveAsync(http, model, route, ct)
+                .ConfigureAwait(false);
         }
         catch
         {
-            // Fallback: empty struct — frontend will show approval without details
-            s.Fields["requestId"] = Value.ForString("");
-            s.Fields["error"] = Value.ForString("Failed to decode approval request");
+            return (null, null);
         }
-
-        return s;
     }
 
-    internal static Type? ResolveAgentType(string typeName)
+    private static async Task WriteDraftRunStartErrorAsync(
+        HttpResponse response,
+        GAgentDraftRunAcceptedReceipt? receipt,
+        string requestedActorTypeName,
+        string? requestedActorId,
+        GAgentDraftRunStartError error,
+        CancellationToken ct)
     {
-        // Try exact match first
-        var type = Type.GetType(typeName, throwOnError: false);
-        if (type is not null)
-            return type;
-
-        // Search loaded assemblies
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        switch (error)
         {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                type = assembly.GetType(typeName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
+            case GAgentDraftRunStartError.UnknownActorType:
+                response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonErrorAsync(
+                    response,
+                    "UNKNOWN_GAGENT_TYPE",
+                    $"GAgent type '{requestedActorTypeName}' could not be resolved.",
+                    ct);
+                break;
+            case GAgentDraftRunStartError.ActorTypeMismatch:
+                var actorId = string.IsNullOrWhiteSpace(receipt?.ActorId)
+                    ? requestedActorId?.Trim()
+                    : receipt.ActorId;
+                var actorTypeName = string.IsNullOrWhiteSpace(receipt?.ActorTypeName)
+                    ? requestedActorTypeName
+                    : receipt.ActorTypeName;
+                response.StatusCode = StatusCodes.Status409Conflict;
+                await WriteJsonErrorAsync(
+                    response,
+                    "GAGENT_ACTOR_TYPE_MISMATCH",
+                    string.IsNullOrWhiteSpace(actorId)
+                        ? $"Requested actor is not compatible with requested type '{actorTypeName}'."
+                        : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
+                    ct);
+                break;
         }
-
-        return null;
     }
 
-    // ─── Actor CRUD (chrono-storage) ───
+    private static async Task WriteDraftRunExceptionJsonAsync(
+        HttpResponse response,
+        Exception ex,
+        bool isAuthRequired,
+        CancellationToken ct)
+    {
+        response.StatusCode = isAuthRequired
+            ? StatusCodes.Status401Unauthorized
+            : StatusCodes.Status500InternalServerError;
+        await WriteJsonErrorAsync(
+            response,
+            isAuthRequired ? "authentication_required" : "GAGENT_DRAFT_RUN_FAILED",
+            isAuthRequired ? "NyxID authentication required. Please sign in." : ex.Message,
+            ct);
+    }
+
+    // Refactor (iter5/cluster-010):
+    //   Old: Host exposed EventEnvelope -> AGUI mapper wrappers for endpoint-local tests.
+    //   New: AGUI mapping lives behind ScopeGAgentAguiEventMapper and projection session projectors.
+
+    // ─── GAgent Registry ───
 
     private static async Task<IResult> HandleListActorsAsync(
+        HttpContext http,
         string scopeId,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
-            var groups = await actorStore.GetAsync(ct);
-            return Results.Ok(groups);
+            var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+            return Results.Ok(new
+            {
+                snapshot.ScopeId,
+                snapshot.StateVersion,
+                snapshot.UpdatedAt,
+                snapshot.ObservedAt,
+                snapshot.Groups,
+            });
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
+            return Results.BadRequest(new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = ex.Message });
         }
         catch (Exception ex)
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to list GAgent actors from storage");
-            return Results.Ok(Array.Empty<GAgentActorGroup>());
+                .LogWarning(ex, "Failed to list GAgent actors from registry read model");
+            return Results.Json(
+                new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = "Failed to list GAgent actors from registry read model." },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
     private static async Task<IResult> HandleAddActorAsync(
+        HttpContext http,
         string scopeId,
         AddGAgentActorHttpRequest request,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(request.GAgentType) || string.IsNullOrWhiteSpace(request.ActorId))
-                return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType and actorId are required." });
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
 
-            await actorStore.AddActorAsync(request.GAgentType.Trim(), request.ActorId.Trim(), ct);
-            return Results.Ok();
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to persist GAgent actor to storage");
-            return Results.Ok();
-        }
+        _ = request;
+        _ = registryCommandPort;
+        _ = loggerFactory;
+        _ = ct;
+
+        return Results.Json(
+            new
+            {
+                code = "DIRECT_GAGENT_ACTOR_REGISTRATION_UNSUPPORTED",
+                message = "Direct GAgent actor registry registration is not supported. Create the target resource through its capability command endpoint.",
+            },
+            statusCode: StatusCodes.Status405MethodNotAllowed);
     }
 
     private static async Task<IResult> HandleRemoveActorAsync(
+        HttpContext http,
         string scopeId,
         string actorId,
         [FromQuery] string? gagentType,
-        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         try
         {
             if (string.IsNullOrWhiteSpace(gagentType))
                 return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType query parameter is required." });
 
-            await actorStore.RemoveActorAsync(gagentType.Trim(), actorId.Trim(), ct);
+            var registration = new GAgentActorRegistration(scopeId, gagentType.Trim(), actorId.Trim());
+            var admission = await admissionPort.AuthorizeTargetAsync(
+                new ScopeResourceTarget(
+                    registration.ScopeId,
+                    ScopeResourceKind.GAgentActor,
+                    registration.GAgentType,
+                    registration.ActorId,
+                    ScopeResourceOperation.Delete),
+                ct);
+            if (!admission.IsAllowed)
+            {
+                return admission.Status switch
+                {
+                    ScopeResourceAdmissionStatus.NotFound => Results.NotFound(new
+                    {
+                        code = "GAGENT_ACTOR_NOT_FOUND",
+                        message = "GAgent actor is not registered in this scope.",
+                    }),
+                    ScopeResourceAdmissionStatus.Denied or ScopeResourceAdmissionStatus.ScopeMismatch => Results.Json(
+                        new { code = "SCOPE_FORBIDDEN", message = "Scope access denied." },
+                        statusCode: StatusCodes.Status403Forbidden),
+                    _ => Results.Json(
+                        new { code = "GAGENT_ACTOR_ADMISSION_UNAVAILABLE", message = "GAgent actor ownership could not be verified." },
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                };
+            }
+
+            await registryCommandPort.UnregisterActorAsync(registration, ct);
             return Results.Ok();
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new { code = "GAGENT_ACTOR_STORE_ERROR", message = ex.Message });
+            return Results.BadRequest(new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = ex.Message });
         }
         catch (Exception ex)
         {
             loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints")
-                .LogWarning(ex, "Failed to remove GAgent actor from storage");
-            return Results.Ok();
+                .LogWarning(ex, "Failed to unregister GAgent actor from registry");
+            return Results.Json(
+                new { code = "GAGENT_ACTOR_REGISTRY_ERROR", message = "Failed to unregister GAgent actor from registry." },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
@@ -819,7 +482,83 @@ public static class ScopeGAgentEndpoints
         || ex.InnerException is NyxIdAuthenticationRequiredException
         || (ex is AggregateException agg && agg.InnerExceptions.Any(e => e is NyxIdAuthenticationRequiredException));
 
+    private sealed class DraftRunSseSession(HttpResponse response)
+    {
+        private readonly HttpResponse _response = response ?? throw new ArgumentNullException(nameof(response));
+        private readonly AGUISseWriter _writer = new(response);
+
+        public bool ResponseStarted { get; private set; }
+
+        public async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken ct)
+        {
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(aguiEvent, ct);
+        }
+
+        public async ValueTask WriteAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken ct)
+        {
+            _response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunStarted = new RunStartedEvent
+                    {
+                        ThreadId = receipt.ActorId,
+                        RunId = receipt.CommandId,
+                    },
+                },
+                ct);
+        }
+
+        public Task WriteTimeoutAsync(CancellationToken ct) =>
+            WriteRunErrorAsync("GAgent draft-run timed out.", code: null, ct);
+
+        public async Task WriteRunErrorAsync(string message, string? code, CancellationToken ct)
+        {
+            await EnsureStartedAsync(ct);
+            await _writer.WriteAsync(
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = message,
+                        Code = code,
+                    },
+                },
+                ct);
+        }
+
+        private async Task EnsureStartedAsync(CancellationToken ct)
+        {
+            if (ResponseStarted)
+                return;
+
+            _response.StatusCode = StatusCodes.Status200OK;
+            _response.Headers.ContentType = "text/event-stream; charset=utf-8";
+            _response.Headers.CacheControl = "no-store";
+            _response.Headers["X-Accel-Buffering"] = "no";
+            await _response.StartAsync(ct);
+            ResponseStarted = true;
+        }
+    }
+
     // ─── Request models ───
+
+    public sealed record GAgentTypeCatalogHttpResponse(
+        string TypeName,
+        string FullName,
+        string AssemblyName,
+        List<GAgentEndpointCatalogHttpResponse> Endpoints);
+
+    public sealed record GAgentEndpointCatalogHttpResponse(
+        string EndpointId,
+        string DisplayName,
+        string Kind,
+        string RequestTypeUrl,
+        string ResponseTypeUrl,
+        string Description,
+        bool Auto);
 
     public sealed record GAgentDraftRunHttpRequest(
         string ActorTypeName,

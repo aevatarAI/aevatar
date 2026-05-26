@@ -39,6 +39,12 @@
 - callback fired 事件能在 actor 内完成对账
 - 不再依赖模块私有 `Dictionary/HashSet`
 
+// Refactor (iter89/cluster-089-workflow-module-clock-state):
+//   Old: modules read process wall clock for cache TTL, signal buffer eviction,
+//        timeout stamps, and connector elapsed metadata.
+//   New: modules use `IWorkflowExecutionContext.UtcNow` for workflow business
+//        time and `GetTimestamp/GetElapsedTime` for monotonic duration metrics.
+
 ## 关键模块语义
 
 - `WorkflowExecutionKernel`

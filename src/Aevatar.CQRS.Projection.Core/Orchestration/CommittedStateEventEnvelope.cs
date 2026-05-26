@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.Compatibility;
 using Google.Protobuf;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
@@ -35,14 +36,12 @@ public static class CommittedStateEventEnvelope
             return false;
 
         stateEvent = published.StateEvent;
-        var stateDescriptor = new TState().Descriptor;
         if (published.StateRoot == null ||
-            !published.StateRoot.Is(stateDescriptor))
+            !ProtobufContractCompatibility.TryUnpack<TState>(published.StateRoot, out state) ||
+            state == null)
         {
             return false;
         }
-
-        state = published.StateRoot.Unpack<TState>();
         return true;
     }
 

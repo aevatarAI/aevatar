@@ -1,0 +1,29 @@
+# Default fallback — any path with no other rule routes here
+*                                                       @louis4li @jason-aelf
+
+# ─── Architecture canon & ADRs ─────────────────────────────
+# Three backend leads as joint owners — any one of them must approve
+/CLAUDE.md                                              @louis4li @eanzhao @jason-aelf
+/docs/canon/                                            @louis4li @eanzhao @jason-aelf
+/docs/adr/                                              @louis4li @eanzhao @jason-aelf
+
+# ─── Core actor / channel runtime (highest blast radius) ───
+# louis4li / eanzhao / jason-aelf — author cannot self-approve,
+# so any non-author owner satisfies the code-owner gate.
+/agents/Aevatar.GAgents.ChannelRuntime/                 @louis4li @eanzhao @jason-aelf
+/agents/channels/                                       @louis4li @eanzhao @jason-aelf
+/agents/Aevatar.GAgents.NyxidChat/                      @louis4li @eanzhao @jason-aelf
+/agents/Aevatar.GAgents.NyxIdRelay/                     @louis4li @eanzhao @jason-aelf
+**/*.proto                                              @louis4li @eanzhao @jason-aelf
+
+# ─── Platform internals (CQRS, projection, scripting) ──────
+/src/platform/                                          @louis4li @eanzhao @jason-aelf
+/src/Aevatar.Studio.Application/                        @louis4li @eanzhao @jason-aelf
+
+# ─── Studio frontend (existing review pair) ────────────────
+/apps/aevatar-console-web/                              @AbigailDeng @potter-sun
+
+# ─── CI guards & engineering discipline ────────────────────
+/tools/ci/                                              @louis4li @eanzhao @jason-aelf
+/.github/workflows/                                     @louis4li @eanzhao @jason-aelf
+/.github/CODEOWNERS                                     @louis4li @eanzhao @jason-aelf

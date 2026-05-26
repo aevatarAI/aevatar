@@ -1,5 +1,3 @@
-using System.Text.Json.Nodes;
-
 namespace Aevatar.Studio.Domain.Studio.Models;
 
 public sealed record StepModel
@@ -14,7 +12,7 @@ public sealed record StepModel
 
     public bool UsedRoleAlias { get; init; }
 
-    public Dictionary<string, JsonNode?> Parameters { get; init; } = new(StringComparer.Ordinal);
+    public StudioStepParameters Parameters { get; init; } = new();
 
     public string? Next { get; init; }
 

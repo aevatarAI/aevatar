@@ -21,7 +21,12 @@ import {
   theme,
 } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
-import { history } from "@/shared/navigation/history";
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from "@/shared/navigation/history";
+import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { buildRuntimeGAgentsHref } from "@/shared/navigation/runtimeRoutes";
@@ -32,10 +37,10 @@ import type {
 } from "@/shared/models/scopes";
 import { studioApi } from "@/shared/studio/api";
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
-  getStudioScopeBindingCurrentRevision,
+  describeStudioDefaultRouteTargetRevisionContext,
+  describeStudioDefaultRouteTargetRevisionTarget,
+  formatStudioMemberBindingImplementationKind,
+  getStudioDefaultRouteTargetCurrentRevision,
 } from "@/shared/studio/models";
 import {
   buildStudioScriptsWorkspaceRoute,
@@ -169,33 +174,23 @@ const StatusTag: React.FC<{
   );
 };
 
-function readAssetTab(): AssetTab {
-  if (typeof window === "undefined") {
-    return "workflows";
-  }
-
-  const tab = new URLSearchParams(window.location.search).get("tab")?.trim();
+function readAssetTab(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): AssetTab {
+  const tab = new URLSearchParams(search).get("tab")?.trim();
   return tab === "scripts" ? "scripts" : "workflows";
 }
 
-function readWorkflowId(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return (
-    new URLSearchParams(window.location.search).get("workflowId")?.trim() ?? ""
-  );
+function readWorkflowId(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): string {
+  return new URLSearchParams(search).get("workflowId")?.trim() ?? "";
 }
 
-function readScriptId(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return (
-    new URLSearchParams(window.location.search).get("scriptId")?.trim() ?? ""
-  );
+function readScriptId(
+  search = typeof window === "undefined" ? "" : window.location.search,
+): string {
+  return new URLSearchParams(search).get("scriptId")?.trim() ?? "";
 }
 
 function resolveWorkflowCapabilityStatus(
@@ -271,7 +266,23 @@ function buildScriptWorkspaceItems(
     .sort((left, right) => left.title.localeCompare(right.title));
 }
 
-const ProjectAssetsPage: React.FC = () => {
+const TeamAssetsPage: React.FC = () => {
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => "",
+  );
+  const routeState = useMemo(() => {
+    const search = typeof window === "undefined" ? "" : window.location.search;
+    const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+
+    return {
+      draft: readScopeQueryDraft(search, pathname),
+      scriptId: readScriptId(search),
+      tab: readAssetTab(search),
+      workflowId: readWorkflowId(search),
+    };
+  }, [locationSnapshot]);
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
 
@@ -292,6 +303,34 @@ const ProjectAssetsPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
+
+  useEffect(() => {
+    const nextRouteDraft = normalizeScopeDraft(routeState.draft);
+
+    setDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+    setActiveDraft((currentDraft) =>
+      normalizeScopeDraft(currentDraft).scopeId === nextRouteDraft.scopeId
+        ? currentDraft
+        : nextRouteDraft,
+    );
+    setActiveTab((currentTab) =>
+      currentTab === routeState.tab ? currentTab : routeState.tab,
+    );
+    setSelectedWorkflowId((currentWorkflowId) =>
+      currentWorkflowId === routeState.workflowId
+        ? currentWorkflowId
+        : routeState.workflowId,
+    );
+    setSelectedScriptId((currentScriptId) =>
+      currentScriptId === routeState.scriptId
+        ? currentScriptId
+        : routeState.scriptId,
+    );
+  }, [routeState]);
 
   useEffect(() => {
     history.replace(
@@ -330,10 +369,10 @@ const ProjectAssetsPage: React.FC = () => {
     queryFn: () => scopesApi.listScripts(activeDraft.scopeId),
     queryKey: ["scopes", "scripts", activeDraft.scopeId],
   });
-  const bindingQuery = useQuery({
+  const defaultRouteQuery = useQuery({
     enabled: activeDraft.scopeId.trim().length > 0,
-    queryFn: () => studioApi.getScopeBinding(activeDraft.scopeId),
-    queryKey: ["scopes", "binding", activeDraft.scopeId],
+    queryFn: () => studioApi.getDefaultRouteTarget(activeDraft.scopeId),
+    queryKey: ["scopes", "default-route", activeDraft.scopeId],
   });
   const workflowDetailQuery = useQuery({
     enabled:
@@ -384,27 +423,27 @@ const ProjectAssetsPage: React.FC = () => {
     (item) => item.capabilityStatus === "active",
   ).length;
   const draftCapabilityCount = workflowCount + scriptCount - activeCapabilityCount;
-  const currentBindingRevision = getStudioScopeBindingCurrentRevision(
-    bindingQuery.data,
+  const currentDefaultRouteRevision = getStudioDefaultRouteTargetCurrentRevision(
+    defaultRouteQuery.data,
   );
-  const currentBindingLabel = bindingQuery.data?.available
-    ? currentBindingRevision
-      ? describeStudioScopeBindingRevisionTarget(currentBindingRevision)
-      : bindingQuery.data.displayName || bindingQuery.data.serviceId
+  const currentDefaultRouteLabel = defaultRouteQuery.data?.available
+    ? currentDefaultRouteRevision
+      ? describeStudioDefaultRouteTargetRevisionTarget(currentDefaultRouteRevision)
+      : defaultRouteQuery.data.displayName || defaultRouteQuery.data.serviceId
     : "Not bound";
-  const currentBindingKind = currentBindingRevision
-    ? formatStudioScopeBindingImplementationKind(
-        currentBindingRevision.implementationKind,
+  const currentDefaultRouteKind = currentDefaultRouteRevision
+    ? formatStudioMemberBindingImplementationKind(
+        currentDefaultRouteRevision.implementationKind,
       )
-    : bindingQuery.data?.available
+    : defaultRouteQuery.data?.available
       ? "Published"
       : "Unknown";
-  const currentBindingContext = describeStudioScopeBindingRevisionContext(
-    currentBindingRevision,
+  const currentDefaultRouteContext = describeStudioDefaultRouteTargetRevisionContext(
+    currentDefaultRouteRevision,
   );
-  const currentBindingActor =
-    currentBindingRevision?.primaryActorId ||
-    bindingQuery.data?.primaryActorId ||
+  const currentDefaultRouteActor =
+    currentDefaultRouteRevision?.primaryActorId ||
+    defaultRouteQuery.data?.primaryActorId ||
     "";
 
   const selectedWorkflow = useMemo(
@@ -448,12 +487,13 @@ const ProjectAssetsPage: React.FC = () => {
             onClick={() =>
               history.push(
                 buildStudioWorkflowEditorRoute({
+                  scopeId: activeDraft.scopeId.trim(),
                   workflowId: record.assetId,
                 }),
               )
             }
           >
-            Open workflow editor
+            Edit in Team Builder
           </Button>,
         ],
       },
@@ -532,7 +572,7 @@ const ProjectAssetsPage: React.FC = () => {
       },
       title: {
         render: (_, record) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text
               strong
               style={{ color: surfaceToken.colorTextHeading, fontSize: 15 }}
@@ -546,7 +586,7 @@ const ProjectAssetsPage: React.FC = () => {
         ),
       },
     }),
-    [surfaceToken],
+    [activeDraft.scopeId, surfaceToken],
   );
 
   const scriptListMetas = useMemo<ProListMetas<AssetWorkspaceItem>>(
@@ -570,12 +610,13 @@ const ProjectAssetsPage: React.FC = () => {
             onClick={() =>
               history.push(
                 buildStudioScriptsWorkspaceRoute({
+                  scopeId: activeDraft.scopeId.trim(),
                   scriptId: record.assetId,
                 }),
               )
             }
           >
-            Open scripts workspace
+            Edit in Team Builder
           </Button>,
         ],
       },
@@ -647,7 +688,7 @@ const ProjectAssetsPage: React.FC = () => {
       },
       title: {
         render: (_, record) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text
               strong
               style={{ color: surfaceToken.colorTextHeading, fontSize: 15 }}
@@ -661,12 +702,13 @@ const ProjectAssetsPage: React.FC = () => {
         ),
       },
     }),
-    [surfaceToken],
+    [activeDraft.scopeId, surfaceToken],
   );
 
   return (
     <PageContainer
       className="aevatar-page-shell-document"
+      content="Team home now lives under /teams. Keep this page for older asset deep links, source inspection, and catalog detail while the team-first flow finishes taking over."
       extra={[
         <Button
           key="open-studio"
@@ -674,20 +716,22 @@ const ProjectAssetsPage: React.FC = () => {
           onClick={() =>
             history.push(
               activeTab === "scripts"
-                ? buildStudioScriptsWorkspaceRoute()
-                : buildStudioWorkflowWorkspaceRoute(),
+                ? buildStudioScriptsWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  })
+                : buildStudioWorkflowWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  }),
             )
           }
         >
-          {activeTab === "scripts"
-            ? "Open scripts workspace"
-            : "Open workflow workspace"}
+          Open Team Builder
         </Button>,
         <Button
           key="open-overview"
-          onClick={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
+          onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
         >
-          Open Project Overview
+          Open Team Home
         </Button>,
         <Button
           key="open-gagents"
@@ -696,20 +740,21 @@ const ProjectAssetsPage: React.FC = () => {
             history.push(
               buildRuntimeGAgentsHref({
                 scopeId: activeDraft.scopeId.trim(),
-                actorId: currentBindingRevision?.primaryActorId || undefined,
-                actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
+                actorId: currentDefaultRouteRevision?.primaryActorId || undefined,
+                actorTypeName:
+                  currentDefaultRouteRevision?.staticActorTypeName || undefined,
               }),
             )
           }
         >
-          Manage GAgents
+          Open Member Runtime
         </Button>,
       ]}
-      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
+      onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
       title={
         <AevatarTitleWithHelp
-          help="Browse the workflows and scripts owned by the current project from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
-          title="Project Assets"
+          help="This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative."
+          title="Legacy Team Assets"
         />
       }
     >
@@ -723,7 +768,7 @@ const ProjectAssetsPage: React.FC = () => {
       >
         <ScopeQueryCard
           draft={draft}
-          loadLabel="Load project assets"
+          loadLabel="Load legacy assets"
           onChange={setDraft}
           onLoad={() => {
             const nextDraft = normalizeScopeDraft(draft);
@@ -763,15 +808,20 @@ const ProjectAssetsPage: React.FC = () => {
         {!activeDraft.scopeId.trim() ? (
           <Alert
             showIcon
-            message="Select a project to inspect its workflow and script assets."
+            message="Select a team to inspect workflow and script assets in the legacy workspace."
             type="info"
           />
         ) : (
           <>
+            <Alert
+              description="Team home is now the primary surface. Use this legacy asset workspace when you need source inspection, catalog state, or older deep links."
+              showIcon
+              type="warning"
+            />
             <ProCard
               bodyStyle={{ padding: 18 }}
               style={buildAevatarPanelStyle(surfaceToken)}
-              title="Project asset summary"
+              title="Legacy asset summary"
             >
               <div
                 style={{
@@ -780,9 +830,15 @@ const ProjectAssetsPage: React.FC = () => {
                   gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
                 }}
               >
-                <SummaryMetric label="Project" value={activeDraft.scopeId} />
-                <SummaryMetric label="Default binding" value={currentBindingLabel} />
-                <SummaryMetric label="Binding kind" value={currentBindingKind} />
+                <SummaryMetric label="Team" value={activeDraft.scopeId} />
+                <SummaryMetric
+                  label="Default route"
+                  value={currentDefaultRouteLabel}
+                />
+                <SummaryMetric
+                  label="Route kind"
+                  value={currentDefaultRouteKind}
+                />
                 <SummaryMetric
                   label="Live capabilities"
                   tone="success"
@@ -809,20 +865,20 @@ const ProjectAssetsPage: React.FC = () => {
                     value="Stage capability posture first. Open the inspector only when you need source, schema, or catalog detail."
                   />
                   <SummaryField
-                    label="Binding detail"
+                    label="Route detail"
                     value={
-                      currentBindingContext ||
-                      bindingQuery.data?.serviceKey ||
-                      "No published default binding"
+                      currentDefaultRouteContext ||
+                      defaultRouteQuery.data?.serviceKey ||
+                      "No published default route"
                     }
                   />
                   <SummaryField
                     label="Serving actor"
-                    value={currentBindingActor || "n/a"}
+                    value={currentDefaultRouteActor || "n/a"}
                   />
                   <SummaryField
                     label="Workflows"
-                    value={`${workflowCount} capability${workflowCount === 1 ? "" : "ies"} tracked in this project`}
+                    value={`${workflowCount} capability${workflowCount === 1 ? "" : "ies"} tracked in this team`}
                   />
                   <SummaryField
                     label="Scripts"
@@ -846,7 +902,7 @@ const ProjectAssetsPage: React.FC = () => {
                   padding: "16px 18px 0",
                 }}
               >
-                <Space direction="vertical" size={2}>
+                <Space orientation="vertical" size={2}>
                   <Typography.Text
                     strong
                     style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}
@@ -854,7 +910,7 @@ const ProjectAssetsPage: React.FC = () => {
                     Capability inventory
                   </Typography.Text>
                   <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-                    One working surface for project-owned assets. Inspectors carry the heavy detail, not the list.
+                    Keep older asset deep links and detailed inspection here. Team home stays the primary narrative surface.
                   </Typography.Text>
                 </Space>
                 <StatusTag
@@ -892,7 +948,7 @@ const ProjectAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No workflow assets were found for this project.",
+                          emptyText: "No workflow assets were found for this team.",
                         }}
                         metas={workflowListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -921,7 +977,7 @@ const ProjectAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No script assets were found for this project.",
+                          emptyText: "No script assets were found for this team.",
                         }}
                         metas={scriptListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -1023,12 +1079,13 @@ const ProjectAssetsPage: React.FC = () => {
                   onClick={() =>
                     history.push(
                       buildStudioWorkflowEditorRoute({
+                        scopeId: activeDraft.scopeId.trim(),
                         workflowId: selectedWorkflowId,
                       }),
                     )
                   }
                 >
-                  Open workflow editor
+                  Edit in Team Builder
                 </Button>
               </>
             ) : (
@@ -1105,12 +1162,13 @@ const ProjectAssetsPage: React.FC = () => {
                 onClick={() =>
                   history.push(
                     buildStudioScriptsWorkspaceRoute({
+                      scopeId: activeDraft.scopeId.trim(),
                       scriptId: selectedScriptId,
                     }),
                   )
                 }
               >
-                Open scripts workspace
+                Edit in Team Builder
               </Button>
             </>
           ) : (
@@ -1164,4 +1222,4 @@ const ScopeScriptCatalogSummary: React.FC<{ catalog: ScopeScriptCatalog }> = ({
   </div>
 );
 
-export default ProjectAssetsPage;
+export default TeamAssetsPage;

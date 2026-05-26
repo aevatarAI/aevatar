@@ -113,7 +113,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyDirectQueryTypes_ShouldNot_Exist()
+    public void DirectActorQueryTypes_ShouldNot_Exist()
     {
         // Forbid generic actor query/reply and stream request-reply patterns
         IArchRule rule = Types().That()
@@ -125,7 +125,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyDirectQueryExpansionTypes_ShouldNot_Exist()
+    public void DirectActorQueryExpansionTypes_ShouldNot_Exist()
     {
         // cqrs_eventsourcing_boundary_guard.sh: expanded legacy direct query patterns
         IArchRule rule = Types().That()
@@ -137,7 +137,7 @@ public class CqrsBoundaryTests
     }
 
     [Fact]
-    public void LegacyQueryRequestedEvents_ShouldNot_Exist()
+    public void DirectQueryRequestedEvents_ShouldNot_Exist()
     {
         // cqrs_eventsourcing_boundary_guard.sh: Query*RequestedEvent patterns
         IArchRule rule = Types().That()
@@ -145,6 +145,30 @@ public class CqrsBoundaryTests
             .And().ResideInNamespaceMatching(@"Aevatar(\..+)?")
             .Should().NotExist()
             .Because("Query*RequestedEvent patterns are legacy direct actor query contracts; use read models");
+        rule.Check(Arch);
+    }
+
+    [Fact]
+    public void ScriptingWritePath_ShouldNot_DependOn_AuthorityActivationPorts()
+    {
+        IArchRule rule = Types().That()
+            .HaveNameMatching("^(RuntimeScriptDefinitionCommandService|RuntimeScriptCatalogCommandService|ScriptBehaviorRuntimeCapabilities|ScriptBehaviorRuntimeCapabilityFactory)$")
+            .And().ResideInNamespaceMatching(@"Aevatar\.Scripting\.(Application|Infrastructure)(\..+)?")
+            .Should().NotDependOnAny(
+                Types().That().HaveNameMatching("^(IScriptAuthorityReadModelActivationPort|IScriptAuthorityProjectionPrimingPort)$"))
+            .Because("scripting write paths must not control authority read-model lifecycle");
+        rule.Check(Arch);
+    }
+
+    [Fact]
+    public void ScriptingCatalogWritePath_ShouldNot_DependOn_QueryPorts()
+    {
+        IArchRule rule = Types().That()
+            .HaveName("RuntimeScriptCatalogCommandService")
+            .And().ResideInNamespaceMatching(@"Aevatar\.Scripting\.Infrastructure(\..+)?")
+            .Should().NotDependOnAny(
+                Types().That().HaveNameMatching("^(IScriptCatalogQueryPort|IScriptReadModelQueryPort)$"))
+            .Because("catalog command success must not depend on query-port catch-up");
         rule.Check(Arch);
     }
 }

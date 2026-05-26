@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+import "service_endpoint.proto";
+import "service_revision.proto";
+
+enum ServiceRunStatus {
+  SERVICE_RUN_STATUS_UNSPECIFIED = 0;
+  SERVICE_RUN_STATUS_ACCEPTED = 1;
+  SERVICE_RUN_STATUS_COMPLETED = 2;
+  SERVICE_RUN_STATUS_FAILED = 3;
+  SERVICE_RUN_STATUS_STOPPED = 4;
+}
+
+message ServiceRunRecord {
+  string scope_id = 1;
+  string service_id = 2;
+  string service_key = 3;
+  string run_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  string endpoint_id = 7;
+  ServiceImplementationKind implementation_kind = 8;
+  string target_actor_id = 9;
+  string revision_id = 10;
+  string deployment_id = 11;
+  ServiceRunStatus status = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  ServiceIdentity identity = 15;
+}
+
+message ServiceRunState {
+  ServiceRunRecord record = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+}
+
+message RegisterServiceRunRequested {
+  ServiceRunRecord record = 1;
+}
+
+message UpdateServiceRunStatusRequested {
+  string run_id = 1;
+  ServiceRunStatus status = 2;
+}
+
+message ServiceRunRegisteredEvent {
+  ServiceRunRecord record = 1;
+}
+
+message ServiceRunStatusUpdatedEvent {
+  string run_id = 1;
+  ServiceRunStatus status = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}

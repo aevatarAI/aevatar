@@ -1,6 +1,7 @@
 import { Badge, Empty, Space, Tag, Typography } from "antd";
 import React from "react";
 import { embeddedPanelStyle } from "@/shared/ui/proComponents";
+import { AEVATAR_PRESSABLE_CARD_CLASS } from "@/shared/ui/interactionStandards";
 import {
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
@@ -251,6 +252,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                   <button
                     aria-label={`Select trace item ${item.eventType}`}
                     aria-pressed={selectedItemKey === item.key}
+                    className={AEVATAR_PRESSABLE_CARD_CLASS}
                     key={item.key}
                     onClick={() => onSelectItem?.(item)}
                     style={timelineSelectButtonStyle}

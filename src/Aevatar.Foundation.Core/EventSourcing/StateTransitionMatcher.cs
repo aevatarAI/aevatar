@@ -1,5 +1,6 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Core.Compatibility;
 
 namespace Aevatar.Foundation.Core.EventSourcing;
 
@@ -27,9 +28,9 @@ public static class StateTransitionMatcher
             return true;
         }
 
-        if (evt is Any any && any.TryUnpack<TEvent>(out var unpacked))
+        if (evt is Any any && ProtobufContractCompatibility.TryUnpack<TEvent>(any, out var unpacked))
         {
-            extracted = unpacked;
+            extracted = unpacked!;
             return true;
         }
 

@@ -38,7 +38,8 @@ public static class WorkflowCapabilityEndpoints
         HttpContext http,
         ChatInput input,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var writer = new ChatSseResponseWriter(http.Response);
@@ -48,7 +49,7 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var capabilities = TryResolveCapabilities(serviceProvider, logger);
+            var capabilities = await TryResolveCapabilitiesAsync(serviceProvider, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
@@ -73,6 +74,8 @@ public static class WorkflowCapabilityEndpoints
                 onAcceptedAsync: async (receipt, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.CorrelationId);
+                    if (onAcceptedHook != null)
+                        await onAcceptedHook(receipt, token);
                     await writer.StartAsync(token);
                     await writer.WriteAsync(BuildRunContextFrame(receipt), token);
                     scope.RecordFirstResponse();
@@ -193,21 +196,28 @@ public static class WorkflowCapabilityEndpoints
                     commandId,
                     input.Approved,
                     input.UserInput,
-                    NormalizeMetadata(input.Metadata)),
+                    NormalizeMetadata(input.Metadata),
+                    input.EditedContent,
+                    input.Feedback),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Resume dispatch only proves inbox admission for the workflow actor, not applied continuation state.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 stepId,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -259,15 +269,20 @@ public static class WorkflowCapabilityEndpoints
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Signal dispatch only proves inbox admission for the workflow actor, not applied signal handling.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 signalName,
                 stepId,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -315,14 +330,19 @@ public static class WorkflowCapabilityEndpoints
                 return MapRunControlDispatchFailure(dispatch.Error, scope);
             }
 
-            return Results.Ok(new
+            // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+            //   Stop dispatch only proves inbox admission for the workflow actor, not terminal run state.
+            //   The actor read model remains the status resource for observing the run after acceptance.
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
             {
                 accepted = true,
                 actorId = dispatch.Receipt.ActorId,
                 runId = dispatch.Receipt.RunId,
                 reason,
-                commandId = dispatch.Receipt.CommandId,
+                acceptedCommandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
             });
         }
         catch (OperationCanceledException)
@@ -335,6 +355,9 @@ public static class WorkflowCapabilityEndpoints
             throw;
         }
     }
+
+    private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
+        $"/api/actors/{Uri.EscapeDataString(receipt.ActorId)}";
 
     private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
@@ -516,7 +539,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            var capabilities = TryResolveCapabilities(http.RequestServices, logger);
+            var capabilities = await TryResolveCapabilitiesAsync(http.RequestServices, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
@@ -554,7 +577,10 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static WorkflowCapabilitiesDocument? TryResolveCapabilities(IServiceProvider? serviceProvider, ILogger? logger)
+    private static async Task<WorkflowCapabilitiesDocument?> TryResolveCapabilitiesAsync(
+        IServiceProvider? serviceProvider,
+        ILogger? logger,
+        CancellationToken ct)
     {
         if (serviceProvider == null)
             return null;
@@ -563,7 +589,9 @@ public static class WorkflowCapabilityEndpoints
         {
             var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
                                as IWorkflowExecutionQueryApplicationService;
-            return queryService?.GetCapabilities();
+            return queryService == null
+                ? null
+                : await queryService.GetCapabilitiesAsync(ct);
         }
         catch (Exception ex)
         {

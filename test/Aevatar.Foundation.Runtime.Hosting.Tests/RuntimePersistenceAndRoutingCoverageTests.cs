@@ -3,10 +3,13 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -80,6 +83,50 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         (await child.GetParentIdAsync()).Should().BeNull();
     }
 
+    [Fact]
+    public async Task LocalActorRuntime_ShouldEmitTopologyAndDeactivateActivities()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
+        var services = new ServiceCollection().BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
+
+        var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-observed");
+        var child = await runtime.CreateAsync<CoverageTestAgent>("child-observed");
+        await runtime.LinkAsync(parent.Id, child.Id);
+        await runtime.UnlinkAsync(child.Id);
+        await runtime.DestroyAsync(child.Id);
+
+        var link = stopped.ShouldContainActivity(
+            AevatarActivitySource.AgentLinkActivityName,
+            AevatarActivitySource.AgentIdTag,
+            "child-observed");
+        link.GetTagItem(AevatarActivitySource.AgentParentTag).Should().Be("parent-observed");
+
+        var unlink = stopped.ShouldContainActivity(
+            AevatarActivitySource.AgentUnlinkActivityName,
+            AevatarActivitySource.AgentIdTag,
+            "child-observed");
+        unlink.GetTagItem(AevatarActivitySource.AgentParentTag).Should().Be("parent-observed");
+
+        var deactivate = stopped.ShouldContainActivity(
+            AevatarActivitySource.AgentDeactivateActivityName,
+            AevatarActivitySource.AgentIdTag,
+            "child-observed");
+        deactivate.GetTagItem(AevatarActivitySource.AgentTypeTag)
+            .Should().Be(typeof(CoverageTestAgent).AssemblyQualifiedName);
+    }
+
     private sealed class TestState
     {
         public int Count { get; init; }
@@ -100,5 +147,26 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+}
+
+file static class ActivityAssertions
+{
+    public static Activity ShouldContainActivity(
+        this ConcurrentQueue<Activity> activities,
+        string displayName,
+        string tagName,
+        string tagValue)
+    {
+        return activities
+            .Where(activity =>
+                activity.DisplayName == displayName &&
+                string.Equals(
+                    activity.GetTagItem(tagName) as string,
+                    tagValue,
+                    StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which;
     }
 }

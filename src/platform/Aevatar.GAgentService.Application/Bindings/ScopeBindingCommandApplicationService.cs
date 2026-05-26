@@ -25,7 +25,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingCommandApplicationService(
@@ -35,7 +35,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeScriptQueryPort scopeScriptQueryPort,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        IWorkflowRunActorPort workflowRunActorPort,
+        IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
@@ -44,11 +44,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
 
+    // Refactor (iter2/cluster-006):
+    //   Old pattern: Upsert dispatched lifecycle commands then polled service catalog and serving readmodels before ACK.
+    //   New principle: Upsert returns accepted lifecycle ids; readmodel freshness is observed through explicit read paths.
     public async Task<ScopeBindingUpsertResult> UpsertAsync(
         ScopeBindingUpsertRequest request,
         CancellationToken ct = default)
@@ -117,6 +120,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
+        // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
+        // observation path in a separate PR rather than blocking this command path on readmodels.
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
 
@@ -125,9 +130,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
-            return true;
-
         var requestedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.RevisionId);
         if (string.IsNullOrWhiteSpace(requestedRevisionId))
             return true;
@@ -141,7 +143,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (existingRevision == null)
             return true;
 
-        if (!string.Equals(existingRevision.ImplementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' with implementation '{existingRevision.ImplementationKind}'.");
@@ -153,14 +155,48 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
         }
 
-        var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Scripting)
+        {
+            var expectedScriptingArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+            if (!string.Equals(existingRevision.ArtifactHash, expectedScriptingArtifactHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+            }
+
+            return false;
+        }
+
+        if (!request.AllowExistingRevisionReplay ||
+            !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
+            return false;
+
+        var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different {request.ImplementationKind} artifact.");
         }
 
         return false;
+    }
+
+    private static string ComputeNonScriptingArtifactHash(ServiceRevisionSpec revisionSpec)
+    {
+        var artifact = revisionSpec.ImplementationSpecCase switch
+        {
+            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec => BuildWorkflowArtifact(revisionSpec),
+            ServiceRevisionSpec.ImplementationSpecOneofCase.StaticSpec => BuildStaticArtifact(revisionSpec),
+            _ => throw new InvalidOperationException(
+                $"Unsupported replay implementation spec '{revisionSpec.ImplementationSpecCase}'."),
+        };
+        return ComputeArtifactHash(artifact);
     }
 
     private async Task<string> ComputeScriptingArtifactHashAsync(
@@ -199,6 +235,66 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         artifact.Endpoints.Add(
             BuildScriptEndpointSpecs(snapshot)
                 .Select(ToEndpointDescriptor));
+        return ComputeArtifactHash(artifact);
+    }
+
+    private static PreparedServiceRevisionArtifact BuildWorkflowArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var workflowSpec = revisionSpec.WorkflowSpec
+            ?? throw new InvalidOperationException("workflow implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
+                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
+                    Description = "Workflow chat endpoint.",
+                },
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = workflowSpec.WorkflowName,
+                    WorkflowYaml = workflowSpec.WorkflowYaml,
+                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
+                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
+                },
+            },
+        };
+    }
+
+    private static PreparedServiceRevisionArtifact BuildStaticArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var staticSpec = revisionSpec.StaticSpec
+            ?? throw new InvalidOperationException("static implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Static,
+            Endpoints = { staticSpec.Endpoints.Select(x => x.Clone()) },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                StaticPlan = new StaticServiceDeploymentPlan
+                {
+                    ActorTypeName = staticSpec.ActorTypeName,
+                    PreferredActorId = staticSpec.PreferredActorId ?? string.Empty,
+                },
+            },
+        };
+    }
+
+    private static string ComputeArtifactHash(PreparedServiceRevisionArtifact artifact)
+    {
         var normalizedArtifact = artifact.Clone();
         normalizedArtifact.ArtifactHash = string.Empty;
         return Convert.ToHexString(SHA256.HashData(normalizedArtifact.ToByteArray()));
@@ -273,7 +369,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
                         workflowBundle.EntryWorkflowName,
-                        definitionActorIdPrefix)));
+                        definitionActorIdPrefix),
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private async Task<DesiredScopeBinding> BuildScriptBindingAsync(
@@ -338,7 +435,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     Script: new ScopeBindingScriptResult(
                         scriptSummary.ScriptId,
                         scriptSummary.ActiveRevision,
-                        scriptSummary.DefinitionActorId)));
+                        scriptSummary.DefinitionActorId)
+                    {
+                        EndpointIds = endpointSpecs.Select(endpoint => endpoint.EndpointId).ToArray(),
+                    },
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private DesiredScopeBinding BuildGAgentBinding(
@@ -391,7 +492,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ScopeBindingImplementationKind.GAgent,
                     $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName)));
+                        actorTypeName),
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private async Task<WorkflowYamlBundle> ParseWorkflowBundleAsync(
@@ -413,7 +515,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             if (string.IsNullOrWhiteSpace(workflowYaml))
                 throw new InvalidOperationException("workflowYamls must not contain empty YAML entries.");
 
-            var parse = await _workflowRunActorPort.ParseWorkflowYamlAsync(workflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

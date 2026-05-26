@@ -8,35 +8,33 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCommandPort
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly ICommandDispatchService<UpsertScriptDefinitionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly IScriptBehaviorCompiler _compiler;
 
     public RuntimeScriptDefinitionCommandService(
         ICommandDispatchService<UpsertScriptDefinitionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
         IScriptingActorAddressResolver addressResolver,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort,
         IScriptBehaviorCompiler compiler)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
     }
 
     public async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         CancellationToken ct) =>
         await UpsertDefinitionWithSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash,
+            scriptPackage,
             definitionActorId,
             scopeId: null,
             ct);
@@ -44,8 +42,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
     public async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash,
+        ScriptPackageSpec scriptPackage,
         string? definitionActorId,
         string? scopeId,
         CancellationToken ct)
@@ -56,44 +53,38 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
         var snapshot = await BuildDefinitionSnapshotAsync(
             scriptId,
             scriptRevision,
-            sourceText,
-            sourceHash);
-        await _authorityReadModelActivationPort.ActivateAsync(actorId, ct);
+            scriptPackage);
 
         var result = await _dispatchService.DispatchAsync(
             new UpsertScriptDefinitionCommand(
                 scriptId,
                 scriptRevision,
-                sourceText,
-                sourceHash,
+                snapshot.SourceHash,
                 actorId,
-                scopeId),
+                scopeId,
+                snapshot.ScriptPackage?.Clone() ?? new ScriptPackageSpec()),
             ct);
         if (!result.Succeeded || result.Receipt == null)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script definition dispatch failed.");
 
-        snapshot.DefinitionActorId = result.Receipt.ActorId;
+        var receipt = result.Receipt;
+        snapshot.DefinitionActorId = receipt.ActorId;
         snapshot.ScopeId = scopeId?.Trim() ?? string.Empty;
-        return new ScriptDefinitionUpsertResult(result.Receipt.ActorId, snapshot);
+        return new ScriptDefinitionUpsertResult(receipt.ActorId, snapshot, receipt);
     }
 
     private async Task<ScriptDefinitionSnapshot> BuildDefinitionSnapshotAsync(
         string scriptId,
         string scriptRevision,
-        string sourceText,
-        string sourceHash)
+        ScriptPackageSpec scriptPackage)
     {
-        var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(sourceText ?? string.Empty);
-        var scriptPackage = ScriptPackageModel.ToPackageSpec(parsedPackage);
-        var entrySourceText = ScriptPackageModel.GetEntrySourceText(scriptPackage);
-        var packageHash = string.IsNullOrWhiteSpace(sourceHash)
-            ? ScriptPackageModel.ComputePackageHash(scriptPackage)
-            : sourceHash;
+        var normalizedPackage = ScriptPackageModel.ToPackageSpec(ScriptPackageModel.ToSourcePackage(scriptPackage));
+        var packageHash = ScriptPackageModel.ComputePackageHash(normalizedPackage);
         var compilation = _compiler.Compile(
             new ScriptBehaviorCompilationRequest(
                 scriptId ?? string.Empty,
                 scriptRevision ?? string.Empty,
-                scriptPackage,
+                normalizedPackage,
                 packageHash));
         try
         {
@@ -116,9 +107,8 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
             return new ScriptDefinitionSnapshot(
                 scriptId ?? string.Empty,
                 scriptRevision ?? string.Empty,
-                entrySourceText,
                 packageHash,
-                scriptPackage,
+                normalizedPackage,
                 compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,
                 compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
                 readModelSchemaVersion,

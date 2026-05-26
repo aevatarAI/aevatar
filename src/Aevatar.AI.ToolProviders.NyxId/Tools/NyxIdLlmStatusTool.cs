@@ -3,7 +3,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-/// <summary>Tool to check available LLM providers and models via NyxID gateway.</summary>
+/// <summary>Tool to check NyxID-confirmed LLM-capable services and models.</summary>
 public sealed class NyxIdLlmStatusTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
@@ -13,16 +13,16 @@ public sealed class NyxIdLlmStatusTool : IAgentTool
     public string Name => "nyxid_llm_status";
 
     public string Description =>
-        "Check available LLM providers and models through the NyxID LLM gateway.";
+        "Check NyxID-confirmed LLM-capable services, routes, and models.";
 
     public string ParametersSchema => """{"type":"object","properties":{}}""";
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        return await _client.GetLlmStatusAsync(token, ct);
+        return await _client.GetLlmServicesAsync(token, ct);
     }
 }

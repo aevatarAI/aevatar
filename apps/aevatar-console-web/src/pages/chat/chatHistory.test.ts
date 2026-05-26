@@ -84,6 +84,7 @@ describe("chatHistory", () => {
         error: undefined,
         events: undefined,
         id: "assistant-1",
+        pendingRunIntervention: undefined,
         role: "assistant",
         status: "complete",
         steps: undefined,
@@ -124,4 +125,3 @@ describe("chatHistory", () => {
     expect(loadConversation("scope-a", conversationId)).toEqual([]);
   });
 });
-

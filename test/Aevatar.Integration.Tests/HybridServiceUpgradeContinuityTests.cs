@@ -7,6 +7,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
@@ -119,8 +120,7 @@ public sealed class HybridServiceUpgradeContinuityTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "text-normalization-protocol-script",
             "rev-1",
-            TextNormalizationProtocolSampleActors.Source,
-            TextNormalizationProtocolSampleActors.SourceHash,
+            ScriptPackageSpecExtensions.CreateSingleSource(TextNormalizationProtocolSampleActors.Source),
             definitionActorId,
             ct);
         await provisioningPort.EnsureRuntimeAsync(
@@ -128,6 +128,12 @@ public sealed class HybridServiceUpgradeContinuityTests
             "rev-1",
             runtimeActorId,
             definition.Snapshot,
+            ct);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            "rev-1",
             ct);
     }
 
@@ -244,12 +250,36 @@ public sealed class HybridServiceUpgradeContinuityTests
 
             return actor.Agent switch
             {
-                TextNormalizationWorkflowProtocolGAgent workflow => workflow.State.Clone(),
-                TextNormalizationScriptingProtocolGAgent scripting => scripting.State.Clone(),
+                TextNormalizationWorkflowProtocolGAgent workflow => await WaitForProtocolStateAsync(workflow, commandId, ct),
+                TextNormalizationScriptingProtocolGAgent scripting => await WaitForProtocolStateAsync(scripting, commandId, ct),
                 _ => throw new InvalidOperationException(
                     $"Hybrid normalization actor `{actorId}` does not expose a supported protocol state."),
             };
         }
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            TextNormalizationWorkflowProtocolGAgent actor,
+            string commandId,
+            CancellationToken ct) =>
+            WaitForProtocolStateAsync(() => actor.State.Clone(), actor.Id, commandId, ct);
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            TextNormalizationScriptingProtocolGAgent actor,
+            string commandId,
+            CancellationToken ct) =>
+            WaitForProtocolStateAsync(() => actor.State.Clone(), actor.Id, commandId, ct);
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            Func<TextNormalizationReadModel> snapshot,
+            string actorId,
+            string commandId,
+            CancellationToken ct) =>
+            ScriptEvolutionIntegrationTestKit.WaitForAsync(
+                _ => Task.FromResult(snapshot()),
+                current => string.Equals(current.LastCommandId, commandId, StringComparison.Ordinal) &&
+                           !string.IsNullOrWhiteSpace(current.NormalizedText),
+                $"Hybrid normalization state not ready. actor_id={actorId}",
+                ct);
 
         private static void EnsureConfigured(HybridServiceSnapshot state)
         {

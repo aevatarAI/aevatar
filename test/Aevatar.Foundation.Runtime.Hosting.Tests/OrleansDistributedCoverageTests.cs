@@ -531,7 +531,7 @@ public sealed class OrleansDistributedCoverageTests
         stateProxy.State.Children.Should().BeEmpty();
         stateProxy.State.AgentStateTypeName.Should().BeNull();
         stateProxy.State.AgentStateSnapshot.Should().BeNull();
-        stateProxy.WriteCount.Should().BeGreaterThan(0);
+        stateProxy.ClearCount.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -615,10 +615,17 @@ public sealed class OrleansDistributedCoverageTests
     private sealed class RuntimeActorGrainStub : IRuntimeActorGrain
     {
         public string AgentTypeName { get; set; } = string.Empty;
+        public string AgentKind { get; set; } = string.Empty;
 
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             AgentTypeName = agentTypeName;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            AgentKind = kind;
             return Task.FromResult(true);
         }
 
@@ -657,6 +664,8 @@ public sealed class OrleansDistributedCoverageTests
         public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(AgentTypeName);
+
+        public Task<string> GetAgentKindAsync() => Task.FromResult(AgentKind);
 
         public Task DeactivateAsync() => Task.CompletedTask;
 
@@ -768,6 +777,8 @@ public sealed class OrleansDistributedCoverageTests
 
         public int WriteCount { get; private set; }
 
+        public int ClearCount { get; private set; }
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             var name = targetMethod?.Name;
@@ -783,7 +794,12 @@ public sealed class OrleansDistributedCoverageTests
                 WriteCount++;
                 return Task.CompletedTask;
             }
-            if (name == "ReadStateAsync" || name == "ClearStateAsync")
+            if (name == "ClearStateAsync")
+            {
+                ClearCount++;
+                return Task.CompletedTask;
+            }
+            if (name == "ReadStateAsync")
                 return Task.CompletedTask;
             if (name == "get_RecordExists")
                 return true;

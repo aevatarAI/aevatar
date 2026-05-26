@@ -1,7 +1,5 @@
-import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, Select, Space, Typography } from 'antd';
+import { Button, Input, Select, Space } from 'antd';
 import React, { useEffect, useMemo } from 'react';
-import { moduleCardProps } from '@/shared/ui/proComponents';
 import {
   applyGovernanceServiceSelection,
   findGovernanceServiceOption,
@@ -34,11 +32,31 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   includeRevision = false,
   revisionOptions = [],
   revisionOptionsLoading = false,
-  loadLabel = 'Load governance',
+  loadLabel = '加载治理信息',
   onChange,
   onLoad,
   onReset,
 }) => {
+  const normalizedTenantId = draft.tenantId.trim();
+  const normalizedAppId = draft.appId.trim();
+  const normalizedNamespace = draft.namespace.trim();
+  const normalizedServiceId = draft.serviceId.trim();
+  const normalizedRevisionId = draft.revisionId.trim();
+  const selectedScopeSegments = useMemo(
+    () =>
+      [
+        normalizedTenantId,
+        normalizedAppId,
+        normalizedNamespace,
+        normalizedServiceId,
+      ].filter(Boolean),
+    [
+      normalizedAppId,
+      normalizedNamespace,
+      normalizedServiceId,
+      normalizedTenantId,
+    ],
+  );
   const selectedServiceOption = useMemo(
     () => findGovernanceServiceOption(serviceOptions, draft),
     [draft, serviceOptions],
@@ -67,123 +85,325 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
     onChange(nextDraft);
   }, [draft, onChange, selectedServiceOption]);
 
+  const loadDisabledReason = useMemo(() => {
+    if (!normalizedTenantId || !normalizedNamespace) {
+      return '先填写治理范围';
+    }
+
+    if (!serviceSearchEnabled) {
+      return '当前范围还不能加载服务';
+    }
+
+    if (!normalizedServiceId) {
+      return serviceOptions.length === 0 ? '当前范围没有可用服务' : '先选择服务';
+    }
+
+    if (includeRevision && !normalizedRevisionId) {
+      return revisionOptionsLoading ? '正在加载版本' : '先选择版本';
+    }
+
+    return '';
+  }, [
+    includeRevision,
+    normalizedNamespace,
+    normalizedRevisionId,
+    normalizedServiceId,
+    normalizedTenantId,
+    revisionOptionsLoading,
+    serviceOptions.length,
+    serviceSearchEnabled,
+  ]);
+
+  const loadDisabled = loadDisabledReason.length > 0;
+
   return (
-    <ProCard {...moduleCardProps}>
-      <Space wrap>
-        <Input
-          placeholder="tenantId (scopeId)"
-          style={{ width: 200 }}
-          value={draft.tenantId}
-          onChange={(event) =>
-            onChange({
-              ...draft,
-              tenantId: event.target.value,
-            })
-          }
-        />
-        <Input
-          placeholder="namespace"
-          style={{ width: 180 }}
-          value={draft.namespace}
-          onChange={(event) =>
-            onChange({
-              ...draft,
-              namespace: event.target.value,
-            })
-          }
-        />
-        <Select
-          allowClear
-          placeholder={
-            serviceSearchEnabled
-              ? 'Search service'
-              : 'Enter tenantId and namespace first'
-          }
-          showSearch
-          style={{ minWidth: 260 }}
-          options={serviceOptions}
-          disabled={!serviceSearchEnabled}
-          value={selectedServiceOption?.value}
-          filterOption={(input, option) => {
-            const normalizedInput = input.trim().toLowerCase();
-            if (!normalizedInput) {
-              return true;
-            }
-
-            const candidate = [
-              option?.label,
-              option?.serviceId,
-              option?.tenantId,
-              option?.namespace,
-            ]
-              .map((value) => String(value ?? '').toLowerCase())
-              .join(' ');
-
-            return candidate.includes(normalizedInput);
+    <div
+      style={{
+        background:
+          'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.92) 100%)',
+        border: '1px solid var(--ant-color-border-secondary)',
+        borderRadius: 16,
+        boxShadow: '0 12px 28px rgba(15, 23, 42, 0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        padding: 18,
+      }}
+    >
+      <div
+        style={{
+          alignItems: 'flex-start',
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: 'minmax(0, 1fr) auto',
+        }}
+      >
+        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+          <span
+            style={{
+              color: 'var(--ant-color-primary)',
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+            >
+            治理范围
+          </span>
+          <span
+            style={{
+              color: 'var(--ant-color-text)',
+              fontSize: 20,
+              fontWeight: 700,
+              lineHeight: 1.2,
+            }}
+          >
+            选择服务范围
+          </span>
+        </Space>
+        <div
+          style={{
+            alignItems: 'center',
+            background: 'rgba(24, 144, 255, 0.06)',
+            border: '1px solid rgba(24, 144, 255, 0.12)',
+            borderRadius: 999,
+            color: 'var(--ant-color-primary)',
+            display: 'inline-flex',
+            fontSize: 12,
+            fontWeight: 600,
+            minHeight: 30,
+            padding: '0 12px',
+            whiteSpace: 'nowrap',
           }}
-          onChange={(_, option) => {
-            const selectedOption = Array.isArray(option) ? option[0] : option;
-            const nextDraft = selectedOption
-              ? applyGovernanceServiceSelection(draft, selectedOption)
-              : { ...draft, appId: '', serviceId: '', revisionId: '' };
-            const selectionChanged =
-              nextDraft.tenantId !== draft.tenantId ||
-              nextDraft.appId !== draft.appId ||
-              nextDraft.namespace !== draft.namespace ||
-              nextDraft.serviceId !== draft.serviceId;
+        >
+          {selectedScopeSegments.length > 0
+            ? `当前范围 ${selectedScopeSegments.join(' / ')}`
+            : '尚未锁定服务范围'}
+        </div>
+      </div>
 
-            onChange(
-              includeRevision && selectionChanged
-                ? { ...nextDraft, revisionId: '' }
-                : nextDraft,
-            );
-          }}
-        />
-        {includeRevision ? (
-          <Select
-            allowClear
-            placeholder={
-              !draft.serviceId.trim()
-                ? 'Select service first'
-                : revisionOptionsLoading
-                  ? 'Loading revisions'
-                  : revisionOptions.length > 0
-                    ? 'Select revision'
-                    : 'No revisions found'
-            }
-            showSearch
-            style={{ minWidth: 240 }}
-            options={revisionOptions}
-            loading={revisionOptionsLoading}
-            disabled={
-              !draft.serviceId.trim() ||
-              revisionOptionsLoading ||
-              revisionOptions.length === 0
-            }
-            value={draft.revisionId}
-            optionFilterProp="label"
-            onChange={(value) =>
+      <div
+        style={{
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span
+            style={{
+              color: 'var(--ant-color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            团队
+          </span>
+          <Input
+            placeholder="团队 ID"
+            value={draft.tenantId}
+            onChange={(event) =>
               onChange({
                 ...draft,
-                revisionId: String(value ?? ''),
+                tenantId: event.target.value,
               })
             }
           />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span
+            style={{
+              color: 'var(--ant-color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            应用
+          </span>
+          <Input
+            placeholder="应用 ID"
+            value={draft.appId}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                appId: event.target.value,
+              })
+            }
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span
+            style={{
+              color: 'var(--ant-color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            命名空间
+          </span>
+          <Input
+            placeholder="命名空间"
+            value={draft.namespace}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                namespace: event.target.value,
+              })
+            }
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span
+            style={{
+              color: 'var(--ant-color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            服务
+          </span>
+          <Select
+            allowClear
+            placeholder={
+              serviceSearchEnabled
+                ? '选择服务'
+                : '先填写团队、应用和命名空间'
+            }
+            showSearch
+            style={{ width: '100%' }}
+            options={serviceOptions}
+            disabled={!serviceSearchEnabled}
+            notFoundContent={
+              serviceSearchEnabled ? '当前范围没有服务' : '先填写团队、应用和命名空间'
+            }
+            value={selectedServiceOption?.value}
+            filterOption={(input, option) => {
+              const normalizedInput = input.trim().toLowerCase();
+              if (!normalizedInput) {
+                return true;
+              }
+
+              const candidate = [
+                option?.label,
+                option?.serviceId,
+                option?.tenantId,
+                option?.appId,
+                option?.namespace,
+              ]
+                .map((value) => String(value ?? '').toLowerCase())
+                .join(' ');
+
+              return candidate.includes(normalizedInput);
+            }}
+            onChange={(_, option) => {
+              const selectedOption = Array.isArray(option) ? option[0] : option;
+              const nextDraft = selectedOption
+                ? applyGovernanceServiceSelection(draft, selectedOption)
+                : { ...draft, appId: '', serviceId: '', revisionId: '' };
+              const selectionChanged =
+                nextDraft.tenantId !== draft.tenantId ||
+                nextDraft.appId !== draft.appId ||
+                nextDraft.namespace !== draft.namespace ||
+                nextDraft.serviceId !== draft.serviceId;
+
+              onChange(
+                includeRevision && selectionChanged
+                  ? { ...nextDraft, revisionId: '' }
+                  : nextDraft,
+              );
+            }}
+          />
+        </div>
+
+        {includeRevision ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span
+              style={{
+                color: 'var(--ant-color-text-secondary)',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              版本
+            </span>
+            <Select
+              allowClear
+              placeholder={
+                !draft.serviceId.trim()
+                  ? '先选择服务'
+                  : revisionOptionsLoading
+                    ? '正在加载版本'
+                    : revisionOptions.length > 0
+                      ? '选择版本'
+                      : '暂无版本'
+              }
+              showSearch
+              style={{ width: '100%' }}
+              options={revisionOptions}
+              loading={revisionOptionsLoading}
+              disabled={
+                !draft.serviceId.trim() ||
+                revisionOptionsLoading ||
+                revisionOptions.length === 0
+              }
+              value={draft.revisionId}
+              optionFilterProp="label"
+              onChange={(value) =>
+                onChange({
+                  ...draft,
+                  revisionId: String(value ?? ''),
+                })
+              }
+            />
+          </div>
         ) : null}
-        <Button type="primary" onClick={onLoad}>
-          {loadLabel}
-        </Button>
-        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
-      </Space>
-      <Typography.Text
-        type="secondary"
-        style={{ display: 'block', marginTop: 12 }}
+      </div>
+
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
+          justifyContent: 'space-between',
+        }}
       >
-        {serviceSearchEnabled
-          ? 'Select a service to hydrate the identity fields for this Governance view.'
-          : 'This Governance view needs tenantId and namespace first. Most user flows should stay on Project pages or open this page from Services.'}
-      </Typography.Text>
-    </ProCard>
+        <span
+          style={{
+            color: 'var(--ant-color-text-secondary)',
+            fontSize: 12,
+            minHeight: 18,
+          }}
+        >
+          {loadDisabledReason}
+        </span>
+        <Space size={10}>
+          {onReset ? <Button onClick={onReset}>重置</Button> : null}
+          <Button
+            aria-disabled={loadDisabled}
+            disabled={loadDisabled}
+            style={
+              loadDisabled
+                ? {
+                    background: 'var(--ant-color-fill-tertiary)',
+                    borderColor: 'var(--ant-color-border-secondary)',
+                    boxShadow: 'none',
+                    color: 'var(--ant-color-text-tertiary)',
+                    cursor: 'not-allowed',
+                  }
+                : undefined
+            }
+            type={loadDisabled ? 'default' : 'primary'}
+            onClick={onLoad}
+          >
+            {loadLabel}
+          </Button>
+        </Space>
+      </div>
+    </div>
   );
 };
 

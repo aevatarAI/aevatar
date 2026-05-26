@@ -13,5 +13,6 @@ public interface IEventSourcingBehaviorFactory<TState>
     /// </summary>
     IEventSourcingBehavior<TState> Create(
         string agentId,
+        Type actorType,
         Func<TState, IMessage, TState> transitionState);
 }

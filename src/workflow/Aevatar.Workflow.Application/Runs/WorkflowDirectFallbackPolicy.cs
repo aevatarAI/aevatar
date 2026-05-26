@@ -88,5 +88,6 @@ public sealed class WorkflowDirectFallbackPolicy
             WorkflowName = WorkflowRunBehaviorOptions.DirectWorkflowName,
             ActorId = null,
             WorkflowYamls = null,
+            Source = WorkflowChatSource.CatalogWorkflow(WorkflowRunBehaviorOptions.DirectWorkflowName),
         };
 }

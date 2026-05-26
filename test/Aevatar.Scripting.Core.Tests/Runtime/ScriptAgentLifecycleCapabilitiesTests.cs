@@ -1,60 +1,22 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using SystemType = System.Type;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public sealed class ScriptAgentLifecycleCapabilitiesTests
 {
-    [Fact]
-    public async Task CreateDestroyLinkAndUnlink_ShouldDelegateToRuntime()
-    {
-        var runtime = new RecordingRuntime();
-        var capabilities = CreateCapabilities(runtime: runtime);
-
-        var actorId = await capabilities.CreateAgentAsync(
-            typeof(FakeTestAgent).AssemblyQualifiedName!,
-            "agent-x",
-            CancellationToken.None);
-        await capabilities.LinkAgentsAsync("parent-1", "child-1", CancellationToken.None);
-        await capabilities.UnlinkAgentAsync("child-1", CancellationToken.None);
-        await capabilities.DestroyAgentAsync("child-1", CancellationToken.None);
-
-        actorId.Should().Be("agent-x");
-        runtime.CreatedType.Should().Be(typeof(FakeTestAgent));
-        runtime.CreatedActorId.Should().Be("agent-x");
-        runtime.LinkedParentId.Should().Be("parent-1");
-        runtime.LinkedChildId.Should().Be("child-1");
-        runtime.UnlinkedChildId.Should().Be("child-1");
-        runtime.DestroyedActorId.Should().Be("child-1");
-    }
-
-    [Fact]
-    public async Task CreateAgentAsync_ShouldPrimeAuthorityProjection_ForDefinitionActors()
-    {
-        var runtime = new RecordingRuntime();
-        var activationPort = new RecordingAuthorityReadModelActivationPort();
-        var capabilities = CreateCapabilities(runtime: runtime, authorityReadModelActivationPort: activationPort);
-
-        var actorId = await capabilities.CreateAgentAsync(
-            typeof(ScriptDefinitionGAgent).AssemblyQualifiedName!,
-            "definition-actor-1",
-            CancellationToken.None);
-
-        actorId.Should().Be("definition-actor-1");
-        activationPort.ActivatedActorIds.Should().ContainSingle(x => x == "definition-actor-1");
-    }
-
     [Fact]
     public async Task MessagingAndCallbackApis_ShouldDelegateToInjectedHandlers()
     {
@@ -196,48 +158,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
-    public async Task CreateAgentAsync_ShouldPrimeAuthorityProjection_ForCatalogActors()
-    {
-        var runtime = new RecordingRuntime();
-        var activationPort = new RecordingAuthorityReadModelActivationPort();
-        var capabilities = CreateCapabilities(runtime: runtime, authorityReadModelActivationPort: activationPort);
-
-        var actorId = await capabilities.CreateAgentAsync(
-            typeof(ScriptCatalogGAgent).AssemblyQualifiedName!,
-            "catalog-actor-1",
-            CancellationToken.None);
-
-        actorId.Should().Be("catalog-actor-1");
-        activationPort.ActivatedActorIds.Should().ContainSingle(x => x == "catalog-actor-1");
-    }
-
-    [Fact]
-    public async Task CreateAgentAsync_ShouldNotPrimeAuthorityProjection_ForRegularActors()
-    {
-        var runtime = new RecordingRuntime();
-        var activationPort = new RecordingAuthorityReadModelActivationPort();
-        var capabilities = CreateCapabilities(runtime: runtime, authorityReadModelActivationPort: activationPort);
-
-        var actorId = await capabilities.CreateAgentAsync(
-            typeof(FakeTestAgent).AssemblyQualifiedName!,
-            "agent-plain-1",
-            CancellationToken.None);
-
-        actorId.Should().Be("agent-plain-1");
-        activationPort.ActivatedActorIds.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task CreateAgentAsync_ShouldThrow_WhenAgentTypeCannotBeResolved()
-    {
-        var capabilities = CreateCapabilities();
-
-        var act = () => capabilities.CreateAgentAsync("Not.A.Real.Type", "agent-x", CancellationToken.None);
-
-        await act.Should().ThrowAsync<TypeLoadException>();
-    }
-
-    [Fact]
     public async Task ProposeScriptEvolutionAsync_ShouldRememberAcceptedSnapshot_ForLaterProvisioning()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
@@ -256,8 +176,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             {
                 ScriptId = "script-1",
                 Revision = "rev-2",
-                SourceText = ScriptSources.UppercaseBehavior,
                 SourceHash = ScriptSources.UppercaseBehaviorHash,
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
                 StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
                 ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             }));
@@ -329,6 +249,63 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
+    public async Task TransientDefinitionSnapshotCache_ShouldStayScopedToSingleCapabilityInstance()
+    {
+        var sharedDefinitionSnapshotPort = new CountingDefinitionSnapshotPort();
+        var firstProvisioningPort = new RecordingRuntimeProvisioningPort();
+        var secondProvisioningPort = new RecordingRuntimeProvisioningPort();
+        var cachedSnapshot = new ScriptDefinitionSnapshot(
+            "script-1",
+            "rev-2",
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            ScriptSources.UppercaseStateTypeUrl,
+            ScriptSources.UppercaseReadModelTypeUrl,
+            "1",
+            "schema-hash");
+
+        var firstCapabilities = CreateCapabilities(
+            definitionSnapshotPort: sharedDefinitionSnapshotPort,
+            definitionCommandPort: new StaticDefinitionCommandPort(
+                new ScriptDefinitionUpsertResult(
+                    "definition-1",
+                    cachedSnapshot,
+                    new ScriptingCommandAcceptedReceipt("definition-1", "command-1", "corr-1"))),
+            runtimeProvisioningPort: firstProvisioningPort);
+
+        await firstCapabilities.UpsertScriptDefinitionAsync(
+            "script-1",
+            "rev-2",
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            "definition-1",
+            CancellationToken.None);
+        await firstCapabilities.SpawnScriptRuntimeAsync(
+            "definition-1",
+            "rev-2",
+            "runtime-1",
+            CancellationToken.None);
+
+        sharedDefinitionSnapshotPort.RequestCount.Should().Be(0);
+        firstProvisioningPort.EnsureCalls.Should().ContainSingle();
+        firstProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
+
+        var secondCapabilities = CreateCapabilities(
+            definitionSnapshotPort: sharedDefinitionSnapshotPort,
+            runtimeProvisioningPort: secondProvisioningPort);
+
+        await secondCapabilities.SpawnScriptRuntimeAsync(
+            "definition-1",
+            "rev-2",
+            "runtime-2",
+            CancellationToken.None);
+
+        sharedDefinitionSnapshotPort.RequestCount.Should().Be(1);
+        secondProvisioningPort.EnsureCalls.Should().ContainSingle();
+        secondProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
+    }
+
+    [Fact]
     public async Task UpsertScriptDefinitionAsync_ShouldRememberSnapshot_UsingLatestKey_WhenRevisionIsBlank()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
@@ -343,7 +320,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                     ScriptSources.UppercaseStateTypeUrl,
                     ScriptSources.UppercaseReadModelTypeUrl,
                     "1",
-                    "schema-hash")));
+                    "schema-hash"),
+                new ScriptingCommandAcceptedReceipt("definition-1", "definition-command-1", "definition-correlation-1")));
         var capabilities = CreateCapabilities(
             definitionCommandPort: definitionPort,
             runtimeProvisioningPort: provisioningPort);
@@ -381,7 +359,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                     ScriptSources.UppercaseStateTypeUrl,
                     ScriptSources.UppercaseReadModelTypeUrl,
                     "1",
-                    "schema-hash")));
+                    "schema-hash"),
+                new ScriptingCommandAcceptedReceipt("definition-1", "definition-command-1", "definition-correlation-1")));
         var capabilities = CreateCapabilities(
             definitionCommandPort: definitionPort,
             runtimeProvisioningPort: provisioningPort);
@@ -481,20 +460,18 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     {
         var cases = new (string Name, Func<ScriptBehaviorRuntimeCapabilities> Create)[]
         {
-            ("publishAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", null!, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("sendToAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("publishToSelfAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, null!, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("scheduleSelfSignalAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("cancelCallbackAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), null!, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, null!, new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtime", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!, new RecordingAuthorityReadModelActivationPort())),
-            ("authorityReadModelActivationPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingRuntime(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), null!)),
+            ("publishAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", null!, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("sendToAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("publishToSelfAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, null!, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("scheduleSelfSignalAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, null!, static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("cancelCallbackAsync", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), null!, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort())),
+            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort())),
+            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilities("run-1", "corr-1", static (_, _, _) => Task.CompletedTask, static (_, _, _) => Task.CompletedTask, static (_, _) => Task.CompletedTask, static (callbackId, _, _, _) => Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory)), static (_, _) => Task.CompletedTask, new RecordingAICapability(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!)),
         };
 
         foreach (var testCase in cases)
@@ -505,7 +482,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     private static ScriptBehaviorRuntimeCapabilities CreateCapabilities(
-        IActorRuntime? runtime = null,
         IAICapability? aiCapability = null,
         IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
         IScriptEvolutionProposalPort? proposalPort = null,
@@ -513,7 +489,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         IScriptRuntimeProvisioningPort? runtimeProvisioningPort = null,
         IScriptRuntimeCommandPort? runtimeCommandPort = null,
         IScriptCatalogCommandPort? catalogCommandPort = null,
-        IScriptAuthorityReadModelActivationPort? authorityReadModelActivationPort = null,
         Func<IMessage, TopologyAudience, CancellationToken, Task>? publishAsync = null,
         Func<string, IMessage, CancellationToken, Task>? sendToAsync = null,
         Func<IMessage, CancellationToken, Task>? publishToSelfAsync = null,
@@ -530,14 +505,12 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                 Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 1, RuntimeCallbackBackend.InMemory))),
             cancelCallbackAsync: cancelCallbackAsync ?? ((_, _) => Task.CompletedTask),
             aiCapability: aiCapability ?? new RecordingAICapability(),
-            runtime: runtime ?? new RecordingRuntime(),
             definitionSnapshotPort: definitionSnapshotPort ?? new RecordingDefinitionSnapshotPort(),
             proposalPort: proposalPort ?? new RecordingProposalPort(),
             definitionCommandPort: definitionCommandPort ?? new RecordingDefinitionCommandPort(),
             runtimeProvisioningPort: runtimeProvisioningPort ?? new RecordingRuntimeProvisioningPort(),
             runtimeCommandPort: runtimeCommandPort ?? new RecordingRuntimeCommandPort(),
-            catalogCommandPort: catalogCommandPort ?? new RecordingCatalogCommandPort(),
-            authorityReadModelActivationPort: authorityReadModelActivationPort ?? new RecordingAuthorityReadModelActivationPort());
+            catalogCommandPort: catalogCommandPort ?? new RecordingCatalogCommandPort());
     }
 
     private sealed class RecordingAICapability : IAICapability
@@ -552,8 +525,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     private sealed class RecordingExecutionProjectionPort
-        : IScriptExecutionProjectionPort,
-          IScriptExecutionReadModelActivationPort
+        : IScriptExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<string> EnsureCalls { get; } = [];
@@ -566,9 +538,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             EnsureCalls.Add(actorId);
             return Task.FromResult<IScriptExecutionProjectionLease?>(new RecordingLease(actorId));
         }
-
-        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
-            await EnsureActorProjectionAsync(actorId, ct) != null;
 
         public Task<IScriptExecutionProjectionLease?> EnsureProjectionAsync(
             string actorId,
@@ -583,7 +552,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             return EnsureActorProjectionAsync(actorId, ct);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,
             IEventSink<EventEnvelope> sink,
             CancellationToken ct = default)
@@ -591,19 +560,12 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             _ = lease;
             _ = sink;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
-        public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            _ = sink;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+    public Task DetachLiveSinkAsync(
+        IAsyncDisposable? liveSinkLease,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
 
         public Task ReleaseActorProjectionAsync(
             IScriptExecutionProjectionLease lease,
@@ -615,61 +577,6 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         }
 
         private sealed record RecordingLease(string ActorId) : IScriptExecutionProjectionLease;
-    }
-
-    private sealed class RecordingRuntime : IActorRuntime
-    {
-        public SystemType? CreatedType { get; private set; }
-        public string? CreatedActorId { get; private set; }
-        public string? DestroyedActorId { get; private set; }
-        public string? LinkedParentId { get; private set; }
-        public string? LinkedChildId { get; private set; }
-        public string? UnlinkedChildId { get; private set; }
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
-
-        public Task<IActor> CreateAsync(SystemType agentType, string? id = null, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            CreatedType = agentType;
-            CreatedActorId = id ?? string.Empty;
-            return Task.FromResult<IActor>(new FakeActor(id ?? string.Empty, new FakeTestAgent(id ?? string.Empty)));
-        }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            DestroyedActorId = id;
-            return Task.CompletedTask;
-        }
-
-        public Task<IActor?> GetAsync(string id)
-        {
-            _ = id;
-            return Task.FromResult<IActor?>(null);
-        }
-
-        public Task<bool> ExistsAsync(string id)
-        {
-            _ = id;
-            return Task.FromResult(false);
-        }
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            LinkedParentId = parentId;
-            LinkedChildId = childId;
-            return Task.CompletedTask;
-        }
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            UnlinkedChildId = childId;
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class RecordingReadModelQueryPort : IScriptReadModelQueryPort
@@ -763,6 +670,29 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         }
     }
 
+    private sealed class CountingDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    {
+        public int RequestCount { get; private set; }
+
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RequestCount++;
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                "script-" + definitionActorId,
+                requestedRevision,
+                ScriptSources.UppercaseBehavior,
+                ScriptSources.UppercaseBehaviorHash,
+                ScriptSources.UppercaseStateTypeUrl,
+                ScriptSources.UppercaseReadModelTypeUrl,
+                "1",
+                "schema-hash"));
+        }
+    }
+
     private sealed class StaticProposalPort(ScriptPromotionDecision decision) : IScriptEvolutionProposalPort
     {
         public Task<ScriptPromotionDecision> ProposeAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
@@ -780,25 +710,26 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             Upserts.Add((scriptId, scriptRevision, definitionActorId));
+            var sourceHash = ScriptPackageModel.ComputePackageHash(scriptPackage);
             var actorId = definitionActorId ?? "definition-created";
             return Task.FromResult(new ScriptDefinitionUpsertResult(
                 actorId,
                 new ScriptDefinitionSnapshot(
                     scriptId,
                     scriptRevision,
-                    sourceText,
                     sourceHash,
+                    scriptPackage,
                     "type.googleapis.com/example.State",
                     "type.googleapis.com/example.ReadModel",
                     "1",
-                    "schema-hash-1")));
+                    "schema-hash-1"),
+                new ScriptingCommandAcceptedReceipt(actorId, "definition-command-1", "definition-correlation-1")));
         }
     }
 
@@ -807,15 +738,13 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
             string scriptId,
             string scriptRevision,
-            string sourceText,
-            string sourceHash,
+            ScriptPackageSpec scriptPackage,
             string? definitionActorId,
             CancellationToken ct)
         {
             _ = scriptId;
             _ = scriptRevision;
-            _ = sourceText;
-            _ = sourceHash;
+            _ = scriptPackage;
             _ = definitionActorId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);
@@ -864,7 +793,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public List<(string? CatalogActorId, string ScriptId, string Revision, string ProposalId)> PromoteCalls { get; } = [];
         public List<(string? CatalogActorId, string ScriptId, string TargetRevision, string ProposalId)> RollbackCalls { get; } = [];
 
-        public Task PromoteCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -879,10 +808,13 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             _ = sourceHash;
             ct.ThrowIfCancellationRequested();
             PromoteCalls.Add((catalogActorId, scriptId, revision, proposalId));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-created",
+                "catalog-command-1",
+                proposalId));
         }
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -895,60 +827,11 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             _ = expectedCurrentRevision;
             ct.ThrowIfCancellationRequested();
             RollbackCalls.Add((catalogActorId, scriptId, targetRevision, proposalId));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-created",
+                "catalog-rollback-command-1",
+                proposalId));
         }
     }
 
-    private sealed class RecordingAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
-    {
-        public List<string> ActivatedActorIds { get; } = [];
-
-        public Task ActivateAsync(string actorId, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            ActivatedActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class FakeActor(string id, IAgent agent) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = agent;
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class FakeTestAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
-
-        public Task<IReadOnlyList<SystemType>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<SystemType>>([]);
-    }
 }

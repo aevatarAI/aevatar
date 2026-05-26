@@ -74,6 +74,8 @@ public sealed class RunSessionTracker
         string scopeId,
         bool approved,
         string? userInput = null,
+        string? editedContent = null,
+        string? feedback = null,
         IDictionary<string, string>? metadata = null,
         string? commandId = null,
         string? serviceId = null)
@@ -90,6 +92,8 @@ public sealed class RunSessionTracker
             StepId = _stepId!,
             Approved = approved,
             UserInput = userInput,
+            EditedContent = editedContent,
+            Feedback = feedback,
             CommandId = commandId ?? _commandId,
             Metadata = metadata,
         };

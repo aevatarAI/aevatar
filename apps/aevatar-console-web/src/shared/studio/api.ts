@@ -13,10 +13,24 @@ import type {
   StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberBindingContract,
+  StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingFailure,
+  StudioMemberBindingRunStatus,
+  StudioMemberBindingRunStatusResponse,
+  StudioMemberBindingViewResponse,
+  StudioMemberDetail,
+  StudioMemberImplementationKind,
+  StudioMemberImplementationRef,
+  StudioMemberLifecycleStage,
+  StudioMemberRoster,
+  StudioMemberSummary,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
   StudioRoleDraftResponse,
+  StudioOrnnHealthResult,
+  StudioOrnnSkillSearchResult,
   StudioScopeScriptBindingActivationResult,
   StudioScopeScriptBindingInput,
   StudioScopeBindingResult,
@@ -29,31 +43,50 @@ import type {
   StudioSerializeYamlResult,
   StudioSettings,
   StudioStartExecutionInput,
+  StudioTeamCreateInput,
+  StudioTeamLifecycleStage,
+  StudioTeamRoster,
+  StudioTeamSummary,
+  StudioTeamUpdateInput,
+  StudioUserConfig,
+  StudioUserConfigModelsResponse,
+  StudioWorkflowDraft,
+  StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
 } from "./models";
-import { normalizeStudioScopeBindingImplementationKind } from "./models";
+import {
+  normalizeStudioMemberLifecycleStage,
+  normalizeStudioScopeBindingImplementationKind,
+  normalizeStudioTeamLifecycleStage,
+} from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import { scopesApi } from "@/shared/api/scopesApi";
 import {
   expectArray,
   expectRecord,
+  expectString,
   normalizeEnumValue,
   readBoolean,
   readNullableString,
   readNumber,
   readString,
 } from "@/shared/api/http/decoders";
-import { readResponseError } from "@/shared/api/http/error";
+import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
+import type {
+  ScopeWorkflowDetail,
+  ScopeWorkflowSummary,
+} from "@/shared/models/scopes";
+import { getOrnnRuntimeConfig } from "./ornnConfig";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
-
 async function studioHostFetch(
   input: string,
   init?: RequestInit
@@ -64,6 +97,42 @@ async function studioHostFetch(
     ...init,
     headers,
   });
+}
+
+async function externalFetch(
+  input: string,
+  init?: RequestInit
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+
+  return authFetch(input, {
+    ...init,
+    headers,
+  });
+}
+
+export class StudioApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "StudioApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isStudioApiStatus(error: unknown, status: number): boolean {
+  return error instanceof StudioApiError && error.status === status;
+}
+
+async function createStudioApiError(response: Response): Promise<StudioApiError> {
+  const details = await readResponseErrorDetails(response);
+  return new StudioApiError(details.message, response.status, details.code);
 }
 
 function isJsonContentType(contentType: string | null): boolean {
@@ -82,10 +151,261 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
+function toScopeWorkflowDirectoryId(scopeId: string): string {
+  return `scope:${scopeId}`;
+}
+
+function toScopeWorkflowPath(scopeId: string, workflowId: string): string {
+  return `scope://${scopeId}/${workflowId}.yaml`;
+}
+
+function resolveScopeWorkflowName(workflow: ScopeWorkflowSummary): string {
+  return workflow.displayName?.trim() || workflow.workflowName?.trim() || workflow.workflowId;
+}
+
+function toCommittedWorkflowSummary(
+  scopeId: string,
+  workflow: ScopeWorkflowSummary
+): StudioWorkflowSummary {
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    description: "",
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    stepCount: 0,
+    hasLayout: false,
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toCommittedWorkflowFile(
+  scopeId: string,
+  detail: ScopeWorkflowDetail
+): StudioWorkflowFile {
+  const workflow = detail.workflow;
+  if (!workflow) {
+    throw new Error("Not Found");
+  }
+
+  return {
+    workflowId: workflow.workflowId,
+    name: resolveScopeWorkflowName(workflow),
+    fileName: `${workflow.workflowId}.yaml`,
+    filePath: toScopeWorkflowPath(scopeId, workflow.workflowId),
+    directoryId: toScopeWorkflowDirectoryId(scopeId),
+    directoryLabel: scopeId,
+    yaml: detail.source?.workflowYaml ?? "",
+    document: null,
+    draftExists: false,
+    findings: [],
+    updatedAtUtc: workflow.updatedAt,
+  };
+}
+
+function toWorkflowFile(
+  draft: StudioWorkflowDraft,
+  draftExists: boolean
+): StudioWorkflowFile {
+  return {
+    ...draft,
+    document: null,
+    draftExists,
+    findings: [],
+  };
+}
+
+function selectLatestTimestamp(left: string, right: string): string {
+  return Date.parse(left) >= Date.parse(right) ? left : right;
+}
+
+function withOptionalScopeId(
+  path: string,
+  scopeId?: string | null
+): string {
+  const normalizedScopeId = trimOptional(scopeId);
+  if (!normalizedScopeId) {
+    return path;
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}scopeId=${encodeURIComponent(normalizedScopeId)}`;
+}
+
+function normalizeOrnnBaseUrl(baseUrl?: string | null): string {
+  return trimOptional(baseUrl)?.replace(/\/+$/, "") ?? "";
+}
+
+function readOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && !Number.isNaN(value) ? value : undefined;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function decodeOrnnSkillSearchResult(
+  value: unknown,
+  baseUrl: string,
+  fallbackPage: number,
+  fallbackPageSize: number
+): StudioOrnnSkillSearchResult {
+  const record = expectRecord(value, "Ornn search response");
+  const payload =
+    record.data === undefined
+      ? record
+      : expectRecord(record.data, "Ornn search response.data");
+
+  const items = Array.isArray(payload.items)
+    ? payload.items.map((entry, index) => {
+        const skill = expectRecord(entry, `Ornn search response.items[${index}]`);
+        return {
+          guid: readNullableString(
+            skill,
+            "guid",
+            `Ornn search response.items[${index}].guid`
+          ) ?? "",
+          name:
+            readNullableString(
+              skill,
+              "name",
+              `Ornn search response.items[${index}].name`
+            ) ?? "Unnamed skill",
+          description:
+            readNullableString(
+              skill,
+              "description",
+              `Ornn search response.items[${index}].description`
+            ) ?? "",
+          isPrivate:
+            readOptionalBoolean(skill.isPrivate) ??
+            readOptionalBoolean(skill.private) ??
+            false,
+        };
+      })
+    : [];
+
+  return {
+    baseUrl,
+    total: readOptionalNumber(payload.total) ?? items.length,
+    totalPages: readOptionalNumber(payload.totalPages) ?? 1,
+    page: readOptionalNumber(payload.page) ?? fallbackPage,
+    pageSize: readOptionalNumber(payload.pageSize) ?? fallbackPageSize,
+    items,
+    message:
+      readNullableString(payload, "message", "Ornn search response.message") ??
+      undefined,
+  };
+}
+
+function decodeStudioUserConfigModelsResponse(
+  value: unknown,
+  label = "StudioUserConfigModelsResponse"
+): StudioUserConfigModelsResponse {
+  const record = expectRecord(value, label);
+  const providersSource = record.providers ?? [];
+  const supportedModelsSource =
+    record.supportedModels ?? record.supported_models ?? [];
+  return {
+    providers: expectArray(
+      providersSource,
+      `${label}.providers`,
+      (entry, providerLabel) => {
+        const resolvedProviderLabel =
+          providerLabel ?? `${label}.providers[]`;
+        const provider = expectRecord(entry, resolvedProviderLabel);
+        return {
+          providerSlug: readNullableString(
+            provider,
+            ["providerSlug", "provider_slug"],
+            `${resolvedProviderLabel}.providerSlug`
+          ) ?? "",
+          providerName: readNullableString(
+            provider,
+            ["providerName", "provider_name"],
+            `${resolvedProviderLabel}.providerName`
+          ) ?? "",
+          status:
+            readNullableString(
+              provider,
+              "status",
+              `${resolvedProviderLabel}.status`
+            )?.trim().toLowerCase() ?? "",
+          proxyUrl:
+            readNullableString(
+              provider,
+              ["proxyUrl", "proxy_url"],
+              `${resolvedProviderLabel}.proxyUrl`
+            ) ?? "",
+          source:
+            readNullableString(
+              provider,
+              "source",
+              `${resolvedProviderLabel}.source`
+            ) ?? undefined,
+        };
+      }
+    ),
+    gatewayUrl:
+      readNullableString(
+        record,
+        ["gatewayUrl", "gateway_url"],
+        `${label}.gatewayUrl`
+      ) ?? "",
+    supportedModels: expectArray(
+      supportedModelsSource,
+      `${label}.supportedModels`,
+      (entry, entryLabel) =>
+        expectString(entry, entryLabel ?? `${label}.supportedModels[]`)
+    ),
+    modelsByProvider: Object.fromEntries(
+      Object.entries(
+        expectRecord(
+          record.modelsByProvider ?? record.models_by_provider ?? {},
+          `${label}.modelsByProvider`
+        )
+      ).map(([providerSlug, models]) => [
+        providerSlug,
+        expectArray(
+          models,
+          `${label}.modelsByProvider.${providerSlug}`,
+          (entry, entryLabel) =>
+            expectString(
+              entry,
+              entryLabel ?? `${label}.modelsByProvider.${providerSlug}[]`
+            )
+        ),
+      ])
+    ),
+  };
+}
+
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+async function requestJsonOrNull<T>(
+  input: string,
+  init?: RequestInit
+): Promise<T | null> {
+  const response = await studioHostFetch(input, init);
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -102,11 +422,28 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
     return undefined as T;
+  }
+
+  return decoder(await response.json());
+}
+
+async function requestDecodedJsonOrAccepted<T>(
+  input: string,
+  decoder: (value: unknown) => T,
+  init?: RequestInit
+): Promise<T | undefined> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+
+  if (response.status === 202 || response.status === 204) {
+    return undefined;
   }
 
   return decoder(await response.json());
@@ -128,7 +465,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -140,6 +477,13 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+async function requestAccepted(input: string, init?: RequestInit): Promise<void> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
 }
 
 async function streamSse(
@@ -158,7 +502,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (!response.body) {
@@ -437,7 +781,12 @@ function decodeStudioScopeBindingResult(
   const record = expectRecord(value, "StudioScopeBindingResult");
   const displayName =
     readOptionalString(record, ["displayName", "DisplayName"]) || "";
-  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const serviceId = readOptionalString(record, [
+    "serviceId",
+    "ServiceId",
+    "publishedServiceId",
+    "PublishedServiceId",
+  ]);
   const workflowRecord =
     record.workflow && typeof record.workflow === "object"
       ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
@@ -579,7 +928,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceId: readString(
       record,
-      ["serviceId", "ServiceId"],
+      [
+        "serviceId",
+        "ServiceId",
+        "publishedServiceId",
+        "PublishedServiceId",
+      ],
       "StudioScopeBindingStatus.serviceId"
     ),
     displayName: readString(
@@ -589,7 +943,12 @@ function decodeStudioScopeBindingStatus(
     ),
     serviceKey: readString(
       record,
-      ["serviceKey", "ServiceKey"],
+      [
+        "serviceKey",
+        "ServiceKey",
+        "publishedServiceKey",
+        "PublishedServiceKey",
+      ],
       "StudioScopeBindingStatus.serviceKey"
     ),
     defaultServingRevisionId: readString(
@@ -630,6 +989,436 @@ function decodeStudioScopeBindingStatus(
   };
 }
 
+function readStudioMemberImplementationKind(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioMemberImplementationKind {
+  return normalizeStudioScopeBindingImplementationKind(
+    readNullableString(record, keys, "StudioMemberSummary.implementationKind")
+  );
+}
+
+function readStudioMemberLifecycle(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioMemberLifecycleStage {
+  return normalizeStudioMemberLifecycleStage(
+    readNullableString(record, keys, "StudioMemberSummary.lifecycleStage")
+  );
+}
+
+function readStudioTeamLifecycle(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioTeamLifecycleStage {
+  return normalizeStudioTeamLifecycleStage(
+    readNullableString(record, keys, "StudioTeamSummary.lifecycleStage")
+  );
+}
+
+function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
+  const record = expectRecord(value, "StudioMemberSummary");
+  return {
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberSummary.memberId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberSummary.scopeId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioMemberSummary.displayName"
+    ),
+    description:
+      readNullableString(
+        record,
+        ["description", "Description"],
+        "StudioMemberSummary.description"
+      ) ?? "",
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    lifecycleStage: readStudioMemberLifecycle(record, [
+      "lifecycleStage",
+      "LifecycleStage",
+    ]),
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberSummary.publishedServiceId"
+    ),
+    lastBoundRevisionId:
+      readNullableString(
+        record,
+        ["lastBoundRevisionId", "LastBoundRevisionId"],
+        "StudioMemberSummary.lastBoundRevisionId"
+      ) ?? null,
+    teamId:
+      readNullableString(
+        record,
+        ["teamId", "TeamId"],
+        "StudioMemberSummary.teamId"
+      ) ?? null,
+    createdAt: readString(
+      record,
+      ["createdAt", "CreatedAt"],
+      "StudioMemberSummary.createdAt"
+    ),
+    updatedAt: readString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioMemberSummary.updatedAt"
+    ),
+  };
+}
+
+function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
+  const record = expectRecord(value, "StudioTeamSummary");
+  return {
+    teamId: readString(
+      record,
+      ["teamId", "TeamId"],
+      "StudioTeamSummary.teamId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamSummary.scopeId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioTeamSummary.displayName"
+    ),
+    description:
+      readNullableString(
+        record,
+        ["description", "Description"],
+        "StudioTeamSummary.description"
+      ) ?? "",
+    entryMemberId:
+      readNullableString(
+        record,
+        ["entryMemberId", "EntryMemberId"],
+        "StudioTeamSummary.entryMemberId"
+      ) ?? null,
+    lifecycleStage: readStudioTeamLifecycle(record, [
+      "lifecycleStage",
+      "LifecycleStage",
+    ]),
+    memberCount: readNumber(
+      record,
+      ["memberCount", "MemberCount"],
+      "StudioTeamSummary.memberCount"
+    ),
+    createdAt: readString(
+      record,
+      ["createdAt", "CreatedAt"],
+      "StudioTeamSummary.createdAt"
+    ),
+    updatedAt: readString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioTeamSummary.updatedAt"
+    ),
+  };
+}
+
+function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
+  const record = expectRecord(value, "StudioTeamRoster");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamRoster.scopeId"
+    ),
+    teams: expectArray(
+      record.teams ?? record.Teams,
+      "StudioTeamRoster.teams",
+      decodeStudioTeamSummary
+    ),
+    nextPageToken:
+      readNullableString(
+        record,
+        ["nextPageToken", "NextPageToken"],
+        "StudioTeamRoster.nextPageToken"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberRoster(value: unknown): StudioMemberRoster {
+  const record = expectRecord(value, "StudioMemberRoster");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberRoster.scopeId"
+    ),
+    members: expectArray(
+      record.members ?? record.Members,
+      "StudioMemberRoster.members",
+      decodeStudioMemberSummary
+    ),
+    nextPageToken:
+      readNullableString(
+        record,
+        ["nextPageToken", "NextPageToken"],
+        "StudioMemberRoster.nextPageToken"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberImplementationRef(
+  value: unknown
+): StudioMemberImplementationRef {
+  const record = expectRecord(value, "StudioMemberImplementationRef");
+  return {
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    workflowId:
+      readNullableString(
+        record,
+        ["workflowId", "WorkflowId"],
+        "StudioMemberImplementationRef.workflowId"
+      ) ?? null,
+    workflowRevision:
+      readNullableString(
+        record,
+        ["workflowRevision", "WorkflowRevision"],
+        "StudioMemberImplementationRef.workflowRevision"
+      ) ?? null,
+    scriptId:
+      readNullableString(
+        record,
+        ["scriptId", "ScriptId"],
+        "StudioMemberImplementationRef.scriptId"
+      ) ?? null,
+    scriptRevision:
+      readNullableString(
+        record,
+        ["scriptRevision", "ScriptRevision"],
+        "StudioMemberImplementationRef.scriptRevision"
+      ) ?? null,
+    actorTypeName:
+      readNullableString(
+        record,
+        ["actorTypeName", "ActorTypeName"],
+        "StudioMemberImplementationRef.actorTypeName"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingContract(
+  value: unknown
+): StudioMemberBindingContract {
+  const record = expectRecord(value, "StudioMemberBindingContract");
+  return {
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberBindingContract.publishedServiceId"
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioMemberBindingContract.revisionId"
+    ),
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    boundAt: readString(
+      record,
+      ["boundAt", "BoundAt"],
+      "StudioMemberBindingContract.boundAt"
+    ),
+  };
+}
+
+function normalizeStudioMemberBindingRunStatus(
+  value: string | number | null | undefined
+): StudioMemberBindingRunStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  return normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "admission_pending",
+    "3": "admitted",
+    "4": "platform_binding_pending",
+    "5": "succeeded",
+    "6": "failed",
+    "7": "rejected",
+    "8": "member_notification_pending",
+    accepted: "accepted",
+    admission_pending: "admission_pending",
+    admissionpending: "admission_pending",
+    admitted: "admitted",
+    platform_binding_pending: "platform_binding_pending",
+    platformbindingpending: "platform_binding_pending",
+    platform_pending: "platform_binding_pending",
+    platformpending: "platform_binding_pending",
+    member_notification_pending: "member_notification_pending",
+    membernotificationpending: "member_notification_pending",
+    notification_pending: "member_notification_pending",
+    notificationpending: "member_notification_pending",
+    succeeded: "succeeded",
+    completed: "succeeded",
+    failed: "failed",
+    rejected: "rejected",
+    unspecified: "unknown",
+    unknown: "unknown",
+  }) as StudioMemberBindingRunStatus;
+}
+
+function decodeStudioMemberBindingFailure(
+  value: unknown
+): StudioMemberBindingFailure {
+  const record = expectRecord(value, "StudioMemberBindingFailure");
+  return {
+    code: readString(record, ["code", "Code"], "StudioMemberBindingFailure.code"),
+    message:
+      readNullableString(
+        record,
+        ["message", "Message"],
+        "StudioMemberBindingFailure.message"
+      ) ?? null,
+    failedAt:
+      readNullableString(
+        record,
+        ["failedAt", "FailedAt", "failedAtUtc", "FailedAtUtc"],
+        "StudioMemberBindingFailure.failedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingRunStatusResponse(
+  value: unknown
+): StudioMemberBindingRunStatusResponse {
+  const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingRunStatusResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingRunStatusResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingRunStatusResponse.memberId"
+    ),
+    platformBindingCommandId:
+      readNullableString(
+        record,
+        ["platformBindingCommandId", "PlatformBindingCommandId"],
+        "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
+      ) ?? null,
+    failure:
+      record.failure == null && record.Failure == null
+        ? null
+        : decodeStudioMemberBindingFailure(record.failure ?? record.Failure),
+    updatedAt:
+      readNullableString(
+        record,
+        ["updatedAt", "UpdatedAt", "updatedAtUtc", "UpdatedAtUtc"],
+        "StudioMemberBindingRunStatusResponse.updatedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingAcceptedResponse(
+  value: unknown
+): StudioMemberBindingAcceptedResponse {
+  const record = expectRecord(value, "StudioMemberBindingAcceptedResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingAcceptedResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingAcceptedResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingAcceptedResponse.memberId"
+    ),
+  };
+}
+
+function decodeStudioMemberBindingViewResponse(
+  value: unknown
+): StudioMemberBindingViewResponse {
+  const record = expectRecord(value, "StudioMemberBindingViewResponse");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
+  return {
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastBinding ?? record.LastBinding
+          ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
+  };
+}
+
+function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
+  const record = expectRecord(value, "StudioMemberDetail");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
+  return {
+    summary: decodeStudioMemberSummary(
+      expectRecord(record.summary ?? record.Summary, "StudioMemberDetail.summary")
+    ),
+    implementationRef:
+      record.implementationRef == null && record.ImplementationRef == null
+        ? null
+        : decodeStudioMemberImplementationRef(
+            record.implementationRef ?? record.ImplementationRef
+          ),
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastBinding ?? record.LastBinding
+          ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
+  };
+}
+
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
     return requestJson("/api/studio/context");
@@ -639,12 +1428,154 @@ export const studioApi = {
     return requestJson("/api/auth/me");
   },
 
-  getWorkspaceSettings(): Promise<StudioWorkspaceSettings> {
-    return requestJson("/api/workspace/");
+  getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {
+    return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
   },
 
-  listWorkflows(): Promise<StudioWorkflowSummary[]> {
-    return requestJson("/api/workspace/workflows");
+  listTeams(scopeId: string): Promise<StudioTeamRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams`,
+      decodeStudioTeamRoster
+    );
+  },
+
+  getTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}`,
+      decodeStudioTeamSummary
+    );
+  },
+
+  createTeam(input: StudioTeamCreateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            description: trimOptional(input.description),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
+      decodeStudioTeamSummary,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName:
+              input.displayName === null ? null : trimOptional(input.displayName),
+            description:
+              input.description === null ? null : trimOptional(input.description),
+          })
+        ),
+      }
+    );
+  },
+
+  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  setTeamEntryMember(
+    scopeId: string,
+    teamId: string,
+    memberId: string
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          memberId: memberId.trim(),
+        }),
+      }
+    );
+  },
+
+  clearTeamEntryMember(
+    scopeId: string,
+    teamId: string
+  ): Promise<StudioTeamSummary | undefined> {
+    return requestDecodedJsonOrAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      decodeStudioTeamSummary,
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  listTeamMembers(scopeId: string, teamId: string): Promise<StudioMemberRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/members`,
+      decodeStudioMemberRoster
+    );
+  },
+
+  listMembers(scopeId: string): Promise<StudioMemberRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members`,
+      decodeStudioMemberRoster
+    );
+  },
+
+  getMember(scopeId: string, memberId: string): Promise<StudioMemberDetail> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}`,
+      decodeStudioMemberDetail
+    );
+  },
+
+  createMember(input: {
+    scopeId: string;
+    displayName: string;
+    implementationKind: StudioMemberImplementationKind;
+    description?: string | null;
+    memberId?: string | null;
+    teamId?: string | null;
+  }): Promise<StudioMemberSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
+      decodeStudioMemberSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            implementationKind: input.implementationKind,
+            description: trimOptional(input.description),
+            memberId: trimOptional(input.memberId),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
+    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", scopeId));
   },
 
   getTemplateWorkflow(
@@ -656,19 +1587,26 @@ export const studioApi = {
     );
   },
 
-  getWorkflow(workflowId: string): Promise<StudioWorkflowFile> {
+  getWorkflowDraft(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowDraft> {
     return requestJson(
-      `/api/workspace/workflows/${encodeURIComponent(workflowId)}`
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        scopeId
+      )
     );
   },
 
-  saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
-    return requestJson("/api/workspace/workflows", {
+  createWorkflowDraft(
+    input: Omit<StudioSaveWorkflowInput, "workflowId">
+  ): Promise<StudioWorkflowDraft> {
+    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", input.scopeId), {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
-          workflowId: trimOptional(input.workflowId),
           directoryId: input.directoryId,
           workflowName: input.workflowName.trim(),
           fileName: trimOptional(input.fileName),
@@ -677,6 +1615,141 @@ export const studioApi = {
         })
       ),
     });
+  },
+
+  updateWorkflowDraft(
+    input: StudioSaveWorkflowInput & { workflowId: string }
+  ): Promise<StudioWorkflowDraft> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(input.workflowId)}`,
+        input.scopeId
+      ),
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            directoryId: input.directoryId,
+            workflowName: input.workflowName.trim(),
+            fileName: trimOptional(input.fileName),
+            yaml: input.yaml,
+            layout: input.layout,
+          })
+        ),
+      }
+    );
+  },
+
+  deleteWorkflowDraft(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return requestJson(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        scopeId
+      ),
+      {
+        method: "DELETE",
+      }
+    );
+  },
+
+  listWorkflows(scopeId?: string | null): Promise<StudioWorkflowSummary[]> {
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      return this.listWorkflowDrafts(scopeId);
+    }
+
+    return Promise.all([
+      this.listWorkflowDrafts(normalizedScopeId),
+      scopesApi.listWorkflows(normalizedScopeId),
+    ]).then(([drafts, committed]) => {
+      const merged = new Map<string, StudioWorkflowSummary>();
+
+      for (const workflow of committed) {
+        merged.set(
+          workflow.workflowId,
+          toCommittedWorkflowSummary(normalizedScopeId, workflow)
+        );
+      }
+
+      for (const draft of drafts) {
+        const existing = merged.get(draft.workflowId);
+        merged.set(
+          draft.workflowId,
+          existing
+            ? {
+                ...draft,
+                updatedAtUtc: selectLatestTimestamp(
+                  draft.updatedAtUtc,
+                  existing.updatedAtUtc
+                ),
+              }
+            : draft
+        );
+      }
+
+      return Array.from(merged.values()).sort(
+        (left, right) =>
+          Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc)
+      );
+    });
+  },
+
+  async getWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowFile> {
+    const normalizedScopeId = trimOptional(scopeId);
+    if (!normalizedScopeId) {
+      const draft = await this.getWorkflowDraft(workflowId, scopeId);
+      return toWorkflowFile(draft, true);
+    }
+
+    const draft = await requestJsonOrNull<StudioWorkflowDraft>(
+      withOptionalScopeId(
+        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+        normalizedScopeId
+      )
+    );
+    if (draft) {
+      return toWorkflowFile(draft, true);
+    }
+
+    return toCommittedWorkflowFile(
+      normalizedScopeId,
+      await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
+    );
+  },
+
+  saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
+    const normalizedWorkflowId = trimOptional(input.workflowId);
+    const shouldUpdate =
+      Boolean(normalizedWorkflowId) &&
+      (input.draftExists ?? Boolean(normalizedWorkflowId));
+    const request = shouldUpdate && normalizedWorkflowId
+      ? this.updateWorkflowDraft({
+          ...input,
+          workflowId: normalizedWorkflowId,
+        })
+      : this.createWorkflowDraft({
+          scopeId: input.scopeId,
+          directoryId: input.directoryId,
+          workflowName: input.workflowName,
+          fileName: input.fileName,
+          yaml: input.yaml,
+          layout: input.layout,
+        });
+    return request.then((draft) => toWorkflowFile(draft, true));
+  },
+
+  deleteWorkflow(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<void> {
+    return this.deleteWorkflowDraft(workflowId, scopeId);
   },
 
   parseYaml(input: {
@@ -777,11 +1850,11 @@ export const studioApi = {
           compactObject({
             implementationKind: "script",
             displayName: trimOptional(input.displayName),
+            serviceId: trimOptional(input.serviceId),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
             }),
-            revisionId: trimOptional(input.revisionId),
           })
         ),
       }
@@ -829,6 +1902,127 @@ export const studioApi = {
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
       decodeStudioScopeBindingStatus
     );
+  },
+
+  bindMemberWorkflow(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    workflowYamls: readonly string[];
+    revisionId?: string | null;
+  }): Promise<StudioMemberBindingAcceptedResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioMemberBindingAcceptedResponse,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
+            workflow: {
+              workflowYamls: input.workflowYamls,
+            },
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberScript(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    scriptId: string;
+    scriptRevision: string;
+    revisionId?: string | null;
+  }): Promise<StudioMemberBindingAcceptedResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioMemberBindingAcceptedResponse,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
+            script: compactObject({
+              scriptId: input.scriptId.trim(),
+              scriptRevision: input.scriptRevision.trim(),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindMemberGAgent(input: {
+    scopeId: string;
+    memberId: string;
+    displayName?: string | null;
+    actorTypeName: string;
+    endpoints: StudioScopeGAgentBindingInput["endpoints"];
+    revisionId?: string | null;
+  }): Promise<StudioMemberBindingAcceptedResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
+      decodeStudioMemberBindingAcceptedResponse,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "gagent",
+            displayName: trimOptional(input.displayName),
+            gagent: compactObject({
+              actorTypeName: input.actorTypeName.trim(),
+              endpoints: input.endpoints.map((endpoint) =>
+                compactObject({
+                  endpointId: endpoint.endpointId.trim(),
+                  displayName:
+                    trimOptional(endpoint.displayName) ||
+                    endpoint.endpointId.trim(),
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
+                  responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
+                  description: trimOptional(endpoint.description),
+                })
+              ),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  getMemberBinding(
+    scopeId: string,
+    memberId: string
+  ): Promise<StudioMemberBindingViewResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
+      decodeStudioMemberBindingViewResponse
+    );
+  },
+
+  getMemberBindingRun(
+    scopeId: string,
+    memberId: string,
+    bindingRunId: string
+  ): Promise<StudioMemberBindingRunStatusResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding-runs/${encodeURIComponent(bindingRunId.trim())}`,
+      decodeStudioMemberBindingRunStatusResponse
+    );
+  },
+
+  getDefaultRouteTarget(scopeId: string): Promise<StudioScopeBindingStatus> {
+    return this.getScopeBinding(scopeId);
   },
 
   getScopeScriptBinding(
@@ -1069,6 +2263,126 @@ export const studioApi = {
         runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
       }),
     });
+  },
+
+  getUserConfig(): Promise<StudioUserConfig> {
+    return requestJson("/api/user-config");
+  },
+
+  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfig> {
+    return requestJson("/api/user-config", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        defaultModel: input.defaultModel.trim(),
+        preferredLlmRoute: trimOptional(input.preferredLlmRoute),
+        runtimeMode: trimOptional(input.runtimeMode),
+        localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
+        remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
+        maxToolRounds: input.maxToolRounds ?? null,
+      }),
+    });
+  },
+
+  getUserConfigModels(): Promise<StudioUserConfigModelsResponse> {
+    return requestDecodedJson(
+      "/api/user-config/models",
+      decodeStudioUserConfigModelsResponse
+    );
+  },
+
+  async getSkillsHealth(): Promise<StudioOrnnHealthResult> {
+    const ornnConfig = getOrnnRuntimeConfig();
+    const baseUrl = normalizeOrnnBaseUrl(ornnConfig.baseUrl);
+    if (ornnConfig.configurationError || !baseUrl) {
+      return {
+        baseUrl,
+        reachable: false,
+        message:
+          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+      };
+    }
+
+    const url = `${baseUrl}/api/web/skill-search?query=&scope=public&page=1&pageSize=1`;
+
+    try {
+      const response = await externalFetch(url);
+      if (!response.ok) {
+        return {
+          baseUrl,
+          reachable: false,
+          message: `Cannot reach Ornn (${response.status}).`,
+        };
+      }
+
+      return {
+        baseUrl,
+        reachable: true,
+        message: "Connected to Ornn.",
+      };
+    } catch (error) {
+      return {
+        baseUrl,
+        reachable: false,
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "Cannot reach Ornn.",
+      };
+    }
+  },
+
+  async searchSkills(input?: {
+    query?: string | null;
+    scope?: string | null;
+    page?: number | null;
+    pageSize?: number | null;
+  }): Promise<StudioOrnnSkillSearchResult> {
+    const ornnConfig = getOrnnRuntimeConfig();
+    const baseUrl = normalizeOrnnBaseUrl(ornnConfig.baseUrl);
+    const query = trimOptional(input?.query) ?? "";
+    const scope = trimOptional(input?.scope) ?? "mixed";
+    const page = input?.page && input.page > 0 ? input.page : 1;
+    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : 50;
+    if (ornnConfig.configurationError || !baseUrl) {
+      return {
+        baseUrl,
+        total: 0,
+        totalPages: 0,
+        page,
+        pageSize,
+        items: [],
+        message:
+          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+      };
+    }
+
+    const params = new URLSearchParams({
+      query,
+      mode: "keyword",
+      scope,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+
+    const response = await externalFetch(
+      `${baseUrl}/api/web/skill-search?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw await createStudioApiError(response);
+    }
+
+    const contentType = response.headers?.get?.("content-type") ?? null;
+    if (contentType !== null && !isJsonContentType(contentType)) {
+      throw new Error("Ornn API returned an unexpected response format.");
+    }
+
+    return decodeOrnnSkillSearchResult(
+      await response.json(),
+      baseUrl,
+      page,
+      pageSize
+    );
   },
 
   addWorkflowDirectory(input: {

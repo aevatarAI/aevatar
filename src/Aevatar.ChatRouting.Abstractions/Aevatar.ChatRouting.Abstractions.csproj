@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AssemblyName>Aevatar.ChatRouting.Abstractions</AssemblyName>
+        <RootNamespace>Aevatar.ChatRouting.Abstractions</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Google.Protobuf" />
+        <PackageReference Include="Grpc.Tools">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Protobuf Include="chat_route_policy.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
+    </ItemGroup>
+
+</Project>

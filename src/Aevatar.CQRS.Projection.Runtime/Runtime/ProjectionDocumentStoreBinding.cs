@@ -26,4 +26,12 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel>
 
         return _writer.UpsertAsync(readModel, ct);
     }
+
+    public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        if (_writer is null)
+            return Task.FromResult(ProjectionWriteResult.Applied());
+
+        return _writer.DeleteAsync(id, ct);
+    }
 }

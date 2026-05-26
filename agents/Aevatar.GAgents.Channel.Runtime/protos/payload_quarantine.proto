@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "chat_activity.proto";
+
+message PlatformQuarantineEnvelope {
+  string quarantine_id = 1;
+  aevatar.gagents.channel.abstractions.BotInstanceId bot = 2;
+  aevatar.gagents.channel.abstractions.ChannelId channel = 3;
+  int64 received_at_unix_ms = 4;
+  string encrypted_blob_ref = 5;
+  string redactor_error_code = 6;
+}

@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -21,6 +22,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     private TState _state = new();
     private IServiceProvider? _applierServiceProvider;
     private IReadOnlyList<IStateEventApplier<TState>> _appliers = [];
+    private IServiceProvider? _publicationHookServiceProvider;
+    private IReadOnlyList<ICommittedStatePublicationHook> _publicationHooks = [];
 
     /// <summary>Mutable agent state, writable only in EventHandler/OnActivateAsync scopes.</summary>
     public TState State
@@ -36,6 +39,9 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public IEventSourcingBehaviorFactory<TState>? EventSourcingBehaviorFactory { get; set; }
 
     /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
+    protected override bool DeferLifecycleAwareModuleInitialization => true;
+
+    /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
     public override async Task ActivateAsync(CancellationToken ct = default)
     {
         await base.ActivateAsync(ct); // Restore modules
@@ -44,6 +50,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         var replayed = await eventSourcing.ReplayAsync(Id, ct);
         _state = replayed ?? new TState();
         await OnStateChangedAsync(_state, ct);
+        await InitializeLifecycleAwareModulesAsync(ct);
         await OnActivateAsync(ct);
     }
 
@@ -94,6 +101,62 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     }
 
     /// <summary>
+    /// Persist one domain event with framework-mediated OCC absorption. On
+    /// <see cref="EventStoreOptimisticConcurrencyException"/>, the framework
+    /// drains pending events, replays from the store to refresh
+    /// <see cref="State"/>, and then invokes
+    /// <paramref name="onOptimisticConcurrencyConflict"/> to let the caller
+    /// decide whether the peer's commit already satisfies the intent of
+    /// this command. Returning <c>true</c> swallows the conflict as a
+    /// successful no-op (see <see cref="State"/> for the post-replay
+    /// shape); returning <c>false</c> rethrows so the runtime envelope
+    /// retry path re-evaluates against fresh state.
+    /// </summary>
+    /// <remarks>
+    /// This overload exists so OCC absorption is a *commit-bound*
+    /// capability — actors cannot replay state outside an active commit
+    /// path (CLAUDE.md "抽象一旦能被滥用就等于设计未完成"). The callback
+    /// must be a pure decision function over the refreshed
+    /// <see cref="State"/>; it must not raise new events, persist
+    /// snapshots, or perform external side effects (NyxID DCR / HTTP),
+    /// because the framework has already drained pending events for
+    /// recovery and any callback-raised events would be committed on the
+    /// next handler turn.
+    /// </remarks>
+    protected async Task PersistDomainEventAsync<TEvent>(
+        TEvent evt,
+        Func<EventStoreOptimisticConcurrencyException, Task<bool>> onOptimisticConcurrencyConflict,
+        CancellationToken ct = default)
+        where TEvent : IMessage
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        ArgumentNullException.ThrowIfNull(onOptimisticConcurrencyConflict);
+
+        try
+        {
+            await PersistDomainEventsAsync([evt], ct).ConfigureAwait(false);
+        }
+        catch (EventStoreOptimisticConcurrencyException conflict)
+        {
+            // ConfirmEventsAsync only removes the committed prefix on OCC;
+            // any events raised mid-flight survive as a pending suffix.
+            // Drain them before replay so they cannot be silently committed
+            // on the next ConfirmEventsAsync (PR #552 review kimi).
+            var eventSourcing = EnsureEventSourcingConfigured();
+            eventSourcing.DiscardPendingEvents();
+            var replayed = await eventSourcing.ReplayAsync(Id, ct).ConfigureAwait(false);
+            using (var guard = StateGuard.BeginWriteScope())
+            {
+                _state = replayed ?? new TState();
+            }
+
+            var absorbed = await onOptimisticConcurrencyConflict(conflict).ConfigureAwait(false);
+            if (!absorbed)
+                throw;
+        }
+    }
+
+    /// <summary>
     /// Persist domain events as one commit, then apply them to in-memory state in order.
     /// </summary>
     protected async Task PersistDomainEventsAsync(
@@ -130,7 +193,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
         if (EventSourcingBehaviorFactory != null)
         {
-            EventSourcing = EventSourcingBehaviorFactory.Create(Id, TransitionState);
+            EventSourcing = EventSourcingBehaviorFactory.Create(Id, GetType(), TransitionState);
             return EventSourcing;
         }
 
@@ -173,16 +236,53 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     {
         for (var i = 0; i < commitResult.CommittedEvents.Count; i++)
         {
+            var published = new CommittedStateEventPublished
+            {
+                StateEvent = commitResult.CommittedEvents[i].Clone(),
+                StateRoot = Any.Pack(_state),
+            };
+            const ObserverAudience audience = ObserverAudience.CommittedFacts;
+            var context = new CommittedStatePublicationContext
+            {
+                ActorId = Id,
+                ActorType = GetType(),
+                Published = published,
+                SourceEnvelope = ActiveInboundEnvelope,
+                Audience = audience,
+            };
+
+            // Refactor (iter18/cluster-006):
+            //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+            //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+            foreach (var hook in ResolveCommittedStatePublicationHooks())
+                await hook.BeforePublishAsync(context, ct);
+
             await CommittedStateEventPublisher.PublishAsync(
-                new CommittedStateEventPublished
-                {
-                    StateEvent = commitResult.CommittedEvents[i].Clone(),
-                    StateRoot = Any.Pack(_state),
-                },
-                ObserverAudience.CommittedFacts,
+                published,
+                audience,
                 ct,
                 ActiveInboundEnvelope);
         }
+    }
+
+    private IReadOnlyList<ICommittedStatePublicationHook> ResolveCommittedStatePublicationHooks()
+    {
+        if (ReferenceEquals(_publicationHookServiceProvider, Services))
+            return _publicationHooks;
+
+        _publicationHookServiceProvider = Services;
+        if (Services == null)
+        {
+            _publicationHooks = [];
+            return _publicationHooks;
+        }
+
+        _publicationHooks =
+            Services.GetService(typeof(IEnumerable<ICommittedStatePublicationHook>))
+                is IEnumerable<ICommittedStatePublicationHook> hooks
+                    ? hooks.ToArray()
+                    : [];
+        return _publicationHooks;
     }
 
 }

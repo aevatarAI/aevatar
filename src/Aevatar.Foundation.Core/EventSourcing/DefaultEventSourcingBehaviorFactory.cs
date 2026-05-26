@@ -33,9 +33,11 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
 
     public IEventSourcingBehavior<TState> Create(
         string agentId,
+        Type actorType,
         Func<TState, IMessage, TState> transitionState)
     {
         ArgumentNullException.ThrowIfNull(agentId);
+        ArgumentNullException.ThrowIfNull(actorType);
         ArgumentNullException.ThrowIfNull(transitionState);
 
         var snapshotsEnabled = _options.EnableSnapshots && _snapshotStore != null;
@@ -43,6 +45,10 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
         ISnapshotStrategy snapshotStrategy = snapshotsEnabled
             ? new IntervalSnapshotStrategy(_options.SnapshotInterval)
             : NeverSnapshotStrategy.Instance;
+
+        // Refactor (iter56/cluster-921-runtime-recovery-actor-type-marker): old=hosting actorId prefix recovery, new=actor-type marker in factory
+        var recoverFromVersionDrift = _options.RecoverFromVersionDriftOnReplay
+            || typeof(IEventSourcingVersionDriftRecoverableActor).IsAssignableFrom(actorType);
 
         return new DelegatingEventSourcingBehavior(
             _eventStore,
@@ -53,7 +59,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             _logger,
             _options.EnableEventCompaction,
             _options.RetainedEventsAfterSnapshot,
-            _compactionScheduler);
+            _compactionScheduler,
+            recoverFromVersionDrift);
     }
 
     private sealed class DelegatingEventSourcingBehavior : EventSourcingBehavior<TState>
@@ -69,7 +76,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ILogger<EventSourcingBehavior<TState>>? logger,
             bool enableEventCompaction,
             int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler)
+            IEventStoreCompactionScheduler? compactionScheduler,
+            bool recoverFromVersionDriftOnReplay)
             : base(
                 eventStore,
                 agentId,
@@ -78,7 +86,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
                 logger,
                 enableEventCompaction,
                 retainedEventsAfterSnapshot,
-                compactionScheduler)
+                compactionScheduler,
+                recoverFromVersionDriftOnReplay)
         {
             _transitionState = transitionState;
         }

@@ -9,19 +9,19 @@ internal sealed class WorkflowRunCommandTargetResolver
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
-    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
-    private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
+    private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunProvisioningPort runProvisioningPort,
+        WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
+        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
 
     public async Task<CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>> ResolveAsync(
@@ -35,16 +35,16 @@ internal sealed class WorkflowRunCommandTargetResolver
                 WorkflowChatRunStartError.ProjectionDisabled);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(command, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
+        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
             return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(actorResolution.Error);
 
         return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Success(
             new WorkflowRunCommandTarget(
-                actorResolution.Actor,
+                actorResolution.Target.ActorId,
                 actorResolution.WorkflowNameForRun,
-                actorResolution.CreatedActorIds,
+                actorResolution.Target.CreatedActorIds,
                 _projectionPort,
-                _materializationActivationPort,
-                _actorPort));
+                _runProvisioningPort,
+                _durableCompletionResolver));
     }
 }

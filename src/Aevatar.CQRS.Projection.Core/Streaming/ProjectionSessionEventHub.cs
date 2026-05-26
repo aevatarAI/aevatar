@@ -7,6 +7,9 @@ namespace Aevatar.CQRS.Projection.Core.Streaming;
 /// <summary>
 /// Generic stream-backed session event hub keyed by scope/session.
 /// </summary>
+// Refactor (iter34/cluster-003-projection-session-legacy-payload):
+//   Old pattern: Projection session event transport carries both protobuf bytes and legacy string payload compatibility (legacy_payload string field in proto + legacy codec interface + legacy payload write path).
+//   New principle: Projection session event transport carries protobuf payload only; obsolete legacy codec surface is deleted; tests/docs updated; protobuf legacy_payload field reserved per protobuf evolution rules; no concrete codec depended on the legacy interface.
 public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventHub<TEvent>
     where TEvent : class
 {
@@ -44,7 +47,6 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
             ScopeId = scopeId,
             SessionId = sessionId,
             EventType = _codec.GetEventType(evt),
-            LegacyPayload = (_codec as ILegacyProjectionSessionEventCodec<TEvent>)?.SerializeLegacy(evt) ?? string.Empty,
             Payload = _codec.Serialize(evt),
         };
         return stream.ProduceAsync(message, ct);
@@ -73,11 +75,10 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
-            if ((message.Payload == null || message.Payload.IsEmpty) &&
-                string.IsNullOrWhiteSpace(message.LegacyPayload))
+            if (message.Payload == null || message.Payload.IsEmpty)
             {
                 _logger.LogWarning(
-                    "Dropping projection session event with empty payloads. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType}",
+                    "Dropping projection session event with empty protobuf payload. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType}",
                     _codec.Channel,
                     scopeId,
                     sessionId,
@@ -85,27 +86,17 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
-            TEvent? evt = default;
-            if (message.Payload != null && !message.Payload.IsEmpty)
-                evt = _codec.Deserialize(message.EventType, message.Payload);
-
-            if (evt == null &&
-                !string.IsNullOrWhiteSpace(message.LegacyPayload) &&
-                _codec is ILegacyProjectionSessionEventCodec<TEvent> legacyCodec)
-            {
-                evt = legacyCodec.DeserializeLegacy(message.EventType, message.LegacyPayload);
-            }
+            var evt = _codec.Deserialize(message.EventType, message.Payload);
 
             if (evt == null)
             {
                 _logger.LogWarning(
-                    "Dropping undecodable projection session event. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType} payloadBytes={PayloadBytes} legacyPayloadLength={LegacyPayloadLength}",
+                    "Dropping undecodable projection session event. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType} payloadBytes={PayloadBytes}",
                     _codec.Channel,
                     scopeId,
                     sessionId,
                     message.EventType,
-                    message.Payload?.Length ?? 0,
-                    message.LegacyPayload?.Length ?? 0);
+                    message.Payload.Length);
                 return;
             }
 

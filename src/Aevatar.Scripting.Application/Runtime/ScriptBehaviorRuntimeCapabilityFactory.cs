@@ -9,38 +9,35 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Application.Runtime;
 
+// Refactor (iter27/cluster-029-scripting-runtime-raw-actor-lifecycle):
+//   Old pattern: Scripting behavior runtime exposes raw IActorRuntime lifecycle/topology by assembly-qualified type name and caller-supplied actor ids
+//   New principle: Delete raw script-facing actor lifecycle/topology API; keep existing typed scripting ports (provisioning/command/definition/catalog/evolution)
 public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRuntimeCapabilityFactory
 {
     private readonly IAICapability _aiCapability;
-    private readonly IActorRuntime _runtime;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
 
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
-        IActorRuntime runtime,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
-        IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        IScriptCatalogCommandPort catalogCommandPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
     }
 
     public IScriptBehaviorRuntimeCapabilities Create(
@@ -63,13 +60,11 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             scheduleSelfSignalAsync,
             cancelCallbackAsync,
             _aiCapability,
-            _runtime,
             _definitionSnapshotPort,
             _proposalPort,
             _definitionCommandPort,
             _runtimeProvisioningPort,
             _runtimeCommandPort,
-            _catalogCommandPort,
-            _authorityReadModelActivationPort);
+            _catalogCommandPort);
     }
 }

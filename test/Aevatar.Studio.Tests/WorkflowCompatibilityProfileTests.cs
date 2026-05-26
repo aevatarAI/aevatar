@@ -1,0 +1,187 @@
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Studio.Infrastructure.Serialization;
+using FluentAssertions;
+
+namespace Aevatar.Studio.Tests;
+
+public sealed class WorkflowCompatibilityProfileTests
+{
+    private readonly WorkflowCompatibilityProfile _profile = WorkflowCompatibilityProfile.AevatarV1;
+
+    [Fact]
+    public void AevatarV1_ShouldHaveExpectedVersion()
+    {
+        _profile.Version.Should().Be("aevatar.workflow.v1");
+    }
+
+    [Theory]
+    [InlineData("llm", "llm_call")]
+    [InlineData("chat", "llm_call")]
+    [InlineData("task", "llm_call")]
+    [InlineData("loop", "while")]
+    [InlineData("sub_workflow", "workflow_call")]
+    [InlineData("foreach_llm", "foreach")]
+    [InlineData("http_get", "connector_call")]
+    [InlineData("http_post", "connector_call")]
+    [InlineData("mcp_call", "connector_call")]
+    [InlineData("sleep", "delay")]
+    [InlineData("publish", "emit")]
+    [InlineData("vote_consensus", "vote")]
+    public void ToCanonicalType_ShouldResolveAliases(string alias, string expected)
+    {
+        _profile.ToCanonicalType(alias).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("transform")]
+    [InlineData("conditional")]
+    [InlineData("llm_call")]
+    [InlineData("workflow_call")]
+    public void ToCanonicalType_ShouldReturnCanonicalAsIs(string type)
+    {
+        _profile.ToCanonicalType(type).Should().Be(type);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void ToCanonicalType_ShouldReturnEmptyForNullOrBlank(string? value)
+    {
+        _profile.ToCanonicalType(value).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("  LOOP  ", "while")]
+    [InlineData("Transform", "transform")]
+    public void ToCanonicalType_ShouldBeCaseInsensitiveAndTrim(string value, string expected)
+    {
+        _profile.ToCanonicalType(value).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("transform", true)]
+    [InlineData("loop", true)]
+    [InlineData("actor_send", true)]
+    [InlineData("workflow_loop", true)]
+    [InlineData("nonexistent", false)]
+    [InlineData(null, false)]
+    public void IsKnownStepType_ShouldRecognizeAllRegisteredTypes(string? type, bool expected)
+    {
+        _profile.IsKnownStepType(type).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("transform", true)]
+    [InlineData("actor_send", false)]
+    [InlineData("workflow_loop", false)]
+    public void IsCanonicalStepType_ShouldOnlyMatchCanonical(string type, bool expected)
+    {
+        _profile.IsCanonicalStepType(type).Should().Be(expected);
+    }
+
+    [Fact]
+    public void IsAdvancedImportOnly_ShouldMatchActorSend()
+    {
+        _profile.IsAdvancedImportOnly("actor_send").Should().BeTrue();
+        _profile.IsAdvancedImportOnly("transform").Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsForbiddenAuthoringType_ShouldMatchWorkflowLoop()
+    {
+        _profile.IsForbiddenAuthoringType("workflow_loop").Should().BeTrue();
+        _profile.IsForbiddenAuthoringType("while").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("sub_step_type", true)]
+    [InlineData("map_step_type", true)]
+    [InlineData("step", true)]
+    [InlineData("prompt", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsStepTypeParameterKey_ShouldMatchExpectedKeys(string? key, bool expected)
+    {
+        _profile.IsStepTypeParameterKey(key).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("singleton", true)]
+    [InlineData("transient", true)]
+    [InlineData("scope", true)]
+    [InlineData("unknown", false)]
+    public void IsSupportedWorkflowCallLifecycle_ShouldValidateLifecycles(string? value, bool expected)
+    {
+        _profile.IsSupportedWorkflowCallLifecycle(value).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("wait_signal", true)]
+    [InlineData("connector_call", true)]
+    [InlineData("llm_call", true)]
+    [InlineData("human_input", true)]
+    [InlineData("human_approval", true)]
+    [InlineData("transform", false)]
+    [InlineData("conditional", false)]
+    public void ShouldMirrorTimeoutMsToParameters_ShouldMatchExpectedTypes(string type, bool expected)
+    {
+        _profile.ShouldMirrorTimeoutMsToParameters(type).Should().Be(expected);
+    }
+
+    [Fact]
+    public void AllowedRoleFields_ShouldRejectRetiredStreamBufferCapacity()
+    {
+        _profile.AllowedRoleFields.Should().NotContain("stream_buffer_capacity");
+    }
+
+    [Fact]
+    public void Parse_WhenRoleUsesRetiredStreamBufferCapacity_ShouldReportUnknownField()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+
+        var result = service.Parse("""
+            name: retired-field
+            roles:
+              - id: assistant
+                stream_buffer_capacity: 128
+            steps:
+              - id: ask
+                type: llm_call
+                target_role: assistant
+            """);
+
+        result.Findings.Should().Contain(f =>
+            f.Path == "/roles/0/stream_buffer_capacity" &&
+            f.Code == "unknown_field");
+    }
+
+    [Fact]
+    public void Serialize_WhenRoleHasStreamSettings_ShouldOmitRetiredStreamBufferCapacity()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var document = new WorkflowDocument
+        {
+            Name = "retired-field",
+            Roles =
+            [
+                new RoleModel
+                {
+                    Id = "assistant",
+                    MaxHistoryMessages = 32,
+                    EventModules = "llm_handler",
+                },
+            ],
+        };
+
+        var yaml = service.Serialize(document);
+
+        yaml.Should().Contain("max_history_messages");
+        yaml.Should().Contain("event_modules");
+        yaml.Should().NotContain("stream_buffer_capacity");
+    }
+}

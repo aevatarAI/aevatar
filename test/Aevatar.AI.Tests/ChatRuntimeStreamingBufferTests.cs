@@ -9,13 +9,16 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
+// Refactor (iter39/cluster-039-public-chatasync-adapter):
+//   Old pattern: ChatRuntime 暴露 public ChatAsync 方法作为 non-streaming adapter,callers 可以选 non-streaming conversation API。
+//   New principle: Public runtime surface 仅暴露 ChatStreamAsync;explicit offline aggregation 放到 narrowly named offline/test adapter(明确不能与 realtime chat 混淆)。Provider contract stream-only。
 public sealed class ChatRuntimeStreamingBufferTests
 {
     [Fact]
-    public async Task ChatStreamAsync_WhenBufferIsBounded_ShouldStillStreamAllChunks()
+    public async Task ChatStreamAsync_WhenStreamOwnerHasNoBuffer_ShouldStillStreamAllChunks()
     {
         var provider = new StreamingProvider(["A", "B", "C", "D"]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 1);
+        var runtime = CreateRuntime(provider);
 
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -29,6 +32,25 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public void ChatRuntimeSource_ShouldNotReintroduceOwnedStreamLoop()
+    {
+        var root = FindRepositoryRoot();
+        var chatRuntimeFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Core",
+            "Chat",
+            "ChatRuntime.cs");
+        var source = StripLineComments(File.ReadAllText(chatRuntimeFile));
+
+        source.Should().NotContain("Task.Run");
+        source.Should().NotContain("Channel<LLMStreamChunk>");
+        source.Should().NotContain("ChannelWriter<LLMStreamChunk>");
+        source.Should().NotContain("_streamBufferCapacity");
+        source.Should().NotContain("streamBufferCapacity");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenProviderReturnsToolCallDelta_ShouldSurfaceStructuredChunks()
     {
         var provider = new StreamingProvider(["done"], streamToolCall: new ToolCall
@@ -37,10 +59,10 @@ public sealed class ChatRuntimeStreamingBufferTests
             Name = "search",
             ArgumentsJson = "{\"q\":\"aevatar\"}",
         });
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaToolCall != null);
@@ -77,9 +99,9 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             ]);
         var captureMiddleware = new CaptureLLMResponseMiddleware();
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, llmMiddlewares: [captureMiddleware]);
+        var runtime = CreateRuntime(provider, llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
         {
         }
 
@@ -104,7 +126,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     DeltaReasoningContent = "thinking step",
                 },
             ]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -135,7 +157,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var runtime = CreateRuntime(provider, tools: tools);
         var output = new StringBuilder();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
@@ -158,7 +180,146 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-tool" },
+                new LLMStreamChunk { DeltaContent = "checking" },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-reasoning",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"sg\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "done" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var assistantToolCallMessage = provider.StreamRequests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Id == "tc-reasoning");
+        assistantToolCallMessage.Content.Should().Be("checking");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-tool");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenTextToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-text-tool" },
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        I will search now.
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">lark</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "done" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var assistantToolCallMessage = provider.StreamRequests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "lookup");
+        assistantToolCallMessage.Content.Should().Be("I will search now.");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-text-tool");
+        provider.StreamRequests[1].Messages.Count(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: > 0 }).Should().Be(1);
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-final-text-tool" },
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        var output = new StringBuilder();
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Contain("summary-ready");
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages.Any(m =>
+            m.Role == "tool" &&
+            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+        var assistantToolCallMessage = provider.StreamRequests[2].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "lookup" &&
+            m.ReasoningContent == "thinking-before-final-text-tool");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-final-text-tool");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldExposeTypedToolContext()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -190,21 +351,38 @@ public sealed class ChatRuntimeStreamingBufferTests
             ],
         ]);
         var tools = new ToolManager();
-        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        tools.Register(new DelegateTool("lookup", _ => string.Join(
+            "|",
+            AgentToolRequestContext.NyxIdAccessToken,
+            AgentToolRequestContext.ScopeId,
+            AgentToolRequestContext.CallId,
+            AgentToolRequestContext.ChannelMessageId)));
+        var runtime = CreateRuntime(
+            provider,
+            tools: tools,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Credentials = new AgentToolCredentials("typed-access", null, null),
+                    Caller = new AgentToolCallerContext("typed-scope", null, null),
+                    Channel = new AgentToolChannelContext(null, null, null, "typed-message", null),
+                },
+            });
 
-        var output = new StringBuilder();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, requestId: "request-typed"))
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                output.Append(chunk.DeltaContent);
         }
 
-        output.ToString().Should().Contain("summary-ready");
         provider.StreamRequests.Should().HaveCount(3);
-        provider.StreamRequests[2].Messages.Any(m =>
+        provider.StreamRequests[0].Metadata.Should().BeEmpty();
+        provider.StreamRequests[1].Metadata.Should().BeEmpty();
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
             m.Role == "tool" &&
-            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+            m.Content != null &&
+            m.Content.StartsWith("typed-access|typed-scope|text-tc-", StringComparison.Ordinal) &&
+            m.Content.EndsWith("|typed-message", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -213,7 +391,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             requestBuilder: () => new LLMRequest
             {
                 Messages = [],
@@ -244,13 +421,101 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenMetadataOnlyRoutingProvided_ShouldNotPromoteRoutingContext()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(provider);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "metadata-route",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+        };
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-metadata-only", metadata))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RoutingContext.Should().BeNull();
+        provider.LastStreamRequest.ToolContext!.Routing.ModelOverride.Should().BeNull();
+        provider.LastStreamRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        provider.LastStreamRequest.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenBaseRoutingAndToolRoutingOverlap_ShouldIgnoreToolRoutingForLlmControl()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RoutingContext = new LLMRequestRoutingContext(
+                    ModelOverride: "base-model",
+                    NyxIdRoutePreference: "base-route",
+                    MaxToolRoundsOverride: 3,
+                    UserMemoryPrompt: "base-memory"),
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    Routing = new LLMRequestRoutingContext(
+                        ModelOverride: "typed-model",
+                        NyxIdRoutePreference: null,
+                        MaxToolRoundsOverride: 9,
+                        UserMemoryPrompt: null),
+                },
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RoutingContext.Should().NotBeNull();
+        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("base-model");
+        provider.LastStreamRequest.RoutingContext.NyxIdRoutePreference.Should().Be("base-route");
+        provider.LastStreamRequest.RoutingContext.MaxToolRoundsOverride.Should().Be(3);
+        provider.LastStreamRequest.RoutingContext.UserMemoryPrompt.Should().Be("base-memory");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenLlmControlProvided_ShouldCarryControlOutsideMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(provider);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: "token-1",
+            NyxIdOrgToken: "org-1",
+            SenderNyxIdAccessToken: null,
+            ModelOverride: "control-model",
+            NyxIdRoutePreference: "/api/v1/proxy/s/control",
+            MaxToolRoundsOverride: 2,
+            UserMemoryPrompt: "memory");
+
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           [ContentPart.TextPart("hello")],
+                           maxToolRounds: 2,
+                           requestId: "session-control",
+                           llmControl: control,
+                           toolContext: null))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.LlmControl.Should().Be(control);
+        provider.LastStreamRequest.Metadata.Should().BeEmpty();
+        provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("control-model");
+        provider.LastStreamRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-1");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldExposeRequestIdToLlmMiddlewareMetadata()
     {
         var provider = new StreamingProvider(["A"]);
         var captureMiddleware = new CaptureLLMMetadataMiddleware();
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             llmMiddlewares: [captureMiddleware]);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
@@ -261,12 +526,11 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldReturnSyntheticResultWithoutCallingProvider()
+    public async Task ExplicitTestAggregation_WhenAgentMiddlewareTerminates_ShouldConsumeStreamWithoutCallingProvider()
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
@@ -277,11 +541,123 @@ public sealed class ChatRuntimeStreamingBufferTests
                 }),
             ]);
 
-        var result = await runtime.ChatAsync("hello");
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
 
         result.Should().Be("short-circuit");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenAgentMiddlewareAwaitsNext_ShouldObserveResultAndItems()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        AgentRunContext? observedContext = null;
+        var runtime = CreateRuntime(
+            provider,
+            agentMiddlewares:
+            [
+                new DelegateAgentRunMiddleware(async (context, next) =>
+                {
+                    context.Items["agent.before_next"] = "seen";
+                    await next();
+                    observedContext = context;
+                }),
+            ]);
+        var output = new StringBuilder();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+        observedContext.Should().NotBeNull();
+        observedContext!.Result.Should().Be("stream-answer");
+        observedContext.Items.Should().Contain("agent.before_next", "seen");
+        observedContext.Items.Should().Contain("gen_ai.provider.name", "streaming-provider");
+    }
+
+    [Fact]
+    public async Task ExplicitTestAggregation_WhenProviderStreamsContent_ShouldAggregateStreamContent()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        var runtime = CreateRuntime(provider);
+
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
+
+        result.Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void ChatRuntimePublicSurface_ShouldNotExposeNonStreamingChatAsync()
+    {
+        var chatAsyncMethods = typeof(ChatRuntime)
+            .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Where(method => method.Name == "ChatAsync")
+            .Select(method => method.ToString())
+            .ToArray();
+
+        chatAsyncMethods.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void UserFacingAiExecutorSurfaces_ShouldNotDirectlyCallProviderChatAsyncOutsideProviderBoundary()
+    {
+        var root = FindRepositoryRoot();
+        var scannedRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core"),
+            Path.Combine(root, "src", "Aevatar.Studio.Hosting"),
+            Path.Combine(root, "agents", "Aevatar.GAgents.ChatbotClassifier"),
+        };
+        var offenders = scannedRoots
+            .SelectMany(scanRoot => Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories))
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => x.line.Contains("provider.ChatAsync", StringComparison.Ordinal)
+                            || x.line.Contains("_provider.ChatAsync", StringComparison.Ordinal))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProviderContractSurfaces_ShouldNotDeclareNonStreamingChatAsync()
+    {
+        var root = FindRepositoryRoot();
+        var providerContractFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Abstractions",
+            "LLMProviders",
+            "ILLMProvider.cs");
+        var concreteProviderRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core", "LLMProviders"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.MEAI"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.NyxId"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.Tornado"),
+        };
+
+        var scannedFiles = new[] { providerContractFile }
+            .Concat(concreteProviderRoots.SelectMany(scanRoot =>
+                Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories)));
+        var offenders = scannedFiles
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => System.Text.RegularExpressions.Regex.IsMatch(
+                    x.line,
+                    @"Task<LLMResponse>\s+ChatAsync\s*\("))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
     }
 
     [Fact]
@@ -290,7 +666,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
@@ -316,7 +691,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             llmMiddlewares:
             [
                 new DelegateLlmCallMiddleware((context, _) =>
@@ -350,6 +724,36 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenLlmMiddlewareTerminates_ShouldEmitReasoningContentChunk()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            llmMiddlewares:
+            [
+                new DelegateLlmCallMiddleware((context, _) =>
+                {
+                    context.Terminate = true;
+                    context.Response = new LLMResponse
+                    {
+                        Content = "answer",
+                        ReasoningContent = "thinking-step",
+                    };
+                    return Task.CompletedTask;
+                }),
+            ]);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-step");
+        chunks.Should().Contain(x => x.DeltaContent == "answer");
+        chunks.Should().Contain(x => x.IsLast);
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenProviderEmitsEmptyNonTerminalChunk_ShouldFilterItOut()
     {
         var provider = new StreamingProvider(
@@ -358,7 +762,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             [
                 new LLMStreamChunk(),
             ]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -367,19 +771,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         chunks.Should().BeEmpty();
     }
 
-    [Fact]
-    public void Constructor_WhenStreamBufferCapacityIsInvalid_ShouldThrow()
-    {
-        var provider = new StreamingProvider([]);
-
-        var act = () => CreateRuntime(provider, streamBufferCapacity: 0);
-
-        act.Should().Throw<ArgumentOutOfRangeException>();
-    }
-
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
-        int streamBufferCapacity,
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
@@ -395,8 +788,15 @@ public sealed class ChatRuntimeStreamingBufferTests
             hooks: null,
             requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
             agentMiddlewares: agentMiddlewares,
-            llmMiddlewares: llmMiddlewares,
-            streamBufferCapacity: streamBufferCapacity);
+            llmMiddlewares: llmMiddlewares);
+    }
+
+    private static string StripLineComments(string source)
+    {
+        var lines = source
+            .Split('\n')
+            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal));
+        return string.Join('\n', lines);
     }
 
     private sealed class QueuedStreamingProvider(
@@ -406,13 +806,6 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         public string Name => "queued-streaming-provider";
         public List<LLMRequest> StreamRequests { get; } = [];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse());
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
@@ -436,18 +829,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
-        public int ChatCallCount { get; private set; }
         public int StreamCallCount { get; private set; }
         public LLMRequest? LastStreamRequest { get; private set; }
-        public LLMRequest? LastChatRequest { get; private set; }
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastChatRequest = request;
-            ChatCallCount++;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = string.Concat(chunks) });
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
@@ -506,6 +889,20 @@ public sealed class ChatRuntimeStreamingBufferTests
 
             await next();
         }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (File.Exists(Path.Combine(current, "aevatar.slnx")))
+                return current;
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 
     private sealed class DelegateAgentRunMiddleware(

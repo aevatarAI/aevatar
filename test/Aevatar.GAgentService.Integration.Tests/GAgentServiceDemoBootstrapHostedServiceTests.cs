@@ -259,6 +259,12 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutSnapshot?>(null);
 
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }

@@ -7,6 +7,9 @@ namespace Aevatar.Scripting.Projection.ReadPorts;
 
 public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
+    // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):
+    //   Old pattern: Scripting persists and republishes source_text as a compatibility shadow of ScriptPackageSpec; multi-file packages can be encoded as JSON text and reparsed from persisted source.
+    //   New principle: ScriptPackageSpec is the sole internal source-package contract for commands/state/events/readmodels; source_text is only an external one-file adapter field at Host/Application boundary.
     private readonly IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>? _documentReader;
     private readonly Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshot?>>? _queryAsync;
 
@@ -49,7 +52,6 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
         return new ScriptDefinitionSnapshot(
             document.ScriptId,
             document.Revision,
-            document.SourceText,
             document.SourceHash,
             document.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
             document.StateTypeUrl,
@@ -76,7 +78,7 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
                 $"Script definition snapshot not found for actor `{definitionActorId}` revision `{requestedRevision}`.");
         }
 
-        if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(snapshot.SourceText))
+        if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
         {
             throw new InvalidOperationException(
                 $"Script definition script_package is empty for actor `{definitionActorId}`.");

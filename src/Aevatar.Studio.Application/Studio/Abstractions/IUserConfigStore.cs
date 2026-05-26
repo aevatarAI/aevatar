@@ -1,11 +1,5 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
-public interface IUserConfigStore
-{
-    Task<UserConfig> GetAsync(CancellationToken cancellationToken = default);
-    Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default);
-}
-
 public static class UserConfigLlmRouteDefaults
 {
     public const string Gateway = "";
@@ -33,6 +27,41 @@ public static class UserConfigLlmRoute
             return normalized;
 
         return $"/api/v1/proxy/s/{normalized.Trim('/')}";
+    }
+}
+
+public readonly record struct UserConfigLlmModelRoute(string RouteSlug, string Model);
+
+public static class UserConfigLlmModel
+{
+    public static UserConfigLlmModelRoute? TryParseRouteModel(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var slashIndex = trimmed.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= trimmed.Length - 1)
+            return null;
+
+        var prefix = trimmed[..slashIndex];
+        if (!LooksLikeSlug(prefix))
+            return null;
+
+        return new UserConfigLlmModelRoute(prefix, trimmed[(slashIndex + 1)..]);
+    }
+
+    private static bool LooksLikeSlug(string value)
+    {
+        if (value.Length is < 2 or > 64) return false;
+        if (!char.IsAsciiLetterLower(value[0])) return false;
+        foreach (var c in value)
+        {
+            if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-'))
+                return false;
+        }
+
+        return true;
     }
 }
 
@@ -85,4 +114,5 @@ public sealed record UserConfig(
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
+    string? GithubUsername = null,
     int MaxToolRounds = 0);

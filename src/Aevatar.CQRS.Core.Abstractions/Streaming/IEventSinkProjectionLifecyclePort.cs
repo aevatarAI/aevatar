@@ -7,14 +7,15 @@ public interface IEventSinkProjectionLifecyclePort<TLease, TEvent>
 {
     bool ProjectionEnabled { get; }
 
-    Task AttachLiveSinkAsync(
+    // Refactor (iter17/cluster-035): Old pattern: attach hid live sink subscriptions behind port-owned process registries. New principle: attach returns an explicit cleanup lease owned by the caller.
+    Task<IAsyncDisposable?> AttachLiveSinkAsync(
         TLease lease,
         IEventSink<TEvent> sink,
         CancellationToken ct = default);
 
+    // Refactor (iter17/cluster-035): Old pattern: detach looked up subscriptions by projection lease and sink. New principle: detach consumes the exact live sink lease produced by attach.
     Task DetachLiveSinkAsync(
-        TLease lease,
-        IEventSink<TEvent> sink,
+        IAsyncDisposable? liveSinkLease,
         CancellationToken ct = default);
 
     Task ReleaseActorProjectionAsync(
@@ -27,7 +28,8 @@ public interface IEventSinkProjectionLifecyclePort<TLease, TEvent>
 /// </summary>
 public static class EventSinkProjectionLifecyclePortExtensions
 {
-    public static Task<TLease?> EnsureAndAttachAsync<TLease, TEvent>(
+    // Refactor (iter17/cluster-035): Old pattern: extension returned only the actor projection lease and made live sink cleanup unreachable. New principle: extension returns the full attachment with both projection and live sink leases.
+    public static Task<EventSinkProjectionAttachment<TLease>?> EnsureAndAttachLeaseAsync<TLease, TEvent>(
         this IEventSinkProjectionLifecyclePort<TLease, TEvent> lifecyclePort,
         Func<CancellationToken, Task<TLease?>> ensureAsync,
         IEventSink<TEvent> sink,
@@ -38,7 +40,7 @@ public static class EventSinkProjectionLifecyclePortExtensions
         ArgumentNullException.ThrowIfNull(ensureAsync);
         ArgumentNullException.ThrowIfNull(sink);
 
-        return EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync(
+        return EventSinkProjectionLeaseOrchestrator.EnsureAndAttachLeaseAsync(
             ensureAsync,
             (lease, eventSink, token) => lifecyclePort.AttachLiveSinkAsync(lease, eventSink, token),
             (lease, token) => lifecyclePort.ReleaseActorProjectionAsync(lease, token),
@@ -46,9 +48,11 @@ public static class EventSinkProjectionLifecyclePortExtensions
             ct);
     }
 
+    // Refactor (iter17/cluster-035): Old pattern: cleanup depended on hidden actorId-to-subscription lookup. New principle: cleanup is driven by the explicit live sink lease carried from attach.
     public static Task DetachReleaseAndDisposeAsync<TLease, TEvent>(
         this IEventSinkProjectionLifecyclePort<TLease, TEvent> lifecyclePort,
         TLease? lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<TEvent> sink,
         Func<Task>? onDetachedAsync = null,
         CancellationToken ct = default)
@@ -59,10 +63,16 @@ public static class EventSinkProjectionLifecyclePortExtensions
 
         return EventSinkProjectionLeaseOrchestrator.DetachReleaseAndDisposeAsync(
             lease,
+            liveSinkLease,
             sink,
-            (runtimeLease, eventSink, token) => lifecyclePort.DetachLiveSinkAsync(runtimeLease, eventSink, token),
+            (subscriptionLease, token) => lifecyclePort.DetachLiveSinkAsync(subscriptionLease, token),
             (runtimeLease, token) => lifecyclePort.ReleaseActorProjectionAsync(runtimeLease, token),
             onDetachedAsync,
             ct);
     }
 }
+
+// Refactor (iter17/cluster-035): Old pattern: attach returned only a projection lease and discarded the live sink subscription lease. New principle: attachment carries every lifecycle handle required for deterministic detach.
+public sealed record EventSinkProjectionAttachment<TLease>(
+    TLease ProjectionLease,
+    IAsyncDisposable? LiveSinkLease);

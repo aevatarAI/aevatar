@@ -84,18 +84,28 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <inheritdoc />
     public void Register(string name, string yaml)
     {
+        Register(name, yaml, "builtin");
+    }
+
+    public void Register(string name, string yaml, string sourceKind)
+    {
         var normalizedName = NormalizeName(name);
+        var normalizedSourceKind = string.IsNullOrWhiteSpace(sourceKind)
+            ? "builtin"
+            : sourceKind.Trim();
         ImmutableInterlocked.AddOrUpdate(
             ref _workflows,
             normalizedName,
             _ => new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
-                WorkflowDefinitionActorId.Format(normalizedName)),
+                WorkflowDefinitionActorId.Format(normalizedName),
+                normalizedSourceKind),
             (_, _) => new WorkflowDefinitionRegistration(
                 normalizedName,
                 yaml,
-                WorkflowDefinitionActorId.Format(normalizedName)));
+                WorkflowDefinitionActorId.Format(normalizedName),
+                normalizedSourceKind));
     }
 
     /// <inheritdoc />

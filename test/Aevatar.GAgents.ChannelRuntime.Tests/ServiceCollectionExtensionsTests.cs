@@ -1,0 +1,250 @@
+using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.DependencyInjection;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
+using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Telegram;
+using Aevatar.GAgents.Scheduled;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Xunit;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class ServiceCollectionExtensionsTests
+{
+    [Fact]
+    public void AddChannelRuntime_RegistersRegistrationProjectionServices_ForInMemoryStore()
+    {
+        var services = new ServiceCollection();
+
+        var result = services.AddChannelRuntime();
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
+        services.AddTelegramPlatform();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
+
+        result.Should().BeSameAs(services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
+        AssertProjectionActivationProviderRegistered<ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
+        // Refactor (iter20/cluster-003):
+        //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
+        //   New principle: delete orphan path,NyxID relay 唯一 ingress
+        AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+        services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
+            .Should().Be(0);
+        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
+            .Should().Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandTargetResolver<ChannelBotRebuildProjectionCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandEnvelopeFactory<ChannelBotRebuildProjectionCommand>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchPipeline<ChannelBotRebuildProjectionCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRebuildProjectionCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
+        registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+    }
+
+    [Fact]
+    public void AddDeviceRegistration_RegistersDeviceCommandFacades()
+    {
+        var services = new ServiceCollection();
+
+        var result = services.AddDeviceRegistration();
+
+        result.Should().BeSameAs(services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(DeviceRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IDeviceCallbackCommandService) &&
+            descriptor.ImplementationType == typeof(DeviceCallbackCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceRegisterCommand, DeviceCommandAcceptedReceipt, DeviceRegistrationCommandStartError>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<DeviceCallbackDispatchCommand, DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>));
+        AssertProjectionActivationProviderRegistered<DeviceRegistrationCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddScheduledAgents_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddScheduledAgents();
+
+        AssertProjectionActivationProviderRegistered<UserAgentCatalogCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelIdentity(new ConfigurationBuilder().Build());
+
+        AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
+            services);
+    }
+
+    [Fact]
+    public void AddChannelRuntime_RegistersLarkInteractiveReplyProducer_SoDispatcherCanFindIt()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelRuntime();
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IInteractiveReplyDispatcher));
+        provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
+        registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+    }
+
+    [Fact]
+    public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForElasticsearchStore()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        var result = services.AddChannelRuntime(configuration);
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+        services.AddChannelInteractiveReplyTools();
+        services.AddTelegramPlatform();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IChannelMessageComposerRegistry>();
+
+        result.Should().BeSameAs(services);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
+        AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime(IConfiguration) registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; configured DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
+        registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
+    }
+
+    private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsLarkConversationInboxName(descriptor.ServiceType.FullName) ||
+            ContainsLarkConversationInboxName(descriptor.ImplementationType?.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsLarkConversationInboxName(string? name) =>
+        name is not null && name.Contains("LarkConversationInbox", StringComparison.Ordinal);
+
+    private static void AssertNoRetiredChannelRuntimeDiagnosticsRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ServiceType.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationType?.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationInstance?.GetType().FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationFactory?.Method.ReturnType.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
+        name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
+
+    private static void AssertProjectionActivationProviderRegistered<TProvider>(IServiceCollection services)
+        where TProvider : IProjectionActivationPlanProvider
+    {
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ProjectionActivationPlanDispatcher));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            descriptor.ImplementationType == typeof(CommittedStateProjectionActivationHook));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionActivationPlanProvider) &&
+            descriptor.ImplementationType == typeof(TProvider));
+    }
+}

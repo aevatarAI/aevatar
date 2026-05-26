@@ -31,16 +31,19 @@ export type DraftRunResult = {
   runId: string;
   sourceHash: string;
   commandTypeUrl: string;
-  readModelUrl: string;
+  activityUrl: string;
 };
 
-export type ScriptReadModelSnapshot = {
+export type ScriptRuntimeActivitySnapshot = {
   actorId: string;
   scriptId: string;
   definitionActorId: string;
   revision: string;
-  readModelTypeUrl: string;
-  readModelPayloadJson: string;
+  input: string;
+  output: string;
+  status: string;
+  lastCommandId: string;
+  notes: string[];
   stateVersion: number;
   lastEventId: string;
   updatedAt: string;
@@ -105,6 +108,48 @@ export type ScopedScriptDetail = {
   source: ScopedScriptSource | null;
 };
 
+export type ScopeScriptCommandAcceptedHandle = {
+  actorId: string;
+  commandId: string;
+  correlationId: string;
+};
+
+export type ScopeScriptAcceptedSummary = {
+  scopeId: string;
+  scriptId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  revisionId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type ScopeScriptUpsertAcceptedResponse = {
+  acceptedScript: ScopeScriptAcceptedSummary;
+  definitionCommand: ScopeScriptCommandAcceptedHandle;
+  catalogCommand: ScopeScriptCommandAcceptedHandle;
+};
+
+export type ScopeScriptSaveObservationRequest = {
+  revisionId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+  acceptedAt: string;
+};
+
+export type ScopeScriptSaveObservationResult = {
+  scopeId: string;
+  scriptId: string;
+  status: 'pending' | 'applied' | 'rejected';
+  message: string;
+  currentScript: ScopedScriptSummary | null;
+  isTerminal: boolean;
+};
+
 export type ScriptDefinitionBindingSnapshot = {
   scriptId: string;
   revision: string;
@@ -152,7 +197,7 @@ export type ScriptDraft = {
   updatedAtUtc: string;
   lastSourceHash: string;
   lastRun: DraftRunResult | null;
-  lastSnapshot: ScriptReadModelSnapshot | null;
+  lastSnapshot: ScriptRuntimeActivitySnapshot | null;
   lastPromotion: ScriptPromotionDecision | null;
   scopeDetail: ScopedScriptDetail | null;
 };

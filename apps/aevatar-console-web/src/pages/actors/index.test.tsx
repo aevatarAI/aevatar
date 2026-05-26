@@ -1,9 +1,11 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import React from 'react';
-import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import ActorsPage from './index';
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import React from "react";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
+import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
+import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import ActorsPage from "./index";
 
-jest.mock('@/shared/api/runtimeActorsApi', () => ({
+jest.mock("@/shared/api/runtimeActorsApi", () => ({
   runtimeActorsApi: {
     getActorSnapshot: jest.fn(),
     getActorTimeline: jest.fn(),
@@ -13,102 +15,306 @@ jest.mock('@/shared/api/runtimeActorsApi', () => ({
   },
 }));
 
-jest.mock('@/shared/api/runtimeQueryApi', () => ({
+jest.mock("@/shared/api/runtimeQueryApi", () => ({
   runtimeQueryApi: {
     listAgents: jest.fn(async () => []),
   },
 }));
 
-jest.mock('@/shared/graphs/GraphCanvas', () => ({
+jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
   default: () => {
-    const React = require('react');
-    return React.createElement('div', null, 'GraphCanvas');
+    const React = require("react");
+    return React.createElement("div", null, "GraphCanvas");
   },
 }));
 
-describe('ActorsPage', () => {
+const actorCatalog = [
+  {
+    description: "WorkflowRunGAgent[SupportRoot]",
+    id: "actor://workflow/customer-support/root-supervisor",
+    type: "WorkflowRunGAgent",
+  },
+  {
+    description: "WorkflowRunGAgent[SupportPlanner]",
+    id: "actor://workflow/customer-support/planner",
+    type: "WorkflowRunGAgent",
+  },
+];
+
+function buildActorSnapshot(actorId: string) {
+  return {
+    actorId,
+    completedSteps: actorId.endsWith("/planner") ? 4 : 2,
+    completionStatusValue: actorId.endsWith("/planner") ? 1 : 0,
+    lastCommandId: "cmd-customer-support",
+    lastError: "",
+    lastEventId: "evt-customer-support",
+    lastOutput: actorId.endsWith("/planner")
+      ? "Planner completed routing."
+      : "Supervisor is waiting for downstream checks.",
+    lastSuccess: actorId.endsWith("/planner"),
+    lastUpdatedAt: "2026-04-16T05:40:12Z",
+    requestedSteps: 4,
+    roleReplyCount: actorId.endsWith("/planner") ? 2 : 1,
+    stateVersion: actorId.endsWith("/planner") ? 7 : 5,
+    totalSteps: 4,
+    workflowName: actorId.endsWith("/planner") ? "SupportPlanner" : "SupportRoot",
+  };
+}
+
+function buildActorTimeline(actorId: string) {
+  return [
+    {
+      agentId: actorId,
+      data: {},
+      eventType: "StepCompleted",
+      message: actorId.endsWith("/planner")
+        ? "Classification completed and plan published."
+        : "Supervisor received escalation request.",
+      stage: actorId.endsWith("/planner") ? "workflow.completed" : "workflow.running",
+      stepId: actorId.endsWith("/planner") ? "plan" : "receive-request",
+      stepType: actorId.endsWith("/planner") ? "tool_call" : "message_ingress",
+      timestamp: "2026-04-16T05:40:12Z",
+    },
+  ];
+}
+
+function buildActorGraph(actorId: string) {
+  return {
+    snapshot: {
+      actorId,
+    },
+    subgraph: {
+      edges: [
+        {
+          edgeId: "edge-owns",
+          edgeType: "OWNS",
+          fromNodeId: actorId,
+          toNodeId: "run://customer-support/current",
+          updatedAt: "2026-04-16T05:40:12Z",
+        },
+      ],
+      nodes: [
+        {
+          nodeId: actorId,
+          nodeType: "Actor",
+          properties: {
+            role: actorId.endsWith("/planner") ? "planner" : "supervisor",
+            workflowName: actorId.endsWith("/planner")
+              ? "CustomerSupportPlanner"
+              : "CustomerSupportTriage",
+          },
+          updatedAt: "2026-04-16T05:40:12Z",
+        },
+        {
+          nodeId: "run://customer-support/current",
+          nodeType: "WorkflowRun",
+          properties: {
+            commandId: "cmd-customer-support",
+            workflowName: "CustomerSupportTriage",
+          },
+          updatedAt: "2026-04-16T05:40:12Z",
+        },
+      ],
+      rootNodeId: actorId,
+    },
+  };
+}
+
+describe("ActorsPage", () => {
+  const findActorRow = (needle: string) =>
+    screen.getAllByRole("row").find((row) => row.textContent?.includes(needle)) ?? null;
+
   beforeEach(() => {
     window.localStorage.clear();
+    window.history.replaceState({}, "", "/runtime/explorer");
+    (runtimeQueryApi.listAgents as jest.Mock).mockReset();
+    (runtimeActorsApi.getActorSnapshot as jest.Mock).mockReset();
+    (runtimeActorsApi.getActorTimeline as jest.Mock).mockReset();
+    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockReset();
+
+    (runtimeQueryApi.listAgents as jest.Mock).mockResolvedValue(actorCatalog);
+    (runtimeActorsApi.getActorSnapshot as jest.Mock).mockImplementation(
+      async (actorId: string) => buildActorSnapshot(actorId),
+    );
+    (runtimeActorsApi.getActorTimeline as jest.Mock).mockImplementation(
+      async (actorId: string) => buildActorTimeline(actorId),
+    );
+    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockImplementation(
+      async (actorId: string) => buildActorGraph(actorId),
+    );
   });
 
-  it('renders the runtime explorer shell and navigation actions', async () => {
-    const { container } = renderWithQueryClient(
-      React.createElement(ActorsPage),
-    );
+  it("renders the live runtime explorer shell and actor list", async () => {
+    const { container } = renderWithQueryClient(React.createElement(ActorsPage));
 
-    expect(container.textContent).toContain('Runtime Explorer');
-    expect(container.textContent).toContain('Actor Focus');
-    expect(container.textContent).toContain('Explorer Digest');
-    expect(container.textContent).toContain('Observed Actors');
-    expect(screen.getByPlaceholderText('Enter actor ID')).toBeTruthy();
-    expect(screen.getByPlaceholderText('Filter discovered actors')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Clear focus' })).toBeTruthy();
-    expect(container.textContent).toContain('0 actor entries in view');
-    expect(container.textContent).toContain(
-      'Snapshot, timeline, and subgraph all resolve from the same actor-focused inspector.',
-    );
-    expect(container.textContent).toContain('No runtime actors matched the current filter.');
+    await screen.findByText("SupportRoot");
+
+    expect(container.textContent).toContain("Aevatar / Platform");
+    expect(container.textContent).toContain("Topology");
+    expect(container.textContent).toContain("真实数据");
+    expect(container.textContent).toContain("选择追查对象");
+    expect(screen.getByPlaceholderText("输入 Actor ID")).toBeTruthy();
+    expect(screen.getByPlaceholderText("筛选 Actor")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "刷新列表" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开追查详情" })).toBeTruthy();
+    expect(screen.queryByText("示例数据")).toBeNull();
+    expect(container.textContent).toContain("SupportRoot");
+    expect(screen.getAllByRole("button", { name: "查看概览" }).length).toBeGreaterThan(0);
   });
 
-  it('opens the actor inspector when an actor ID is provided', async () => {
-    const { runtimeActorsApi } = jest.requireMock('@/shared/api/runtimeActorsApi') as {
-      runtimeActorsApi: {
-        getActorGraphEnriched: jest.Mock;
-        getActorSnapshot: jest.Mock;
-        getActorTimeline: jest.Mock;
-      };
-    };
+  it("opens the dedicated detail page when an actor id is entered directly", async () => {
+    renderWithQueryClient(React.createElement(ActorsPage));
 
-    runtimeActorsApi.getActorSnapshot.mockResolvedValue({
-      actorId: 'actor://selected',
-      completedSteps: 4,
-      completionStatusValue: 100,
-      lastOutput: 'Completed successfully.',
-      lastUpdatedAt: '2026-03-26T00:00:00Z',
-      roleReplyCount: 2,
-      stateVersion: 7,
-      workflowName: 'SupportWorkflow',
+    fireEvent.change(screen.getByPlaceholderText("输入 Actor ID"), {
+      target: { value: "actor://workflow/customer-support/planner" },
     });
-    runtimeActorsApi.getActorTimeline.mockResolvedValue([
-      {
-        eventType: 'StepStarted',
-        message: 'Step started',
-        stage: 'workflow.started',
-        stepId: 'step-1',
-        stepType: 'chat',
-        timestamp: '2026-03-26T00:00:01Z',
-      },
-    ]);
-    runtimeActorsApi.getActorGraphEnriched.mockResolvedValue({
-      subgraph: {
-        edges: [],
-        nodes: [
-          {
-            nodeId: 'actor://selected',
-            nodeType: 'WorkflowAgent',
-          },
-        ],
-      },
+    fireEvent.click(screen.getByRole("button", { name: "打开追查详情" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/explorer/detail");
     });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor://workflow/customer-support/planner");
+  });
+
+  it("opens a live preview drawer from the real actor list", async () => {
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("对象快速概览")).toBeTruthy();
+    await waitFor(() => {
+      expect(runtimeActorsApi.getActorSnapshot).toHaveBeenCalledWith(
+        "actor://workflow/customer-support/planner",
+      );
+    });
+  });
+
+  it("bounds the actor table body instead of clipping the parent panel", async () => {
+    const { container } = renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+
+    const tableShell = container.querySelector<HTMLElement>(".topology-actor-table-shell");
+    const table = container.querySelector<HTMLElement>(".topology-actor-table");
+    const tableBody = container.querySelector<HTMLElement>(
+      ".topology-actor-table .ant-table-body",
+    );
+
+    expect(tableShell).toBeTruthy();
+    expect(tableShell).toHaveStyle({
+      maxWidth: "100%",
+      minWidth: "0",
+      overflowX: "auto",
+      width: "100%",
+    });
+    expect(table).toBeTruthy();
+    expect(table).toHaveStyle({
+      maxHeight: "min(52vh, 440px)",
+      maxWidth: "100%",
+      minWidth: "0",
+      overflow: "hidden",
+      width: "100%",
+    });
+    expect(tableBody).toBeTruthy();
+    expect(tableBody).toHaveStyle({
+      maxHeight: "calc(min(52vh, 440px) - 64px)",
+    });
+  });
+
+  it("does not open the preview drawer when only the row is clicked", async () => {
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(plannerRow as HTMLElement);
+
+    expect(screen.queryByText("对象快速概览")).toBeNull();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("对象快速概览")).toBeTruthy();
+  });
+
+  it("opens runtime runs from the preview drawer using the preview actor context", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/explorer?scopeId=scope-team-1&serviceId=service-draft&runId=run-123",
+    );
 
     renderWithQueryClient(React.createElement(ActorsPage));
 
-    fireEvent.change(screen.getByPlaceholderText('Enter actor ID'), {
-      target: { value: 'actor://selected' },
-    });
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("对象快速概览")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看运行" }));
 
     await waitFor(() => {
-      expect(runtimeActorsApi.getActorSnapshot).toHaveBeenCalledWith(
-        'actor://selected',
-      );
+      expect(window.location.pathname).toBe("/runtime/runs");
     });
-    expect(await screen.findByText('Snapshot')).toBeTruthy();
-    expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getByText('Topology Digest')).toBeTruthy();
-    expect(screen.getByText('SupportWorkflow')).toBeTruthy();
-    expect(screen.getByText(/Last output:/i).textContent).toContain(
-      'Completed successfully.',
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor://workflow/customer-support/planner");
+    expect(params.get("scopeId")).toBe("scope-team-1");
+    expect(params.get("serviceOverrideId")).toBe("service-draft");
+    expect(params.get("route")).toBe("SupportPlanner");
+    expect(params.get("returnTo")).toContain("/runtime/explorer/detail");
+    expect(params.get("returnTo")).toContain("actorId=actor%3A%2F%2Fworkflow%2Fcustomer-support%2Fplanner");
+  });
+
+  it("shows a dedicated unavailable message when preview actor snapshot is gone", async () => {
+    (runtimeActorsApi.getActorSnapshot as jest.Mock).mockRejectedValueOnce(
+      new Error("HTTP 404 Not Found"),
     );
+    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockRejectedValueOnce(
+      new Error("HTTP 404 Not Found"),
+    );
+
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await screen.findByText("SupportPlanner");
+    const plannerRow = findActorRow("SupportPlanner");
+
+    expect(plannerRow).toBeTruthy();
+
+    fireEvent.click(
+      within(plannerRow as HTMLElement).getByRole("button", { name: "查看概览" }),
+    );
+
+    expect(await screen.findByText("这个 actor 当前不可预览")).toBeTruthy();
+    expect(screen.getByText("当前后端还能引用这个 actor，但已经查不到它的 snapshot。常见原因是后端重启、运行态已清理，或这是历史绑定残留。")).toBeTruthy();
+  });
+
+  it("keeps the list page route without a detail actor selection", async () => {
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/explorer");
+    });
+    expect(window.location.search).toBe("");
   });
 });

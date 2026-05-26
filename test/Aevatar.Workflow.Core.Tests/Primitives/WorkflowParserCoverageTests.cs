@@ -125,6 +125,26 @@ public sealed class WorkflowParserCoverageTests
     }
 
     [Fact]
+    public void Parse_WhenRoleAgentKindIsPresent_ShouldMapTrimmedAgentKind()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: role_agent_kind
+            roles:
+              - id: assistant
+                name: Assistant
+                agent_kind: " workflow.assistant-role "
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: assistant
+            """);
+
+        workflow.Roles.Should().ContainSingle();
+        workflow.Roles[0].AgentKind.Should().Be("workflow.assistant-role");
+    }
+
+    [Fact]
     public void Parse_WhenRetryAndOnErrorUseDefaultsAndFallbackAlias_ShouldNormalizePolicies()
     {
         var workflow = new WorkflowParser().Parse(

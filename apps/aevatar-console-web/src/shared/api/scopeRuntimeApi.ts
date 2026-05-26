@@ -1,4 +1,5 @@
 import { jsonBody, requestJson, withQuery } from "./http/client";
+import { decodeServiceCatalogSnapshots } from "./servicesApi";
 import {
   expectArray,
   expectRecord,
@@ -13,6 +14,7 @@ import {
 import type {
   ScopeServiceBindingCatalogSnapshot,
   ScopeServiceBindingInput,
+  ScopeServiceEndpointContract,
   ScopeServiceRevisionActionResult,
   ScopeServiceRevisionCatalogSnapshot,
   ScopeServiceRunAuditReport,
@@ -30,7 +32,10 @@ import type {
   BoundServiceReference,
   ServiceBindingSnapshot,
 } from "@/shared/models/governance";
-import type { ServiceCommandAcceptedReceipt } from "@/shared/models/services";
+import type {
+  ServiceCatalogSnapshot,
+  ServiceCommandAcceptedReceipt,
+} from "@/shared/models/services";
 import {
   normalizeStudioScopeBindingImplementationKind,
   type StudioScopeBindingRevision,
@@ -554,6 +559,114 @@ function decodeScopeServiceRevisionActionResult(
   };
 }
 
+function decodeScopeServiceEndpointContract(
+  value: unknown,
+  label = "ScopeServiceEndpointContract",
+): ScopeServiceEndpointContract {
+  const record = expectRecord(value, label);
+  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  return {
+    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    serviceId: serviceId || "",
+    memberId: readOptionalString(record, ["memberId", "MemberId"]),
+    publishedServiceId: readOptionalString(record, [
+      "publishedServiceId",
+      "PublishedServiceId",
+    ]),
+    endpointId: readString(
+      record,
+      ["endpointId", "EndpointId"],
+      `${label}.endpointId`,
+    ),
+    invokePath: readString(
+      record,
+      ["invokePath", "InvokePath"],
+      `${label}.invokePath`,
+    ),
+    method: readString(record, ["method", "Method"], `${label}.method`),
+    requestContentType: readString(
+      record,
+      ["requestContentType", "RequestContentType"],
+      `${label}.requestContentType`,
+    ),
+    responseContentType: readString(
+      record,
+      ["responseContentType", "ResponseContentType"],
+      `${label}.responseContentType`,
+    ),
+    requestTypeUrl: readString(
+      record,
+      ["requestTypeUrl", "RequestTypeUrl"],
+      `${label}.requestTypeUrl`,
+    ),
+    responseTypeUrl: readString(
+      record,
+      ["responseTypeUrl", "ResponseTypeUrl"],
+      `${label}.responseTypeUrl`,
+    ),
+    supportsSse: readBoolean(
+      record,
+      ["supportsSse", "SupportsSse"],
+      `${label}.supportsSse`,
+    ),
+    supportsWebSocket: readBoolean(
+      record,
+      ["supportsWebSocket", "SupportsWebSocket"],
+      `${label}.supportsWebSocket`,
+    ),
+    supportsAguiFrames: readBoolean(
+      record,
+      ["supportsAguiFrames", "SupportsAguiFrames"],
+      `${label}.supportsAguiFrames`,
+    ),
+    streamFrameFormat: readNullableString(
+      record,
+      ["streamFrameFormat", "StreamFrameFormat"],
+      `${label}.streamFrameFormat`,
+    ),
+    smokeTestSupported: readBoolean(
+      record,
+      ["smokeTestSupported", "SmokeTestSupported"],
+      `${label}.smokeTestSupported`,
+    ),
+    defaultSmokeInputMode: readString(
+      record,
+      ["defaultSmokeInputMode", "DefaultSmokeInputMode"],
+      `${label}.defaultSmokeInputMode`,
+    ) as ScopeServiceEndpointContract["defaultSmokeInputMode"],
+    defaultSmokePrompt: readNullableString(
+      record,
+      ["defaultSmokePrompt", "DefaultSmokePrompt"],
+      `${label}.defaultSmokePrompt`,
+    ),
+    sampleRequestJson: readNullableString(
+      record,
+      ["sampleRequestJson", "SampleRequestJson"],
+      `${label}.sampleRequestJson`,
+    ),
+    deploymentStatus: readString(
+      record,
+      ["deploymentStatus", "DeploymentStatus"],
+      `${label}.deploymentStatus`,
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`,
+    ),
+    curlExample: readNullableString(
+      record,
+      ["curlExample", "CurlExample"],
+      `${label}.curlExample`,
+    ),
+    fetchExample: readNullableString(
+      record,
+      ["fetchExample", "FetchExample"],
+      `${label}.fetchExample`,
+    ),
+  };
+}
+
 function decodeScopeServiceRunSummary(
   value: unknown,
   label = "ScopeServiceRunSummary",
@@ -1042,6 +1155,19 @@ function encodeScopeServiceBindingPayload(input: ScopeServiceBindingInput) {
 }
 
 export const scopeRuntimeApi = {
+  listServices(
+    scopeId: string,
+    query?: { appId?: string; take?: number },
+  ): Promise<ServiceCatalogSnapshot[]> {
+    return requestJson(
+      withQuery(`/api/scopes/${encodeURIComponent(scopeId)}/services`, {
+        appId: query?.appId?.trim(),
+        take: query?.take,
+      }),
+      decodeServiceCatalogSnapshots,
+    );
+  },
+
   getServiceBindings(
     scopeId: string,
     serviceId: string,
@@ -1119,6 +1245,28 @@ export const scopeRuntimeApi = {
     );
   },
 
+  getServiceEndpointContract(
+    scopeId: string,
+    serviceId: string,
+    endpointId: string,
+  ): Promise<ScopeServiceEndpointContract> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
+      decodeScopeServiceEndpointContract,
+    );
+  },
+
+  getMemberEndpointContract(
+    scopeId: string,
+    memberId: string,
+    endpointId: string,
+  ): Promise<ScopeServiceEndpointContract> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
+      decodeScopeServiceEndpointContract,
+    );
+  },
+
   retireServiceRevision(
     scopeId: string,
     serviceId: string,
@@ -1152,6 +1300,24 @@ export const scopeRuntimeApi = {
     );
   },
 
+  listMemberRuns(
+    scopeId: string,
+    memberId: string,
+    options?: {
+      take?: number;
+    },
+  ): Promise<ScopeServiceRunCatalogSnapshot> {
+    return requestJson(
+      withQuery(
+        `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs`,
+        {
+          take: options?.take,
+        },
+      ),
+      decodeScopeServiceRunCatalogSnapshot,
+    );
+  },
+
   getServiceRunAudit(
     scopeId: string,
     serviceId: string,
@@ -1163,6 +1329,25 @@ export const scopeRuntimeApi = {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/runs/${encodeURIComponent(runId)}/audit`,
+        {
+          actorId: options?.actorId?.trim(),
+        },
+      ),
+      decodeScopeServiceRunAuditSnapshot,
+    );
+  },
+
+  getMemberRunAudit(
+    scopeId: string,
+    memberId: string,
+    runId: string,
+    options?: {
+      actorId?: string;
+    },
+  ): Promise<ScopeServiceRunAuditSnapshot> {
+    return requestJson(
+      withQuery(
+        `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs/${encodeURIComponent(runId)}/audit`,
         {
           actorId: options?.actorId?.trim(),
         },

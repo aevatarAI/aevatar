@@ -20,20 +20,20 @@ public static class ChatHistoryEndpoints
 
     private static async Task<IResult> HandleGetIndex(
         string scopeId,
-        [FromServices] IChatHistoryStore store,
+        [FromServices] IChatHistoryQueryPort queryPort,
         CancellationToken ct)
     {
-        var index = await store.GetIndexAsync(scopeId, ct);
+        var index = await queryPort.GetIndexAsync(scopeId, ct);
         return Results.Ok(index);
     }
 
     private static async Task<IResult> HandleGetConversation(
         string scopeId,
         string conversationId,
-        [FromServices] IChatHistoryStore store,
+        [FromServices] IChatHistoryQueryPort queryPort,
         CancellationToken ct)
     {
-        var messages = await store.GetMessagesAsync(scopeId, conversationId, ct);
+        var messages = await queryPort.GetMessagesAsync(scopeId, conversationId, ct);
         return Results.Ok(messages);
     }
 
@@ -41,20 +41,20 @@ public static class ChatHistoryEndpoints
         string scopeId,
         string conversationId,
         SaveConversationRequest request,
-        [FromServices] IChatHistoryStore store,
+        [FromServices] IChatHistoryCommandPort commandPort,
         CancellationToken ct)
     {
-        await store.SaveMessagesAsync(scopeId, conversationId, request.Meta, request.Messages, ct);
+        await commandPort.SaveMessagesAsync(scopeId, conversationId, request.Meta, request.Messages, ct);
         return Results.Ok();
     }
 
     private static async Task<IResult> HandleDeleteConversation(
         string scopeId,
         string conversationId,
-        [FromServices] IChatHistoryStore store,
+        [FromServices] IChatHistoryCommandPort commandPort,
         CancellationToken ct)
     {
-        await store.DeleteConversationAsync(scopeId, conversationId, ct);
+        await commandPort.DeleteConversationAsync(scopeId, conversationId, ct);
         return Results.Ok();
     }
 

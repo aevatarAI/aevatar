@@ -33,4 +33,8 @@
               GrpcServices="None"
               AdditionalImportDirs="..\Aevatar.Scripting.Abstractions\Protos" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+  </ItemGroup>
 </Project>

@@ -6,7 +6,9 @@ import {
 import {
   buildTimelineGroups,
   buildEventRows,
+  extractRunFinishedOutput,
   filterEventRows,
+  resolveRunMessageFallback,
   type EventFilterValues,
 } from './runEventPresentation';
 
@@ -148,5 +150,36 @@ describe('runEventPresentation', () => {
     expect(groups[0].label).toBe('Step · triage');
     expect(groups[2].label).toBe('Step · triage');
     expect(groups[0].key).not.toBe(groups[2].key);
+  });
+
+  it('extracts final output from the run finished result payload', () => {
+    const events: AGUIEvent[] = [
+      {
+        type: AGUIEventType.RUN_FINISHED,
+        threadId: 'actor-1',
+        runId: 'run-1',
+        result: {
+          '@type':
+            'type.googleapis.com/aevatar.workflow.application.abstractions.runs.WorkflowRunResultPayload',
+          output: '你好，我是 hello-chat。',
+        },
+      },
+    ];
+
+    expect(extractRunFinishedOutput(events)).toBe('你好，我是 hello-chat。');
+  });
+
+  it('falls back to snapshot output when no message frames were emitted', () => {
+    const events: AGUIEvent[] = [
+      {
+        type: AGUIEventType.RUN_FINISHED,
+        threadId: 'actor-1',
+        runId: 'run-1',
+      },
+    ];
+
+    expect(resolveRunMessageFallback(events, '最终输出来自 snapshot')).toBe(
+      '最终输出来自 snapshot',
+    );
   });
 });

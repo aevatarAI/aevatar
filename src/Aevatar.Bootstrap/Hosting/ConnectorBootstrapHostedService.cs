@@ -10,6 +10,8 @@ public sealed class ConnectorBootstrapHostedService : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ConnectorBootstrapHostedService> _logger;
+    private IConnectorRegistry? _registry;
+    private int _disposeStarted;
 
     public ConnectorBootstrapHostedService(
         IServiceProvider serviceProvider,
@@ -19,7 +21,7 @@ public sealed class ConnectorBootstrapHostedService : IHostedService
         _logger = logger;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -28,18 +30,26 @@ public sealed class ConnectorBootstrapHostedService : IHostedService
         if (registry == null)
         {
             _logger.LogDebug("Skip connector bootstrap because IConnectorRegistry is not registered.");
-            return Task.CompletedTask;
+            return;
         }
 
+        _registry = registry;
         var connectorBuilders = scope.ServiceProvider.GetServices<IConnectorBuilder>();
-        ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, _logger);
+        await ConnectorRegistration.RegisterConnectorsAsync(registry, connectorBuilders, _logger, ct: cancellationToken);
 
         var names = registry.ListNames();
         if (names.Count > 0)
             _logger.LogInformation("Connectors loaded: {Count} [{Names}]", names.Count, string.Join(", ", names));
-
-        return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+            return;
+
+        var registry = _registry;
+        if (registry is not null)
+            await registry.DisposeAsync();
+    }
 }

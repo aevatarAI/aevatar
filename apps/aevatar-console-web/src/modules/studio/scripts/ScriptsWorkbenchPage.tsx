@@ -4,6 +4,7 @@ import {
   CloseOutlined,
   DownOutlined,
   ExperimentOutlined,
+  FileAddOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   PlayCircleOutlined,
@@ -25,7 +26,9 @@ import {
 import type { MenuProps } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import type { StudioAppContext } from '@/shared/studio/models';
+import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import {
   addPackageFile,
   coerceScriptPackage,
@@ -53,10 +56,13 @@ import type {
   ScriptDraft,
   ScriptPackage,
   ScriptPromotionDecision,
-  ScriptReadModelSnapshot,
+  ScriptRuntimeActivitySnapshot,
+  ScopeScriptSaveObservationRequest,
+  ScopeScriptSaveObservationResult,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
   ScopedScriptDetail,
+  ScopeScriptUpsertAcceptedResponse,
 } from '@/shared/studio/scriptsModels';
 import {
   ScriptsStudioEmptyState,
@@ -226,7 +232,7 @@ const ScriptCodeEditorComponent: React.ComponentType<ScriptCodeEditorProps> =
 type ScriptsWorkbenchPageProps = {
   appContext: StudioAppContext;
   initialScriptId?: string;
-  onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   onSelectScriptId?: (scriptId: string) => void;
 };
 
@@ -240,10 +246,6 @@ function createDraftKey(prefix: string): string {
 
   draftCounter += 1;
   return `${prefix}_${Date.now().toString(36)}_${draftCounter.toString(36)}`;
-}
-
-function createRevisionSeed(): string {
-  return `draft-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 }
 
 function buildScopePageHref(
@@ -285,11 +287,8 @@ function normalizeStudioId(value: string, fallbackPrefix: string): string {
     .slice(0, 14)}`;
 }
 
-function buildScopeScriptBindingRevisionId(
-  scriptId: string,
-  scriptRevision: string,
-): string {
-  return normalizeStudioId(`${scriptId}-${scriptRevision}`, 'rev');
+function trimOptional(value: string | null | undefined): string {
+  return String(value || '').trim();
 }
 
 function createStarterPackage(): ScriptPackage {
@@ -363,7 +362,7 @@ function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraf
   return {
     key: seed.key || createDraftKey('script_draft'),
     scriptId: seed.scriptId || `script-${index}`,
-    revision: seed.revision || createRevisionSeed(),
+    revision: seed.revision || '',
     baseRevision: seed.baseRevision || '',
     reason: seed.reason || '',
     input: seed.input || '',
@@ -421,7 +420,7 @@ function readStoredDrafts(): ScriptDraft[] {
       return {
         key: String(item.key || createDraftKey(`script_draft_${index + 1}`)),
         scriptId: String(item.scriptId || `script-${index + 1}`),
-        revision: String(item.revision || createRevisionSeed()),
+        revision: String(item.revision || ''),
         baseRevision: String(item.baseRevision || ''),
         reason: String(item.reason || ''),
         input: String(item.input || ''),
@@ -455,8 +454,8 @@ function readStoredDrafts(): ScriptDraft[] {
   }
 }
 
-function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotView {
-  if (!snapshot?.readModelPayloadJson) {
+function parseSnapshotView(snapshot: ScriptRuntimeActivitySnapshot | null): SnapshotView {
+  if (!snapshot) {
     return {
       input: '',
       output: '',
@@ -466,39 +465,18 @@ function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotVi
     };
   }
 
-  try {
-    const payload = JSON.parse(snapshot.readModelPayloadJson) as Record<
-      string,
-      unknown
-    >;
-    return {
-      input: typeof payload.input === 'string' ? payload.input : '',
-      output: typeof payload.output === 'string' ? payload.output : '',
-      status: typeof payload.status === 'string' ? payload.status : '',
-      lastCommandId:
-        typeof payload.last_command_id === 'string'
-          ? payload.last_command_id
-          : '',
-      notes: Array.isArray(payload.notes)
-        ? payload.notes.filter(
-            (item): item is string => typeof item === 'string',
-          )
-        : [],
-    };
-  } catch {
-    return {
-      input: '',
-      output: '',
-      status: '',
-      lastCommandId: '',
-      notes: [],
-    };
-  }
+  return {
+    input: snapshot.input || '',
+    output: snapshot.output || '',
+    status: snapshot.status || '',
+    lastCommandId: snapshot.lastCommandId || '',
+    notes: Array.isArray(snapshot.notes) ? snapshot.notes : [],
+  };
 }
 
-function isSameReadModelSnapshot(
-  left: ScriptReadModelSnapshot | null | undefined,
-  right: ScriptReadModelSnapshot | null | undefined,
+function isSameRuntimeActivitySnapshot(
+  left: ScriptRuntimeActivitySnapshot | null | undefined,
+  right: ScriptRuntimeActivitySnapshot | null | undefined,
 ): boolean {
   if (!left && !right) {
     return true;
@@ -513,8 +491,11 @@ function isSameReadModelSnapshot(
     left.scriptId === right.scriptId &&
     left.definitionActorId === right.definitionActorId &&
     left.revision === right.revision &&
-    left.readModelTypeUrl === right.readModelTypeUrl &&
-    left.readModelPayloadJson === right.readModelPayloadJson &&
+    left.input === right.input &&
+    left.output === right.output &&
+    left.status === right.status &&
+    left.lastCommandId === right.lastCommandId &&
+    left.notes.join('\u0000') === right.notes.join('\u0000') &&
     left.stateVersion === right.stateVersion &&
     left.lastEventId === right.lastEventId &&
     left.updatedAt === right.updatedAt
@@ -618,7 +599,7 @@ function hydrateDraftFromScopeDetail(
     detail.script?.activeRevision ||
     detail.source?.revision ||
     existing?.revision ||
-    createRevisionSeed();
+    '';
 
   return createDraft(index, {
     key: existing?.key,
@@ -653,6 +634,49 @@ function hydrateDraftFromScopeDetail(
     lastPromotion: existing?.lastPromotion || null,
     scopeDetail: detail,
   });
+}
+
+function buildSaveObservationRequest(
+  accepted: ScopeScriptUpsertAcceptedResponse,
+): ScopeScriptSaveObservationRequest {
+  return {
+    revisionId: accepted.acceptedScript.revisionId,
+    definitionActorId: accepted.acceptedScript.definitionActorId,
+    sourceHash: accepted.acceptedScript.sourceHash,
+    proposalId: accepted.acceptedScript.proposalId,
+    expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+    acceptedAt: accepted.acceptedScript.acceptedAt,
+  };
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function catalogMatchesPromotion(
+  catalog: ScriptCatalogSnapshot | null | undefined,
+  decision: ScriptPromotionDecision,
+): boolean {
+  if (!catalog || !decision.accepted) {
+    return false;
+  }
+
+  if (catalog.activeRevision !== decision.candidateRevision) {
+    return false;
+  }
+
+  if (
+    decision.definitionActorId &&
+    catalog.activeDefinitionActorId !== decision.definitionActorId
+  ) {
+    return false;
+  }
+
+  if (decision.proposalId && catalog.lastProposalId !== decision.proposalId) {
+    return false;
+  }
+
+  return true;
 }
 
 function compactScriptIdList(details: ScopedScriptDetail[] | undefined): string[] {
@@ -700,7 +724,7 @@ function validatePackageFilePath(
 const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   appContext,
   initialScriptId = '',
-  onUnsavedChangesChange,
+  onRegisterLeaveGuard,
   onSelectScriptId,
 }) => {
   const queryClient = useQueryClient();
@@ -718,6 +742,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [promotionReasonDraft, setPromotionReasonDraft] = React.useState('');
   const [bindModalOpen, setBindModalOpen] = React.useState(false);
   const [bindDisplayNameDraft, setBindDisplayNameDraft] = React.useState('');
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = React.useState(false);
   const [askAiOpen, setAskAiOpen] = React.useState(false);
   const [askAiPrompt, setAskAiPrompt] = React.useState('');
   const [askAiReasoning, setAskAiReasoning] = React.useState('');
@@ -763,6 +788,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const suppressAskAiToggleRef = React.useRef(false);
   const askAiAbortRef = React.useRef<AbortController | null>(null);
   const saveShortcutActionRef = React.useRef<(() => void) | null>(null);
+  const pendingLeaveDecisionRef = React.useRef<{
+    promise: Promise<boolean>;
+    resolve: (allowed: boolean) => void;
+  } | null>(null);
 
   const scopeBacked =
     appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
@@ -974,7 +1003,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     enabled: Boolean(selectedRuntimeActorId),
     retry: 4,
     retryDelay: (attempt) => Math.min(attempt * 800, 2400),
-    queryFn: () => scriptsApi.getRuntimeReadModel(selectedRuntimeActorId),
+    queryFn: () => scriptsApi.getRuntimeActivity(selectedRuntimeActorId),
   });
 
   const selectedProposalQuery = useQuery({
@@ -1054,7 +1083,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
     return JSON.stringify({
       scriptId: selectedDraft.scriptId,
-      scriptRevision: selectedDraft.revision,
+      scriptRevision: selectedDraft.revision || undefined,
       source: serializePersistedSource(selectedDraft.package),
       package: selectedDraft.package,
     });
@@ -1076,7 +1105,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       try {
         const payload = JSON.parse(deferredValidationPayload) as {
           scriptId: string;
-          scriptRevision: string;
+          scriptRevision?: string;
           source: string;
           package: ScriptPackage;
         };
@@ -1232,7 +1261,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       onSelectScriptId?.(detail.script?.scriptId || '');
       setNotice({
         type: 'info',
-        message: `Loaded ${detail.script?.scriptId || 'scope script'} into the active draft list.`,
+        message: `Loaded ${detail.script?.scriptId || 'workspace script'} into the active draft list.`,
       });
     },
     [drafts, onSelectScriptId],
@@ -1447,12 +1476,12 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     await queryClient.invalidateQueries({
       queryKey: ['studio-scripts-catalogs', appContext.scopeId],
     });
-    const bindingScopeIds = Array.from(
+    const defaultRouteScopeIds = Array.from(
       new Set([appContext.scopeId, resolvedScopeId].filter(Boolean)),
     );
-    for (const scopeId of bindingScopeIds) {
+    for (const scopeId of defaultRouteScopeIds) {
       await queryClient.invalidateQueries({
-        queryKey: ['studio-scope-binding', scopeId],
+        queryKey: ['studio-default-route', scopeId],
       });
     }
   }, [appContext.scopeId, queryClient, resolvedScopeId]);
@@ -1514,7 +1543,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     try {
       const result = await scriptsApi.validateDraft({
         scriptId: selectedDraft.scriptId,
-        scriptRevision: selectedDraft.revision,
+        scriptRevision: selectedDraft.revision || undefined,
         source: serializePersistedSource(selectedDraft.package),
         package: selectedDraft.package,
       });
@@ -1547,49 +1576,145 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
 
     if (!scopeBacked) {
-      throw new Error('Save is only available after Studio resolves the current scope.');
+      throw new Error('Save is only available after Studio resolves the current workspace.');
     }
 
-    const response = await scriptsApi.saveScript(resolvedScopeId, {
+    const persistedSource = serializePersistedSource(selectedDraft.package);
+    const accepted = await scriptsApi.saveScript(resolvedScopeId, {
       scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
-      revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
       expectedBaseRevision: selectedDraft.baseRevision || undefined,
-      sourceText: serializePersistedSource(selectedDraft.package),
+      sourceText: persistedSource,
     });
 
     updateSelectedDraft((draft) => ({
       ...draft,
-      scriptId: response.script?.scriptId || draft.scriptId,
-      revision:
-        response.script?.activeRevision || response.source?.revision || draft.revision,
-      baseRevision:
-        response.script?.activeRevision || response.source?.revision || draft.baseRevision,
+      scriptId: accepted.acceptedScript.scriptId || draft.scriptId,
+      revision: accepted.acceptedScript.revisionId || draft.revision,
       definitionActorId:
-        response.script?.definitionActorId ||
-        response.source?.definitionActorId ||
-        draft.definitionActorId,
-      lastSourceHash:
-        response.source?.sourceHash ||
-        response.script?.activeSourceHash ||
-        draft.lastSourceHash,
-      scopeDetail: response,
+        accepted.acceptedScript.definitionActorId || draft.definitionActorId,
+      lastSourceHash: accepted.acceptedScript.sourceHash || draft.lastSourceHash,
     }));
-    onSelectScriptId?.(response.script?.scriptId || selectedDraft.scriptId);
+    onSelectScriptId?.(accepted.acceptedScript.scriptId || selectedDraft.scriptId);
 
-    return response;
-  }, [onSelectScriptId, scopeBacked, selectedDraft, updateSelectedDraft]);
+    return accepted;
+  }, [onSelectScriptId, resolvedScopeId, scopeBacked, selectedDraft, updateSelectedDraft]);
+
+  const observeAcceptedSave = React.useCallback(async (
+    accepted: ScopeScriptUpsertAcceptedResponse,
+  ): Promise<ScopeScriptSaveObservationResult> => {
+    const request = buildSaveObservationRequest(accepted);
+    let lastObservation: ScopeScriptSaveObservationResult | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+          request,
+        );
+        lastObservation = observation;
+        lastError = null;
+        if (observation.isTerminal) {
+          return observation;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+
+      await wait(250);
+    }
+
+    if (lastObservation != null) {
+      return lastObservation;
+    }
+
+    if (lastError != null) {
+      throw lastError;
+    }
+
+    return lastObservation ?? {
+      scopeId: accepted.acceptedScript.scopeId,
+      scriptId: accepted.acceptedScript.scriptId,
+      status: 'pending',
+      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
+      currentScript: null,
+      isTerminal: false,
+    };
+  }, [resolvedScopeId]);
+
+  const waitForPromotionCatalog = React.useCallback(async (
+    decision: ScriptPromotionDecision,
+  ): Promise<ScriptCatalogSnapshot | null> => {
+    if (!decision.accepted) {
+      return null;
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const catalog = await scriptsApi.getScriptCatalog(
+          resolvedScopeId,
+          decision.scriptId,
+        );
+        if (catalogMatchesPromotion(catalog, decision)) {
+          return catalog;
+        }
+      } catch {
+        // Ignore transient query failures while the catalog is catching up.
+      }
+
+      await wait(250);
+    }
+
+    return null;
+  }, [resolvedScopeId]);
 
   const handleSave = React.useCallback(async () => {
     setSavePending(true);
     setNotice(null);
     try {
-      const response = await saveCurrentDraftToScope();
+      const accepted = await saveCurrentDraftToScope();
+      setNotice({
+        type: 'info',
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
+      });
+      const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
+      if (observation.status === 'rejected') {
+        throw new Error(observation.message);
+      }
+
+      if (observation.status === 'applied') {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision || detail.source?.revision || draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
+
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
-        type: 'success',
-        message: `Saved ${response.script?.scriptId || selectedDraft?.scriptId || 'script'} into current scope ${response.scopeId}.`,
+        type: observation.status === 'applied' ? 'success' : 'warning',
+        message: observation.status === 'applied'
+          ? `Saved ${accepted.acceptedScript.scriptId} into workspace ${accepted.acceptedScript.scopeId}.`
+          : observation.message,
       });
     } catch (error) {
       setNotice({
@@ -1599,7 +1724,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     } finally {
       setSavePending(false);
     }
-  }, [openWorkspaceSection, refreshScopeScripts, saveCurrentDraftToScope, selectedDraft?.scriptId]);
+  }, [observeAcceptedSave, openWorkspaceSection, refreshScopeScripts, resolvedScopeId, saveCurrentDraftToScope, updateSelectedDraft]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -1618,14 +1743,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
 
     const scriptId = normalizeStudioId(scopeScript.scriptId || selectedDraft.scriptId, 'script');
-    const scriptRevision = normalizeStudioId(
+    const scriptRevision = trimOptional(
       scopeScript.activeRevision || selectedDraft.revision,
-      'rev',
     );
-    const bindingRevisionId = buildScopeScriptBindingRevisionId(
-      scriptId,
-      scriptRevision,
-    );
+    if (!scriptRevision) {
+      setNotice({
+        type: 'warning',
+        message: 'Save the current script into the workspace before binding it.',
+      });
+      return;
+    }
 
     setBindPending(true);
     setNotice(null);
@@ -1633,9 +1760,9 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const result = await studioApi.bindScopeScript({
         scopeId: resolvedScopeId,
         displayName: bindDisplayNameDraft.trim() || scriptId,
+        serviceId: scriptId,
         scriptId,
         scriptRevision,
-        revisionId: bindingRevisionId,
       });
 
       setBindModalOpen(false);
@@ -1644,19 +1771,20 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Updated scope ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
+        message: `Updated workspace ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
         description:
-          'Review the active binding, revision rollout, and saved script assets from the scope views.',
+          'Review the active binding, revision rollout, and saved script assets from the team views.',
         actions: [
           {
-            label: 'Open Scope Scripts',
-            href: buildScopePageHref('/scopes/scripts', resolvedScopeId, {
+            label: 'Open Team Assets',
+            href: buildScopePageHref('/scopes/assets', resolvedScopeId, {
+              tab: 'scripts',
               scriptId,
             }),
           },
           {
-            label: 'Open Scope Overview',
-            href: buildScopePageHref('/scopes/overview', resolvedScopeId),
+            label: 'Open Team Workspace',
+            href: buildTeamWorkspaceRoute(resolvedScopeId),
           },
         ],
       });
@@ -1699,7 +1827,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!resolvedScopeId) {
       setNotice({
         type: 'warning',
-        message: 'Test Run requires the current scope.',
+        message: 'Test Run requires the current workspace.',
       });
       return;
     }
@@ -1710,7 +1838,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const result = await scriptsApi.runDraftScript({
         scopeId: resolvedScopeId,
         scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
-        scriptRevision: normalizeStudioId(selectedDraft.revision, 'draft'),
+        scriptRevision: selectedDraft.revision.trim() || undefined,
         source: serializePersistedSource(selectedDraft.package),
         package: selectedDraft.package,
         input: runInputDraft,
@@ -1773,7 +1901,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scopeBacked) {
       setNotice({
         type: 'warning',
-        message: 'Promotion is only available after Studio resolves the current scope.',
+        message: 'Promotion is only available after Studio resolves the current workspace.',
       });
       return;
     }
@@ -1783,7 +1911,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!baseRevision) {
       setNotice({
         type: 'warning',
-        message: 'Save the script into the current scope before proposing a promotion.',
+        message: 'Save the script into the workspace before proposing a promotion.',
       });
       return;
     }
@@ -1794,7 +1922,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const scriptId = normalizeStudioId(selectedDraft.scriptId, 'script');
       const response = await scriptsApi.proposeEvolution(resolvedScopeId, scriptId, {
         baseRevision,
-        candidateRevision: normalizeStudioId(selectedDraft.revision, 'rev'),
+        candidateRevision: selectedDraft.revision.trim() || undefined,
         candidateSource: serializePersistedSource(selectedDraft.package),
         reason: promotionReasonDraft || selectedDraft.reason || undefined,
       });
@@ -1808,14 +1936,49 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setPromotionModalOpen(false);
       setActiveResultTab('promotion');
       openWorkspaceSection('activity');
+      const observedCatalog = response.accepted
+        ? await waitForPromotionCatalog(response)
+        : null;
+      if (observedCatalog) {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          response.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision ||
+            detail.source?.revision ||
+            draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            response.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
       await refreshScopeScripts();
       await queryClient.invalidateQueries({
         queryKey: ['studio-scripts-proposals'],
       });
       setNotice({
-        type: response.accepted ? 'success' : 'warning',
+        type: response.accepted
+          ? observedCatalog
+            ? 'success'
+            : 'info'
+          : 'warning',
         message: response.accepted
-          ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
+          ? observedCatalog
+            ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
+            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Waiting for the catalog read model to catch up.`
           : response.failureReason || 'Promotion proposal was rejected.',
       });
     } catch (error) {
@@ -1834,9 +1997,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     queryClient,
     openWorkspaceSection,
     refreshScopeScripts,
+    resolvedScopeId,
     scopeBacked,
     selectedDraft,
     updateSelectedDraft,
+    waitForPromotionCatalog,
   ]);
 
   const resetAskAiOutput = React.useCallback(() => {
@@ -2155,7 +2320,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         return draft;
       }
 
-      if (isSameReadModelSnapshot(draft.lastSnapshot, selectedRuntimeQuery.data)) {
+      if (isSameRuntimeActivitySnapshot(draft.lastSnapshot, selectedRuntimeQuery.data)) {
         return draft;
       }
 
@@ -2181,8 +2346,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     selectedDraft &&
       scopeBacked &&
       !savePending &&
-      selectedDraft.scriptId.trim() &&
-      selectedDraft.revision.trim(),
+      selectedDraft.scriptId.trim(),
   );
   const canRun = Boolean(
     selectedDraft &&
@@ -2199,8 +2363,15 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       (selectedDraft.scopeDetail?.script?.activeRevision || selectedDraft.baseRevision),
   );
   const scopeBindingScript = selectedDraft?.scopeDetail?.script || null;
+  const scopeBindingRevision = trimOptional(
+    scopeBindingScript?.activeRevision || selectedDraft?.revision,
+  );
   const canBindScope = Boolean(
-    selectedDraft && scopeBacked && scopeBindingScript && !bindPending,
+    selectedDraft &&
+      scopeBacked &&
+      scopeBindingScript &&
+      scopeBindingRevision &&
+      !bindPending,
   );
   const scopeSelectionId = selectedDraft?.scopeDetail?.script?.scriptId || '';
   const hasScopeChanges = isScopeDetailDirty(selectedDraft);
@@ -2232,12 +2403,12 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     : validationError ||
       visibleProblems[0]?.message ||
       'Clean';
-  const headerRevisionLabel = selectedDraft?.revision || 'draft revision';
+  const headerRevisionLabel = selectedDraft?.revision || 'not saved';
   const headerScopeLabel = scopeBacked
-    ? `Scope ${compactHeaderValue(resolvedScopeId)}`
+    ? `Workspace ${compactHeaderValue(resolvedScopeId)}`
     : 'Local draft';
   const headerScopeTooltip = scopeBacked
-    ? `Scope ${resolvedScopeId || '-'}`
+    ? `Workspace ID ${resolvedScopeId || '-'}`
     : 'Local draft';
   const moreActions: NonNullable<MenuProps['items']> = [
     {
@@ -2272,7 +2443,46 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     },
   ];
   const surfaceActionClass = (active = false) =>
-    `console-scripts-surface-action ${active ? 'active' : ''}`;
+    `console-scripts-surface-action ${AEVATAR_INTERACTIVE_BUTTON_CLASS} ${active ? 'active' : ''}`;
+  const settlePendingLeaveDecision = React.useCallback(
+    (
+      allowed: boolean,
+      options?: {
+        closeModal?: boolean;
+      },
+    ) => {
+      pendingLeaveDecisionRef.current?.resolve(allowed);
+      pendingLeaveDecisionRef.current = null;
+      if (options?.closeModal !== false) {
+        setLeaveConfirmOpen(false);
+      }
+    },
+    [],
+  );
+  const requestLeaveConfirmation = React.useCallback(() => {
+    if (!hasUnsavedScopeChanges) {
+      return Promise.resolve(true);
+    }
+
+    if (pendingLeaveDecisionRef.current) {
+      setLeaveConfirmOpen(true);
+      return pendingLeaveDecisionRef.current.promise;
+    }
+
+    let resolveLeaveDecision: ((allowed: boolean) => void) | null = null;
+    const promise = new Promise<boolean>((resolve) => {
+      resolveLeaveDecision = resolve;
+    });
+
+    pendingLeaveDecisionRef.current = {
+      promise,
+      resolve: (allowed: boolean) => {
+        resolveLeaveDecision?.(allowed);
+      },
+    };
+    setLeaveConfirmOpen(true);
+    return promise;
+  }, [hasUnsavedScopeChanges]);
 
   React.useEffect(() => {
     if (isEmbeddedMode) {
@@ -2283,18 +2493,29 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   }, [isEmbeddedMode]);
 
   React.useEffect(() => {
-    onUnsavedChangesChange?.(hasUnsavedScopeChanges);
-  }, [hasUnsavedScopeChanges, onUnsavedChangesChange]);
+    onRegisterLeaveGuard?.(requestLeaveConfirmation);
+
+    return () => {
+      onRegisterLeaveGuard?.(null);
+    };
+  }, [onRegisterLeaveGuard, requestLeaveConfirmation]);
 
   React.useEffect(
     () => () => {
-      onUnsavedChangesChange?.(false);
+      settlePendingLeaveDecision(false, {
+        closeModal: false,
+      });
     },
-    [onUnsavedChangesChange],
+    [settlePendingLeaveDecision],
   );
 
   React.useEffect(() => {
     if (!hasUnsavedScopeChanges) {
+      if (pendingLeaveDecisionRef.current) {
+        settlePendingLeaveDecision(true);
+      } else {
+        setLeaveConfirmOpen(false);
+      }
       return undefined;
     }
 
@@ -2305,7 +2526,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [hasUnsavedScopeChanges]);
+  }, [hasUnsavedScopeChanges, settlePendingLeaveDecision]);
 
   return (
     <div className="console-scripts-page">
@@ -2388,7 +2609,23 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 </span>
               ) : null}
               <Tooltip
-                title={scopeBacked ? 'Save the active draft into the current scope catalog' : 'Requires the current scope'}
+                title="Create a fresh local draft without changing the workspace catalog"
+                placement="bottom"
+              >
+                <span className="console-scripts-tooltip-anchor">
+                  <button
+                    type="button"
+                    className="console-scripts-ghost-action console-scripts-header-text-action"
+                    onClick={createNewDraft}
+                    aria-label="New draft"
+                  >
+                    <FileAddOutlined />
+                    <span>New draft</span>
+                  </button>
+                </span>
+              </Tooltip>
+              <Tooltip
+                title={scopeBacked ? 'Save the active draft into the workspace catalog' : 'Requires the current workspace'}
                 placement="bottom"
               >
                 <span className="console-scripts-tooltip-anchor">
@@ -2407,8 +2644,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               <Tooltip
                 title={
                   canBindScope
-                    ? 'Bind the saved script to the default service for this scope.'
-                    : 'Save the current script into the scope before binding it.'
+                    ? 'Bind the saved script to the default service for this workspace.'
+                    : 'Save the current script into the workspace before binding it.'
                 }
                 placement="bottom"
               >
@@ -2418,7 +2655,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     className="console-scripts-solid-action console-scripts-header-text-action"
                     onClick={handleOpenBindScope}
                     disabled={!canBindScope}
-                    aria-label="Bind scope"
+                    aria-label="Update default route"
                   >
                     <SafetyCertificateOutlined />
                     <span>Bind</span>
@@ -2725,12 +2962,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             <div className="console-scripts-drawer-body">
               <ScriptsPackagePanel
                 selectedDraft={selectedDraft}
-                onRevisionChange={(value) =>
-                  updateSelectedDraft((draft) => ({
-                    ...draft,
-                    revision: normalizeStudioId(value, 'rev'),
-                  }))
-                }
                 onBaseRevisionChange={(value) =>
                   updateSelectedDraft((draft) => ({
                     ...draft,
@@ -2895,7 +3126,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
                   toggleAskAiComposer();
                 }}
-                className={`console-scripts-ask-ai-trigger ${askAiOpen ? 'active' : ''}`}
+                className={`console-scripts-ask-ai-trigger ${AEVATAR_INTERACTIVE_BUTTON_CLASS} ${askAiOpen ? 'active' : ''}`}
                 title={
                   canUseAskAi
                     ? 'Ask AI to generate script code.'
@@ -2938,7 +3169,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <div className="console-scripts-detail-copy">
             Test Run executes the current draft directly through
             <code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
-            without rebinding the scope default service.
+            without rebinding the workspace default service.
           </div>
           <textarea
             aria-label="Script test run input"
@@ -2990,7 +3221,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={bindModalOpen}
-          eyebrow="Scope"
+          eyebrow="Workspace"
           title="Bind saved script"
           onClose={() => setBindModalOpen(false)}
           actions={
@@ -3014,14 +3245,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Bind the saved scope script to the default service for this scope.
+            Bind the saved workspace script to the default service for this workspace.
             Existing workflow authoring stays available alongside this flow.
           </div>
           <div style={{ marginTop: 16 }}>
             <div className="console-scripts-eyebrow">Script</div>
             <div className="console-scripts-detail-copy">
               {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
-              {scopeBindingScript?.activeRevision || selectedDraft?.revision || '-'}
+              {scopeBindingRevision || 'save required'}
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
@@ -3032,6 +3263,38 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               placeholder="Script display name"
               style={{ marginTop: 8 }}
             />
+          </div>
+        </ScriptsStudioModal>
+
+        <ScriptsStudioModal
+          open={leaveConfirmOpen}
+          eyebrow="Scripts"
+          title="Leave Scripts Studio?"
+          onClose={() => settlePendingLeaveDecision(false)}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => settlePendingLeaveDecision(false)}
+                className="console-scripts-ghost-action"
+              >
+                Continue editing
+              </button>
+              <button
+                type="button"
+                onClick={() => settlePendingLeaveDecision(true)}
+                className="console-scripts-solid-action"
+              >
+                Leave page
+              </button>
+            </>
+          }
+          width={560}
+        >
+          <div className="console-scripts-detail-copy" style={{ marginTop: 0 }}>
+            The current script changes have not been saved to the workspace yet. Your
+            local draft will still be kept in this browser, but these changes
+            will not be visible in the workspace until you save them.
           </div>
         </ScriptsStudioModal>
 

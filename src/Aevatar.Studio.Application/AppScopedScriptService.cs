@@ -5,18 +5,15 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Hosting.CapabilityApi;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-using Microsoft.AspNetCore.Http;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.AspNetCore.Http;
+
 namespace Aevatar.Studio.Application;
 
 public sealed class AppScopedScriptService
@@ -30,12 +27,13 @@ public sealed class AppScopedScriptService
 
     private readonly IScopeScriptQueryPort? _scriptQueryPort;
     private readonly IScopeScriptCommandPort? _scriptCommandPort;
+    private readonly IScopeScriptSaveObservationPort? _scriptSaveObservationPort;
     private readonly IScriptDefinitionSnapshotPort? _definitionSnapshotPort;
     private readonly IScriptEvolutionApplicationService? _scriptEvolutionService;
     private readonly IScriptCatalogQueryPort? _scriptCatalogQueryPort;
     private readonly IScriptEvolutionDecisionReadPort? _scriptEvolutionDecisionReadPort;
     private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
-    private readonly IScriptReadModelQueryApplicationService? _readModelQueryService;
+    private readonly IScriptRuntimeActivityQueryPort? _runtimeActivityQueryPort;
     private readonly IScriptStoragePort? _scriptStoragePort;
     private readonly IHttpClientFactory _httpClientFactory;
 
@@ -43,23 +41,25 @@ public sealed class AppScopedScriptService
         IHttpClientFactory httpClientFactory,
         IScopeScriptQueryPort? scriptQueryPort = null,
         IScopeScriptCommandPort? scriptCommandPort = null,
+        IScopeScriptSaveObservationPort? scriptSaveObservationPort = null,
         IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
         IScriptEvolutionApplicationService? scriptEvolutionService = null,
         IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
         IScriptEvolutionDecisionReadPort? scriptEvolutionDecisionReadPort = null,
         IScriptingActorAddressResolver? scriptingActorAddressResolver = null,
-        IScriptReadModelQueryApplicationService? readModelQueryService = null,
+        IScriptRuntimeActivityQueryPort? runtimeActivityQueryPort = null,
         IScriptStoragePort? scriptStoragePort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
         _scriptCommandPort = scriptCommandPort;
+        _scriptSaveObservationPort = scriptSaveObservationPort;
         _definitionSnapshotPort = definitionSnapshotPort;
         _scriptEvolutionService = scriptEvolutionService;
         _scriptCatalogQueryPort = scriptCatalogQueryPort;
         _scriptEvolutionDecisionReadPort = scriptEvolutionDecisionReadPort;
         _scriptingActorAddressResolver = scriptingActorAddressResolver;
-        _readModelQueryService = readModelQueryService;
+        _runtimeActivityQueryPort = runtimeActivityQueryPort;
         _scriptStoragePort = scriptStoragePort;
     }
 
@@ -118,61 +118,38 @@ public sealed class AppScopedScriptService
             allowNotFound: true);
     }
 
-    public async Task<IReadOnlyList<ScriptReadModelSnapshotHttpResponse>> ListRuntimeSnapshotsAsync(
+    public async Task<IReadOnlyList<ScriptRuntimeActivitySnapshot>> ListRuntimeActivitiesAsync(
         int take,
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take <= 0 ? 24 : take, 1, 200);
-        if (_readModelQueryService != null)
+        if (_runtimeActivityQueryPort != null)
         {
-            var snapshots = await _readModelQueryService.ListSnapshotsAsync(boundedTake, ct);
-            return snapshots
-                .Select(static snapshot => new ScriptReadModelSnapshotHttpResponse(
-                    snapshot.ActorId,
-                    snapshot.ScriptId,
-                    snapshot.DefinitionActorId,
-                    snapshot.Revision,
-                    snapshot.ReadModelTypeUrl,
-                    FormatReadModelJson(snapshot.ReadModelPayload),
-                    snapshot.StateVersion,
-                    snapshot.LastEventId,
-                    snapshot.UpdatedAt))
-                .ToArray();
+            // Refactor (iter56/cluster-928-script-any-public-delete): old=public Any → JSON readmodel surface,
+            // new=removed (keep internal semantic Any).
+            // Studio activity now uses native AppScriptReadModel data.
+            return await _runtimeActivityQueryPort.ListAsync(boundedTake, ct);
         }
 
-        return await SendAsync<List<ScriptReadModelSnapshotHttpResponse>>(
+        return await SendAsync<List<ScriptRuntimeActivitySnapshot>>(
                    HttpMethod.Get,
-                   $"/api/scripts/runtimes?take={boundedTake}",
+                   $"/api/app/scripts/runtimes?take={boundedTake}",
                    body: null,
                    ct) ??
                [];
     }
 
-    public async Task<ScriptReadModelSnapshotHttpResponse?> GetRuntimeSnapshotAsync(
+    public async Task<ScriptRuntimeActivitySnapshot?> GetRuntimeActivityAsync(
         string actorId,
         CancellationToken ct = default)
     {
         var normalizedActorId = NormalizeRequired(actorId, nameof(actorId));
-        if (_readModelQueryService != null)
-        {
-            var snapshot = await _readModelQueryService.GetSnapshotAsync(normalizedActorId, ct);
-            return snapshot == null
-                ? null
-                : new ScriptReadModelSnapshotHttpResponse(
-                    snapshot.ActorId,
-                    snapshot.ScriptId,
-                    snapshot.DefinitionActorId,
-                    snapshot.Revision,
-                    snapshot.ReadModelTypeUrl,
-                    FormatReadModelJson(snapshot.ReadModelPayload),
-                    snapshot.StateVersion,
-                    snapshot.LastEventId,
-                    snapshot.UpdatedAt);
-        }
+        if (_runtimeActivityQueryPort != null)
+            return await _runtimeActivityQueryPort.GetAsync(normalizedActorId, ct);
 
-        return await SendAsync<ScriptReadModelSnapshotHttpResponse>(
+        return await SendAsync<ScriptRuntimeActivitySnapshot>(
             HttpMethod.Get,
-            $"/api/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/readmodel",
+            $"/api/app/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/activity",
             body: null,
             ct,
             allowNotFound: true);
@@ -218,7 +195,7 @@ public sealed class AppScopedScriptService
             allowNotFound: true);
     }
 
-    public async Task<ScopeScriptDetail> SaveAsync(
+    public async Task<AppScopeScriptSaveAcceptedResponse> SaveAsync(
         string scopeId,
         AppScopeScriptSaveRequest request,
         CancellationToken ct = default)
@@ -226,12 +203,11 @@ public sealed class AppScopedScriptService
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.SourceText);
         var sourceText = NormalizeRequired(
-            AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.SourceText),
+            scriptPackage.GetPrimaryCSharpSource(),
             nameof(request.SourceText));
-        var scriptId = string.IsNullOrWhiteSpace(request.ScriptId)
-            ? StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script")
-            : NormalizeRequired(request.ScriptId, nameof(request.ScriptId));
+        var scriptId = StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script");
 
         ScopeScriptUpsertResult upsertResult;
         if (_scriptCommandPort != null)
@@ -240,7 +216,7 @@ public sealed class AppScopedScriptService
                 new ScopeScriptUpsertRequest(
                     normalizedScopeId,
                     scriptId,
-                    sourceText,
+                    scriptPackage,
                     request.RevisionId,
                     request.ExpectedBaseRevision),
                 ct);
@@ -257,16 +233,41 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        var detail = BuildSavedDetail(normalizedScopeId, sourceText, upsertResult);
+        var accepted = BuildAcceptedSaveResponse(sourceText, upsertResult);
+        _ = UploadScriptBestEffortAsync(scriptId, sourceText);
+        return accepted;
+    }
 
-        try
-        {
-            if (_scriptStoragePort != null)
-                await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, ct);
-        }
-        catch { /* don't fail the save if chrono-storage upload fails */ }
+    public async Task<ScopeScriptSaveObservationResult> ObserveSaveAsync(
+        string scopeId,
+        string scriptId,
+        AppScopeScriptSaveObservationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
 
-        return detail;
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedScriptId = NormalizeRequired(scriptId, nameof(scriptId));
+        var normalizedRevisionId = NormalizeRequired(request.RevisionId ?? string.Empty, nameof(request.RevisionId));
+        var normalizedDefinitionActorId = NormalizeRequired(request.DefinitionActorId ?? string.Empty, nameof(request.DefinitionActorId));
+        var normalizedSourceHash = NormalizeRequired(request.SourceHash ?? string.Empty, nameof(request.SourceHash));
+        var remoteRequest = new ScopeScriptSaveObservationRequest(
+            normalizedRevisionId,
+            normalizedDefinitionActorId,
+            normalizedSourceHash,
+            request.ProposalId?.Trim() ?? string.Empty,
+            request.ExpectedBaseRevision?.Trim() ?? string.Empty,
+            request.AcceptedAt);
+
+        if (_scriptSaveObservationPort != null)
+            return await _scriptSaveObservationPort.ObserveAsync(normalizedScopeId, normalizedScriptId, remoteRequest, ct);
+
+        return await SendAsync<ScopeScriptSaveObservationResult>(
+                   HttpMethod.Post,
+                   $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}/save-observation",
+                   remoteRequest,
+                   ct) ??
+               throw new InvalidOperationException("Script save observation returned an empty response.");
     }
 
     public async Task<ScriptPromotionDecision> ProposeEvolutionAsync(
@@ -462,32 +463,25 @@ public sealed class AppScopedScriptService
         (mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
          mediaType.Contains("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
 
-    private static ScopeScriptDetail BuildSavedDetail(
-        string scopeId,
+    private static AppScopeScriptSaveAcceptedResponse BuildAcceptedSaveResponse(
         string sourceText,
         ScopeScriptUpsertResult upsertResult)
     {
         ArgumentNullException.ThrowIfNull(upsertResult);
 
-        var summary = upsertResult.Script;
-        var normalizedSourceText = sourceText ?? string.Empty;
-        var sourceHash = string.IsNullOrWhiteSpace(summary.ActiveSourceHash)
-            ? ComputeSha256(normalizedSourceText)
-            : summary.ActiveSourceHash;
+        var submittedSource = new ScopeScriptSource(
+            sourceText ?? string.Empty,
+            upsertResult.DefinitionActorId,
+            upsertResult.RevisionId,
+            string.IsNullOrWhiteSpace(upsertResult.SourceHash)
+                ? ComputeSha256(sourceText ?? string.Empty)
+                : upsertResult.SourceHash);
 
-        return new ScopeScriptDetail(
-            Available: true,
-            ScopeId: scopeId,
-            Script: summary,
-            Source: new ScopeScriptSource(
-                normalizedSourceText,
-                string.IsNullOrWhiteSpace(upsertResult.DefinitionActorId)
-                    ? summary.DefinitionActorId
-                    : upsertResult.DefinitionActorId,
-                string.IsNullOrWhiteSpace(upsertResult.RevisionId)
-                    ? summary.ActiveRevision
-                    : upsertResult.RevisionId,
-                sourceHash));
+        return new AppScopeScriptSaveAcceptedResponse(
+            upsertResult.AcceptedScript,
+            submittedSource,
+            upsertResult.DefinitionCommand,
+            upsertResult.CatalogCommand);
     }
 
     private static string ComputeSha256(string value)
@@ -496,41 +490,19 @@ public sealed class AppScopedScriptService
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
-    private static string FormatReadModelJson(Any? payload)
+    private async Task UploadScriptBestEffortAsync(string scriptId, string sourceText)
     {
-        if (payload == null)
-            return "{}";
+        if (_scriptStoragePort == null)
+            return;
 
-        if (payload.Is(AppScriptReadModel.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<AppScriptReadModel>());
-        if (payload.Is(Struct.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Struct>());
-        if (payload.Is(Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Value>());
-        if (payload.Is(ListValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<ListValue>());
-        if (payload.Is(StringValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<StringValue>());
-        if (payload.Is(BoolValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BoolValue>());
-        if (payload.Is(Int32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int32Value>());
-        if (payload.Is(Int64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int64Value>());
-        if (payload.Is(UInt32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt32Value>());
-        if (payload.Is(UInt64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt64Value>());
-        if (payload.Is(FloatValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<FloatValue>());
-        if (payload.Is(DoubleValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<DoubleValue>());
-        if (payload.Is(BytesValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BytesValue>());
-        if (payload.Is(Empty.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Empty>());
-
-        return "{}";
+        try
+        {
+            await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, CancellationToken.None);
+        }
+        catch
+        {
+            /* don't fail the accepted save if chrono-storage upload fails */
+        }
     }
 
     private static AppScriptCatalogSnapshot ToCatalogSnapshot(
@@ -576,6 +548,14 @@ public sealed record AppScopeScriptSaveRequest(
     string? ExpectedBaseRevision = null,
     AppScriptPackage? Package = null);
 
+public sealed record AppScopeScriptSaveObservationRequest(
+    string? RevisionId,
+    string? DefinitionActorId,
+    string? SourceHash,
+    string? ProposalId,
+    string? ExpectedBaseRevision,
+    DateTimeOffset AcceptedAt);
+
 public sealed record AppScopeScriptEvolutionRequest(
     string? ScriptId,
     string? BaseRevision,
@@ -585,6 +565,23 @@ public sealed record AppScopeScriptEvolutionRequest(
     string? Reason,
     string? ProposalId,
     AppScriptPackage? CandidatePackage = null);
+
+public sealed record AppScopeScriptSaveAcceptedResponse(
+    ScopeScriptAcceptedSummary AcceptedScript,
+    ScopeScriptSource SubmittedSource,
+    ScopeScriptCommandAcceptedHandle DefinitionCommand,
+    ScopeScriptCommandAcceptedHandle CatalogCommand)
+{
+    public string ScopeId => AcceptedScript.ScopeId;
+    public string ScriptId => AcceptedScript.ScriptId;
+    public string RevisionId => AcceptedScript.RevisionId;
+    public string CatalogActorId => AcceptedScript.CatalogActorId;
+    public string DefinitionActorId => AcceptedScript.DefinitionActorId;
+    public string SourceHash => AcceptedScript.SourceHash;
+    public DateTimeOffset AcceptedAt => AcceptedScript.AcceptedAt;
+    public string ProposalId => AcceptedScript.ProposalId;
+    public string ExpectedBaseRevision => AcceptedScript.ExpectedBaseRevision;
+}
 
 public sealed record AppScriptCatalogSnapshot(
     string ScriptId,

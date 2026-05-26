@@ -1,0 +1,35 @@
+// ─────────────────────────────────────────────────────────────
+// Aevatar Foundation - persisted actor identity envelope.
+// Decouples authoritative state from runtime-incidental CLR type names; see
+// docs/adr/0019-stable-agent-kind-identity.md.
+// ─────────────────────────────────────────────────────────────
+syntax = "proto3";
+
+package aevatar.runtime;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.Runtime";
+
+// Stable business identity for an actor row, persisted alongside the
+// runtime grain state envelope. Replaces the runtime-incidental
+// AgentTypeName CLR string as the primary handle the activation path uses
+// to find an implementation.
+message RuntimeActorIdentity {
+  // Fully-qualified `<module>.<entity>` business kind token, e.g.
+  // `scheduled.skill-runner` or `channels.bot-registration`. Never versioned
+  // — schema evolution within a kind goes through proto3 field rules or the
+  // state-version migration mechanism, not through kind rename. Empty for
+  // pre-Phase-1 rows; the activation path lazy-tags this from the legacy
+  // CLR-name fallback on first successful activation.
+  string kind = 1;
+
+  // Runtime-owned schema marker for the actor's persisted business state.
+  // Domain state protos themselves stay pure domain artifacts and never
+  // carry a version field; the consumer contract for state migration lives
+  // in issue #500 and reads this value off the runtime envelope.
+  int32 state_schema_version = 2;
+
+  // Populated only during the Phase 1/2 transition window so mixed-version
+  // pods can resolve the row through the legacy CLR-name path. Becomes
+  // `reserved` in Phase 3 once every pod is on the kind-registry path.
+  string legacy_clr_type_name = 3;
+}

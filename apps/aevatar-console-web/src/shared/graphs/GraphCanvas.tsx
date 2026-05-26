@@ -34,10 +34,12 @@ import {
 } from '@/shared/studio/graph';
 
 type GraphCanvasProps = {
+  autoFitKey?: string;
   nodes: Node[];
   edges: Edge[];
   height?: number | string;
   bottomInset?: number;
+  overlayContent?: React.ReactNode;
   selectedNodeId?: string;
   selectedEdgeId?: string;
   variant?: 'default' | 'studio';
@@ -52,7 +54,21 @@ type GraphCanvasProps = {
   }) => void;
   onConnectNodes?: (sourceId: string, targetId: string) => void;
   onNodeLayoutChange?: (nodes: Node[]) => void;
+  onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
 };
+
+const SELF_MANAGED_SELECTION_CLASS = 'graph-canvas-self-managed-selection';
+const selfManagedSelectionCss = `
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS},
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}.selected,
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}:focus,
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}:focus-visible {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+`;
 
 const STUDIO_NODE_ICON_BY_CATEGORY: Record<
   string,
@@ -240,10 +256,12 @@ function StudioWorkflowNode({
 }
 
 const GraphCanvas: React.FC<GraphCanvasProps> = ({
+  autoFitKey,
   nodes,
   edges,
   height = 420,
   bottomInset = 0,
+  overlayContent,
   selectedNodeId,
   selectedEdgeId,
   variant = 'default',
@@ -253,12 +271,22 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   onCanvasContextMenu,
   onConnectNodes,
   onNodeLayoutChange,
+  onDeleteNodes,
 }) => {
   const [localNodes, setLocalNodes] = useNodesState(nodes);
   const [localEdges, setLocalEdges] = useEdgesState(edges);
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
   const isStudioVariant = variant === 'studio';
+  const studioFitViewOptions = React.useMemo(
+    () => ({
+      padding: 0.2,
+      minZoom: 0.14,
+      maxZoom: 0.92,
+      duration: 0,
+    }),
+    [],
+  );
 
   useEffect(() => {
     setLocalNodes(nodes);
@@ -268,11 +296,58 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     setLocalEdges(edges);
   }, [edges, setLocalEdges]);
 
+  useEffect(() => {
+    if (!autoFitKey || !flowInstance || !isStudioVariant || nodes.length === 0) {
+      return;
+    }
+
+    if (typeof window === 'undefined') {
+      flowInstance.fitView(studioFitViewOptions);
+      return;
+    }
+
+    const useAnimationFrame =
+      typeof window.requestAnimationFrame === 'function' &&
+      typeof window.cancelAnimationFrame === 'function';
+    const handle = useAnimationFrame
+      ? window.requestAnimationFrame(() => {
+          flowInstance.fitView(studioFitViewOptions);
+        })
+      : window.setTimeout(() => {
+          flowInstance.fitView(studioFitViewOptions);
+        }, 0);
+
+    return () => {
+      if (useAnimationFrame) {
+        window.cancelAnimationFrame(handle);
+        return;
+      }
+
+      window.clearTimeout(handle);
+    };
+  }, [
+    autoFitKey,
+    flowInstance,
+    isStudioVariant,
+    nodes.length,
+    studioFitViewOptions,
+  ]);
+
   const decoratedNodes = useMemo(
     () =>
       localNodes.map((node) => {
         const isSelected = node.id === selectedNodeId;
+        const managesOwnSelection = node.className
+          ?.split(' ')
+          .includes(SELF_MANAGED_SELECTION_CLASS);
         if (isStudioVariant) {
+          return {
+            ...node,
+            selected: isSelected,
+          };
+        }
+
+        if (managesOwnSelection) {
           return {
             ...node,
             selected: isSelected,
@@ -333,22 +408,18 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         height,
         minHeight: 0,
         overflow: 'hidden',
+        position: 'relative',
         width: '100%',
       }}
     >
+      {!isStudioVariant ? <style>{selfManagedSelectionCss}</style> : null}
       <ReactFlow
         onInit={setFlowInstance}
         nodes={decoratedNodes}
         edges={decoratedEdges}
         fitView
         fitViewOptions={
-          isStudioVariant
-            ? {
-                padding: 0.2,
-                minZoom: 0.14,
-                maxZoom: 0.92,
-              }
-            : undefined
+          isStudioVariant ? studioFitViewOptions : undefined
         }
         minZoom={isStudioVariant ? 0.14 : undefined}
         maxZoom={isStudioVariant ? 1.6 : undefined}
@@ -362,10 +433,34 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         nodesDraggable={isStudioVariant}
         nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
         elementsSelectable
+        deleteKeyCode={isStudioVariant && !onDeleteNodes ? null : undefined}
         onNodesChange={isStudioVariant ? handleNodesChange : undefined}
+        onBeforeDelete={
+          isStudioVariant && onDeleteNodes
+            ? async ({ nodes: nodesToDelete }) => {
+                const nodeIds = nodesToDelete
+                  .map((node) => String(node.id ?? '').trim())
+                  .filter(Boolean);
+                if (nodeIds.length === 0) {
+                  return false;
+                }
+
+                try {
+                  await onDeleteNodes(nodeIds);
+                } catch {
+                  // Keep the local graph unchanged until the parent document confirms deletion.
+                }
+
+                return false;
+              }
+            : undefined
+        }
         onNodeDragStop={
           isStudioVariant
-            ? (_, __, nextNodes) => onNodeLayoutChange?.(nextNodes)
+            ? () =>
+                onNodeLayoutChange?.(
+                  (flowInstance?.getNodes() as Node[]) ?? localNodes,
+                )
             : undefined
         }
         onConnect={
@@ -442,6 +537,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
           <Controls showInteractive={false} />
         )}
       </ReactFlow>
+      {overlayContent}
     </div>
   );
 };

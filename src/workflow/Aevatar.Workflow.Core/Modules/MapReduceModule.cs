@@ -9,6 +9,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Map-Reduce module: splits input into items, maps each through a sub-step in parallel,
 /// then reduces all results through a second sub-step.
+/// Refactor (iter11/cluster-021): Old backpressure reporting read raw Queue.Count after head removals.
+/// Refactor (iter11/cluster-021): New reporting uses cursor-aware queued count while helper preserves FIFO.
 /// </summary>
 public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -82,9 +84,9 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             };
             state.Parents[parentKey.StepId] = parentState;
 
-            if (state.Backpressure.MaxConcurrentWorkers == 0)
-                state.Backpressure = BackpressureHelper.Initialize(
-                    BackpressureHelper.ResolveMaxConcurrent(request.Parameters));
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.ResolveMaxConcurrent(request.Parameters));
 
             ctx.Logger.LogInformation("MapReduce {StepId}: map {Count} items via {Type}", request.StepId, items.Length, mapType);
 
@@ -104,7 +106,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     {
                         StepId = request.StepId,
                         RunId = runId,
-                        QueuedCount = state.Backpressure.Queue.Count,
+                        QueuedCount = BackpressureHelper.QueuedCount(state.Backpressure),
                         ActiveCount = state.Backpressure.ActiveWorkers,
                         MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
                     }, TopologyAudience.Self, ct);
@@ -143,6 +145,9 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Results.Add(evt.ToMapReduceItemResult());
             state.Parents[parent] = parentState;
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.DefaultMaxConcurrentWorkers);
             var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Results.Count < parentState.MapCount)

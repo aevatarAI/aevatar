@@ -185,7 +185,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                 : fieldPathResolver(defaultSortField.Trim());
             var defaultClauses = new List<object>
             {
-                BuildSortClause(primarySortField, ProjectionDocumentSortDirection.Desc, includeMissingHints: true),
+                BuildSortClause(primarySortField, ProjectionDocumentSortDirection.Desc),
             };
             defaultClauses.AddRange(BuildTiebreakSortClauses());
             return defaultClauses.ToArray();
@@ -194,8 +194,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         var clauses = query.Sorts
             .Select(sort => BuildSortClause(
                 fieldPathResolver(sort.FieldPath),
-                sort.Direction,
-                includeMissingHints: false))
+                sort.Direction))
             .ToList();
         clauses.AddRange(BuildTiebreakSortClauses());
         return clauses.ToArray();
@@ -203,24 +202,37 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 
     private static object BuildSortClause(
         string fieldPath,
-        ProjectionDocumentSortDirection direction,
-        bool includeMissingHints)
+        ProjectionDocumentSortDirection direction)
     {
         var spec = new Dictionary<string, object?>
         {
             ["order"] = direction == ProjectionDocumentSortDirection.Asc ? "asc" : "desc",
+            ["missing"] = "_last",
+            ["unmapped_type"] = ResolveSortUnmappedType(fieldPath),
         };
-
-        if (includeMissingHints)
-        {
-            spec["missing"] = "_last";
-            spec["unmapped_type"] = "date";
-        }
 
         return new Dictionary<string, object?>
         {
             [fieldPath] = spec,
         };
+    }
+
+    private static string ResolveSortUnmappedType(string fieldPath)
+    {
+        var normalizedFieldPath = fieldPath.Trim();
+        if (normalizedFieldPath.EndsWith(".keyword", StringComparison.Ordinal))
+            return "keyword";
+
+        var lastSegmentIndex = normalizedFieldPath.LastIndexOf('.');
+        var fieldName = lastSegmentIndex >= 0
+            ? normalizedFieldPath[(lastSegmentIndex + 1)..]
+            : normalizedFieldPath;
+
+        return fieldName.EndsWith("_utc_value", StringComparison.Ordinal) ||
+               fieldName.EndsWith("At", StringComparison.Ordinal) ||
+               fieldName.EndsWith("_at", StringComparison.Ordinal)
+            ? "date"
+            : "keyword";
     }
 
     private static IEnumerable<object> BuildTiebreakSortClauses()

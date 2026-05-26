@@ -1,9 +1,7 @@
 using System.Globalization;
-using System.Text.Json.Nodes;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
-using Aevatar.Studio.Domain.Studio.Utilities;
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -155,7 +153,6 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 MaxTokens = ReadInteger(roleNode, "max_tokens", findings, path),
                 MaxToolRounds = ReadInteger(roleNode, "max_tool_rounds", findings, path),
                 MaxHistoryMessages = ReadInteger(roleNode, "max_history_messages", findings, path),
-                StreamBufferCapacity = ReadInteger(roleNode, "stream_buffer_capacity", findings, path),
                 EventModules = eventModules,
                 EventRoutes = eventRoutes,
                 Connectors = ParseConnectors(roleNode, path, findings),
@@ -205,7 +202,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             _profile.ShouldMirrorTimeoutMsToParameters(canonicalType) &&
             !parameters.ContainsKey("timeout_ms"))
         {
-            parameters["timeout_ms"] = JsonValue.Create(timeoutMs.Value.ToString(CultureInfo.InvariantCulture));
+            parameters["timeout_ms"] = StudioStepParameterValue.FromScalar(timeoutMs.Value.ToString(CultureInfo.InvariantCulture));
         }
 
         return new StepModel
@@ -226,12 +223,12 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         };
     }
 
-    private Dictionary<string, JsonNode?> ParseParameters(
+    private StudioStepParameters ParseParameters(
         YamlMappingNode stepNode,
         string path,
         ICollection<ValidationFinding> findings)
     {
-        var parameters = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        var parameters = new StudioStepParameters();
         var parametersNode = GetMapping(stepNode, "parameters");
         if (parametersNode is not null)
         {
@@ -403,6 +400,9 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
     private Dictionary<string, object?> SerializeRole(RoleModel role)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: role YAML emitted stream_buffer_capacity as if stream buffering were authoring semantics.
+        //   New principle: exported roles include only stable role behavior; ChatRuntime owns stream flow without a YAML buffer knob.
         var result = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["id"] = role.Id,
@@ -424,7 +424,6 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "max_tokens", role.MaxTokens);
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
         AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
-        AddIfNotNull(result, "stream_buffer_capacity", role.StreamBufferCapacity);
         AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
@@ -453,7 +452,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         {
             result["parameters"] = step.Parameters.ToDictionary(
                 pair => pair.Key,
-                pair => pair.Value.ToPlainValue(),
+                pair => pair.Value?.ToPlainValue(),
                 StringComparer.Ordinal);
         }
 
@@ -498,7 +497,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         return result;
     }
 
-    private void CanonicalizeStepTypeParameters(IDictionary<string, JsonNode?> parameters)
+    private void CanonicalizeStepTypeParameters(IDictionary<string, StudioStepParameterValue?> parameters)
     {
         foreach (var key in parameters.Keys.ToList())
         {
@@ -507,15 +506,15 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 continue;
             }
 
-            var value = parameters[key].ToWorkflowScalarString();
+            var value = parameters[key]?.ToWorkflowScalarString();
             if (!string.IsNullOrWhiteSpace(value))
             {
-                parameters[key] = JsonValue.Create(_profile.ToCanonicalType(value));
+                parameters[key] = StudioStepParameterValue.FromScalar(_profile.ToCanonicalType(value));
             }
         }
     }
 
-    private static void ApplyErgonomicDefaults(string rawType, IDictionary<string, JsonNode?> parameters)
+    private static void ApplyErgonomicDefaults(string rawType, IDictionary<string, StudioStepParameterValue?> parameters)
     {
         var normalized = string.IsNullOrWhiteSpace(rawType)
             ? string.Empty
@@ -539,7 +538,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 if (!parameters.ContainsKey("operation") &&
                     parameters.TryGetValue("tool", out var toolValue))
                 {
-                    AddStringIfMissing(parameters, "operation", toolValue.ToWorkflowScalarString());
+                    AddStringIfMissing(parameters, "operation", toolValue?.ToWorkflowScalarString());
                 }
                 break;
             case "foreach_llm":
@@ -552,14 +551,14 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         }
     }
 
-    private static void AddStringIfMissing(IDictionary<string, JsonNode?> parameters, string key, string? value)
+    private static void AddStringIfMissing(IDictionary<string, StudioStepParameterValue?> parameters, string key, string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || parameters.ContainsKey(key))
         {
             return;
         }
 
-        parameters[key] = JsonValue.Create(value);
+        parameters[key] = StudioStepParameterValue.FromScalar(value);
     }
 
     private static void AddIfNotNull(IDictionary<string, object?> dictionary, string key, object? value)
@@ -577,26 +576,25 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         dictionary[key] = value;
     }
 
-    private static JsonNode? ToParameterValue(YamlNode node) =>
+    private static StudioStepParameterValue? ToParameterValue(YamlNode node) =>
         node switch
         {
             YamlScalarNode scalar => ToScalarJsonValue(scalar),
-            YamlSequenceNode sequence => new JsonArray(sequence.Children.Select(ToParameterValue).ToArray()),
-            YamlMappingNode mapping => new JsonObject(mapping.Children.ToDictionary(
-                child => ToKey(child.Key),
-                child => ToParameterValue(child.Value))),
-            _ => JsonValue.Create(node.ToString()),
+            YamlSequenceNode sequence => StudioStepParameterValue.FromList(sequence.Children.Select(ToParameterValue)),
+            YamlMappingNode mapping => StudioStepParameterValue.FromObject(mapping.Children.Select(child =>
+                new KeyValuePair<string, StudioStepParameterValue?>(ToKey(child.Key), ToParameterValue(child.Value)))),
+            _ => StudioStepParameterValue.FromScalar(node.ToString()),
         };
 
-    private static JsonNode? ToScalarJsonValue(YamlScalarNode scalar)
+    private static StudioStepParameterValue? ToScalarJsonValue(YamlScalarNode scalar)
     {
         if (scalar.Tag == "tag:yaml.org,2002:null" ||
             string.IsNullOrWhiteSpace(scalar.Value))
         {
-            return string.IsNullOrEmpty(scalar.Value) ? null : JsonValue.Create(scalar.Value);
+            return string.IsNullOrEmpty(scalar.Value) ? null : StudioStepParameterValue.FromScalar(scalar.Value);
         }
 
-        return JsonValue.Create(scalar.Value);
+        return StudioStepParameterValue.FromScalar(scalar.Value);
     }
 
     private static void ReportUnknownKeys(

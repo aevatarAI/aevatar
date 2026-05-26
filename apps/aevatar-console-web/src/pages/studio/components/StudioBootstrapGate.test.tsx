@@ -3,7 +3,7 @@ import React from 'react';
 import StudioBootstrapGate from './StudioBootstrapGate';
 
 describe('StudioBootstrapGate', () => {
-  it('renders lightweight bootstrap notices and keeps children mounted', () => {
+  it('renders a single bootstrap summary banner and keeps children mounted', () => {
     render(
       <StudioBootstrapGate
         appContextLoading
@@ -18,17 +18,11 @@ describe('StudioBootstrapGate', () => {
     );
 
     expect(
-      screen.getByText('Bootstrapping Studio host context'),
+      screen.getByText('Studio 当前有部分能力暂时不可用'),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText('Failed to load Studio app context'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Failed to load Studio workspace settings'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Studio authentication bootstrap returned an error'),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/团队上下文：app context failed/)).toBeInTheDocument();
+    expect(screen.getByText(/工作区设置：workspace failed/)).toBeInTheDocument();
+    expect(screen.getByText(/登录状态：auth bootstrap warning/)).toBeInTheDocument();
     expect(screen.getByText('Studio workbench')).toBeInTheDocument();
   });
 });

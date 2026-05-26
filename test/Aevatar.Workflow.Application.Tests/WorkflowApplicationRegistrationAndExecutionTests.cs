@@ -177,14 +177,17 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>) &&
             x.ImplementationType == typeof(WorkflowRunFinalizeEmitter));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowRunObservationLifecycle));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
-            x.ImplementationType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+            x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
-            x.ImplementationType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+            x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationFactory != null);
@@ -203,6 +206,51 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void AddWorkflowApplication_ShouldRegisterAcceptedOnlyDispatchWithAcceptedTarget()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication();
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowRunAcceptedCommandTargetResolver));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>) &&
+            x.ImplementationType == typeof(ActorCommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandReceiptFactory<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>) &&
+            x.ImplementationType == typeof(WorkflowRunAcceptedReceiptFactory));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldKeepInteractionServiceOnCommandTargetAndObservationLifecycle()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication();
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowRunCommandTargetResolver));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowRunObservationLifecycle));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetDispatcher<WorkflowRunCommandTarget>) &&
+            x.ImplementationType == typeof(ActorCommandTargetDispatcher<WorkflowRunCommandTarget>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>) &&
+            x.ImplementationType == typeof(WorkflowRunAcceptedReceiptFactory));
+    }
+
+    [Fact]
     public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
     {
         var services = new ServiceCollection();
@@ -218,7 +266,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldMergeHeadersAndCommandMetadata()
+    public void EnvelopeFactory_ShouldKeepCommandMetadataOutOfHeaders()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -254,8 +302,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
-        request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
     }

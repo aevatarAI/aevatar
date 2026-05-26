@@ -1,24 +1,23 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using Aevatar.AI.Abstractions;
+using System.IdentityModel.Tokens.Jwt;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Google.Protobuf.WellKnownTypes;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-public static class NyxIdChatEndpoints
+public static partial class NyxIdChatEndpoints
 {
     public static IEndpointRouteBuilder MapNyxIdChatEndpoints(this IEndpointRouteBuilder app)
     {
@@ -29,32 +28,42 @@ public static class NyxIdChatEndpoints
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
 
-        // NyxID Channel Bot Relay webhook — receives forwarded platform messages
-        app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync).WithTags("NyxIdRelay");
+        // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
+        // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so
+        // the route must stay anonymous to the normal bearer policy. The diag + health routes
+        // under the same prefix are operator probes that also must stay open.
+        app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
+            .WithTags("NyxIdRelay")
+            .AllowAnonymous();
         app.MapGet("/api/webhooks/nyxid-relay/health", () => Results.Json(new
         {
             status = "ok",
             endpoint = "/api/webhooks/nyxid-relay",
             last_check = DateTimeOffset.UtcNow,
-        })).WithTags("NyxIdRelay");
+        }))
+            .WithTags("NyxIdRelay")
+            .AllowAnonymous();
 
-        // Temporary diagnostic: test NyxID gateway connectivity from this server
-        app.MapPost("/api/webhooks/nyxid-relay/diag", async (HttpContext http, CancellationToken ct) =>
+        // Diagnostic: deep connectivity check against NyxID gateway
+        app.MapPost("/api/webhooks/nyxid-relay/diag", async (
+            HttpContext http,
+            [FromServices] NyxIdToolOptions nyxOptions,
+            CancellationToken ct) =>
         {
             var token = http.Request.Headers["X-Test-Token"].FirstOrDefault()
                 ?? http.Request.Headers.Authorization.FirstOrDefault()?.Replace("Bearer ", "");
             if (string.IsNullOrWhiteSpace(token))
                 return Results.Json(new { error = "Provide token via X-Test-Token header" });
 
-            var gateway = "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
+            var baseUrl = (nyxOptions.BaseUrl ?? "https://nyx-api.chrono-ai.fun").TrimEnd('/');
+            var gateway = $"{baseUrl}/api/v1/llm/gateway/v1/chat/completions";
             var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
 
             using var client = new System.Net.Http.HttpClient();
+            client.DefaultRequestHeaders.UserAgent.Clear();
             var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, gateway);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             req.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            // Clear default User-Agent to mimic clean request
-            client.DefaultRequestHeaders.UserAgent.Clear();
 
             var resp = await client.SendAsync(req, ct);
             var respBody = await resp.Content.ReadAsStringAsync(ct);
@@ -64,9 +73,9 @@ public static class NyxIdChatEndpoints
                 status = (int)resp.StatusCode,
                 statusText = resp.StatusCode.ToString(),
                 responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
-                serverOutboundIp = "check response headers",
             });
-        }).WithTags("NyxIdRelay");
+        })
+            .WithTags("NyxIdRelay");
 
         // Access control for relay is handled by NyxID's route configuration.
 
@@ -76,533 +85,217 @@ public static class NyxIdChatEndpoints
     private static async Task<IResult> HandleCreateConversationAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] NyxIdChatLifecycleFacade lifecycleFacade,
         CancellationToken ct)
     {
-        var entry = await actorStore.CreateActorAsync(scopeId, ct);
-        return Results.Ok(new { actorId = entry.ActorId, createdAt = entry.CreatedAt });
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
+        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+        // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
+        //   The create facade returns accepted/admission-visible command trace, not read-model-observed conversation state.
+        //   Clients must poll the conversation list or observe the stream/status path instead of treating this body as committed.
+        var receipt = await lifecycleFacade.CreateConversationAsync(scopeId, ct);
+        return receipt.Status switch
+        {
+            NyxIdChatConversationCreateStatus.Accepted => Results.Accepted(
+                $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations",
+                new
+                {
+                    status = "accepted",
+                    actorId = receipt.ActorId,
+                    acceptedCommandId = receipt.CommandId,
+                    correlationId = receipt.CorrelationId,
+                    statusUrl = $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations",
+                }),
+            NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject),
+            NyxIdChatConversationCreateStatus.RegistrationUnavailable => Results.Json(
+                new { error = "Conversation registration is not admission-visible" },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(
+                new { error = "Conversation creation failed" },
+                statusCode: StatusCodes.Status500InternalServerError),
+        };
     }
+
+    private static IResult ChatRouteRejected(Reject? reject) =>
+        Results.Json(
+            new
+            {
+                error = "chat_route_rejected",
+                detail = string.IsNullOrWhiteSpace(reject?.Reason)
+                    ? "The chat route policy rejected this request."
+                    : reject.Reason,
+            },
+            statusCode: StatusCodes.Status403Forbidden);
 
     private static async Task<IResult> HandleListConversationsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] IGAgentActorRegistryQueryPort registryQueryPort,
         CancellationToken ct)
     {
-        var actors = await actorStore.ListActorsAsync(scopeId, ct);
-        return Results.Ok(actors);
-    }
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
 
-    private static async Task HandleStreamMessageAsync(
-        HttpContext http,
-        string scopeId,
-        string actorId,
-        NyxIdChatStreamRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] ILoggerFactory loggerFactory,
-        CancellationToken ct)
-    {
-        var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        var writer = new NyxIdChatSseWriter(http.Response);
-
-        try
+        var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
+        var actorIds = snapshot.Groups
+            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal))
+            ?.ActorIds
+            ?? [];
+        return Results.Ok(new
         {
-            var accessToken = ExtractBearerToken(http);
-            if (string.IsNullOrWhiteSpace(accessToken))
-            {
-                http.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return;
-            }
-
-            var prompt = request.Prompt?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 })
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-
-            // Get or create the actor
-            var actor = await actorRuntime.GetAsync(actorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-
-            // Set up SSE response
-            await writer.StartAsync(ct);
-
-            var messageId = Guid.NewGuid().ToString("N");
-            await writer.WriteRunStartedAsync(actorId, ct);
-
-            // Subscribe to actor events and map to SSE frames
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    try
-                    {
-                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
-                        if (!string.IsNullOrWhiteSpace(terminalFrame))
-                            tcs.TrySetResult(terminalFrame);
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
-
-            // Build and dispatch ChatRequestEvent to the actor
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = prompt,
-                SessionId = request.SessionId ?? messageId,
-                ScopeId = scopeId,
-            };
-            if (request.InputParts is { Count: > 0 })
-            {
-                foreach (var part in request.InputParts)
-                    chatRequest.InputParts.Add(part.ToProto());
-            }
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
-            chatRequest.Metadata["scope_id"] = scopeId;
-            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
-            await InjectConnectedServicesAsync(http, accessToken, chatRequest.Metadata, ct);
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for completion or timeout
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-
-            if (completedTask == tcs.Task)
-            {
-                if (tcs.Task.IsFaulted)
-                {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
-                }
-                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
-                {
-                    await writer.WriteRunFinishedAsync(CancellationToken.None);
-                }
-            }
-            else
-            {
-                await writer.WriteRunErrorAsync("Request timed out.", CancellationToken.None);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Client disconnected
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "NyxID chat stream failed for actor {ActorId}", actorId);
-            if (!writer.Started)
-            {
-                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
-                return;
-            }
-
-            await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
-        }
-    }
-
-    /// <summary>
-    /// Maps AI event envelope payloads to NyxIdChat SSE frames.
-    /// </summary>
-    private static async ValueTask<string?> MapAndWriteEventAsync(
-        EventEnvelope envelope,
-        string messageId,
-        NyxIdChatSseWriter writer)
-    {
-        var payload = envelope.Payload;
-        if (payload is null)
-            return null;
-
-        if (payload.Is(TextMessageStartEvent.Descriptor))
-        {
-            await writer.WriteTextStartAsync(messageId, CancellationToken.None);
-        }
-        else if (payload.Is(TextMessageContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageContentEvent>();
-            if (!string.IsNullOrEmpty(evt.Delta))
-                await writer.WriteTextDeltaAsync(evt.Delta, CancellationToken.None);
-        }
-        else if (payload.Is(ToolCallEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolCallEvent>();
-            await writer.WriteToolCallStartAsync(evt.ToolName, evt.CallId, CancellationToken.None);
-        }
-        else if (payload.Is(ToolResultEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolResultEvent>();
-            await writer.WriteToolCallEndAsync(evt.CallId, evt.ResultJson, CancellationToken.None);
-        }
-        else if (payload.Is(ToolApprovalRequestEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolApprovalRequestEvent>();
-            await writer.WriteToolApprovalRequestAsync(
-                evt.RequestId, evt.ToolName, evt.ToolCallId,
-                evt.ArgumentsJson, evt.IsDestructive, evt.TimeoutSeconds,
-                CancellationToken.None);
-        }
-        else if (payload.Is(MediaContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<MediaContentEvent>();
-            await writer.WriteMediaContentAsync(evt, CancellationToken.None);
-        }
-        else if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-
-            // Check for LLM error markers
-            if (!string.IsNullOrEmpty(evt.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(
-                        evt.Content[llmErrorPrefix.Length..].Trim(), CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-
-                if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(evt.Content.Trim(), CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-            }
-
-            await writer.WriteTextEndAsync(messageId, CancellationToken.None);
-            return "TEXT_MESSAGE_END";
-        }
-
-        return null;
+            snapshot.ScopeId,
+            snapshot.StateVersion,
+            snapshot.UpdatedAt,
+            snapshot.ObservedAt,
+            Conversations = actorIds.Select(actorId => new { actorId }),
+        });
     }
 
     private static async Task<IResult> HandleDeleteConversationAsync(
         HttpContext http,
         string scopeId,
         string actorId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] NyxIdChatLifecycleFacade lifecycleFacade,
         CancellationToken ct)
     {
-        var removed = await actorStore.DeleteActorAsync(scopeId, actorId, ct);
-        return removed ? Results.Ok() : Results.NotFound();
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
+        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
+        var receipt = await lifecycleFacade.DeleteConversationAsync(scopeId, actorId, ct);
+        return receipt.Status switch
+        {
+            NyxIdChatConversationDeleteStatus.Accepted => Results.Ok(),
+            NyxIdChatConversationDeleteStatus.NotFound => Results.NotFound(new { error = "Conversation not found" }),
+            NyxIdChatConversationDeleteStatus.AccessDenied => Results.Json(
+                new { error = "Conversation access denied" },
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Json(
+                new { error = "Conversation admission unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
     }
 
-    /// <summary>
-    /// Handles tool approval decisions from the frontend.
-    /// Opens an SSE connection to stream the continuation chat response.
-    /// </summary>
-    private static async Task HandleApproveAsync(
-        HttpContext http,
+    private static async Task<IResult?> AuthorizeConversationAsync(
+        IScopeResourceAdmissionPort admissionPort,
         string scopeId,
         string actorId,
-        NyxIdApprovalRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] ILoggerFactory loggerFactory,
+        ScopeResourceOperation operation,
         CancellationToken ct)
     {
-        var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        var writer = new NyxIdChatSseWriter(http.Response);
-
-        try
+        var admission = await admissionPort.AuthorizeTargetAsync(
+            new ScopeResourceTarget(
+                scopeId,
+                ScopeResourceKind.GAgentActor,
+                NyxIdChatServiceDefaults.GAgentTypeName,
+                actorId,
+                operation),
+            ct);
+        return admission.Status switch
         {
-            var accessToken = ExtractBearerToken(http);
-            if (string.IsNullOrWhiteSpace(accessToken))
-            {
-                http.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(request.RequestId))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-
-            var actor = await actorRuntime.GetAsync(actorId);
-            if (actor == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-
-            await writer.StartAsync(ct);
-            await writer.WriteRunStartedAsync(actorId, ct);
-
-            var messageId = Guid.NewGuid().ToString("N");
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                async envelope =>
-                {
-                    try
-                    {
-                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
-                        if (!string.IsNullOrWhiteSpace(terminalFrame))
-                            tcs.TrySetResult(terminalFrame);
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.TrySetException(ex);
-                    }
-                },
-                ct);
-
-            // Send the approval decision to the actor
-            var decisionEvent = new ToolApprovalDecisionEvent
-            {
-                RequestId = request.RequestId,
-                SessionId = request.SessionId ?? scopeId,
-                Approved = request.Approved,
-                Reason = request.Reason ?? string.Empty,
-            };
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(decisionEvent),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // Wait for the continuation chat to complete (or timeout)
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
-
-            if (completedTask == tcs.Task)
-            {
-                if (tcs.Task.IsFaulted)
-                {
-                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
-                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
-                }
-                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
-                {
-                    await writer.WriteRunFinishedAsync(CancellationToken.None);
-                }
-            }
-            else
-            {
-                await writer.WriteRunErrorAsync("Approval continuation timed out.", CancellationToken.None);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Client disconnected
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "NyxID approval stream failed for actor {ActorId}", actorId);
-            if (!writer.Started)
-            {
-                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
-                return;
-            }
-
-            await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
-        }
+            ScopeResourceAdmissionStatus.Allowed => null,
+            ScopeResourceAdmissionStatus.NotFound => Results.NotFound(new { error = "Conversation not found" }),
+            ScopeResourceAdmissionStatus.Denied or ScopeResourceAdmissionStatus.ScopeMismatch =>
+                Results.Json(new { error = "Conversation access denied" }, statusCode: StatusCodes.Status403Forbidden),
+            ScopeResourceAdmissionStatus.Unavailable =>
+                Results.Json(new { error = "Conversation admission unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(new { error = "Conversation admission failed" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
     }
 
-    public sealed record NyxIdApprovalRequest(
-        string? RequestId,
-        bool Approved = true,
-        string? Reason = null,
-        string? SessionId = null);
-
-    private static async Task InjectUserConfigMetadataAsync(
+    private static async Task<bool> TryAuthorizeConversationAsync(
         HttpContext http,
-        IDictionary<string, string> metadata,
+        IScopeResourceAdmissionPort admissionPort,
+        string scopeId,
+        string actorId,
+        ScopeResourceOperation operation,
         CancellationToken ct)
     {
+        var admissionError = await AuthorizeConversationAsync(admissionPort, scopeId, actorId, operation, ct);
+        if (admissionError == null)
+            return true;
+
+        http.Response.StatusCode = admissionError is IStatusCodeHttpResult { StatusCode: { } statusCode }
+            ? statusCode
+            : StatusCodes.Status500InternalServerError;
+        return false;
+    }
+
+    private static async Task<LLMControlContext> BuildLlmControlAsync(
+        HttpContext http,
+        string accessToken,
+        CancellationToken ct)
+    {
+        var control = new LLMControlContext(
+            NyxIdAccessToken: accessToken,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
         var logger = http.RequestServices.GetService<ILoggerFactory>()
             ?.CreateLogger("Aevatar.NyxId.Chat.UserConfig");
 
         var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
-        if (preferencesStore == null)
+        if (preferencesStore != null)
         {
-            logger?.LogWarning("INyxIdUserLlmPreferencesStore not registered — skipping user config injection");
-            return;
+            try
+            {
+                // Studio chat endpoint always uses the ambient (bot owner) scope —
+                // the channel inbound path passes the sender binding-id explicitly.
+                var preferences = await preferencesStore.GetOwnerAsync(ct);
+                logger?.LogInformation(
+                    "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
+                    preferences.DefaultModel ?? "<empty>",
+                    preferences.PreferredRoute ?? "<empty>",
+                    preferences.MaxToolRounds);
+
+                control = control with
+                {
+                    ModelOverride = string.IsNullOrWhiteSpace(preferences.DefaultModel)
+                        ? control.ModelOverride
+                        : preferences.DefaultModel.Trim(),
+                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(preferences.PreferredRoute)
+                        ? control.NyxIdRoutePreference
+                        : preferences.PreferredRoute.Trim(),
+                    MaxToolRoundsOverride = preferences.MaxToolRounds > 0
+                        ? preferences.MaxToolRounds
+                        : control.MaxToolRoundsOverride,
+                };
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to load user config from the projection read model; falling back to server defaults");
+            }
         }
 
-        try
-        {
-            var preferences = await preferencesStore.GetAsync(ct);
-            logger?.LogInformation(
-                "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
-                preferences.DefaultModel ?? "<empty>",
-                preferences.PreferredRoute ?? "<empty>",
-                preferences.MaxToolRounds);
-
-            if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-            if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
-            if (preferences.MaxToolRounds > 0)
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to load user config from chrono-storage — falling back to server defaults");
-        }
-    }
-
-    private static async Task InjectUserMemoryAsync(
-        HttpContext http,
-        IDictionary<string, string> metadata,
-        CancellationToken ct)
-    {
         var memoryStore = http.RequestServices.GetService<IUserMemoryStore>();
         if (memoryStore == null)
-            return;
+            return control;
+
+        var memoryLogger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.UserMemory");
 
         try
         {
             var section = await memoryStore.BuildPromptSectionAsync(2000, ct);
             if (!string.IsNullOrWhiteSpace(section))
-                metadata[LLMRequestMetadataKeys.UserMemoryPrompt] = section;
+                control = control with { UserMemoryPrompt = section };
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort
-        }
-    }
-
-    private static async Task InjectConnectedServicesAsync(
-        HttpContext http,
-        string accessToken,
-        IDictionary<string, string> metadata,
-        CancellationToken ct)
-    {
-        var client = http.RequestServices.GetService<NyxIdApiClient>();
-        if (client is null)
-            return;
-
-        try
-        {
-            // Use IMemoryCache with 60s TTL to avoid calling DiscoverProxyServices on every request.
-            var cache = http.RequestServices.GetService<IMemoryCache>();
-            var cacheKey = $"nyxid:services:{ComputeTokenHash(accessToken)}";
-
-            string? servicesJson = null;
-            if (cache is not null)
-                servicesJson = cache.Get<string>(cacheKey);
-
-            if (servicesJson is null)
-            {
-                servicesJson = await client.DiscoverProxyServicesAsync(accessToken, ct);
-                cache?.Set(cacheKey, servicesJson, TimeSpan.FromSeconds(60));
-            }
-
-            var context = BuildConnectedServicesContext(servicesJson);
-            if (!string.IsNullOrWhiteSpace(context))
-                metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
-        }
-        catch
-        {
-            // Best-effort — agent still works without capability context
-        }
-    }
-
-    private static string BuildConnectedServicesContext(string servicesJson)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("<connected-services>");
-        sb.AppendLine("Your capabilities based on connected services:");
-
-        var slugs = new List<string>();
-
-        try
-        {
-            using var doc = JsonDocument.Parse(servicesJson);
-            var root = doc.RootElement;
-
-            // Handle both array and object-with-array responses
-            JsonElement items = root;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                if (root.TryGetProperty("services", out var svc))
-                    items = svc;
-                else if (root.TryGetProperty("data", out var data))
-                    items = data;
-            }
-
-            if (items.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in items.EnumerateArray())
-                {
-                    var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
-                    var name = item.TryGetProperty("name", out var n) ? n.GetString()
-                             : item.TryGetProperty("label", out var l) ? l.GetString()
-                             : slug;
-                    var proxyUrl = item.TryGetProperty("proxy_url", out var p) ? p.GetString() : null;
-                    var baseUrl = item.TryGetProperty("endpoint_url", out var e) ? e.GetString()
-                                : item.TryGetProperty("base_url", out var b) ? b.GetString()
-                                : null;
-
-                    if (string.IsNullOrWhiteSpace(slug)) continue;
-                    slugs.Add(slug);
-
-                    sb.Append($"- **{name ?? slug}** (slug: `{slug}`)");
-                    if (!string.IsNullOrWhiteSpace(baseUrl))
-                        sb.Append($" — base: {baseUrl}");
-                    sb.AppendLine();
-                }
-            }
-        }
-        catch
-        {
-            // Parse failure — return what we have
+            memoryLogger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
         }
 
-        if (slugs.Count == 0)
-        {
-            sb.AppendLine("No services connected yet. Use nyxid_catalog to browse and connect services.");
-        }
-
-        sb.AppendLine("Use nyxid_proxy with slug + path to call any service. Use code_execute for sandbox.");
-        sb.AppendLine("</connected-services>");
-
-        // Append API hints for connected services
-        var hints = NyxIdServiceApiHints.BuildHintsSection(slugs);
-        if (!string.IsNullOrEmpty(hints))
-        {
-            sb.AppendLine();
-            sb.Append(hints);
-        }
-
-        return sb.ToString();
-    }
-
-    private static string ComputeTokenHash(string token)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToHexStringLower(bytes)[..16]; // Short hash for cache key
+        return control;
     }
 
     private static string? ExtractBearerToken(HttpContext http)
@@ -618,375 +311,28 @@ public static class NyxIdChatEndpoints
     }
 
     /// <summary>
-    /// Decode the JWT payload (without verification) to extract the 'sub' claim.
-    /// Used by the relay endpoint to resolve the user's scope ID for chrono-storage
-    /// config access, since the auth middleware has already run by the time the handler
-    /// executes and won't re-process the injected Authorization header.
+    /// Parse the JWT (without verification) to extract the 'sub' claim.
+    /// Signature validation is handled earlier by the auth middleware / relay JWT
+    /// validator; this helper only re-reads the already-accepted bearer token so the
+    /// handler can recover the user scope id after header injection.
     /// </summary>
     private static string? TryExtractJwtSubject(string token)
     {
         try
         {
-            var parts = token.Split('.');
-            if (parts.Length < 2) return null;
+            var handler = new JwtSecurityTokenHandler();
+            if (!handler.CanReadToken(token))
+                return null;
 
-            // JWT payload is base64url-encoded
-            var payload = parts[1];
-            // Pad to multiple of 4
-            payload = payload.Replace('-', '+').Replace('_', '/');
-            switch (payload.Length % 4)
-            {
-                case 2: payload += "=="; break;
-                case 3: payload += "="; break;
-            }
-
-            var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("sub", out var sub))
-                return sub.GetString()?.Trim();
-            return null;
+            var jwt = handler.ReadJwtToken(token);
+            return jwt.Claims
+                .FirstOrDefault(claim => string.Equals(claim.Type, "sub", StringComparison.Ordinal))
+                ?.Value
+                ?.Trim();
         }
         catch
         {
             return null;
         }
     }
-
-    public sealed record NyxIdChatStreamRequest(
-        string? Prompt,
-        string? SessionId = null,
-        IReadOnlyList<ContentPartDto>? InputParts = null);
-
-    public sealed record ContentPartDto(
-        string Type,
-        string? Text = null,
-        string? DataBase64 = null,
-        string? MediaType = null,
-        string? Uri = null,
-        string? Name = null)
-    {
-        public ChatContentPart ToProto() => new()
-        {
-            Kind = Type?.ToLowerInvariant() switch
-            {
-                "image" => ChatContentPartKind.Image,
-                "audio" => ChatContentPartKind.Audio,
-                "video" => ChatContentPartKind.Video,
-                "text" => ChatContentPartKind.Text,
-                _ => ChatContentPartKind.Unspecified,
-            },
-            Text = Text ?? string.Empty,
-            DataBase64 = DataBase64 ?? string.Empty,
-            MediaType = MediaType ?? string.Empty,
-            Uri = Uri ?? string.Empty,
-            Name = Name ?? string.Empty,
-        };
-    }
-
-    // ─── NyxID Channel Bot Relay ───
-
-    /// <summary>
-    /// Receives forwarded platform messages from NyxID Channel Bot Relay.
-    /// Verifies HMAC signature, dispatches to NyxIdChat actor, collects response, returns sync reply.
-    /// </summary>
-    private static async Task<IResult> HandleRelayWebhookAsync(
-        HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] NyxIdChatActorStore actorStore,
-        [FromServices] NyxIdRelayOptions relayOptions,
-        [FromServices] ILoggerFactory loggerFactory,
-        CancellationToken ct)
-    {
-        var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Relay");
-
-        try
-        {
-            // ─── Parse payload ───
-            RelayMessage? message;
-            try
-            {
-                message = await http.Request.ReadFromJsonAsync<RelayMessage>(RelayJsonOptions, ct);
-            }
-            catch (JsonException ex)
-            {
-                logger.LogWarning(ex, "Failed to parse relay payload");
-                return FriendlyReply("I received a message but couldn't understand it. Please try again.");
-            }
-
-            if (message is null || string.IsNullOrWhiteSpace(message.Content?.Text))
-                return FriendlyReply("I received an empty message. Please send some text.");
-
-            // ─── Auth ───
-            var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(userToken))
-            {
-                logger.LogWarning("Relay callback missing X-NyxID-User-Token header");
-                return FriendlyReply("Authentication is not configured properly. " +
-                    "Please ask the bot owner to check the channel relay setup.");
-            }
-
-            // Resolve user scope for chrono-storage config access
-            var jwtScopeId = TryExtractJwtSubject(userToken);
-            var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
-
-            if (!string.IsNullOrWhiteSpace(jwtScopeId))
-            {
-                var claims = new[] { new System.Security.Claims.Claim("sub", jwtScopeId) };
-                var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
-                http.User = new System.Security.Claims.ClaimsPrincipal(identity);
-            }
-
-            // Note: config.json in chrono-storage cannot be read in relay flow because
-            // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
-            // which is not present on relay callbacks (token is in X-NyxID-User-Token instead).
-            // InjectUserConfigMetadataAsync will silently fall back to server defaults.
-
-            // ─── Resolve conversation ───
-            var platform = message.Platform ?? "unknown";
-            var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
-            var conversationId = message.Conversation?.Id;
-            if (string.IsNullOrWhiteSpace(conversationId))
-                conversationId = $"{platform}-{conversationPlatformId}";
-
-            var actorId = $"nyxid-relay-{conversationId}";
-
-            logger.LogInformation(
-                "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
-                platform, conversationId, message.Sender?.DisplayName);
-
-            // ─── Get or create actor ───
-            var actor = await actorRuntime.GetAsync(actorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-            await actorStore.EnsureActorAsync(scopeId, actorId, ct);
-
-            // ─── Subscribe and collect response ───
-            var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var responseBuilder = new StringBuilder();
-            string? errorMessage = null;
-            using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
-
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                actor.Id,
-                envelope =>
-                {
-                    var payload = envelope.Payload;
-                    if (payload is null) return Task.CompletedTask;
-
-                    if (payload.Is(TextMessageContentEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageContentEvent>();
-                        if (!string.IsNullOrEmpty(evt.Delta))
-                            responseBuilder.Append(evt.Delta);
-                    }
-                    else if (payload.Is(TextMessageEndEvent.Descriptor))
-                    {
-                        var evt = payload.Unpack<TextMessageEndEvent>();
-                        if (!string.IsNullOrEmpty(evt.Content))
-                        {
-                            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                            const string llmFailedPrefix = "LLM request failed:";
-                            if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
-                            else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                                errorMessage = evt.Content.Trim();
-                        }
-                        responseTcs.TrySetResult(responseBuilder.ToString());
-                    }
-
-                    return Task.CompletedTask;
-                },
-                ct);
-
-            // ─── Dispatch to actor ───
-            // SessionId = per-message unique ID (for idempotent retry),
-            // NOT conversationId (which is per-chat and would collide across messages).
-            var relayMessageId = message.MessageId;
-            var sessionId = !string.IsNullOrWhiteSpace(relayMessageId)
-                ? $"{conversationId}-{relayMessageId}"
-                : $"{conversationId}-{Guid.NewGuid():N}";
-
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = message.Content.Text,
-                SessionId = sessionId,
-                ScopeId = scopeId,
-            };
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
-            chatRequest.Metadata["scope_id"] = scopeId;
-            chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
-            chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
-            chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
-            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
-            };
-
-            await actor.HandleEventAsync(envelope, ct);
-
-            // ─── Wait for response ───
-            var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
-            sw.Stop();
-
-            string replyText;
-            if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
-            {
-                replyText = responseTcs.Task.Result;
-                logger.LogInformation("Relay response in {ElapsedMs}ms, length={Length}",
-                    sw.ElapsedMilliseconds, replyText.Length);
-            }
-            else
-            {
-                var partial = responseBuilder.ToString();
-                logger.LogWarning("Relay timed out after {ElapsedMs}ms, partial={Length}",
-                    sw.ElapsedMilliseconds, partial.Length);
-                replyText = partial.Length > 0
-                    ? partial
-                    : "Sorry, it's taking too long to respond. Please try again.";
-            }
-
-            // ─── Translate errors to friendly messages ───
-            if (!string.IsNullOrWhiteSpace(errorMessage))
-            {
-                logger.LogWarning("Relay LLM error: conversation={ConversationId}, error={Error}",
-                    conversationId, errorMessage);
-
-                replyText = ClassifyError(errorMessage);
-
-                if (relayOptions.EnableDebugDiagnostics)
-                {
-                    var config = http.RequestServices.GetService<IConfiguration>();
-                    var diagnostic = BuildRelayDiagnostic(chatRequest.Metadata, config, errorMessage);
-                    replyText += $"\n\n[Debug]\n{diagnostic}";
-                }
-            }
-            else if (string.IsNullOrWhiteSpace(replyText))
-            {
-                logger.LogWarning("Relay empty response: conversation={ConversationId}", conversationId);
-                replyText = "Sorry, I wasn't able to generate a response. Please try again.";
-            }
-
-            return FriendlyReply(replyText);
-        }
-        catch (OperationCanceledException)
-        {
-            return FriendlyReply("The request was cancelled. Please try again.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Relay handler unexpected error");
-            return FriendlyReply("Sorry, an unexpected error occurred. Please try again later.");
-        }
-    }
-
-    /// <summary>Classify a technical LLM error into a user-friendly message.</summary>
-    private static string ClassifyError(string error)
-    {
-        if (error.Contains("403", StringComparison.Ordinal) ||
-            error.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, I can't reach the AI service right now (403 Forbidden).";
-
-        if (error.Contains("401", StringComparison.Ordinal) ||
-            error.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-            error.Contains("authentication", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, authentication with the AI service failed (401).";
-
-        if (error.Contains("429", StringComparison.Ordinal) ||
-            error.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            error.Contains("too many", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the AI service is busy right now (429). Please wait a moment and try again.";
-
-        if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the AI service took too long to respond. Please try again.";
-
-        if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
-            error.Contains("not found", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the configured AI model is not available.";
-
-        return "Sorry, something went wrong while generating a response.";
-    }
-
-    /// <summary>
-    /// Build diagnostic block for relay error replies. Only included when
-    /// <see cref="NyxIdRelayOptions.EnableDebugDiagnostics"/> is true.
-    /// </summary>
-    private static string BuildRelayDiagnostic(
-        Google.Protobuf.Collections.MapField<string, string> metadata,
-        IConfiguration? configuration,
-        string errorMessage)
-    {
-        var modelOverride = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : null;
-        var serverDefault = configuration?["Aevatar:NyxId:DefaultModel"] ?? "(OpenAIModel option)";
-        var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r)
-            && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
-        var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
-
-        var model = !string.IsNullOrWhiteSpace(modelOverride)
-            ? $"{modelOverride} (from config.json)"
-            : $"server-default={serverDefault}";
-
-        var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;
-
-        return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}\nError: {error}";
-    }
-
-    private static IResult FriendlyReply(string text) =>
-        Results.Json(new { reply = new { text } });
-
-    // ─── Relay payload models ───
-
-    private static readonly JsonSerializerOptions RelayJsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
-
-    private sealed class RelayMessage
-    {
-        public string? MessageId { get; set; }
-        public string? Platform { get; set; }
-        public RelayAgent? Agent { get; set; }
-        public RelayConversation? Conversation { get; set; }
-        public RelaySender? Sender { get; set; }
-        public RelayContent? Content { get; set; }
-        public string? Timestamp { get; set; }
-    }
-
-    private sealed class RelayAgent
-    {
-        public string? ApiKeyId { get; set; }
-        public string? Name { get; set; }
-    }
-
-    private sealed class RelayConversation
-    {
-        public string? Id { get; set; }
-        public string? PlatformId { get; set; }
-        public string? Type { get; set; }
-    }
-
-    private sealed class RelaySender
-    {
-        public string? PlatformId { get; set; }
-        public string? DisplayName { get; set; }
-    }
-
-    private sealed class RelayContent
-    {
-        public string? Type { get; set; }
-        public string? Text { get; set; }
-    }
-
 }

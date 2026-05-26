@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
