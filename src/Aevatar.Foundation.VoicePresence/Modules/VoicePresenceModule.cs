@@ -166,6 +166,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.TransportRelayStopped:
                 await HandleTransportRelayStoppedAsync(signal.TransportRelayStopped, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted:
+                await HandleTransportLifetimeCompletedAsync(signal.TransportLifetimeCompleted, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.ProviderEventReceived:
                 await HandleProviderEventReceivedAsync(signal.ProviderEventReceived, ctx, ct);
                 break;
@@ -320,6 +323,27 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             TransportLeaseId = key.TransportLeaseId,
             LeaseExpiresAt = key.LeaseExpiresAt?.Clone(),
         };
+
+    internal VoiceTransportLifetimeCompleted? TryBuildTransportLifetimeCompleted(IVoiceTransport expectedTransport) =>
+        _transportPump is { } pump && ReferenceEquals(expectedTransport, pump.Transport)
+            ? new VoiceTransportLifetimeCompleted
+            {
+                SessionId = pump.Key.SessionId,
+                OwnerId = pump.Key.OwnerId,
+                TransportLeaseId = pump.Key.TransportLeaseId,
+                LeaseExpiresAt = pump.Key.LeaseExpiresAt?.Clone(),
+                Reason = "host_transport_completed",
+            }
+            : null;
+
+    internal async Task DisposeVolatileTransportAsync(IVoiceTransport expectedTransport)
+    {
+        var pump = _transportPump;
+        if (pump == null || !ReferenceEquals(expectedTransport, pump.Transport))
+            return;
+
+        await DisposeTransportPumpAsync();
+    }
 
     /// <summary>
     /// Detaches the current transport and stops the relay loops.
@@ -956,6 +980,29 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
 
         ClearTransportLeaseState(state);
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
+    private async Task HandleTransportLifetimeCompletedAsync(
+        VoiceTransportLifetimeCompleted request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        EnsureVolatileSelfSignalDispatcher(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseExpiresAt))
+            return;
+
+        ClearTransportLeaseState(state);
+        state.ActiveSessionId = string.Empty;
+        state.LeaseExpiresAt = null;
+        state.ActiveLeaseOwnerId = string.Empty;
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 

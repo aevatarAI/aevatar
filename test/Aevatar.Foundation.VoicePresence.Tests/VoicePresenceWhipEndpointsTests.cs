@@ -3,6 +3,7 @@ using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Transport;
+using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -152,13 +153,10 @@ public class VoicePresenceWhipEndpointsTests
         var transport = new StubVoiceTransport();
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "v=0\r\nanswer", completion.Task));
-        var detachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatched = new List<IMessage>();
         var session = CreateTrackingSession(
             module,
-            detachCompletedByTransport: new Dictionary<IVoiceTransport, TaskCompletionSource>
-            {
-                [transport] = detachCompleted,
-            },
+            selfSignals: dispatched,
             pcmSampleRateHz: 16000);
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
         var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
@@ -177,9 +175,11 @@ public class VoicePresenceWhipEndpointsTests
         transport.Disposed.ShouldBeFalse();
 
         completion.SetResult();
-        await detachCompleted.Task;
+        await transport.DisposedTask.Task;
         module.HasVolatileTransportLease.ShouldBeFalse();
         transport.Disposed.ShouldBeTrue();
+        dispatched.OfType<VoiceTransportLifetimeCompleted>().ShouldHaveSingleItem();
+        dispatched.OfType<VoiceTransportDetachRequested>().ShouldBeEmpty();
     }
 
     [Fact]
@@ -348,15 +348,10 @@ public class VoicePresenceWhipEndpointsTests
         var factory = new SequencedWebRtcVoiceTransportFactory(
             new WebRtcVoiceTransportSession(transport1, "answer-1", completion1.Task),
             new WebRtcVoiceTransportSession(transport2, "answer-2", completion2.Task));
-        var transport1DetachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var transport2DetachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatched = new List<IMessage>();
         var session = CreateTrackingSession(
             module,
-            detachCompletedByTransport: new Dictionary<IVoiceTransport, TaskCompletionSource>
-            {
-                [transport1] = transport1DetachCompleted,
-                [transport2] = transport2DetachCompleted,
-            });
+            selfSignals: dispatched);
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
 
         var post1 = CreateContext(app, HttpMethods.Post, "offer-1");
@@ -375,40 +370,54 @@ public class VoicePresenceWhipEndpointsTests
         transport2.Disposed.ShouldBeFalse();
 
         completion1.SetResult();
-        await transport1DetachCompleted.Task;
+        await transport1.DisposedTask.Task;
 
         module.HasVolatileTransportLease.ShouldBeTrue();
         transport2.Disposed.ShouldBeFalse();
+        dispatched.OfType<VoiceTransportLifetimeCompleted>()
+            .Count(static signal => signal.SessionId == "lease-1")
+            .ShouldBe(0);
 
         completion2.SetResult();
-        await transport2DetachCompleted.Task;
+        await transport2.DisposedTask.Task;
         module.HasVolatileTransportLease.ShouldBeFalse();
+        dispatched.OfType<VoiceTransportLifetimeCompleted>()
+            .Count(static signal => signal.SessionId == "lease-2")
+            .ShouldBe(1);
     }
 
     private static VoicePresenceSession CreateTrackingSession(
         VoicePresenceModule module,
-        IReadOnlyDictionary<IVoiceTransport, TaskCompletionSource> detachCompletedByTransport,
+        List<IMessage> selfSignals,
         int pcmSampleRateHz = 24000) =>
         new(
             isInitialized: () => module.IsInitialized,
             isTransportAttached: () => module.HasVolatileTransportLease,
-            attachTransportAsync: (transport, _) =>
+            attachTransportAsync: (transport, ct) =>
             {
-                module.AttachTransport(transport, static (_, _) => Task.CompletedTask);
-                return Task.CompletedTask;
+                return module.AttachTransportAsync(
+                    transport,
+                    (message, _) =>
+                    {
+                        selfSignals.Add(message);
+                        return Task.CompletedTask;
+                    },
+                    $"lease-{selfSignals.OfType<VoiceTransportAttachRequested>().Count() + 1}",
+                    "host-1",
+                    Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+                    ct);
             },
             detachTransportAsync: async (expectedTransport, _) =>
             {
                 await module.DetachTransportAsync(expectedTransport);
-                if (expectedTransport != null &&
-                    detachCompletedByTransport.TryGetValue(expectedTransport, out var completion))
-                {
-                    completion.TrySetResult();
-                }
             },
             pcmSampleRateHz,
             module,
-            static (_, _) => Task.CompletedTask);
+            (message, _) =>
+            {
+                selfSignals.Add(message);
+                return Task.CompletedTask;
+            });
 
     private static WebApplication CreateApp(
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession,

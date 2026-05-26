@@ -180,6 +180,7 @@ public static class VoicePresenceEndpoints
             {
                 await session.AttachTransportAsync(transportSession.Transport, ctx.RequestAborted);
                 attached = true;
+                // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
                 _ = ObserveTransportLifetimeAsync(session, transportSession.Transport, transportSession.Completion);
 
                 ctx.Response.StatusCode = StatusCodes.Status201Created;
@@ -408,7 +409,7 @@ public static class VoicePresenceEndpoints
             // transport completion is best-effort cleanup only
         }
 
-        await session.DetachTransportAsync(transport);
+        await session.CompleteTransportLifetimeAsync(transport);
     }
 }
 

@@ -10,4 +10,5 @@ public sealed record VoicePresenceSessionLeaseHandle(
     string OwnerId,
     long ObservedStateVersion,
     DateTimeOffset ExpiresAtUtc,
-    VoiceRemoteAudioSupport RemoteAudioSupport);
+    VoiceRemoteAudioSupport RemoteAudioSupport,
+    string? ActiveTransportLeaseId = null);
