@@ -709,6 +709,32 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public void TelegramUserConnector_must_not_reintroduce_inbound_queue_or_polling_state()
+    {
+        var path = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Bootstrap",
+            "Connectors",
+            "TelegramUserConnector.cs"));
+        var source = File.ReadAllText(path);
+
+        source.Should().NotContain("TelegramInboundUpdate",
+            "deleted per iter113/cluster-1 - inbound goes through NyxID relay");
+        source.Should().NotContain("GetUpdatesPayload",
+            "/getUpdates implementation deleted");
+        source.Should().NotContain("MaxBufferedUpdates",
+            "in-memory buffer deleted");
+        source.Should().NotContain("Queue<",
+            "inbound queue state deleted");
+    }
+
+    [Fact]
     public async Task HttpConnectorBuilder_WithHttpClientFactory_ShouldUseNamedClient()
     {
         var handler = new StubHttpMessageHandler(_ =>
