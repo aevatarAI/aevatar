@@ -181,26 +181,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             },
             static (_, context) => new GAgentDraftRunRuntimeLease(context));
 
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public GAgentDraftRunRuntimeLease LeaseToReturn { get; } = new(new GAgentDraftRunProjectionContext
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "service-draft-run-session",
-            SessionId = "cmd-1",
-        });
-
-        public Task<GAgentDraftRunRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
-    }
-
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease>
     {
         public List<GAgentDraftRunRuntimeLease> Leases { get; } = [];

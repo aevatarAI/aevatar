@@ -222,27 +222,6 @@ public sealed class ScriptServiceAguiProjectionPortTests
             },
             static (_, context) => new ScriptServiceAguiRuntimeLease(context));
 
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public ScriptServiceAguiRuntimeLease LeaseToReturn { get; } = new(new ScriptServiceAguiProjectionContext
-        {
-            RootActorId = "script-actor-1",
-            ProjectionKind = ScriptServiceAguiProjectionKind,
-            SessionId = "run-1",
-        });
-
-        public Task<ScriptServiceAguiRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
-    }
-
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<ScriptServiceAguiRuntimeLease>
     {
         public List<ScriptServiceAguiRuntimeLease> Leases { get; } = [];

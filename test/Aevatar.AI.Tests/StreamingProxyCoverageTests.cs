@@ -2334,26 +2334,6 @@ public class StreamingProxyCoverageTests
         }
     }
 
-    private sealed class RecordingRoomSessionActivationService
-        : IProjectionScopeActivationService<StreamingProxyRoomSessionRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<StreamingProxyRoomSessionRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(new StreamingProxyRoomSessionRuntimeLease(new StreamingProxyRoomSessionProjectionContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-                SessionId = request.SessionId,
-            }));
-        }
-    }
-
     private sealed class RecordingRoomSessionReleaseService
         : IProjectionScopeReleaseService<StreamingProxyRoomSessionRuntimeLease>
     {
