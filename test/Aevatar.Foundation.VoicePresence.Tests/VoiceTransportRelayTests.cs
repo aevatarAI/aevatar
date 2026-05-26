@@ -368,12 +368,6 @@ public class VoiceTransportRelayTests
         public Task SimulateEventAsync(VoiceProviderEvent evt) =>
             _eventSink?.Invoke(_sessionKey, evt, CancellationToken.None) ?? Task.CompletedTask;
 
-        public async Task SimulateEventAndWait(VoiceProviderEvent evt, TaskCompletionSource signal)
-        {
-            await SimulateEventAsync(evt);
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        }
-
         private sealed class RecordingProviderSession(RecordingProvider provider) : RealtimeVoiceProviderSession
         {
             public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)

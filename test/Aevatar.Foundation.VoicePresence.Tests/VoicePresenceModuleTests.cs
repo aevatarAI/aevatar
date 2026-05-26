@@ -517,6 +517,38 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public void Voice_provider_must_not_reintroduce_legacy_OnEvent_callback_or_session_shim()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var providerInterface = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence.Abstractions/IRealtimeVoiceProvider.cs"));
+        providerInterface.ShouldNotContain(
+            "OnEvent",
+            Case.Sensitive,
+            "legacy mutable callback deleted per iter106/cluster-106 - typed event sink only");
+        providerInterface.ShouldNotContain(
+            "LegacyRealtimeVoiceProviderSession",
+            Case.Sensitive,
+            "legacy session shim deleted per Phase 8 r1 reject");
+
+        var providerSources = new[]
+        {
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.OpenAI/OpenAIRealtimeProvider.cs"),
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.MiniCPM/MiniCPMRealtimeProvider.cs"),
+        };
+
+        foreach (var sourcePath in providerSources)
+        {
+            var source = File.ReadAllText(sourcePath);
+            source.ShouldNotContain(
+                "OnEvent",
+                Case.Sensitive,
+                $"{Path.GetFileName(sourcePath)} must keep provider callbacks on typed event sinks");
+        }
+    }
+
+    [Fact]
     public async Task Provider_response_identity_should_persist_in_role_gagent_voice_sub_state()
     {
         var module = CreateModule(new RecordingVoiceProvider());
