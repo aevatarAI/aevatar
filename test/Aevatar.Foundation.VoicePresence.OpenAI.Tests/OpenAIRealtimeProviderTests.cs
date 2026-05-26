@@ -228,9 +228,8 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
-    public async Task Slow_callback_should_keep_latest_events_when_channel_is_bounded()
+    public async Task Receive_loop_should_emit_events_directly_through_physical_session_sink()
     {
-        var firstCallbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = new FakeSession(
         [
             new OpenAIRealtimeResponseCreatedEvent("resp-1"),
@@ -238,51 +237,30 @@ public class OpenAIRealtimeProviderTests
             new OpenAIRealtimeOutputAudioDeltaEvent("resp-1", [2]),
             new OpenAIRealtimeOutputAudioDeltaEvent("resp-1", [3]),
             new OpenAIRealtimeDisconnectedEvent("done"),
-        ], afterFirstEvent: firstCallbackStarted.Task);
-        var provider = CreateProvider(session, new OpenAIRealtimeProviderOptions
-        {
-            EventQueueCapacity = 2,
-        });
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ]);
+        var provider = CreateProvider(session);
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seen = new List<VoiceProviderEvent>();
-        var invocationCount = 0;
 
-        provider.OnEvent = async (evt, ct) =>
-        {
-            seen.Add(evt);
-            if (Interlocked.Increment(ref invocationCount) == 1)
+        await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
+            (key, evt, ct) =>
             {
-                firstCallbackStarted.TrySetResult();
-                await gate.Task.WaitAsync(ct);
-            }
-
-            if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
-                disconnected.TrySetResult();
-        };
-
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+                _ = key;
+                _ = ct;
+                seen.Add(evt);
+                if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
+                    disconnected.TrySetResult();
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
         await session.ReceiveCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        gate.TrySetResult();
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        seen.Any(static x =>
-        {
-            if (x.EventCase != VoiceProviderEvent.EventOneofCase.AudioReceived)
-                return false;
-
-            var audio = x.AudioReceived.Pcm16.ToByteArray();
-            return audio.Length == 1 && audio[0] == 3;
-        }).ShouldBeTrue();
+        seen.Count(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived).ShouldBe(3);
+        seen.Where(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived)
+            .Select(static x => x.AudioReceived.Pcm16.ToByteArray().Single())
+            .ShouldBe([1, 2, 3]);
         seen.Any(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected).ShouldBeTrue();
-        seen.Any(static x =>
-        {
-            if (x.EventCase != VoiceProviderEvent.EventOneofCase.AudioReceived)
-                return false;
-
-            var audio = x.AudioReceived.Pcm16.ToByteArray();
-            return audio.Length == 1 && (audio[0] == 1 || audio[0] == 2);
-        }).ShouldBeFalse();
     }
 
     [Fact]

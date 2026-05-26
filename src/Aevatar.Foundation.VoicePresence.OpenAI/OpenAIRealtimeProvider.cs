@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -17,6 +16,9 @@ namespace Aevatar.Foundation.VoicePresence.OpenAI;
 //   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
 //   New principle: provider callbacks emit provider-native response ids only.
 //   VoicePresenceModule owns actor response epoch mapping inside the actor turn.
+// Refactor (iter106/cluster-106-voice-provider-session-runtime):
+//   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+//   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
 public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 {
     private static readonly BinaryData PermissiveToolSchema =
@@ -27,13 +29,8 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
     private readonly OpenAIRealtimeProviderOptions _options;
     private readonly ILogger _logger;
 
-    private IOpenAIRealtimeSession? _session;
-    private Channel<VoiceProviderEvent>? _eventChannel;
-    private CancellationTokenSource? _lifetimeCts;
-    private Task? _receiveLoop;
-    private Task? _dispatchLoop;
     private bool _disposed;
-    private int _sampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz;
+    private OpenAIRealtimeProviderSession? _activeSession;
 
     public OpenAIRealtimeProvider(
         OpenAIRealtimeProviderOptions? options = null,
@@ -57,79 +54,56 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
     public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
 
-    public async Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
+    public async Task<RealtimeVoiceProviderSession> ConnectAsync(
+        VoiceProviderSessionKey sessionKey,
+        VoiceProviderConfig config,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(eventSink);
         EnsureDisconnected();
         ValidateProviderConfig(config);
 
-        _session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
-        _eventChannel = Channel.CreateBounded<VoiceProviderEvent>(new BoundedChannelOptions(_options.EventQueueCapacity)
-        {
-            SingleReader = true,
-            SingleWriter = true,
-            FullMode = BoundedChannelFullMode.DropOldest,
-            AllowSynchronousContinuations = false,
-        });
-        _lifetimeCts = new CancellationTokenSource();
-        _receiveLoop = RunReceiveLoopAsync(_session, _eventChannel.Writer, _lifetimeCts.Token);
-        _dispatchLoop = RunDispatchLoopAsync(_eventChannel.Reader, _lifetimeCts.Token);
+        var session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
+        _activeSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink);
+        _activeSession.Start();
+        return _activeSession;
     }
 
-    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+    public async Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
     {
-        if (pcm16.IsEmpty)
-            return Task.CompletedTask;
-
-        return EnsureSession().SendInputAudioAsync(BinaryData.FromBytes(pcm16.ToArray()), ct);
-    }
-
-    public async Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(callId))
-            throw new ArgumentException("call_id is required.", nameof(callId));
-
-        var session = EnsureSession();
-        await session.AddItemAsync(
-            new RealtimeFunctionCallOutputItem(callId, resultJson ?? string.Empty),
+        var legacySession = new VoiceProviderSessionKey(string.Empty, string.Empty, string.Empty, 0);
+        await ConnectAsync(
+            legacySession,
+            config,
+            (key, providerEvent, token) =>
+            {
+                _ = key;
+                var callback = OnEvent;
+                return callback?.Invoke(providerEvent, token) ?? Task.CompletedTask;
+            },
             ct);
-        await session.StartResponseAsync(ct);
     }
 
-    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(injection);
-        return InjectUserTextAsync(BuildInjectedEventText(injection), ct);
-    }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
+        EnsureSession().SendAudioAsync(pcm16, ct);
+
+    public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
+        EnsureSession().SendToolResultAsync(callId, resultJson, ct);
+
+    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
+        EnsureSession().InjectEventAsync(injection, ct);
+
+    internal Task InjectUserTextAsync(string text, CancellationToken ct) =>
+        EnsureSession().InjectUserTextAsync(text, ct);
 
     public Task CancelResponseAsync(CancellationToken ct) =>
         EnsureSession().CancelResponseAsync(ct);
 
-    public async Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(session);
-
-        _sampleRateHz = ResolveSampleRateHz(session.SampleRateHz);
-        await EnsureSession().SendSessionUpdateAsync(BuildSessionUpdateEvent(session), ct);
-    }
-
-    internal async Task InjectUserTextAsync(string text, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            throw new ArgumentException("Text input is required.", nameof(text));
-
-        var item = new RealtimeMessageItem(
-            RealtimeMessageRole.User,
-            [new RealtimeInputTextMessageContentPart(text)]);
-
-        var session = EnsureSession();
-        await session.AddItemAsync(item, ct);
-        await session.StartResponseAsync(ct);
-    }
-
-    private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
-        $"External event observed:\n{InjectionJsonFormatter.Format(injection)}";
+    public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
+        EnsureSession().UpdateSessionAsync(session, ct);
 
     public async ValueTask DisposeAsync()
     {
@@ -137,88 +111,13 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             return;
 
         _disposed = true;
-
-        var cts = _lifetimeCts;
-        _lifetimeCts = null;
-        cts?.Cancel();
-
-        if (_eventChannel != null)
-            _eventChannel.Writer.TryComplete();
-
-        await AwaitLoopAsync(_receiveLoop);
-        await AwaitLoopAsync(_dispatchLoop);
-
-        _receiveLoop = null;
-        _dispatchLoop = null;
-        _eventChannel = null;
-
-        if (_session != null)
-        {
-            await _session.DisposeAsync();
-            _session = null;
-        }
-
-        cts?.Dispose();
+        await DisposeActiveSessionAsync();
     }
 
-    private async Task RunReceiveLoopAsync(
-        IOpenAIRealtimeSession session,
-        ChannelWriter<VoiceProviderEvent> writer,
-        CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var sessionEvent in session.ReceiveEventsAsync(ct).WithCancellation(ct))
-            {
-                var providerEvent = MapSessionEvent(sessionEvent);
-                if (providerEvent != null)
-                    await writer.WriteAsync(providerEvent, ct);
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "OpenAI realtime receive loop terminated unexpectedly.");
-            TryWriteDisconnected(writer, $"error:{ex.Message}");
-        }
-        finally
-        {
-            writer.TryComplete();
-        }
-    }
+    private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
+        $"External event observed:\n{InjectionJsonFormatter.Format(injection)}";
 
-    private async Task RunDispatchLoopAsync(ChannelReader<VoiceProviderEvent> reader, CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var providerEvent in reader.ReadAllAsync(ct))
-            {
-                var callback = OnEvent;
-                if (callback == null)
-                    continue;
-
-                try
-                {
-                    await callback(providerEvent, ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "OpenAI realtime provider callback failed for event {EventCase}.",
-                        providerEvent.EventCase);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-    }
-
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: MapSessionEvent allocated actor response epochs and mutated provider-owned response dictionaries.
-    //   New principle: OpenAI events carry provider-native response ids; VoicePresenceModule maps them in actor turn.
-    private VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent) =>
+    private static VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent, int sampleRateHz) =>
         sessionEvent switch
         {
             OpenAIRealtimeSpeechStartedEvent => new VoiceProviderEvent
@@ -255,7 +154,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 AudioReceived = new VoiceAudioReceived
                 {
                     Pcm16 = Google.Protobuf.ByteString.CopyFrom(audio.Pcm16),
-                    SampleRateHz = _sampleRateHz,
+                    SampleRateHz = sampleRateHz,
                     ProviderResponseId = audio.ProviderResponseId,
                 },
             },
@@ -287,7 +186,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             _ => null,
         };
 
-    private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session)
+    private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session, int sampleRateHz)
     {
         // Refactor (iter94/cluster-809):
         // Old:OpenAI SDK typed beta session options.
@@ -302,12 +201,12 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 ["input"] = new JsonObject
                 {
-                    ["format"] = BuildPcmAudioFormat(_sampleRateHz),
+                    ["format"] = BuildPcmAudioFormat(sampleRateHz),
                     ["turn_detection"] = BuildTurnDetection(),
                 },
                 ["output"] = new JsonObject
                 {
-                    ["format"] = BuildPcmAudioFormat(_sampleRateHz),
+                    ["format"] = BuildPcmAudioFormat(sampleRateHz),
                     ["voice"] = string.IsNullOrWhiteSpace(session.Voice)
                         ? "alloy"
                         : session.Voice.Trim(),
@@ -435,25 +334,161 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             throw new InvalidOperationException("OpenAI realtime provider requires api_key.");
     }
 
-    private IOpenAIRealtimeSession EnsureSession() =>
-        _session ?? throw new InvalidOperationException("OpenAI realtime provider is not connected.");
+    private OpenAIRealtimeProviderSession EnsureSession() =>
+        _activeSession ?? throw new InvalidOperationException("OpenAI realtime provider is not connected.");
 
     private void EnsureDisconnected()
     {
-        if (_session != null)
+        if (_activeSession != null)
             throw new InvalidOperationException("OpenAI realtime provider is already connected.");
     }
 
-    private static void TryWriteDisconnected(ChannelWriter<VoiceProviderEvent> writer, string reason)
+    private async Task DisposeActiveSessionAsync()
     {
-        writer.TryWrite(new VoiceProviderEvent
+        var session = _activeSession;
+        _activeSession = null;
+        if (session != null)
+            await session.DisposeAsync();
+    }
+
+    // Refactor (iter106/cluster-106-voice-provider-session-runtime):
+    //   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+    //   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
+    private sealed class OpenAIRealtimeProviderSession : RealtimeVoiceProviderSession
+    {
+        private readonly VoiceProviderSessionKey _callbackKey;
+        private readonly IOpenAIRealtimeSession _physicalSession;
+        private readonly OpenAIRealtimeProvider _connector;
+        private readonly ILogger _logger;
+        private readonly Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> _eventSink;
+        private readonly CancellationTokenSource _physicalSessionCancellation = new();
+        private Task? _receiveTask;
+        private bool _disposed;
+        private int _outputSampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz;
+
+        public OpenAIRealtimeProviderSession(
+            VoiceProviderSessionKey sessionKey,
+            IOpenAIRealtimeSession session,
+            OpenAIRealtimeProvider connector,
+            ILogger logger,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink)
+        {
+            _callbackKey = sessionKey;
+            _physicalSession = session;
+            _connector = connector;
+            _logger = logger;
+            _eventSink = eventSink;
+        }
+
+        public void Start()
+        {
+            _receiveTask = RunReceiveLoopAsync(_physicalSessionCancellation.Token);
+        }
+
+        public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            if (pcm16.IsEmpty)
+                return Task.CompletedTask;
+
+            return _physicalSession.SendInputAudioAsync(BinaryData.FromBytes(pcm16.ToArray()), ct);
+        }
+
+        public override async Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(callId))
+                throw new ArgumentException("call_id is required.", nameof(callId));
+
+            await _physicalSession.AddItemAsync(
+                new RealtimeFunctionCallOutputItem(callId, resultJson ?? string.Empty),
+                ct);
+            await _physicalSession.StartResponseAsync(ct);
+        }
+
+        public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(injection);
+            return InjectUserTextAsync(BuildInjectedEventText(injection), ct);
+        }
+
+        public override Task CancelResponseAsync(CancellationToken ct) =>
+            _physicalSession.CancelResponseAsync(ct);
+
+        public override async Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(session);
+
+            _outputSampleRateHz = _connector.ResolveSampleRateHz(session.SampleRateHz);
+            await _physicalSession.SendSessionUpdateAsync(_connector.BuildSessionUpdateEvent(session, _outputSampleRateHz), ct);
+        }
+
+        internal async Task InjectUserTextAsync(string text, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                throw new ArgumentException("Text input is required.", nameof(text));
+
+            var item = new RealtimeMessageItem(
+                RealtimeMessageRole.User,
+                [new RealtimeInputTextMessageContentPart(text)]);
+
+            await _physicalSession.AddItemAsync(item, ct);
+            await _physicalSession.StartResponseAsync(ct);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _physicalSessionCancellation.Cancel();
+            await AwaitLoopAsync(_receiveTask);
+            await _physicalSession.DisposeAsync();
+            _physicalSessionCancellation.Dispose();
+        }
+
+        private async Task RunReceiveLoopAsync(CancellationToken ct)
+        {
+            try
+            {
+                await foreach (var sessionEvent in _physicalSession.ReceiveEventsAsync(ct).WithCancellation(ct))
+                {
+                    var providerEvent = MapSessionEvent(sessionEvent, _outputSampleRateHz);
+                    if (providerEvent != null)
+                        await EmitAsync(providerEvent, ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OpenAI realtime receive loop terminated unexpectedly.");
+                await EmitAsync(BuildDisconnected($"error:{ex.Message}"), CancellationToken.None);
+            }
+        }
+
+        private async Task EmitAsync(VoiceProviderEvent providerEvent, CancellationToken ct)
+        {
+            try
+            {
+                await _eventSink(_callbackKey, providerEvent, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OpenAI realtime provider callback failed for event {EventCase}.",
+                    providerEvent.EventCase);
+            }
+        }
+    }
+
+    private static VoiceProviderEvent BuildDisconnected(string reason) =>
+        new()
         {
             Disconnected = new VoiceProviderDisconnected
             {
                 Reason = reason,
             },
-        });
-    }
+        };
 
     private static async Task AwaitLoopAsync(Task? loop)
     {

@@ -75,6 +75,9 @@ message VoicePresenceEventDedupeFenceEntry {
 // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
 //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
 //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
+// Refactor (iter106/cluster-106-voice-provider-session-runtime):
+//   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+//   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
 message VoicePresenceRuntimeState {
   VoicePresenceRuntimeStatus status = 1;
   int32 current_response_id = 2;
@@ -96,6 +99,7 @@ message VoicePresenceRuntimeState {
   string active_transport_lease_id = 18;
   string active_lease_owner_id = 19;
   repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
+  int64 lease_epoch = 21;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -206,6 +210,7 @@ message VoiceTransportAttachRequested {
   string owner_id = 2;
   string transport_lease_id = 3;
   google.protobuf.Timestamp lease_expires_at = 4;
+  int64 lease_epoch = 6;
 }
 
 message VoiceTransportDetachRequested {
@@ -214,6 +219,7 @@ message VoiceTransportDetachRequested {
   string reason = 3;
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
 }
 
 message VoiceTransportControlFrameReceived {
@@ -222,6 +228,7 @@ message VoiceTransportControlFrameReceived {
   VoiceControlFrame control_frame = 3;
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
 }
 
 message VoiceTransportAudioFrameReceived {
@@ -231,6 +238,7 @@ message VoiceTransportAudioFrameReceived {
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
   int32 sample_rate_hz = 6;
+  int64 lease_epoch = 7;
 }
 
 message VoiceTransportRelayStopped {
@@ -239,6 +247,7 @@ message VoiceTransportRelayStopped {
   string reason = 3;
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
 }
 
 // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
@@ -248,14 +257,19 @@ message VoiceTransportLifetimeCompleted {
   string reason = 3;
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
 }
 
+// Refactor (iter106/cluster-106-voice-provider-session-runtime):
+//   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
+//   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
 message VoiceProviderEventReceived {
   string session_id = 1;
   string transport_lease_id = 2;
   VoiceProviderEvent provider_event = 3;
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
+  int64 lease_epoch = 6;
 }
 
 message VoiceRemoteSessionClosed {
