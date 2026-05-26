@@ -235,6 +235,15 @@ message VoiceTransportRelayStopped {
   google.protobuf.Timestamp lease_expires_at = 5;
 }
 
+// Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
+message VoiceTransportLifetimeCompleted {
+  string session_id = 1;
+  string transport_lease_id = 2;
+  string reason = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp lease_expires_at = 5;
+}
+
 message VoiceProviderEventReceived {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -279,6 +288,7 @@ message VoiceModuleSignal {
     VoiceTransportRelayStopped transport_relay_stopped = 13;
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportAudioFrameReceived transport_audio_frame_received = 15;
+    VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
   }
 }
 
@@ -298,4 +308,5 @@ message VoicePresenceCapabilityReadModel {
   string active_session_id = 10;
   google.protobuf.Timestamp lease_expires_at = 11;
   VoiceRemoteAudioSupport remote_audio_support = 12;
+  string active_transport_lease_id = 13;
 }

@@ -178,9 +178,10 @@ public static class VoicePresenceEndpoints
             var attached = false;
             try
             {
-                await session.AttachTransportAsync(transportSession.Transport, ctx.RequestAborted);
+                var lifetimeCompleted = await session.AttachTransportAsync(transportSession.Transport, ctx.RequestAborted);
                 attached = true;
-                _ = ObserveTransportLifetimeAsync(session, transportSession.Transport, transportSession.Completion);
+                // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
+                _ = ObserveTransportLifetimeAsync(session, lifetimeCompleted, transportSession.Completion);
 
                 ctx.Response.StatusCode = StatusCodes.Status201Created;
                 ctx.Response.ContentType = "application/sdp";
@@ -396,7 +397,7 @@ public static class VoicePresenceEndpoints
 
     private static async Task ObserveTransportLifetimeAsync(
         VoicePresenceSession session,
-        IVoiceTransport transport,
+        VoiceTransportLifetimeCompleted? lifetimeCompleted,
         Task completion)
     {
         try
@@ -408,7 +409,7 @@ public static class VoicePresenceEndpoints
             // transport completion is best-effort cleanup only
         }
 
-        await session.DetachTransportAsync(transport);
+        await session.CompleteTransportLifetimeAsync(lifetimeCompleted);
     }
 }
 
