@@ -288,6 +288,79 @@ type OrderedStudioShellMemberItem = StudioShellMemberItem & {
   readonly insertionOrder: number;
 };
 
+function studioMemberSummaryMatches(
+  left: StudioMemberSummary | undefined,
+  right: StudioMemberSummary,
+): boolean {
+  return Boolean(
+    left &&
+      trimOptional(left.memberId) === trimOptional(right.memberId) &&
+      trimOptional(left.scopeId) === trimOptional(right.scopeId) &&
+      trimOptional(left.displayName) === trimOptional(right.displayName) &&
+      trimOptional(left.description) === trimOptional(right.description) &&
+      normalizeStudioMemberBindingImplementationKind(left.implementationKind) ===
+        normalizeStudioMemberBindingImplementationKind(right.implementationKind) &&
+      trimOptional(left.teamId) === trimOptional(right.teamId) &&
+      trimOptional(left.publishedServiceId) === trimOptional(right.publishedServiceId) &&
+      trimOptional(left.lastBoundRevisionId) === trimOptional(right.lastBoundRevisionId),
+  );
+}
+
+function upsertStudioMemberSummary(
+  members: readonly StudioMemberSummary[],
+  member: StudioMemberSummary,
+): StudioMemberSummary[] {
+  const normalizedMemberId = trimOptional(member.memberId);
+  let matched = false;
+  const nextMembers = members.map((currentMember) => {
+    if (
+      normalizedMemberId &&
+      trimOptional(currentMember.memberId) === normalizedMemberId
+    ) {
+      matched = true;
+      return {
+        ...currentMember,
+        ...member,
+      };
+    }
+
+    return currentMember;
+  });
+
+  return matched ? nextMembers : [member, ...nextMembers];
+}
+
+function isStudioMemberVisibleForRoster(
+  member: StudioMemberSummary,
+  scopeId: string,
+  teamId: string,
+): boolean {
+  if (trimOptional(member.scopeId) !== trimOptional(scopeId)) {
+    return false;
+  }
+
+  const normalizedTeamId = trimOptional(teamId);
+  return !normalizedTeamId || trimOptional(member.teamId) === normalizedTeamId;
+}
+
+function mergeOptimisticStudioMembers(
+  members: readonly StudioMemberSummary[],
+  optimisticMembers: readonly StudioMemberSummary[],
+  scopeId: string,
+  teamId: string,
+): StudioMemberSummary[] {
+  if (!optimisticMembers.length) {
+    return [...members];
+  }
+
+  return optimisticMembers
+    .filter((member) => isStudioMemberVisibleForRoster(member, scopeId, teamId))
+    .reduce(
+      (current, member) => upsertStudioMemberSummary(current, member),
+      [...members],
+    );
+}
+
 type InlineInfoButtonProps = {
   readonly ariaLabel: string;
   readonly buttonStyle?: React.CSSProperties;
@@ -1070,7 +1143,8 @@ function buildInventoryScriptName(
   for (const member of members) {
     const scriptId =
       member.implementationKind === 'script'
-        ? buildScriptIdSlug(member.displayName)
+        ? buildScriptIdSlug(member.memberId) ||
+          buildScriptIdSlug(member.displayName)
         : '';
     if (scriptId) {
       usedIds.add(scriptId);
@@ -1400,7 +1474,8 @@ function resolveLifecycleScriptId(
   ) {
     return trimOptional(memberSummary?.publishedServiceId)
       ? ''
-      : trimOptional(memberSummary?.displayName);
+      : trimOptional(memberSummary?.memberId) ||
+          buildScriptIdSlug(memberSummary?.displayName || '');
   }
 
   return '';
@@ -2218,11 +2293,14 @@ function isKnownLegacyServiceMemberToken(
 
   return (
     studioScopeMembers.some(
-      (member) => trimOptional(member.publishedServiceId) === normalizedToken,
+      (member) =>
+        trimOptional(member.publishedServiceId) === normalizedToken ||
+        trimOptional(member.memberId) === normalizedToken,
     ) ||
     publishedMembers.some(
       ({ service, memberSummary }) =>
         trimOptional(memberSummary?.publishedServiceId) === normalizedToken ||
+        trimOptional(memberSummary?.memberId) === normalizedToken ||
         trimOptional(service.serviceId) === normalizedToken,
     )
   );
@@ -2684,6 +2762,9 @@ const StudioPage: React.FC = () => {
   const [inventoryBusyKey, setInventoryBusyKey] = useState('');
   const [inventoryBusyAction, setInventoryBusyAction] = useState<InventoryBusyAction>('');
   const [memberRecencyOrder, setMemberRecencyOrder] = useState<string[]>([]);
+  const [optimisticStudioMembers, setOptimisticStudioMembers] = useState<
+    StudioMemberSummary[]
+  >([]);
   const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
   const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
   const [createMemberName, setCreateMemberName] = useState('');
@@ -3041,9 +3122,37 @@ const StudioPage: React.FC = () => {
     gAgentTypesQuery.data,
     selectedGAgentTypeName,
   ]);
+  useEffect(() => {
+    const serverMembers = studioMembersQuery.data?.members ?? [];
+    if (!serverMembers.length || !optimisticStudioMembers.length) {
+      return;
+    }
+
+    setOptimisticStudioMembers((current) =>
+      current.filter((optimisticMember) => {
+        const serverMember = serverMembers.find(
+          (member) =>
+            trimOptional(member.memberId) ===
+            trimOptional(optimisticMember.memberId),
+        );
+        return !studioMemberSummaryMatches(serverMember, optimisticMember);
+      }),
+    );
+  }, [optimisticStudioMembers.length, studioMembersQuery.data?.members]);
   const studioScopeMembers = useMemo(
-    () => studioMembersQuery.data?.members ?? [],
-    [studioMembersQuery.data?.members],
+    () =>
+      mergeOptimisticStudioMembers(
+        studioMembersQuery.data?.members ?? [],
+        optimisticStudioMembers,
+        resolvedStudioScopeId,
+        resolvedStudioTeamId,
+      ),
+    [
+      optimisticStudioMembers,
+      resolvedStudioScopeId,
+      resolvedStudioTeamId,
+      studioMembersQuery.data?.members,
+    ],
   );
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
@@ -4272,26 +4381,38 @@ const StudioPage: React.FC = () => {
               (detail) => trimOptional(detail.script?.scriptId) === selectedId,
             ) ?? null
           : null;
-      const effectiveScriptState =
-        scriptBuildState?.scriptId && trimOptional(scriptBuildState.scriptId) === selectedId
+      const currentAppliedScriptState =
+        scriptBuildState?.scriptId &&
+        trimOptional(scriptBuildState.scriptId) === selectedId &&
+        !scriptBuildState.dirty &&
+        scriptBuildState.saveStatus === 'applied'
           ? scriptBuildState
-          : lastAppliedScriptBuildState?.scriptId &&
-              trimOptional(lastAppliedScriptBuildState.scriptId) === selectedId
-            ? lastAppliedScriptBuildState
-          : catalogScriptState
-          ? {
-              scriptId: trimOptional(catalogScriptState.script?.scriptId),
-              displayName: '',
-              scriptRevision:
-                trimOptional(catalogScriptState.source?.revision) ||
-                trimOptional(catalogScriptState.script?.activeRevision),
-              revisionId:
-                trimOptional(catalogScriptState.source?.revision) ||
-                trimOptional(catalogScriptState.script?.activeRevision),
-              dirty: false,
-              saveStatus: 'applied' as const,
-            }
           : null;
+      const lastAppliedScriptState =
+        lastAppliedScriptBuildState?.scriptId &&
+        trimOptional(lastAppliedScriptBuildState.scriptId) === selectedId &&
+        !lastAppliedScriptBuildState.dirty &&
+        lastAppliedScriptBuildState.saveStatus === 'applied'
+          ? lastAppliedScriptBuildState
+          : null;
+      const catalogAppliedScriptState = catalogScriptState
+        ? {
+            scriptId: trimOptional(catalogScriptState.script?.scriptId),
+            displayName: '',
+            scriptRevision:
+              trimOptional(catalogScriptState.source?.revision) ||
+              trimOptional(catalogScriptState.script?.activeRevision),
+            revisionId:
+              trimOptional(catalogScriptState.source?.revision) ||
+              trimOptional(catalogScriptState.script?.activeRevision),
+            dirty: false,
+            saveStatus: 'applied' as const,
+          }
+        : null;
+      const effectiveScriptState =
+        currentAppliedScriptState ||
+        lastAppliedScriptState ||
+        catalogAppliedScriptState;
       const scriptId = trimOptional(effectiveScriptState?.scriptId);
       if (
         scriptId &&
@@ -5252,6 +5373,19 @@ const StudioPage: React.FC = () => {
           return;
         }
 
+        if (
+          studioScopeMembers.some(
+            (member) =>
+              normalizeStudioMemberBindingImplementationKind(
+                member.implementationKind,
+              ) === 'script' &&
+              buildScriptIdSlug(member.memberId) === scriptId,
+          )
+        ) {
+          void message.warning('A Script member with the same id already exists.');
+          return;
+        }
+
         let createdScriptMember: StudioMemberSummary | null = null;
         if (resolvedStudioScopeId) {
           setInventoryBusyKey('create');
@@ -5259,10 +5393,17 @@ const StudioPage: React.FC = () => {
           try {
             createdScriptMember = await studioApi.createMember({
               scopeId: resolvedStudioScopeId,
+              memberId: scriptId,
               displayName: scriptDisplayName,
               implementationKind: 'script',
               ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
             });
+            setOptimisticStudioMembers((current) =>
+              upsertStudioMemberSummary(
+                current,
+                createdScriptMember as StudioMemberSummary,
+              ),
+            );
             queryClient.setQueryData<StudioMemberRoster>(
               studioMembersQueryKey,
               (current) =>
@@ -5297,6 +5438,11 @@ const StudioPage: React.FC = () => {
         setSelectedScriptId(scriptId);
         setTemplateWorkflow('');
         setScriptBuildState(null);
+        const createdScriptMemberId = trimOptional(createdScriptMember?.memberId);
+        if (createdScriptMemberId) {
+          pinnedRouteBackendMemberIdRef.current = createdScriptMemberId;
+          setPinnedRouteBackendMemberId(createdScriptMemberId);
+        }
         setCreateMemberModalOpen(false);
         setCreateMemberTeamId('');
         history.push(
@@ -5304,8 +5450,8 @@ const StudioPage: React.FC = () => {
             scopeId: resolvedStudioScopeId || undefined,
             teamId: createMemberTeamId || undefined,
             returnTo: routeState.returnTo || undefined,
-            memberKey: createdScriptMember?.memberId
-              ? `member:${createdScriptMember.memberId}`
+            memberKey: createdScriptMemberId
+              ? `member:${createdScriptMemberId}`
               : undefined,
             focus: `script:${scriptId}`,
             step: 'build',
@@ -5357,6 +5503,9 @@ const StudioPage: React.FC = () => {
           implementationKind: 'gagent',
           ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
         });
+        setOptimisticStudioMembers((current) =>
+          upsertStudioMemberSummary(current, createdGAgentMember),
+        );
         queryClient.setQueryData<StudioMemberRoster>(
           studioMembersQueryKey,
           (current) =>
@@ -5372,6 +5521,8 @@ const StudioPage: React.FC = () => {
         setSelectedWorkflowId('');
         setSelectedScriptId('');
         setTemplateWorkflow('');
+        pinnedRouteBackendMemberIdRef.current = createdGAgentMember.memberId;
+        setPinnedRouteBackendMemberId(createdGAgentMember.memberId);
         setCreateMemberModalOpen(false);
         setCreateMemberTeamId('');
         history.push(
@@ -5639,6 +5790,86 @@ const StudioPage: React.FC = () => {
       selectedWorkflowId,
       visibleWorkflowSummaries,
       workflowNames,
+    ],
+  );
+
+  const handleRenameInventoryMember = useCallback(
+    async (memberKey: string) => {
+      const normalizedMemberKey = trimOptional(memberKey);
+      if (normalizedMemberKey.startsWith('workflow:')) {
+        await handleRenameWorkflowMember(normalizedMemberKey);
+        return;
+      }
+
+      if (!normalizedMemberKey.startsWith('member:')) {
+        return;
+      }
+
+      const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+        normalizedMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      );
+      const memberId =
+        trimOptional(memberSummary?.memberId) ||
+        readMemberIdFromMemberKey(normalizedMemberKey);
+      if (!resolvedStudioScopeId || !memberId) {
+        void message.warning('Select a backend member before renaming.');
+        return;
+      }
+
+      const currentDisplayName =
+        trimOptional(memberSummary?.displayName) || memberId;
+      const nextDisplayName = trimOptional(
+        window.prompt('Rename member', currentDisplayName) ?? '',
+      );
+      if (!nextDisplayName || nextDisplayName === currentDisplayName) {
+        return;
+      }
+
+      setInventoryBusyKey(normalizedMemberKey);
+      setInventoryBusyAction('rename');
+
+      try {
+        const detail = await studioApi.updateMember({
+          scopeId: resolvedStudioScopeId,
+          memberId,
+          displayName: nextDisplayName,
+          description: memberSummary?.description ?? undefined,
+          teamId: memberSummary?.teamId ?? undefined,
+        });
+        setOptimisticStudioMembers((current) =>
+          upsertStudioMemberSummary(current, detail.summary),
+        );
+        queryClient.setQueryData<StudioMemberRoster>(
+          studioMembersQueryKey,
+          (current) =>
+            upsertStudioMemberRosterMember(
+              current,
+              resolvedStudioScopeId,
+              detail.summary,
+            ),
+        );
+        void queryClient.invalidateQueries({
+          queryKey: studioMembersQueryKey,
+        });
+        void message.success(`Renamed member to ${nextDisplayName}.`);
+      } catch (error) {
+        void message.error(
+          error instanceof Error ? error.message : 'Failed to rename member.',
+        );
+      } finally {
+        setInventoryBusyKey('');
+        setInventoryBusyAction('');
+      }
+    },
+    [
+      handleRenameWorkflowMember,
+      publishedScopeMembers,
+      queryClient,
+      resolvedStudioScopeId,
+      studioMembersQueryKey,
+      studioScopeMembers,
     ],
   );
 
@@ -8137,13 +8368,13 @@ const StudioPage: React.FC = () => {
     scopeServicesQuery.isFetching,
     scopeServicesQuery.isLoading,
   ]);
-  const selectedInventoryMemberKey = useMemo(
-    () =>
-      effectiveSelectedMemberKey.startsWith('workflow:')
-        ? effectiveSelectedMemberKey
-        : '',
-    [effectiveSelectedMemberKey],
-  );
+  const selectedInventoryMemberKey = useMemo(() => {
+    const normalizedMemberKey = trimOptional(effectiveSelectedMemberKey);
+    return normalizedMemberKey.startsWith('workflow:') ||
+      normalizedMemberKey.startsWith('member:')
+      ? normalizedMemberKey
+      : '';
+  }, [effectiveSelectedMemberKey]);
   const selectedInventoryEntryMemberId = trimOptional(currentCanonicalMemberId);
   const selectedInventoryEntryLabel =
     trimOptional(currentMemberLabel) ||
@@ -8221,21 +8452,70 @@ const StudioPage: React.FC = () => {
       ),
     [activeWorkflowFile, selectedInventoryMemberKey, visibleWorkflowSummaries],
   );
-  const renameableWorkflowLabel = useMemo(() => {
-    if (!selectedInventoryWorkflowId) {
-      return 'current workflow member';
+  const selectedInventoryMemberSummary = useMemo(
+    () =>
+      selectedInventoryMemberKey.startsWith('member:')
+        ? resolveStudioMemberSummaryFromMemberKey(
+            selectedInventoryMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          )
+        : null,
+    [publishedScopeMembers, selectedInventoryMemberKey, studioScopeMembers],
+  );
+  const selectedInventoryResolvedMemberId =
+    trimOptional(selectedInventoryMemberSummary?.memberId) ||
+    readMemberIdFromMemberKey(selectedInventoryMemberKey);
+  const selectedInventoryLabel = useMemo(() => {
+    if (selectedInventoryMemberKey.startsWith('workflow:')) {
+      if (!selectedInventoryWorkflowId) {
+        return 'current workflow member';
+      }
+
+      const selectedWorkflowSummaryForInventory = visibleWorkflowSummaries.find(
+        (workflow) =>
+          trimOptional(workflow.workflowId) === selectedInventoryWorkflowId,
+      );
+      return (
+        trimOptional(selectedWorkflowSummaryForInventory?.name) ||
+        trimOptional(selectedWorkflowSummaryForInventory?.fileName) ||
+        'current workflow member'
+      );
     }
 
-    const selectedWorkflowSummaryForInventory = visibleWorkflowSummaries.find(
-      (workflow) =>
-        trimOptional(workflow.workflowId) === selectedInventoryWorkflowId,
-    );
-    return (
-      trimOptional(selectedWorkflowSummaryForInventory?.name) ||
-      trimOptional(selectedWorkflowSummaryForInventory?.fileName) ||
-      'current workflow member'
-    );
-  }, [selectedInventoryWorkflowId, visibleWorkflowSummaries]);
+    if (selectedInventoryMemberKey.startsWith('member:')) {
+      return (
+        trimOptional(selectedInventoryMemberSummary?.displayName) ||
+        trimOptional(currentMemberLabel) ||
+        selectedInventoryResolvedMemberId ||
+        'current member'
+      );
+    }
+
+    return 'current member';
+  }, [
+    currentMemberLabel,
+    selectedInventoryMemberKey,
+    selectedInventoryMemberSummary?.displayName,
+    selectedInventoryResolvedMemberId,
+    selectedInventoryWorkflowId,
+    visibleWorkflowSummaries,
+  ]);
+  const selectedInventoryCanRename = Boolean(
+    selectedInventoryMemberKey.startsWith('workflow:') ||
+      (selectedInventoryMemberKey.startsWith('member:') &&
+        resolvedStudioScopeId &&
+        selectedInventoryResolvedMemberId),
+  );
+  const selectedInventoryCanDelete = Boolean(
+    selectedInventoryMemberKey.startsWith('workflow:') &&
+      selectedInventoryWorkflowId,
+  );
+  const selectedInventoryDeleteTitle = selectedInventoryMemberKey.startsWith('member:')
+    ? 'Member delete is not available yet.'
+    : selectedInventoryCanDelete
+      ? `Delete ${selectedInventoryLabel}`
+      : 'Select a workflow draft member to delete.';
   const handleSelectStudioMember = useCallback(
     async (memberKey: string) => {
       const normalizedMemberKey = trimOptional(memberKey);
@@ -8418,24 +8698,39 @@ const StudioPage: React.FC = () => {
           }
 
           if (memberImplementationKind === 'script') {
-            const scriptId = availableScopeScripts.find(
-              (detail) =>
-                normalizeComparableText(detail.script?.scriptId) ===
-                  normalizeComparableText(memberImplementationName) ||
-                normalizeComparableText(detail.script?.scriptId) ===
-                  normalizeComparableText(selectedMemberServiceId),
-            )?.script?.scriptId;
+            const scriptId =
+              trimOptional(selectedMemberSummary?.memberId) ||
+              availableScopeScripts.find(
+                (detail) =>
+                  normalizeComparableText(detail.script?.scriptId) ===
+                    normalizeComparableText(memberImplementationName) ||
+                  normalizeComparableText(detail.script?.scriptId) ===
+                    normalizeComparableText(selectedMemberServiceId),
+              )?.script?.scriptId;
             if (scriptId) {
+              const memberKey =
+                selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
+              pinnedRouteBackendMemberIdRef.current =
+                selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey);
+              setPinnedRouteBackendMemberId(
+                selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey),
+              );
+              setSelectedWorkflowId('');
+              setSelectedScriptId(scriptId);
+              setTemplateWorkflow('');
+              setBuildSurface('scripts');
+              setStudioSurface('build');
               history.push(
                 buildStudioRoute({
                   scopeId: resolvedStudioScopeId || undefined,
                   teamId: routeState.teamId || undefined,
                   returnTo: routeState.returnTo || undefined,
-                  memberKey: `script:${scriptId}`,
+                  memberKey,
+                  focus: `script:${scriptId}`,
+                  step: 'build',
                   tab: 'scripts',
                 }),
               );
-              openScopeScript(scriptId);
             } else {
               void message.warning(
                 `Could not find a workspace script for ${memberImplementationName || 'this member'}.`,
@@ -8586,12 +8881,16 @@ const StudioPage: React.FC = () => {
   const memberItems = useMemo(() => {
     const items: OrderedStudioShellMemberItem[] = [];
     const seen = new Set<string>();
+    const currentMemberCanRename =
+      currentFocusMemberKey.startsWith('workflow:') ||
+      selectedRailMemberKey.startsWith('member:') ||
+      currentFocusMemberKey.startsWith('member:');
     const currentMemberItem: StudioShellMemberItem = {
       key: selectedRailMemberKey || currentFocusMemberKey,
       label: currentMemberLabel,
       canDelete:
         currentFocusMemberKey.startsWith('workflow:') && Boolean(selectedWorkflowId),
-      canRename: currentFocusMemberKey.startsWith('workflow:'),
+      canRename: currentMemberCanRename,
       description: currentMemberDescription,
       kind: currentMemberKind,
       meta: currentMemberMeta,
@@ -8730,6 +9029,7 @@ const StudioPage: React.FC = () => {
             formatStudioMemberLifecycleStage(memberSummary.lifecycleStage) ||
             'Backend member authority',
         }) || 'Backend member authority.',
+        canRename: Boolean(memberId),
         kind: 'member',
         meta: formatStudioAssetMeta({
           primary:
@@ -8884,9 +9184,12 @@ const StudioPage: React.FC = () => {
       selectedWorkflowId ||
         (selectedScriptId
           ? activeScriptPublishedServiceId ||
-            (scriptBuildState?.scriptId === selectedScriptId &&
+            ((scriptBuildState?.scriptId === selectedScriptId &&
               !scriptBuildState.dirty &&
-              scriptBuildState.saveStatus === 'applied')
+              scriptBuildState.saveStatus === 'applied') ||
+              (lastAppliedScriptBuildState?.scriptId === selectedScriptId &&
+                !lastAppliedScriptBuildState.dirty &&
+                lastAppliedScriptBuildState.saveStatus === 'applied'))
           : false) ||
         workbenchPublishedService ||
         (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
@@ -9277,7 +9580,15 @@ const StudioPage: React.FC = () => {
         ));
   const createScriptId = buildScriptIdSlug(createMemberName);
   const createScriptIdAlreadyExists = Boolean(
-    createScriptId && availableScopeScriptIds.has(createScriptId),
+    createScriptId &&
+      (availableScopeScriptIds.has(createScriptId) ||
+        studioScopeMembers.some(
+          (member) =>
+            normalizeStudioMemberBindingImplementationKind(
+              member.implementationKind,
+            ) === 'script' &&
+            buildScriptIdSlug(member.memberId) === createScriptId,
+        )),
   );
   const createMemberButtonDisabled = inventoryBusyKey === 'create';
   const selectedInventoryMemberBusy =
@@ -9303,45 +9614,50 @@ const StudioPage: React.FC = () => {
           Create member
         </Button>
         <Button
-          aria-label={`Rename ${renameableWorkflowLabel}`}
+          aria-label={`Rename ${selectedInventoryLabel}`}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-          disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          disabled={!selectedInventoryCanRename || selectedInventoryMemberBusy}
           loading={selectedInventoryBusyAction === 'rename'}
           onClick={() =>
             selectedInventoryMemberKey
-              ? void handleRenameWorkflowMember(selectedInventoryMemberKey)
+              ? void handleRenameInventoryMember(selectedInventoryMemberKey)
               : undefined
           }
           style={{
             ...inventoryActionButtonStyle,
             cursor:
-              !selectedInventoryMemberKey || selectedInventoryMemberBusy
+              !selectedInventoryCanRename || selectedInventoryMemberBusy
                 ? 'not-allowed'
                 : 'pointer',
             opacity:
-              !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
+              !selectedInventoryCanRename || selectedInventoryMemberBusy
+                ? 0.56
+                : 1,
           }}
         >
           Rename
         </Button>
         <Button
-          aria-label={`Delete ${renameableWorkflowLabel}`}
+          aria-label={`Delete ${selectedInventoryLabel}`}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-          disabled={!selectedInventoryMemberKey || selectedInventoryMemberBusy}
+          disabled={!selectedInventoryCanDelete || selectedInventoryMemberBusy}
           loading={selectedInventoryBusyAction === 'delete'}
           onClick={() =>
-            selectedInventoryMemberKey
+            selectedInventoryCanDelete
               ? void handleDeleteWorkflowMember(selectedInventoryMemberKey)
               : undefined
           }
+          title={selectedInventoryDeleteTitle}
           style={{
             ...inventoryActionDangerButtonStyle,
             cursor:
-              !selectedInventoryMemberKey || selectedInventoryMemberBusy
+              !selectedInventoryCanDelete || selectedInventoryMemberBusy
                 ? 'not-allowed'
                 : 'pointer',
             opacity:
-              !selectedInventoryMemberKey || selectedInventoryMemberBusy ? 0.56 : 1,
+              !selectedInventoryCanDelete || selectedInventoryMemberBusy
+                ? 0.56
+                : 1,
           }}
         >
           Delete
@@ -9350,12 +9666,11 @@ const StudioPage: React.FC = () => {
       {selectedInventoryMemberKey ? (
         <div style={inventorySelectionPillStyle}>
           <span style={inventorySelectionLabelStyle}>Selected</span>
-          <span style={inventorySelectionValueStyle}>{renameableWorkflowLabel}</span>
+          <span style={inventorySelectionValueStyle}>{selectedInventoryLabel}</span>
         </div>
       ) : (
         <div style={inventoryActionsHintStyle}>
-          Create a member here. Workflow now registers backend member authority;
-          Script / GAgent will move into the same flow next.
+          Create a Workflow, Script, or GAgent member from this inventory.
         </div>
       )}
       {canSetSelectedInventoryEntryMember ? (
@@ -9568,18 +9883,26 @@ const StudioPage: React.FC = () => {
           (routeBuildFocus.kind === 'script' ? routeBuildFocus.value : '') ||
           (routeSelectedMember.kind === 'script' ? routeSelectedMember.value : '') ||
           trimOptional(scriptBuildState?.scriptId);
+        const memberKeyForBind =
+          routeSelectedBackendMemberKey ||
+          (lifecycleSurfaceMemberKey.startsWith('member:')
+            ? lifecycleSurfaceMemberKey
+            : '') ||
+          (routeSelectedMemberKey.startsWith('member:')
+            ? routeSelectedMemberKey
+            : '');
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
             teamId: routeState.teamId || undefined,
             returnTo: routeState.returnTo || undefined,
-            memberKey: routeSelectedMemberKey || undefined,
+            memberKey: memberKeyForBind || undefined,
             focus: scriptFocusId ? `script:${scriptFocusId}` : undefined,
             step: 'bind',
             tab: 'bindings',
           }),
         );
-        applyStudioTarget('bind');
+        applyStudioTarget('bind', undefined, memberKeyForBind || undefined);
       }}
       onRegisterLeaveGuard={handleRegisterScriptLeaveGuard}
       onScriptBuildStateChange={handleScriptBuildStateChange}

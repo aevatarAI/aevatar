@@ -151,12 +151,15 @@ public sealed record CreateStudioMemberRequest(
 
 /// <summary>
 /// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
-/// the caller wants to change the member's team assignment (ADR-0017 §Q6).
+/// the caller wants to change display fields or the member's team assignment
+/// (ADR-0017 §Q6).
 /// Uses <see cref="PatchValue{T}"/> so the application layer can distinguish
 /// "absent" (no change) from "explicit null" (unassign) without a sentinel
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
+    PatchValue<string> DisplayName = default,
+    PatchValue<string> Description = default,
     PatchValue<string> TeamId = default);
 
 /// <summary>

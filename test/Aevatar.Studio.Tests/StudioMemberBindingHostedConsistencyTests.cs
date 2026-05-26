@@ -207,6 +207,14 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             CancellationToken ct = default) =>
             throw new NotSupportedException("Implementation update is not exercised by this hosted consistency test.");
 
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            string? description,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Rename is not exercised by this hosted consistency test.");
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default)

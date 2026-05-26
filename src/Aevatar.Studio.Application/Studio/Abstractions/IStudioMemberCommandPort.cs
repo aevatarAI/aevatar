@@ -22,6 +22,17 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
+    /// Updates display fields for an existing member. This dispatches the
+    /// actor-owned rename event; it never mutates a read model directly.
+    /// </summary>
+    Task RenameAsync(
+        string scopeId,
+        string memberId,
+        string displayName,
+        string? description,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Updates the implementation reference for an existing member (e.g. once
     /// Studio has produced a workflow yaml, script revision, or wired up a
     /// gagent type for the member). Idempotent on identical inputs.
