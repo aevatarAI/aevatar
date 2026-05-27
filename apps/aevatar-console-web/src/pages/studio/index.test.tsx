@@ -7209,7 +7209,7 @@ describe("StudioPage", () => {
   });
 
   it("pins Observe to the selected member service and corrects stale run selection", async () => {
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValueOnce({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -7230,9 +7230,9 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Logs")).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      expect(mockScopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
         "scope-1",
-        "workspace-demo",
+        "default",
         {
           take: 12,
         }
@@ -7247,7 +7247,7 @@ describe("StudioPage", () => {
   });
 
   it("keeps Observe populated with the latest invoke session while runtime runs warm up", async () => {
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -7273,7 +7273,7 @@ describe("StudioPage", () => {
 
   it("rehydrates Observe from the persisted invoke session after refresh", async () => {
     const now = Date.now();
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
