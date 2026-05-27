@@ -193,7 +193,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               border: `1px solid ${token.colorSuccessBorder}`,
                               color: token.colorSuccess,
                             }}
-                            text="Entry member"
+                            text="入口成员"
                           />
                         ) : null}
                       </div>
@@ -232,7 +232,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           onClick={onClearEntry}
                           size="small"
                         >
-                          Clear entry
+                          清除入口成员
                         </Button>
                       ) : row.canInvokeAsEntry && onSetEntry ? (
                         <Button
@@ -283,7 +283,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   onClick={handleNavigate(createMemberHref)}
                   type="primary"
                 >
-                  Create first member
+                  创建第一个成员
                 </Button>
               </div>
             ) : null}
