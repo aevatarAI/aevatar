@@ -37,10 +37,7 @@ import {
   buildScopeHref,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
-import {
-  WORKFLOW_RUNTIME_GUARDRAIL,
-  type WorkflowOperationalAttention,
-} from "./workflowOperationalUnits";
+import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
 import {
   clearSyncedPendingTeamRosterSummaries,
   mergePendingTeamRosterSummaries,
@@ -49,8 +46,13 @@ import {
 const scopeServiceAppId = "default";
 const compactTeamRosterThreshold = 6;
 
+type TeamOperationalAttention = Exclude<
+  WorkflowOperationalAttention,
+  "runtime-unresolved"
+>;
+
 type MemberRosterPreview = {
-  readonly attention: WorkflowOperationalAttention;
+  readonly attention: TeamOperationalAttention;
   readonly attentionDetail: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly memberId: string;
@@ -61,12 +63,14 @@ type MemberRosterPreview = {
 };
 
 type TeamRosterPreview = {
-  readonly attention: WorkflowOperationalAttention;
+  readonly attention: TeamOperationalAttention;
   readonly attentionDetail: string;
   readonly detailHref: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly memberPreviewLabel: string;
+  readonly memberPreviewTooltip?: string;
   readonly serviceLabel: string;
+  readonly serviceTooltip?: string;
   readonly team: StudioTeamSummary;
   readonly teamId: string;
   readonly title: string;
@@ -117,7 +121,7 @@ function formatRunStatusLabel(status: string | null | undefined): string {
 
 function formatOperationalStatusLabel(
   status: string | null | undefined,
-  attention: WorkflowOperationalAttention,
+  attention: TeamOperationalAttention,
 ): string {
   const normalizedStatus = trimOptional(status);
   if (normalizedStatus) {
@@ -137,14 +141,12 @@ function formatOperationalStatusLabel(
       return "待绑定";
     case "no-recent-runs":
       return "待运行";
-    case "runtime-unresolved":
-      return "同步中";
     default:
       return "未知";
   }
 }
 
-function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
+function formatAttentionLabel(attention: TeamOperationalAttention): string {
   switch (attention) {
     case "failed":
       return "待处理";
@@ -158,8 +160,6 @@ function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
       return "待绑定";
     case "no-recent-runs":
       return "待运行";
-    case "runtime-unresolved":
-      return "状态同步中";
     default:
       return "待确认";
   }
@@ -167,7 +167,7 @@ function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
 
 function resolveAttentionPillStyle(
   token: ReturnType<typeof theme.useToken>["token"],
-  attention: WorkflowOperationalAttention,
+  attention: TeamOperationalAttention,
 ): React.CSSProperties {
   switch (attention) {
     case "healthy":
@@ -321,33 +321,75 @@ const SummaryStatCard: React.FC<{
   );
 };
 
-const TeamFact: React.FC<{
-  readonly label: string;
-  readonly value: React.ReactNode;
-}> = ({ label, value }) => (
+const TeamTitle: React.FC<{
+  readonly level: 3 | 4;
+  readonly title: string;
+}> = ({ level, title }) => (
   <div
     style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: 4,
       minWidth: 0,
     }}
+    title={title}
   >
-    <Typography.Text
-      strong
+    <Typography.Title
+      level={level}
       style={{
-        fontSize: 16,
         margin: 0,
-        overflowWrap: "anywhere",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
       }}
     >
-      {value}
-    </Typography.Text>
-    <Typography.Text style={{ fontSize: 13 }} type="secondary">
-      {label}
-    </Typography.Text>
+      {title}
+    </Typography.Title>
   </div>
 );
+
+const TeamFact: React.FC<{
+  readonly label: string;
+  readonly tooltip?: string;
+  readonly value: React.ReactNode;
+}> = ({ label, tooltip, value }) => {
+  const { token } = theme.useToken();
+  const renderedValue = (
+    <span
+      style={{
+        color: token.colorText,
+        display: "block",
+        fontSize: 16,
+        fontWeight: 600,
+        margin: 0,
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+      title={typeof value === "string" ? tooltip || value : undefined}
+    >
+      {value}
+    </span>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        minWidth: 0,
+      }}
+    >
+      {typeof value === "string" && (tooltip || value) ? (
+        <Tooltip title={tooltip || value}>{renderedValue}</Tooltip>
+      ) : (
+        renderedValue
+      )}
+      <Typography.Text style={{ fontSize: 13 }} type="secondary">
+        {label}
+      </Typography.Text>
+    </div>
+  );
+};
 
 function compareMembers(
   left: StudioMemberSummary,
@@ -415,32 +457,9 @@ function resolveMemberPreviewService(input: {
   );
 }
 
-function resolveRuntimeUnavailable(input: {
-  readonly memberId: string;
-  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
-  readonly runtimeGuardrailedMemberIds?: ReadonlySet<string>;
-}): boolean {
-  const memberId = trimOptional(input.memberId);
-  if (!memberId) {
-    return false;
-  }
-
-  if (input.runtimeGuardrailedMemberIds?.has(memberId)) {
-    return true;
-  }
-
-  if (!input.runtimeAvailableByMemberId) {
-    return false;
-  }
-
-  return !input.runtimeAvailableByMemberId.has(memberId);
-}
-
 function buildMemberRosterPreview(input: {
-  readonly guardrailedMemberIds?: ReadonlySet<string>;
   readonly member: StudioMemberSummary;
   readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
-  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
   readonly teamId?: string | null;
@@ -453,31 +472,17 @@ function buildMemberRosterPreview(input: {
   const serviceId =
     trimOptional(input.member.publishedServiceId) ||
     trimOptional(matchedService?.serviceId);
-  const runtimeRelevant = Boolean(
-    serviceId || trimOptional(input.member.lastBoundRevisionId),
-  );
-  const runtimeUnavailable =
-    runtimeRelevant &&
-    resolveRuntimeUnavailable({
-      memberId,
-      runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
-      runtimeGuardrailedMemberIds: input.guardrailedMemberIds,
-    });
-  const runs =
-    memberId && !runtimeUnavailable ? input.runsByMemberId[memberId] ?? [] : [];
+  const runs = memberId ? input.runsByMemberId[memberId] ?? [] : [];
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
 
-  let attention: WorkflowOperationalAttention = "draft";
+  let attention: TeamOperationalAttention = "draft";
   let attentionDetail = `当前成员还处于 ${formatStudioMemberLifecycleStage(input.member.lifecycleStage)} 阶段。`;
 
-  if (runtimeUnavailable) {
-    attention = "runtime-unresolved";
-    attentionDetail = "成员已绑定，首页暂未同步到最近运行状态；打开团队可查看完整上下文。";
-  } else if (latestRun && isFailedRun(latestRun)) {
+  if (latestRun && isFailedRun(latestRun)) {
     attention = "failed";
     attentionDetail =
       trimOptional(latestRun.lastError) || "最近一次成员运行处于异常状态。";
@@ -490,7 +495,7 @@ function buildMemberRosterPreview(input: {
     attentionDetail = "最近一次成员运行正常，可继续进入详情查看。";
   } else if (serviceId || matchedService) {
     attention = "no-recent-runs";
-    attentionDetail = "当前成员已经形成绑定，但还没有可见的运行信号。";
+    attentionDetail = "成员已绑定服务，最近还没有运行记录。";
   } else if (
     trimOptional(input.member.lastBoundRevisionId) ||
     input.member.lifecycleStage === "bind_ready"
@@ -516,20 +521,16 @@ function buildMemberRosterPreview(input: {
 }
 
 function buildTeamRosterPreview(input: {
-  readonly guardrailedMemberIds?: ReadonlySet<string>;
   readonly members: readonly StudioMemberSummary[];
   readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
-  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
   readonly team: StudioTeamSummary;
 }): TeamRosterPreview {
   const memberPreviews = input.members.map((member) =>
     buildMemberRosterPreview({
-      guardrailedMemberIds: input.guardrailedMemberIds,
       member,
       runsByMemberId: input.runsByMemberId,
-      runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
       scopeId: input.scopeId,
       services: input.services,
       teamId: input.team.teamId,
@@ -541,14 +542,13 @@ function buildTeamRosterPreview(input: {
       .map((preview) => preview.latestRun)
       .filter((run): run is ScopeServiceRunSummary => Boolean(run))
       .sort(compareRuns)[0] ?? null;
-  const statusRank: Record<WorkflowOperationalAttention, number> = {
+  const statusRank: Record<TeamOperationalAttention, number> = {
     failed: 0,
     waiting: 1,
-    "runtime-unresolved": 2,
-    "no-bound-service": 3,
-    "no-recent-runs": 4,
-    draft: 5,
-    healthy: 6,
+    "no-bound-service": 2,
+    "no-recent-runs": 3,
+    draft: 4,
+    healthy: 5,
   };
   const mostImportantMemberPreview = memberPreviews
     .slice()
@@ -576,6 +576,16 @@ function buildTeamRosterPreview(input: {
     .map((preview) => preview.serviceLabel)
     .filter((label) => label && label !== "未绑定");
   const uniqueServiceLabels = Array.from(new Set(serviceLabels));
+  const memberPreviewTooltip =
+    sortedMembers.length > 0
+      ? sortedMembers
+          .map((member) =>
+            pickMeaningfulLabel(member.displayName, member.memberId) || "未命名成员",
+          )
+          .join(" / ")
+      : undefined;
+  const serviceTooltip =
+    uniqueServiceLabels.length > 0 ? uniqueServiceLabels.join(" / ") : undefined;
   const primaryMemberPreview =
     memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
   const detailHref = buildTeamDetailHref({
@@ -586,7 +596,7 @@ function buildTeamRosterPreview(input: {
     teamId: input.team.teamId,
   });
 
-  let attention: WorkflowOperationalAttention =
+  let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
   let attentionDetail = "这个 Team 已经存在后端事实，但还没有分配成员。";
   if (input.team.lifecycleStage === "archived") {
@@ -602,10 +612,12 @@ function buildTeamRosterPreview(input: {
     detailHref,
     latestRun,
     memberPreviewLabel,
+    memberPreviewTooltip,
     serviceLabel:
       uniqueServiceLabels.length > 0
         ? uniqueServiceLabels.slice(0, 2).join(" / ")
         : "暂无绑定服务",
+    serviceTooltip,
     team: input.team,
     teamId: input.team.teamId,
     title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || "未命名 Team",
@@ -645,16 +657,9 @@ const TeamRosterCard: React.FC<{
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <Typography.Title
-            level={3}
-            style={{
-              fontSize: 22,
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {preview.title}
-          </Typography.Title>
+          <div style={{ fontSize: 22 }}>
+            <TeamTitle level={3} title={preview.title} />
+          </div>
           <Typography.Paragraph
             ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
             style={{
@@ -684,8 +689,11 @@ const TeamRosterCard: React.FC<{
       </div>
 
       <Typography.Text
+        title={preview.teamId}
+        ellipsis={{ tooltip: preview.teamId }}
         style={{
           color: token.colorTextSecondary,
+          display: "block",
           fontSize: 13,
         }}
       >
@@ -723,8 +731,16 @@ const TeamRosterCard: React.FC<{
           paddingTop: 14,
         }}
       >
-        <TeamFact label="Team 成员" value={preview.memberPreviewLabel} />
-        <TeamFact label="关联服务" value={preview.serviceLabel} />
+        <TeamFact
+          label="Team 成员"
+          tooltip={preview.memberPreviewTooltip}
+          value={preview.memberPreviewLabel}
+        />
+        <TeamFact
+          label="关联服务"
+          tooltip={preview.serviceTooltip}
+          value={preview.serviceLabel}
+        />
       </div>
 
       <Space wrap>
@@ -763,15 +779,9 @@ const TeamRosterRow: React.FC<{
     >
       <div style={{ minWidth: 0 }}>
         <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
-          <Typography.Title
-            level={4}
-            style={{
-              margin: 0,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {preview.title}
-          </Typography.Title>
+          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <TeamTitle level={4} title={preview.title} />
+          </div>
           <span
             style={{
               ...resolveAttentionPillStyle(token, preview.attention),
@@ -799,8 +809,11 @@ const TeamRosterRow: React.FC<{
           {preview.attentionDetail}
         </Typography.Paragraph>
         <Typography.Text
+          title={preview.teamId}
+          ellipsis={{ tooltip: preview.teamId }}
           style={{
             color: token.colorTextSecondary,
+            display: "block",
             fontSize: 13,
           }}
         >
@@ -816,8 +829,16 @@ const TeamRosterRow: React.FC<{
         )}
       />
       <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
-      <TeamFact label="成员" value={preview.memberPreviewLabel} />
-      <TeamFact label="服务" value={preview.serviceLabel} />
+      <TeamFact
+        label="成员"
+        tooltip={preview.memberPreviewTooltip}
+        value={preview.memberPreviewLabel}
+      />
+      <TeamFact
+        label="服务"
+        tooltip={preview.serviceTooltip}
+        value={preview.serviceLabel}
+      />
 
       <Space className="teams-home-roster-row-actions" wrap>
         <Button onClick={() => history.push(preview.detailHref)} type="primary">
@@ -952,22 +973,8 @@ const TeamsHomePage: React.FC = () => {
       ),
     [studioMembers],
   );
-  const runtimeSampleMembers = React.useMemo(
-    () => runtimeTrackableMembers.slice(0, WORKFLOW_RUNTIME_GUARDRAIL),
-    [runtimeTrackableMembers],
-  );
-  const guardrailedMemberIds = React.useMemo(
-    () =>
-      new Set(
-        runtimeTrackableMembers
-          .slice(WORKFLOW_RUNTIME_GUARDRAIL)
-          .map((member) => trimOptional(member.memberId))
-          .filter(Boolean),
-      ),
-    [runtimeTrackableMembers],
-  );
   const memberRunQueries = useQueries({
-    queries: runtimeSampleMembers.map((member) => ({
+    queries: runtimeTrackableMembers.map((member) => ({
       enabled: scopeId.length > 0 && membersQuery.isSuccess,
       queryKey: ["teams", "member-runs", scopeId, member.memberId],
       queryFn: () =>
@@ -977,56 +984,42 @@ const TeamsHomePage: React.FC = () => {
       retry: false,
     })),
   });
-  const runtimeAvailableByMemberId = React.useMemo(() => {
-    const available = new Set<string>();
-    memberRunQueries.forEach((query, index) => {
-      if (query.isSuccess) {
-        available.add(trimOptional(runtimeSampleMembers[index]?.memberId));
-      }
-    });
-    return available;
-  }, [memberRunQueries, runtimeSampleMembers]);
   const runsByMemberId = React.useMemo(
     () =>
       Object.fromEntries(
-        runtimeSampleMembers.map((member, index) => [
+        runtimeTrackableMembers.map((member, index) => [
           trimOptional(member.memberId),
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
-      ) as Record<string, readonly any[]>,
-    [memberRunQueries, runtimeSampleMembers],
+      ) as Record<string, readonly ScopeServiceRunSummary[]>,
+    [memberRunQueries, runtimeTrackableMembers],
   );
   const teamPreviews = React.useMemo(
     () =>
       studioTeams.map((team) =>
         buildTeamRosterPreview({
-          guardrailedMemberIds,
           members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
-          runtimeAvailableByMemberId,
           scopeId,
           services: servicesQuery.data ?? [],
           team,
         }),
       ),
     [
-      guardrailedMemberIds,
       membersByTeamId,
       runsByMemberId,
-      runtimeAvailableByMemberId,
       scopeId,
       servicesQuery.data,
       studioTeams,
     ],
   );
-  const unresolvedRuntimeTeamCount = React.useMemo(
-    () =>
-      teamPreviews.filter(
-        (preview) => preview.attention === "runtime-unresolved",
-      ).length,
-    [teamPreviews],
-  );
   const visibleTeamCount = teamPreviews.length;
+  const actionableTeamCount = teamPreviews.filter(
+    (preview) => preview.attention !== "healthy",
+  ).length;
+  const healthyTeamCount = teamPreviews.filter(
+    (preview) => preview.attention === "healthy",
+  ).length;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
@@ -1130,7 +1123,9 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="AI Team" value={visibleTeamCount} />
+              <SummaryStatCard accent label="AI Team 总数" value={visibleTeamCount} />
+              <SummaryStatCard label="待处理 Team" value={actionableTeamCount} />
+              <SummaryStatCard label="运行稳定" value={healthyTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (
@@ -1168,7 +1163,7 @@ const TeamsHomePage: React.FC = () => {
                       团队列表
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前账号下已经创建的 AI Team；成员和运行状态用于帮助你快速判断是否需要处理。
+                      按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
@@ -1194,14 +1189,6 @@ const TeamsHomePage: React.FC = () => {
                     </Space.Compact>
                   ) : null}
                 </div>
-                {unresolvedRuntimeTeamCount > 0 ? (
-                  <Alert
-                    description={`有 ${unresolvedRuntimeTeamCount} 个 Team 已完成成员绑定，但首页暂未同步到最近运行状态。它们不一定需要处理；打开团队详情可以查看成员、服务和运行上下文。`}
-                    message="部分 Team 的运行状态仍在同步"
-                    showIcon
-                    type="info"
-                  />
-                ) : null}
                 {useCompactRoster ? (
                   <ul
                     aria-label="团队紧凑视图"
