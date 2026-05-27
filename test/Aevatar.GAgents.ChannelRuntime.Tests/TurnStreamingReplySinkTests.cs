@@ -69,8 +69,8 @@ public sealed class TurnStreamingReplySinkTests
     [Fact]
     public async Task OnDeltaAsync_ActorDispatchThrows_DropsChunkWithoutPropagating()
     {
-        var dispatchPort = Substitute.For<IActorHandledDispatchPort>();
-        dispatchPort.DispatchAndWaitHandledAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<DispatchAdmission>(new InvalidOperationException("boom")));
         var sink = CreateSink(dispatchPort, out _);
 
@@ -110,7 +110,7 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     private static TurnStreamingReplySink CreateSink(
-        IActorHandledDispatchPort dispatchPort,
+        IActorDispatchPort dispatchPort,
         out FakeTimeProvider timeProvider,
         bool cardMode = false)
     {
@@ -145,13 +145,13 @@ public sealed class TurnStreamingReplySinkTests
             cardMode);
     }
 
-    private static (IActorHandledDispatchPort dispatchPort, List<EventEnvelope> envelopes) BuildRecordingDispatchPort()
+    private static (IActorDispatchPort dispatchPort, List<EventEnvelope> envelopes) BuildRecordingDispatchPort()
     {
         var envelopes = new List<EventEnvelope>();
-        var dispatchPort = Substitute.For<IActorHandledDispatchPort>();
-        dispatchPort.DispatchAndWaitHandledAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
-        dispatchPort.When(x => x.DispatchAndWaitHandledAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+        dispatchPort.When(x => x.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
         return (dispatchPort, envelopes);
     }

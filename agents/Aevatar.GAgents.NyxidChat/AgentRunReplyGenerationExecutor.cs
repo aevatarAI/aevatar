@@ -25,7 +25,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -42,8 +41,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ILogger<AgentRunReplyGenerationExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null,
-        IActorHandledDispatchPort? actorHandledDispatchPort = null)
+        TimeProvider? timeProvider = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -53,7 +51,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _userConfigQueryPort = userConfigQueryPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _actorHandledDispatchPort = actorHandledDispatchPort;
     }
 
     public async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
@@ -384,7 +381,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
         return new TurnStreamingReplySink(
-            _actorHandledDispatchPort ?? new AdmissionOnlyHandledDispatchPortAdapter(_actorDispatchPort),
+            _actorDispatchPort,
             targetActorId,
             request.CorrelationId,
             request.RegistrationId,
@@ -394,22 +391,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             _timeProvider,
             _logger,
             cardMode);
-    }
-
-    private sealed class AdmissionOnlyHandledDispatchPortAdapter : IActorHandledDispatchPort
-    {
-        private readonly IActorDispatchPort _dispatchPort;
-
-        public AdmissionOnlyHandledDispatchPortAdapter(IActorDispatchPort dispatchPort)
-        {
-            _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        }
-
-        public Task<DispatchAdmission> DispatchAndWaitHandledAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default) =>
-            _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
     private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink)

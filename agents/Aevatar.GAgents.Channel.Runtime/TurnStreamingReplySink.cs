@@ -22,7 +22,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {
     private const string PublisherActorId = "channel-runtime.streaming-reply";
 
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly string _targetActorId;
     private readonly string _correlationId;
     private readonly string _registrationId;
@@ -35,7 +35,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private bool _disposed;
 
     public TurnStreamingReplySink(
-        IActorHandledDispatchPort actorDispatchPort,
+        IActorDispatchPort actorDispatchPort,
         string targetActorId,
         string correlationId,
         string registrationId,
@@ -111,7 +111,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
         try
         {
-            await _actorDispatchPort.DispatchAndWaitHandledAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
+            await _actorDispatchPort.DispatchAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
             ChunksEmitted++;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

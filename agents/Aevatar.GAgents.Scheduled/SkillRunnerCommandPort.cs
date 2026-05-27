@@ -12,11 +12,11 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     private const string PublisherActorId = "scheduled.skill-runner";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
 
     public SkillRunnerCommandPort(
         IActorRuntime actorRuntime,
-        IActorHandledDispatchPort actorDispatchPort)
+        IActorDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -77,6 +77,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
             Payload = Any.Pack(command),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, agentId),
         };
-        return _actorDispatchPort.DispatchAndWaitHandledAsync(agentId, envelope, ct);
+        return _actorDispatchPort.DispatchAsync(agentId, envelope, ct);
     }
 }
