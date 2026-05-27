@@ -50,14 +50,14 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const memberTableMinWidth = 1220;
+const memberTableMinWidth = 1380;
 
 const memberTableColumns = [
-  { key: "member", width: 250 },
-  { key: "role", width: 330 },
-  { key: "implementation", width: 160 },
-  { key: "service", width: 170 },
-  { key: "actions", width: 310 },
+  { key: "member", width: 260 },
+  { key: "role", width: 320 },
+  { key: "implementation", width: 170 },
+  { key: "service", width: 190 },
+  { key: "actions", width: 440 },
 ] as const;
 
 const memberTableHeaderCellStyle: React.CSSProperties = {
@@ -224,10 +224,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       <td
                         style={{
                           ...memberTableCellStyle,
-                          borderTop:
-                            index === 0
-                              ? "1px solid var(--ant-colorBorderSecondary)"
-                              : "1px solid var(--ant-colorBorderSecondary)",
+                          borderTop: "1px solid var(--ant-colorBorderSecondary)",
                           boxShadow: row.isEntryMember
                             ? "inset 4px 0 0 var(--ant-colorPrimary)"
                             : undefined,

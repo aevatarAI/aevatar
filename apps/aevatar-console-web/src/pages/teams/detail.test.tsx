@@ -1164,6 +1164,22 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
+    const membersTable = await screen.findByRole("table");
+    expect(
+      within(membersTable).getByRole("columnheader", { name: "成员" }),
+    ).toBeTruthy();
+    expect(
+      within(membersTable).getByRole("columnheader", { name: "职责" }),
+    ).toBeTruthy();
+    expect(
+      within(membersTable).getByRole("columnheader", { name: "实现" }),
+    ).toBeTruthy();
+    expect(
+      within(membersTable).getByRole("columnheader", { name: "服务" }),
+    ).toBeTruthy();
+    expect(
+      within(membersTable).getByRole("columnheader", { name: "操作" }),
+    ).toBeTruthy();
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
