@@ -383,7 +383,11 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
                 new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nBuild the daily report.")),
-            ]);
+            ],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -422,6 +426,46 @@ public sealed class ConversationReplyGeneratorTests
                     call.Name == "use_skill" &&
                     call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
         reply.Text.Should().NotContain("generic daily answer");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithSkillRecoveryStreamingStatus_DoesNotPolluteFinalReplyText()
+    {
+        var providerFactory = new DailyPrimarySkillRecoveryProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nBuild the daily report.")),
+            ]);
+        var sink = new RecordingStreamingSink();
+        var skillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "daily",
+            OriginalCommand: "/daily",
+            PrimarySkillName: "chrono-ai-daily",
+            MaxOrnnSearchAttempts: 2);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-daily-streaming-status",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-streaming-status" },
+                Content = new MessageContent { Text = "/daily" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with { SkillRecovery = skillRecovery },
+            sink,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("daily report from loaded skill");
+        sink.Emissions.Should().HaveCount(2);
+        sink.Emissions[0].Should().Contain("正在处理 `/daily`");
+        sink.Emissions[0].Should().NotBe("…");
+        sink.Emissions[1].Should().Be("daily report from loaded skill");
     }
 
     [Fact]

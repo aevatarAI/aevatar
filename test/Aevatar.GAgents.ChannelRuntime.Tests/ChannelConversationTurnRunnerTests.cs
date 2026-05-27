@@ -1238,6 +1238,29 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldNotAttachOrnnRecovery_ForRegisteredSlashCommandWhenSlashSubsystemFallsThrough()
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IChannelSlashCommandHandler>(new NullSlashCommandHandler("custom"))
+            .AddSingleton<ChannelSlashCommandRegistry>()
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/custom arg", "msg-custom-slash", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("/custom arg");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.Should().Be(AgentSkillRecoveryContext.Empty);
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunLlmReplyAsync_ShouldReturnPermanentFailure_WhenActivityIsMissing()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -2758,6 +2781,14 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     private sealed record RelayStubPayload(string PlainText) : IPlainTextComposedMessage;
+
+    private sealed class NullSlashCommandHandler(string name) : IChannelSlashCommandHandler
+    {
+        public string Name { get; } = name;
+        public bool RequiresBinding => false;
+        public Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct) =>
+            Task.FromResult<MessageContent?>(null);
+    }
 
     private sealed class RecordingWorkflowResumeDispatchService
         : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>

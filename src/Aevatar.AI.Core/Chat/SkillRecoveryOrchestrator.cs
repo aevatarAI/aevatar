@@ -13,6 +13,7 @@ internal sealed class SkillRecoveryOrchestrator
     private readonly AgentSkillRecoveryContext _recovery;
     private readonly Func<AgentToolExecutionContext?, StreamingToolExecutor> _executorFactory;
     private int _searchAttempts;
+    private int _directiveSequence;
 
     public SkillRecoveryOrchestrator(
         AgentSkillRecoveryContext recovery,
@@ -91,7 +92,7 @@ internal sealed class SkillRecoveryOrchestrator
                 break;
             }
 
-            await ApplyDirectiveAsync(directive, executor, messages, pendingHistoryMessages, ct)
+            await ApplyDirectiveAsync(WithUniqueToolCallId(directive), executor, messages, pendingHistoryMessages, ct)
                 .ConfigureAwait(false);
             if (directive.ConsumesOrnnSearchAttempt)
                 _searchAttempts++;
@@ -101,6 +102,25 @@ internal sealed class SkillRecoveryOrchestrator
         }
 
         return applied;
+    }
+
+    private SkillRecoveryPlanner.RecoveryDirective WithUniqueToolCallId(
+        SkillRecoveryPlanner.RecoveryDirective directive)
+    {
+        if (directive.ToolCall is not { } toolCall)
+            return directive;
+
+        _directiveSequence++;
+        var uniqueToolCall = new ToolCall
+        {
+            Id = string.IsNullOrWhiteSpace(toolCall.Id)
+                ? $"skill-recovery:{_directiveSequence}"
+                : $"{toolCall.Id}:recovery:{_directiveSequence}",
+            Name = toolCall.Name,
+            ArgumentsJson = toolCall.ArgumentsJson,
+        };
+
+        return directive with { ToolCall = uniqueToolCall };
     }
 
     private static async Task ApplyDirectiveAsync(

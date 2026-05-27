@@ -36,14 +36,20 @@ public sealed class SkillRecoveryPlannerTests
             .OnlyContain(message => !string.IsNullOrWhiteSpace(message.ReasoningContent));
         messages.Should().Contain(message =>
             message.Role == "tool" &&
-            message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills" &&
+            message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills:recovery:1" &&
             message.Content != null &&
             message.Content.Contains("Found 1 skill", StringComparison.Ordinal));
         messages.Should().Contain(message =>
             message.Role == "tool" &&
-            message.ToolCallId == "req-orchestrator:skill-recovery:use-skill" &&
+            message.ToolCallId == "req-orchestrator:skill-recovery:use-skill:recovery:2" &&
             message.Content != null &&
             message.Content.Contains("chrono-ai-daily", StringComparison.Ordinal));
+        messages
+            .Where(message => message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
+            .SelectMany(message => message.ToolCalls!)
+            .Select(call => call.Id)
+            .Should()
+            .OnlyHaveUniqueItems();
         pending.Should().HaveSameCount(messages);
     }
 

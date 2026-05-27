@@ -1584,7 +1584,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return request;
     }
 
-    private static bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
+    private bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
     {
         context = AgentSkillRecoveryContext.Empty;
         if (!TryParseSlashCommand(text, out var commandName, out _))
@@ -1607,8 +1607,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return true;
         }
 
-        if (LocalSlashCommands.Contains(normalizedCommand))
+        if (LocalSlashCommands.Contains(normalizedCommand) ||
+            ResolveSlashCommandHandler(normalizedCommand) is not null)
+        {
             return false;
+        }
 
         context = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,

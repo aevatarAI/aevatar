@@ -101,9 +101,17 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         // the placeholder to the final text. Disabled by setting the option to empty/whitespace.
         if (streamingSink is not null)
         {
-            var placeholder = _relayOptions?.StreamingPlaceholderText;
-            if (!string.IsNullOrWhiteSpace(placeholder))
-                await streamingSink.OnDeltaAsync(placeholder, ct);
+            var skillRecoveryStatus = BuildSkillRecoveryStreamingStatus(toolContext);
+            if (!string.IsNullOrWhiteSpace(skillRecoveryStatus))
+            {
+                await streamingSink.OnDeltaAsync(skillRecoveryStatus, ct);
+            }
+            else
+            {
+                var placeholder = _relayOptions?.StreamingPlaceholderText;
+                if (!string.IsNullOrWhiteSpace(placeholder))
+                    await streamingSink.OnDeltaAsync(placeholder, ct);
+            }
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
@@ -282,6 +290,21 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             return false;
 
         return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
+    }
+
+    private static string? BuildSkillRecoveryStreamingStatus(AgentToolExecutionContext? toolContext)
+    {
+        var recovery = toolContext?.SkillRecovery;
+        if (recovery is not { RequireInitialOrnnSearch: true } ||
+            string.IsNullOrWhiteSpace(recovery.CommandName))
+        {
+            return null;
+        }
+
+        var commandLabel = recovery.CommandName.Trim().TrimStart('/');
+        return string.IsNullOrWhiteSpace(commandLabel)
+            ? null
+            : $"正在处理 `/{commandLabel}`, 加载技能并扫描数据中...";
     }
 
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round
