@@ -6853,11 +6853,18 @@ const StudioPage: React.FC = () => {
       publishedScopeMembers,
       studioScopeMembers,
     );
-    if (
-      normalizeStudioMemberBindingImplementationKind(
-        memberSummary?.implementationKind,
-      ) !== 'script'
-    ) {
+    const implementationKind = normalizeStudioMemberBindingImplementationKind(
+      memberSummary?.implementationKind,
+    );
+    if (implementationKind === 'gagent') {
+      setSelectedWorkflowId('');
+      setSelectedScriptId('');
+      setTemplateWorkflow('');
+      setBuildSurface('gagent');
+      return;
+    }
+
+    if (implementationKind !== 'script') {
       return;
     }
 
@@ -7257,7 +7264,7 @@ const StudioPage: React.FC = () => {
           testTeam: options?.test && entryVisible,
           teamId: candidate.teamId,
         });
-        void message.success('Team entry member update accepted.');
+        void message.info('Team entry 变更已提交，正在等待同步确认。');
         if (options?.test) {
           if (!entryVisible) {
             void message.warning(
@@ -7283,7 +7290,7 @@ const StudioPage: React.FC = () => {
     ],
   );
   useEffect(() => {
-    if (studioSurface !== 'build' || buildSurface !== 'editor') {
+    if (studioSurface !== 'build') {
       return;
     }
 
@@ -7293,6 +7300,30 @@ const StudioPage: React.FC = () => {
         workbenchStudioMember?.implementationKind ||
         workbenchPublishedServiceRevision?.implementationKind,
     );
+    if (implementationKind === 'gagent') {
+      const actorTypeName =
+        trimOptional(
+          workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
+        ) ||
+        trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName);
+      if (actorTypeName) {
+        setSelectedGAgentTypeName((current) =>
+          trimOptional(current) === actorTypeName ? current : actorTypeName,
+        );
+      }
+      if (buildSurface !== 'gagent') {
+        setSelectedWorkflowId('');
+        setSelectedScriptId('');
+        setTemplateWorkflow('');
+        setBuildSurface('gagent');
+      }
+      return;
+    }
+
+    if (buildSurface !== 'editor') {
+      return;
+    }
+
     if (implementationKind !== 'script') {
       return;
     }
@@ -7322,9 +7353,11 @@ const StudioPage: React.FC = () => {
     studioSurface,
     workbenchPublishedServiceRevision?.implementationKind,
     workbenchPublishedServiceRevision?.scriptId,
+    workbenchPublishedServiceRevision?.staticActorTypeName,
     workbenchStudioMember?.displayName,
     workbenchStudioMember?.implementationKind,
     workbenchStudioMember?.publishedServiceId,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
   ]);
@@ -8214,7 +8247,7 @@ const StudioPage: React.FC = () => {
           queryKey: ['teams', 'roster', resolvedStudioScopeId],
         }),
       ]);
-      void message.success('Team entry member updated.');
+      void message.info('Team entry 变更已提交，正在等待同步确认。');
     } catch (error) {
       void message.error(
         error instanceof Error

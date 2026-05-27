@@ -108,17 +108,34 @@ function resolveTestStatusPill(
 function formatStatusLabel(status: TeamTestStatus): string {
   switch (status) {
     case "setting-entry":
-      return "Setting entry";
+      return "正在设置入口";
     case "running":
-      return "Running";
+      return "测试中";
     case "success":
-      return "Completed";
+      return "已完成";
     case "error":
-      return "Failed";
+      return "失败";
     case "stopped":
-      return "Stopped";
+      return "已停止";
     default:
-      return "Ready";
+      return "待测试";
+  }
+}
+
+function formatLifecycleLabelForTeamTest(label: string): string {
+  switch (label.trim().toLowerCase()) {
+    case "created":
+      return "已创建";
+    case "build ready":
+    case "build_ready":
+      return "可绑定";
+    case "bind ready":
+    case "bind_ready":
+      return "可调用";
+    case "unknown":
+      return "状态未知";
+    default:
+      return label || "状态未知";
   }
 }
 
@@ -179,7 +196,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
       return (
         <AevatarInspectorEmpty
           compact
-          title="正在检查 Team entry"
+          title="正在检查入口成员"
           description="成员清单同步完成后即可选择入口成员。"
         />
       );
@@ -209,7 +226,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(createMemberHref)}
               type="primary"
             >
-              Create first member
+              创建第一个成员
             </Button>
           ) : null}
         </div>
@@ -223,7 +240,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             showIcon
             type="warning"
             message="还没有可作为入口的成员"
-            description="成员需要完成 Build / Bind，进入 Bind ready 后才能执行 Team Test。"
+            description="成员需要完成 Build / Bind，并进入可调用状态后才能测试 Team。"
           />
         ) : null}
         {rosterRows.map((row) => (
@@ -254,7 +271,11 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               <FactLine monospace rows={1} secondary text={row.memberId} />
             </div>
             <Space size={6} style={{ flex: "1 1 150px" }} wrap>
-              <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
+              <DetailPill
+                compact
+                style={row.lifecycleStyle}
+                text={formatLifecycleLabelForTeamTest(row.lifecycleLabel)}
+              />
               {row.canInvokeAsEntry ? (
                 <DetailPill
                   compact
@@ -263,7 +284,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                     border: `1px solid ${token.colorSuccessBorder}`,
                     color: token.colorSuccess,
                   }}
-                  text="Ready"
+                  text="可测试"
                 />
               ) : null}
             </Space>
@@ -280,10 +301,10 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   loading={entryActionBusyMemberId === row.memberId}
                   onClick={() => onSetEntryAndTest(row.memberId)}
                   size="small"
-                  title={!hasPrompt ? "Enter a prompt before testing." : undefined}
+                  title={!hasPrompt ? "请先输入测试问题。" : undefined}
                   type="primary"
                 >
-                  Set as entry and test
+                  设为入口并测试
                 </Button>
               ) : (
                 <Button
@@ -292,7 +313,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   onClick={handleNavigate(row.buildStudioHref)}
                   size="small"
                 >
-                  Build / Bind first
+                  先 Build / Bind
                 </Button>
               )}
             </Space>
@@ -308,7 +329,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space align="center" size={8} wrap>
             <WarningOutlined style={{ color: token.colorWarning }} />
-            <Typography.Text strong>No entry member selected</Typography.Text>
+            <Typography.Text strong>未选择入口成员</Typography.Text>
           </Space>
           {renderEntrySelection()}
         </div>
@@ -320,7 +341,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space align="center" size={8} wrap>
             <WarningOutlined style={{ color: token.colorWarning }} />
-            <Typography.Text strong>Entry member is not in this Team roster</Typography.Text>
+            <Typography.Text strong>入口成员不在当前 Team 成员清单中</Typography.Text>
             <CompactFactValue value={normalizedEntryMemberId} />
           </Space>
           {renderEntrySelection()}
@@ -356,13 +377,23 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               }}
             />
             <Typography.Text strong>
-              {entryMember?.name || "Entry member"}
+              {entryMember?.name || "入口成员"}
             </Typography.Text>
             {entryMember ? (
-              <DetailPill compact style={entryMember.lifecycleStyle} text={entryMember.lifecycleLabel} />
+              <DetailPill
+                compact
+                style={entryMember.lifecycleStyle}
+                text={formatLifecycleLabelForTeamTest(entryMember.lifecycleLabel)}
+              />
             ) : null}
           </Space>
-          <FactLine monospace secondary text={normalizedEntryMemberId} />
+          <CompactFactValue
+            color={token.colorTextSecondary}
+            head={8}
+            strong={false}
+            tail={6}
+            value={normalizedEntryMemberId}
+          />
         </div>
         <div
           style={{
@@ -374,7 +405,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           }}
         >
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            Service
+            服务
           </Typography.Text>
           <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
@@ -385,7 +416,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(entryMember.editStudioHref)}
               size="small"
             >
-              Edit in Studio
+              在 Studio 编辑
             </Button>
           ) : null}
           {onClearEntry ? (
@@ -399,7 +430,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onClearEntry}
               size="small"
             >
-              Clear entry
+              清除入口成员
             </Button>
           ) : null}
         </Space>
@@ -433,7 +464,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <Space align="center" size={8} wrap>
             <PlayCircleOutlined style={{ color: token.colorPrimary }} />
             <Typography.Text strong style={{ fontSize: 16 }}>
-              Test Team
+              测试团队
             </Typography.Text>
             <DetailPill
               compact
@@ -442,7 +473,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             />
           </Space>
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
-            通过 Team entry member 发起一次真实 Team invoke。
+            通过入口成员发起一次真实 Team 调用。
           </Typography.Text>
         </div>
         {lastResult ? (
@@ -456,7 +487,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             }}
           >
             <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              Last test · {lastResult.finishedAtLabel}
+              上次测试 · {lastResult.finishedAtLabel}
             </Typography.Text>
             <Space size={6} wrap>
               <DetailPill
@@ -510,7 +541,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         }}
       >
         <Input.TextArea
-          aria-label="Team test prompt"
+          aria-label="测试问题"
           autoSize={{ minRows: 3, maxRows: 8 }}
           disabled={disabled || isRunning || isSettingEntry}
           onChange={(event) => onPromptChange(event.target.value)}
@@ -527,7 +558,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onStop}
               type="primary"
             >
-              Stop
+              停止
             </Button>
           ) : (
             <Button
@@ -538,12 +569,12 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onTest}
               type="primary"
             >
-              Test Team
+              开始测试
             </Button>
           )}
           {error?.actionLabel === "Retry" && !isRunning ? (
             <Button block disabled={!canTest} onClick={onTest}>
-              Retry
+              重试
             </Button>
           ) : null}
         </Space>
@@ -570,10 +601,16 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             padding: "10px 14px",
           }}
         >
-          <span>Transcript</span>
+          <span>测试记录</span>
           <Space size={6}>
             <LinkOutlined />
-            <span style={{ fontFamily: factValueFontFamily }}>{teamId}</span>
+            <CompactFactValue
+              color={token.colorTextSecondary}
+              head={8}
+              strong={false}
+              tail={6}
+              value={teamId}
+            />
           </Space>
         </div>
         <Typography.Paragraph

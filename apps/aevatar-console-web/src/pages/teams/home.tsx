@@ -138,7 +138,7 @@ function formatOperationalStatusLabel(
     case "no-recent-runs":
       return "待运行";
     case "runtime-unresolved":
-      return "待确认";
+      return "同步中";
     default:
       return "未知";
   }
@@ -158,6 +158,8 @@ function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
       return "待绑定";
     case "no-recent-runs":
       return "待运行";
+    case "runtime-unresolved":
+      return "状态同步中";
     default:
       return "待确认";
   }
@@ -276,13 +278,6 @@ function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
   );
 }
 
-function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
-  return ((event: React.MouseEvent<HTMLElement>) => {
-    event.stopPropagation();
-    handler();
-  }) as T;
-}
-
 const SummaryStatCard: React.FC<{
   readonly accent?: boolean;
   readonly label: string;
@@ -398,7 +393,9 @@ function groupMembersByTeamId(
     }
   });
 
-  result.forEach((teamMembers) => teamMembers.sort(compareMembers));
+  result.forEach((teamMembers) => {
+    teamMembers.sort(compareMembers);
+  });
   return result;
 }
 
@@ -479,7 +476,7 @@ function buildMemberRosterPreview(input: {
 
   if (runtimeUnavailable) {
     attention = "runtime-unresolved";
-    attentionDetail = "当前成员已经存在绑定事实，但本页暂时没有拿到它的运行信号。";
+    attentionDetail = "成员已绑定，首页暂未同步到最近运行状态；打开团队可查看完整上下文。";
   } else if (latestRun && isFailedRun(latestRun)) {
     attention = "failed";
     attentionDetail =
@@ -626,28 +623,18 @@ const TeamRosterCard: React.FC<{
   const { token } = theme.useToken();
 
   return (
-    <div
-      onClick={() => history.push(preview.detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(preview.detailHref);
-        }
-      }}
-      role="button"
+    <article
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 24,
         boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
         display: "flex",
         flexDirection: "column",
         gap: 14,
         minWidth: 0,
         padding: 18,
       }}
-      tabIndex={0}
     >
       <div
         style={{
@@ -742,14 +729,14 @@ const TeamRosterCard: React.FC<{
 
       <Space wrap>
         <Button
-          onClick={stopEvent(() => history.push(preview.detailHref))}
+          onClick={() => history.push(preview.detailHref)}
           size="large"
           type="primary"
         >
           查看团队
         </Button>
       </Space>
-    </div>
+    </article>
   );
 };
 
@@ -759,29 +746,20 @@ const TeamRosterRow: React.FC<{
   const { token } = theme.useToken();
 
   return (
-    <div
-      onClick={() => history.push(preview.detailHref)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          history.push(preview.detailHref);
-        }
-      }}
-      role="button"
+    <article
+      className="teams-home-roster-row"
       style={{
         alignItems: "center",
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 20,
         boxShadow: token.boxShadowTertiary,
-        cursor: "pointer",
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "minmax(0, 1.8fr) repeat(4, minmax(88px, 120px)) auto",
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "minmax(0, 1.8fr) repeat(4, minmax(88px, 120px)) auto",
         minWidth: 0,
         padding: 16,
       }}
-      tabIndex={0}
     >
       <div style={{ minWidth: 0 }}>
         <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
@@ -841,15 +819,12 @@ const TeamRosterRow: React.FC<{
       <TeamFact label="成员" value={preview.memberPreviewLabel} />
       <TeamFact label="服务" value={preview.serviceLabel} />
 
-      <Space wrap>
-        <Button
-          onClick={stopEvent(() => history.push(preview.detailHref))}
-          type="primary"
-        >
+      <Space className="teams-home-roster-row-actions" wrap>
+        <Button onClick={() => history.push(preview.detailHref)} type="primary">
           查看团队
         </Button>
       </Space>
-    </div>
+    </article>
   );
 };
 
@@ -1044,6 +1019,13 @@ const TeamsHomePage: React.FC = () => {
       studioTeams,
     ],
   );
+  const unresolvedRuntimeTeamCount = React.useMemo(
+    () =>
+      teamPreviews.filter(
+        (preview) => preview.attention === "runtime-unresolved",
+      ).length,
+    [teamPreviews],
+  );
   const visibleTeamCount = teamPreviews.length;
   const resolvedRosterView =
     manualRosterView ??
@@ -1212,32 +1194,50 @@ const TeamsHomePage: React.FC = () => {
                     </Space.Compact>
                   ) : null}
                 </div>
+                {unresolvedRuntimeTeamCount > 0 ? (
+                  <Alert
+                    description={`有 ${unresolvedRuntimeTeamCount} 个 Team 已完成成员绑定，但首页暂未同步到最近运行状态。它们不一定需要处理；打开团队详情可以查看成员、服务和运行上下文。`}
+                    message="部分 Team 的运行状态仍在同步"
+                    showIcon
+                    type="info"
+                  />
+                ) : null}
                 {useCompactRoster ? (
-                  <div
+                  <ul
                     aria-label="团队紧凑视图"
                     style={{
                       display: "flex",
                       flexDirection: "column",
                       gap: 14,
+                      listStyle: "none",
+                      margin: 0,
+                      padding: 0,
                     }}
                   >
                     {teamPreviews.map((preview) => (
-                      <TeamRosterRow key={preview.teamId} preview={preview} />
+                      <li key={preview.teamId}>
+                        <TeamRosterRow preview={preview} />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 ) : (
-                  <div
+                  <ul
                     aria-label="团队卡片视图"
                     style={{
                       display: "grid",
                       gap: 16,
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+                      listStyle: "none",
+                      margin: 0,
+                      padding: 0,
                     }}
                   >
                     {teamPreviews.map((preview) => (
-                      <TeamRosterCard key={preview.teamId} preview={preview} />
+                      <li key={preview.teamId}>
+                        <TeamRosterCard preview={preview} />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </>
             ) : (

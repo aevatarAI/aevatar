@@ -213,6 +213,33 @@ describe("TeamsHomePage", () => {
     ).toBeNull();
   });
 
+  it("explains unresolved runtime status without exposing internal signal wording", async () => {
+    const members = Array.from({ length: 13 }, (_, index) => ({
+      ...defaultMembers[0],
+      memberId: `member-${index + 1}`,
+      displayName: `成员 ${index + 1}`,
+      publishedServiceId: `service-${index + 1}`,
+      teamId: "t-support",
+    }));
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members,
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("部分 Team 的运行状态仍在同步")).toBeTruthy();
+    expect(screen.getAllByText("状态同步中").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "成员已绑定，首页暂未同步到最近运行状态；打开团队可查看完整上下文。",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/绑定事实/)).toBeNull();
+    expect(screen.queryByText(/运行信号/)).toBeNull();
+  });
+
   it("opens the bound member detail handoff from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 

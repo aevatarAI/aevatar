@@ -312,6 +312,28 @@ describe("DeploymentsPage", () => {
     expect(screen.queryByText("发布摘要")).toBeNull();
   });
 
+  it("warns when scope edits have not been loaded yet", async () => {
+    renderDeploymentsPage();
+
+    expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("命名空间"), {
+      target: {
+        value: "cn.changed",
+      },
+    });
+
+    expect(await screen.findByText("范围已编辑但尚未加载")).toBeInTheDocument();
+    expect(screen.getByText("显示上次加载范围")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加载范围变更" })).toBeInTheDocument();
+    expect(screen.getByText("Trade Agent")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /重\s*置/ }));
+
+    expect(await screen.findByText("已加载范围已锁定")).toBeInTheDocument();
+    expect(screen.getByText("显示已加载范围")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加载发布列表" })).toBeInTheDocument();
+  });
+
   it("renders the selected service workbench from URL context", async () => {
     renderDeploymentsPage(
       "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",

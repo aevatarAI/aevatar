@@ -76,7 +76,7 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   onOpenTeamTest,
   testTeamDisabled = false,
   testTeamHint,
-  testTeamLabel = "Test Team",
+  testTeamLabel = "测试团队",
 }) => {
   const archiveMenuItems =
     archiveTeamActionLabel && onArchiveTeam
@@ -126,11 +126,11 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
         >
           <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
             <Button
-              aria-label="Team more actions"
+              aria-label="团队更多操作"
               disabled={archiveTeamDisabled}
               icon={<MoreOutlined />}
               style={{ ...topActionButtonStyle, paddingInline: 14 }}
-              title="More actions"
+              title="更多操作"
             />
           </span>
         </Dropdown>
