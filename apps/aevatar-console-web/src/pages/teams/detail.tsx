@@ -629,6 +629,7 @@ const TeamDetailPage: React.FC = () => {
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
+  const selectedRosterMemberId = currentMemberId;
   React.useEffect(() => {
     const canonicalMemberId = trimText(currentMemberId);
     if (
@@ -764,6 +765,7 @@ const TeamDetailPage: React.FC = () => {
         lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
         isEntryMember: trimText(member.memberId) === entryMemberId,
+        isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
         memberId: member.memberId,
         name: trimText(member.displayName) || member.memberId,
         serviceId: trimText(member.publishedServiceId) || "--",
@@ -771,6 +773,7 @@ const TeamDetailPage: React.FC = () => {
     [
       buildTeamReturnHref,
       entryMemberId,
+      selectedRosterMemberId,
       scopeId,
       selectedTeamId,
       teamMembersQuery.data?.members,
@@ -829,6 +832,17 @@ const TeamDetailPage: React.FC = () => {
   const currentRunFriendly = activeRunId
     ? formatFriendlyStatus(currentRunStatus)
     : "暂无可见运行";
+  const currentMemberLabel =
+    trimText(preferredMemberSummary?.displayName) ||
+    teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
+    currentMemberId ||
+    "--";
+  const currentMemberCardCaption = currentMemberId
+    ? `memberId · ${compactOptionalId(currentMemberId)}`
+    : "当前还没有选中成员";
+  const currentMemberCardTooltip = currentMemberId
+    ? `memberId · ${currentMemberId}`
+    : "当前还没有选中成员";
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
@@ -1351,6 +1365,8 @@ const TeamDetailPage: React.FC = () => {
   const teamTestPanel = (
     <TeamTestPanel
       createMemberHref={createMemberHref}
+      currentMemberId={currentMemberId || null}
+      currentMemberLabel={currentMemberLabel}
       disabled={isTeamArchived}
       entryActionBusyMemberId={entryActionBusyMemberId}
       entryMemberId={teamSummaryQuery.data?.entryMemberId}
@@ -1382,6 +1398,9 @@ const TeamDetailPage: React.FC = () => {
         currentDeploymentPillText={currentDeploymentPillText}
         currentHeaderStatusFriendly={currentHeaderStatusFriendly}
         currentHeaderStatusStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
+        currentMemberCardCaption={currentMemberCardCaption}
+        currentMemberCardTooltip={currentMemberCardTooltip}
+        currentMemberLabel={currentMemberLabel}
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
