@@ -117,6 +117,16 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
     }
 
     [Fact]
+    public void ProductionSource_ShouldUseDispatchServiceOnly()
+    {
+        var source = File.ReadAllText(GetProductionSourcePath());
+
+        source.Should().NotContain("IActor" + "HandledDispatchPort");
+        source.Should().NotContain("DispatchAndWait" + "HandledAsync");
+        source.Should().NotContain("ICommandDispatchPipeline<ProvisionScriptRuntimeCommand");
+    }
+
+    [Fact]
     public async Task EnsureRuntimeAsync_ShouldUseProvidedDefinitionSnapshot_WhenSupplied()
     {
         ProvisionScriptRuntimeCommand? capturedCommand = null;
@@ -196,6 +206,26 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
             "type.googleapis.com/example.ReadModel",
             "2",
             "schema-hash-1");
+
+    private static string GetProductionSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "Aevatar.Scripting.Infrastructure",
+                "Ports",
+                "RuntimeScriptProvisioningService.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate RuntimeScriptProvisioningService.cs from test output directory.");
+    }
 
     private sealed class StaticDispatchService(
         Func<ProvisionScriptRuntimeCommand, Task<CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>> dispatch)

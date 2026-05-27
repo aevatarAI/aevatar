@@ -34,7 +34,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ChannelRelayRegistrationFacade>();
         services.TryAddSingleton<ChannelBotRegistrationCommandEnvelopeFactory>();
         services.TryAddSingleton<ChannelRegistrationCommandReceiptFactory>();
-        services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, HandledActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();
         services.TryAddSingleton<ICommandTargetResolver<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>, ChannelBotRegistrationCommandTargetResolver<ChannelBotRegisterCommand>>();
         services.TryAddSingleton<ICommandTargetResolver<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandStartError>, ChannelBotRegistrationCommandTargetResolver<ChannelBotUnregisterCommand>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<ChannelBotRegisterCommand>>(sp => sp.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());

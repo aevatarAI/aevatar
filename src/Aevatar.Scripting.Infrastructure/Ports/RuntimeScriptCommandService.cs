@@ -5,26 +5,15 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter149/issue1132): Old pattern: runtime script commands had an optional handled-dispatch bypass around the typed command service.  New principle: runtime script commands always use the typed accepted-only dispatch service.
 public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
 {
     private readonly ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly ICommandDispatchPipeline<RunScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>? _dispatchPipeline;
-    private readonly IActorHandledDispatchPort? _handledDispatchPort;
 
     public RuntimeScriptCommandService(
         ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
-        : this(dispatchService, null, null)
-    {
-    }
-
-    public RuntimeScriptCommandService(
-        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        ICommandDispatchPipeline<RunScriptRuntimeCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>? dispatchPipeline,
-        IActorHandledDispatchPort? handledDispatchPort)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _dispatchPipeline = dispatchPipeline;
-        _handledDispatchPort = handledDispatchPort;
     }
 
     public async Task RunRuntimeAsync(
@@ -91,19 +80,6 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             scopeId,
             string.IsNullOrWhiteSpace(commandId) ? null : commandId.Trim(),
             string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim());
-        if (_dispatchPipeline != null && _handledDispatchPort != null)
-        {
-            var prepared = await _dispatchPipeline.PrepareAsync(command, ct);
-            if (!prepared.Succeeded || prepared.Target == null)
-                throw prepared.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");
-
-            await _handledDispatchPort.DispatchAndWaitHandledAsync(
-                prepared.Target.Target.TargetId,
-                prepared.Target.Envelope,
-                ct);
-            return;
-        }
-
         var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");

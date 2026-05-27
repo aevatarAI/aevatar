@@ -130,6 +130,7 @@ public class WorkflowGAgentCoverageTests
         runtime.CreateCalls.Should().Be(1);
         runtime.Linked.Should().ContainSingle();
         runtime.Linked[0].child.Should().EndWith(":role_a");
+        runtime.DispatchRequests.Should().Contain(runtime.Linked[0].child);
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
         roleAgent.RoleName.Should().Be("RoleA");
@@ -1867,6 +1868,7 @@ public class WorkflowGAgentCoverageTests
         public List<FakeActor> CreatedActors { get; } = [];
         public List<FakeWorkflowRunChildAgent> CreatedChildWorkflowAgents { get; } = [];
         public List<(string parent, string child)> Linked { get; } = [];
+        public List<string> DispatchRequests { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
         public string? ThrowOnGetAsyncActorId { get; set; }
@@ -1935,6 +1937,7 @@ public class WorkflowGAgentCoverageTests
         public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            DispatchRequests.Add(actorId);
             var actor = CreatedActors.FirstOrDefault(x => x.Id == actorId)
                         ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);

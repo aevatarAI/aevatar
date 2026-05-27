@@ -2423,8 +2423,7 @@ public sealed class AgentRunGAgentTests
                 relayOptions,
                 NullLogger<AgentRunReplyGenerationExecutor>.Instance,
                 scopeResolver,
-                userConfigQueryPort,
-                actorHandledDispatchPort: new TestHandledDispatchPort(dispatchPort));
+                userConfigQueryPort);
         }
 
         public IActorDispatchPort DispatchPort => _dispatchPort;
@@ -2589,7 +2588,7 @@ public sealed class AgentRunGAgentTests
                 return null;
 
             return new TurnStreamingReplySink(
-                new TestHandledDispatchPort(_dispatchPort),
+                _dispatchPort,
                 request.TargetActorId,
                 request.CorrelationId,
                 request.RegistrationId,
@@ -2686,15 +2685,6 @@ public sealed class AgentRunGAgentTests
                     CompletionTokens = source.CompletionTokens,
                     TotalTokens = source.TotalTokens,
                 };
-
-        private sealed class TestHandledDispatchPort(IActorDispatchPort dispatchPort) : IActorHandledDispatchPort
-        {
-            public Task<DispatchAdmission> DispatchAndWaitHandledAsync(
-                string actorId,
-                EventEnvelope envelope,
-                CancellationToken ct = default) =>
-                dispatchPort.DispatchAsync(actorId, envelope, ct);
-        }
 
         private sealed class TestStreamingReplyRunState(
             TurnStreamingReplySink sink,
