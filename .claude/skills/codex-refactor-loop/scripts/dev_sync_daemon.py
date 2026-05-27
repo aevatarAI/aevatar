@@ -290,8 +290,16 @@ def sync_direction(source: str, target: str, wt: Path, branch_prefix: str, label
 
 
 def tick() -> None:
+    # forward 总跑(dev → trunk)
     sync_direction(SOURCE, TARGET, FORWARD_WT, FORWARD_PREFIX, "forward")
-    sync_direction(TARGET, SOURCE, REVERSE_WT, REVERSE_PREFIX, "reverse")
+    # reverse 仅当 trunk 完全包含 dev(trunk 没落后 dev 任何 commit)时才开 PR
+    # per loning: 先保证 dev → trunk OK,trunk superset of dev 时,才开 rollup 回 dev
+    fetch()
+    trunk_behind_dev = count_ahead(f"origin/{TARGET}", f"origin/{SOURCE}")
+    if trunk_behind_dev == 0:
+        sync_direction(TARGET, SOURCE, REVERSE_WT, REVERSE_PREFIX, "reverse")
+    else:
+        log(f"reverse: gate — trunk 落后 dev {trunk_behind_dev} commits,reverse 暂停直到 forward 完")
 
 
 def main() -> None:
