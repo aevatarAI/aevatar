@@ -374,15 +374,10 @@ const ChatPage: React.FC = () => {
     queryKey: ["studio-settings"],
     queryFn: () => studioApi.getSettings(),
   });
-  const userConfigQuery = useQuery({
+  const userLlmSettingsQuery = useQuery({
     enabled: authSessionQuery.isSuccess,
-    queryKey: ["chat", "user-config"],
-    queryFn: () => studioApi.getUserConfig(),
-  });
-  const userConfigModelsQuery = useQuery({
-    enabled: authSessionQuery.isSuccess,
-    queryKey: ["chat", "user-config-models"],
-    queryFn: () => studioApi.getUserConfigModels(),
+    queryKey: ["chat", "user-llm-settings"],
+    queryFn: () => studioApi.getUserLlmSettings(),
   });
 
   const defaultRouteTargetQuery = useQuery({
@@ -426,16 +421,16 @@ const ChatPage: React.FC = () => {
   const selectedService =
     services.find((service) => service.id === selectedServiceId) ?? null;
   const globalPreferredRoute = normalizeUserLlmRoute(
-    userConfigQuery.data?.preferredLlmRoute
+    userLlmSettingsQuery.data?.effectiveRoute
   );
   const routeOptions = useMemo(
     () =>
       buildConversationRouteOptions(
-        userConfigModelsQuery.data,
+        userLlmSettingsQuery.data,
         globalPreferredRoute,
         conversationRoute
       ),
-    [conversationRoute, globalPreferredRoute, userConfigModelsQuery.data]
+    [conversationRoute, globalPreferredRoute, userLlmSettingsQuery.data]
   );
   const effectiveRoute =
     conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
@@ -445,21 +440,20 @@ const ChatPage: React.FC = () => {
   );
   const effectiveModel =
     trimConversationValue(conversationModel) ||
-    trimConversationValue(userConfigQuery.data?.defaultModel) ||
+    trimConversationValue(userLlmSettingsQuery.data?.defaultModel) ||
     "";
   const modelGroups = useMemo(
     () =>
       buildConversationModelGroups({
         conversationModel,
         effectiveRoute,
-        globalDefaultModel: userConfigQuery.data?.defaultModel,
-        models: userConfigModelsQuery.data,
+        globalDefaultModel: userLlmSettingsQuery.data?.defaultModel,
+        settings: userLlmSettingsQuery.data,
       }),
     [
       conversationModel,
       effectiveRoute,
-      userConfigModelsQuery.data,
-      userConfigQuery.data?.defaultModel,
+      userLlmSettingsQuery.data,
     ]
   );
   const conversationHeaders = useMemo(
@@ -2283,8 +2277,8 @@ const ChatPage: React.FC = () => {
                         modelGroups={modelGroups}
                         modelValue={conversationModel}
                         modelsLoading={
-                          userConfigModelsQuery.isLoading ||
-                          Boolean(userConfigModelsQuery.isFetching)
+                          userLlmSettingsQuery.isLoading ||
+                          Boolean(userLlmSettingsQuery.isFetching)
                         }
                         onModelChange={handleConversationModelChange}
                         onReset={handleResetConversationLlm}

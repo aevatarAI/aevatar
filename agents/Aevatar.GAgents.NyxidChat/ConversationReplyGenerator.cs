@@ -274,7 +274,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 continue;
 
             output.Append(chunk.DeltaContent);
-            if (streamingSink is not null)
+            if (streamingSink is not null && ShouldStreamVisibleReply(output.ToString()))
                 await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
@@ -347,7 +347,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: activity.Conversation?.CanonicalKey,
-            agentName: "NyxIdConversationReply");
+            agentName: "NyxIdConversationReply",
+            suppressToolCallRoundText: true);
+    }
+
+    private static bool ShouldStreamVisibleReply(string accumulatedText)
+    {
+        if (string.IsNullOrWhiteSpace(accumulatedText))
+            return false;
+
+        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
     }
 
     private static int ResolveMaxToolRounds(LLMControlContext llmControl) =>

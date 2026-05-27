@@ -2,7 +2,6 @@ using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Hosting.Controllers;
@@ -14,18 +13,15 @@ public sealed class UserConfigController : ControllerBase
 {
     private readonly IUserConfigService _userConfigService;
     private readonly IUserLlmPreferenceService _llmPreferenceService;
-    private readonly IConfiguration _configuration;
     private readonly ILogger<UserConfigController> _logger;
 
     public UserConfigController(
         IUserConfigService userConfigService,
         IUserLlmPreferenceService llmPreferenceService,
-        IConfiguration configuration,
         ILogger<UserConfigController> logger)
     {
         _userConfigService = userConfigService;
         _llmPreferenceService = llmPreferenceService;
-        _configuration = configuration;
         _logger = logger;
     }
 
@@ -48,13 +44,13 @@ public sealed class UserConfigController : ControllerBase
     }
 
     [HttpPut]
-    public async Task<ActionResult<UserConfig>> Save(
+    public async Task<ActionResult<UserConfigSaveReceiptResponse>> Save(
         [FromBody] SaveUserConfigRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var next = await _userConfigService.SaveAsync(
+            var receipt = await _userConfigService.SaveAsync(
                 ExtractBearerToken(),
                 new SaveUserConfigCommand(
                     request.DefaultModel,
@@ -65,7 +61,7 @@ public sealed class UserConfigController : ControllerBase
                     request.GithubUsername,
                     request.MaxToolRounds),
                 cancellationToken);
-            return Ok(next);
+            return Accepted(UserConfigSaveReceiptResponse.FromApplication(receipt));
         }
         catch (InvalidOperationException exception)
         {
@@ -87,40 +83,15 @@ public sealed class UserConfigController : ControllerBase
         [property: JsonPropertyName("githubUsername")] string? GithubUsername = null,
         [property: JsonPropertyName("maxToolRounds")] int? MaxToolRounds = null);
 
-    [HttpGet("models")]
-    public async Task<ActionResult<NyxIdLlmStatusResponse>> GetModels(CancellationToken cancellationToken)
+    [HttpGet("llm")]
+    public async Task<ActionResult<UserLlmSettingsResponse>> GetLlmSettings(CancellationToken cancellationToken)
     {
         try
         {
-            var options = await _llmPreferenceService
-                .GetOptionsAsync(ExtractBearerToken(), cancellationToken)
+            var view = await _llmPreferenceService
+                .GetSettingsAsync(ExtractBearerToken(), cancellationToken)
                 .ConfigureAwait(false);
-            var status = ToLegacyStatusResponse(options);
-            status.GatewayUrl = ResolveNyxIdAuthorityBase() is { } authorityBase
-                ? $"{authorityBase}/api/v1/llm/gateway/v1"
-                : null;
-            status.SupportedModels = (status.ModelsByProvider ?? [])
-                .Values
-                .SelectMany(models => models)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return Ok(status);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Failed to fetch LLM services from NyxID");
-            return Ok(NyxIdLlmStatusResponse.Empty);
-        }
-    }
-
-    [HttpGet("llm/options")]
-    public async Task<ActionResult<UserLlmOptionsView>> GetLlmOptions(CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await _llmPreferenceService
-                .GetOptionsAsync(ExtractBearerToken(), cancellationToken)
-                .ConfigureAwait(false));
+            return Ok(UserLlmSettingsResponse.FromApplication(view));
         }
         catch (InvalidOperationException exception)
         {
@@ -128,28 +99,29 @@ public sealed class UserConfigController : ControllerBase
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _logger.LogWarning(exception, "Failed to fetch user LLM options");
-            return StatusCode(502, new { message = "LLM options are temporarily unavailable." });
+            _logger.LogWarning(exception, "Failed to fetch user LLM settings");
+            return StatusCode(502, new { message = "LLM settings are temporarily unavailable." });
         }
     }
 
-    [HttpPut("llm/preference")]
-    public async Task<ActionResult<UserConfig>> SaveLlmPreference(
-        [FromBody] SaveUserLlmPreferenceRequest request,
+    [HttpPut("llm")]
+    public async Task<ActionResult<UserConfigSaveReceiptResponse>> SaveLlmSettings(
+        [FromBody] SaveUserLlmSettingsRequest? request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var next = await _userConfigService.SaveLlmPreferenceAsync(
+            if (request is null)
+                return BadRequest(new { message = "Request body is required." });
+
+            if (request.RouteValue is null)
+                return BadRequest(new { message = "routeValue is required; use an empty string for the gateway route." });
+
+            var receipt = await _userConfigService.SaveLlmPreferenceAsync(
                 ExtractBearerToken(),
-                new SaveUserLlmPreferenceCommand(
-                    request.ServiceId,
-                    request.RouteValue,
-                    request.Model,
-                    request.PresetId,
-                    request.Reset),
+                request.ToCommand(),
                 cancellationToken).ConfigureAwait(false);
-            return Ok(next);
+            return Accepted(UserConfigSaveReceiptResponse.FromApplication(receipt));
         }
         catch (InvalidOperationException exception)
         {
@@ -157,74 +129,27 @@ public sealed class UserConfigController : ControllerBase
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to save user LLM preference");
-            return StatusCode(502, new { message = "User LLM preference is temporarily unavailable." });
+            _logger.LogWarning(ex, "Failed to save user LLM settings");
+            return StatusCode(502, new { message = "User LLM settings are temporarily unavailable." });
         }
     }
 
-    public sealed record SaveUserLlmPreferenceRequest(
-        [property: JsonPropertyName("serviceId")] string? ServiceId = null,
-        [property: JsonPropertyName("routeValue")] string? RouteValue = null,
-        [property: JsonPropertyName("model")] string? Model = null,
-        [property: JsonPropertyName("presetId")] string? PresetId = null,
-        [property: JsonPropertyName("reset")] bool? Reset = null);
-
-    private static NyxIdLlmStatusResponse ToLegacyStatusResponse(UserLlmOptionsView options)
+    [HttpGet("runtime")]
+    public async Task<ActionResult<UserConfigRuntimeView>> GetRuntime(CancellationToken cancellationToken)
     {
-        var providers = options.Available
-            .GroupBy(option => option.ServiceSlug, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
-            {
-                var first = group.First();
-                return new NyxIdLlmProviderStatus
-                {
-                    ProviderSlug = first.ServiceSlug,
-                    ProviderName = first.DisplayName,
-                    Status = first.Status,
-                    ProxyUrl = first.RouteValue,
-                    Source = first.Source,
-                };
-            })
-            .ToList();
-
-        var modelsByProvider = options.Available
-            .GroupBy(option => option.ServiceSlug, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group => group
-                    .SelectMany(option => option.AvailableModels)
-                    .Where(model => !string.IsNullOrWhiteSpace(model))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
-                    .ToList(),
-                StringComparer.OrdinalIgnoreCase);
-
-        return new NyxIdLlmStatusResponse
+        try
         {
-            Providers = providers,
-            ModelsByProvider = modelsByProvider,
-        };
-    }
-
-    private string? ResolveNyxIdAuthorityBase()
-    {
-        var authority = _configuration["Cli:App:NyxId:Authority"]
-            ?? _configuration["Aevatar:NyxId:Authority"]
-            ?? _configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var trimmed = authority.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
-            return null;
-
-        // Strip /api/v1/llm/gateway/v1 suffix if present to get the authority base
-        const string gatewaySuffix = "/api/v1/llm/gateway/v1";
-        if (trimmed.EndsWith(gatewaySuffix, StringComparison.OrdinalIgnoreCase))
-            return trimmed[..^gatewaySuffix.Length];
-
-        return trimmed;
+            return Ok(await _userConfigService.GetRuntimeAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Unexpected error reading user runtime config");
+            return StatusCode(502, new { message = "User runtime config is temporarily unavailable." });
+        }
     }
 
     private string? ExtractBearerToken()
@@ -238,39 +163,4 @@ public sealed class UserConfigController : ControllerBase
             ? header[prefix.Length..].Trim()
             : null;
     }
-}
-
-public sealed class NyxIdLlmStatusResponse
-{
-    public static readonly NyxIdLlmStatusResponse Empty = new();
-
-    [JsonPropertyName("providers")]
-    public List<NyxIdLlmProviderStatus>? Providers { get; set; }
-
-    [JsonPropertyName("gateway_url")]
-    public string? GatewayUrl { get; set; }
-
-    [JsonPropertyName("supported_models")]
-    public List<string>? SupportedModels { get; set; }
-
-    [JsonPropertyName("models_by_provider")]
-    public Dictionary<string, List<string>>? ModelsByProvider { get; set; }
-}
-
-public sealed class NyxIdLlmProviderStatus
-{
-    [JsonPropertyName("provider_slug")]
-    public string? ProviderSlug { get; set; }
-
-    [JsonPropertyName("provider_name")]
-    public string? ProviderName { get; set; }
-
-    [JsonPropertyName("status")]
-    public string? Status { get; set; }
-
-    [JsonPropertyName("proxy_url")]
-    public string? ProxyUrl { get; set; }
-
-    [JsonPropertyName("source")]
-    public string? Source { get; set; }
 }

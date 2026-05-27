@@ -201,6 +201,8 @@ message LlmSessionRuntimeToolSelection {
   repeated LlmSessionRuntimeToolDeclaration forwarded_tools = 1;
   repeated string substituted_tool_names = 2;
   repeated string additive_tool_names = 3;
+  string tool_choice_hint_name = 4;
+  string tool_choice_hint_arguments_json = 5;
 }
 
 message LlmRunRequested {

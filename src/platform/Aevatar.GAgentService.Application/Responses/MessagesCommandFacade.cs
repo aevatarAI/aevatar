@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,8 @@ public sealed class MessagesCommandFacade(
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
     IActorDispatchPort dispatchPort,
+    IResponsesToolClassificationService toolClassificationService,
+    IResponsesDirectToolPlanService directToolPlanService,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
     private const string RegistrationScopeMetadataKey = "scope_id";
@@ -64,17 +67,24 @@ public sealed class MessagesCommandFacade(
                 sessionResult.Error.Code,
                 sessionResult.Error.Message);
 
-        var plan = await BuildExecutionPlanAsync(
+        var planResult = await BuildExecutionPlanAsync(
             normalized,
             callerScopeResult.Scope!,
             routedModelResult.Model!,
+            routedModelResult.Action!,
             bearerToken,
             sessionResult.Session!,
             ct);
 
+        if (planResult.Error is not null)
+            return MessagesCreateCommandResult.FromError(
+                planResult.Error.StatusCode,
+                planResult.Error.Code,
+                planResult.Error.Message);
+
         return normalized.Stream
-            ? MessagesCreateCommandResult.FromStreamPlan(plan)
-            : await ExecuteNonStreamingAsync(plan, ct);
+            ? MessagesCreateCommandResult.FromStreamPlan(planResult.Plan!)
+            : await ExecuteNonStreamingAsync(planResult.Plan!, ct);
     }
 
     public async Task<ResponsesStreamCommandResult> StreamAsync(
@@ -158,7 +168,7 @@ public sealed class MessagesCommandFacade(
         }
 
         action.ForwardToModel.ModelName = routedModel;
-        return RouteTargetResult.FromModel(routedModel);
+        return RouteTargetResult.FromModel(routedModel, action);
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -185,21 +195,25 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<MessagesCreateCommandPlan> BuildExecutionPlanAsync(
+    private async Task<ExecutionPlanResult> BuildExecutionPlanAsync(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
         string routedModel,
+        ChatRouteAction routeAction,
         string bearerToken,
         LlmSessionRegistrationResult session,
         CancellationToken ct)
     {
         var toolProviderContext = BuildToolProviderContext(callerScope, normalized.MessageId, bearerToken);
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
+        var toolPlan = directToolPlanService.Build(routeAction);
+        if (toolPlan.Error is not null)
+            return ExecutionPlanResult.FromError(toolPlan.Error);
+
+        var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
-            Array.Empty<IResponsesToolProvider>(),
             toolProviderContext,
-            logger,
-            ct);
+            toolPlan.AdditionalToolProviders,
+            ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -215,12 +229,13 @@ public sealed class MessagesCommandFacade(
                 normalized.MessageId);
         }
 
-        return new MessagesCreateCommandPlan(
+        return ExecutionPlanResult.FromPlan(new MessagesCreateCommandPlan(
             normalized,
             session,
             llmRequest,
             toolProviderContext.ToolContextMetadata,
-            toolClassification);
+            toolClassification,
+            toolPlan.ToolChoiceHintPlan));
     }
 
     private async Task<MessagesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -419,7 +434,11 @@ public sealed class MessagesCommandFacade(
         MessagesCreateCommandPlan plan,
         CancellationToken ct)
     {
-        var command = BuildRunRequested(plan.Session.ResponseId, plan.LlmRequest, plan.ToolClassification);
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -430,7 +449,8 @@ public sealed class MessagesCommandFacade(
     private static LlmRunRequested BuildRunRequested(
         string responseId,
         LLMRequest request,
-        ResponsesToolClassification toolClassification)
+        ResponsesToolClassification toolClassification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
     {
         var command = new LlmRunRequested
         {
@@ -448,7 +468,7 @@ public sealed class MessagesCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification);
+        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
         return command;
     }
 
@@ -471,13 +491,21 @@ public sealed class MessagesCommandFacade(
         return result;
     }
 
-    private static LlmSessionRuntimeToolSelection ToToolSelection(ResponsesToolClassification classification)
+    private static LlmSessionRuntimeToolSelection ToToolSelection(
+        ResponsesToolClassification classification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
     {
         var selection = new LlmSessionRuntimeToolSelection
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
         };
+        if (!toolChoiceHintPlan.IsEmpty)
+        {
+            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
+            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+        }
+
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
             new LlmSessionRuntimeToolDeclaration
             {
@@ -495,16 +523,26 @@ public sealed class MessagesCommandFacade(
 
     private sealed record RouteTargetResult(
         string? Model,
+        ChatRouteAction? Action,
         ResponsesCommandError? Error)
     {
-        public static RouteTargetResult FromModel(string model) => new(model, null);
+        public static RouteTargetResult FromModel(string model, ChatRouteAction action) => new(model, action, null);
 
         public static RouteTargetResult FromError(int statusCode, string code, string message) =>
-            new(null, new ResponsesCommandError(statusCode, code, message));
+            new(null, null, new ResponsesCommandError(statusCode, code, message));
     }
 
     private sealed record SessionRegistrationResult(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
+
+    private sealed record ExecutionPlanResult(
+        MessagesCreateCommandPlan? Plan,
+        ResponsesCommandError? Error)
+    {
+        public static ExecutionPlanResult FromPlan(MessagesCreateCommandPlan plan) => new(plan, null);
+
+        public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
+    }
 
 }

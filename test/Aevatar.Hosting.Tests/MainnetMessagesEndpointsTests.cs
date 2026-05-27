@@ -374,12 +374,10 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldNotInjectAevatarAdditiveTools()
+    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
     {
-        // Regression: /v1/messages must explicitly pass Array.Empty<IResponsesToolProvider>()
-        // to ResponsesToolClassifier so Aevatar substitutes/additives never shadow the
-        // Anthropic client's own tool harness (Claude Code in particular). If a future
-        // refactor wires DI providers into this path, this test fails.
+        // /v1/messages shares the Responses tool classification path so Anthropic clients
+        // see the same substitute/additive tools as the other mainnet LLM facades.
         var provider = new MessagesRecordingLLMProvider
         {
             StreamChunks =
@@ -417,7 +415,9 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         provider.LastRequest.Should().NotBeNull();
         var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
+        toolNames.Should().Contain(["use_skill", "ornn_search_skills"]);
+        toolNames.Should().NotContain("WebSearch",
+            "the Messages request does not declare a client WebSearch tool to substitute");
     }
 
     [Fact]
@@ -673,8 +673,10 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().BeEmpty(
-            "/v1/messages intentionally does not inject Responses workspace tool providers");
+        var hintedTool = provider.LastRequest!.Tools.Should()
+            .ContainSingle(tool => tool.Name == "aevatar_invoke_gagent")
+            .Subject;
+        hintedTool.Description.Should().Contain("target-agent");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -702,6 +704,8 @@ public sealed class MainnetMessagesEndpointsTests
             sessions,
             sp.GetServices<IResponsesToolProvider>(),
             sp.GetRequiredService<IToolSetRegistry>()));
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddToolSetRegistry(options =>

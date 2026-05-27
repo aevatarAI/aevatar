@@ -21,6 +21,7 @@ internal static class StudioHostingServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
+        services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
             .AddJsonOptions(json =>

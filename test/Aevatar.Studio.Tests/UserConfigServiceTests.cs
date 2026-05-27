@@ -28,9 +28,10 @@ public sealed class UserConfigServiceTests
             "bearer",
             new SaveUserConfigCommand(DefaultModel: "chrono-llm/gpt-5.5"));
 
-        result.DefaultModel.Should().Be("gpt-5.5");
-        result.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
-        commandService.Saved.Should().ContainSingle().Which.Should().Be(result);
+        result.Accepted.Should().BeTrue();
+        var saved = commandService.Saved.Should().ContainSingle().Subject;
+        saved.DefaultModel.Should().Be("gpt-5.5");
+        saved.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
@@ -43,9 +44,10 @@ public sealed class UserConfigServiceTests
             "bearer",
             new SaveUserConfigCommand(DefaultModel: "openai/gpt-5"));
 
-        result.DefaultModel.Should().Be("openai/gpt-5");
-        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        commandService.Saved.Should().ContainSingle().Which.Should().Be(result);
+        result.Accepted.Should().BeTrue();
+        var saved = commandService.Saved.Should().ContainSingle().Subject;
+        saved.DefaultModel.Should().Be("openai/gpt-5");
+        saved.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
     [Fact]
@@ -57,9 +59,10 @@ public sealed class UserConfigServiceTests
         var result = await service.SaveAsync(new SaveUserConfigCommand(
             DefaultModel: "chrono-llm/gpt-5.5"));
 
-        result.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
-        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        commandService.Saved.Should().ContainSingle().Which.Should().Be(result);
+        result.Accepted.Should().BeTrue();
+        var saved = commandService.Saved.Should().ContainSingle().Subject;
+        saved.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
+        saved.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
     [Fact]
@@ -86,9 +89,10 @@ public sealed class UserConfigServiceTests
             "bearer",
             new SaveUserLlmPreferenceCommand(Model: "chrono-llm/gpt-5.5"));
 
-        result.DefaultModel.Should().Be("gpt-5.5");
-        result.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
-        commandService.Saved.Should().ContainSingle().Which.Should().Be(result);
+        result.Accepted.Should().BeTrue();
+        var saved = commandService.Saved.Should().ContainSingle().Subject;
+        saved.DefaultModel.Should().Be("gpt-5.5");
+        saved.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
     }
 
     [Fact]
@@ -107,14 +111,17 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task SaveLlmPreferenceAsync_ShouldStripMatchingServicePrefix_WhenServiceIdProvided()
     {
-        var service = CreateService();
+        var commandService = new RecordingUserConfigCommandService();
+        var service = CreateService(commandService: commandService);
 
         var result = await service.SaveLlmPreferenceAsync(
             "bearer",
             new SaveUserLlmPreferenceCommand(ServiceId: "chrono-llm", Model: "chrono-llm/gpt-5.5"));
 
-        result.DefaultModel.Should().Be("gpt-5.5");
-        result.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        result.Accepted.Should().BeTrue();
+        var saved = commandService.Saved.Should().ContainSingle().Subject;
+        saved.DefaultModel.Should().Be("gpt-5.5");
+        saved.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
     }
 
     private static UserConfigService CreateService(
@@ -139,17 +146,29 @@ public sealed class UserConfigServiceTests
     {
         public List<UserConfig> Saved { get; } = [];
 
-        public Task SaveAsync(UserConfig config, CancellationToken ct = default)
+        public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default)
         {
             Saved.Add(config);
-            return Task.CompletedTask;
+            return Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-1",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-1",
+                AckedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
+        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
             SaveAsync(config, ct);
 
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+            Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-github",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-github",
+                AckedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class StubUserLlmCatalogPort(NyxIdLlmServicesResult result) : IUserLlmCatalogPort
