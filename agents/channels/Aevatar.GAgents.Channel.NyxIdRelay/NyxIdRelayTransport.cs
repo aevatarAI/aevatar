@@ -225,11 +225,6 @@ public sealed class NyxIdRelayTransport
                 "run_id",
                 "step_id",
                 "approved");
-            RemoveKeys(
-                submission.FormFields,
-                "user_input",
-                "edited_content",
-                "feedback");
         }
 
         if (TryBuildLlmSelectionPayload(submission, out var llmSelection))
@@ -241,14 +236,6 @@ public sealed class NyxIdRelayTransport
                 "service_id",
                 "preset_id");
         }
-    }
-
-    private static void RemoveKeys(
-        Google.Protobuf.Collections.MapField<string, string> values,
-        params string[] keys)
-    {
-        foreach (var key in keys)
-            values.Remove(key);
     }
 
     private static bool TryBuildWorkflowResumePayload(
@@ -337,6 +324,14 @@ public sealed class NyxIdRelayTransport
 
         value = (raw ?? string.Empty).Trim();
         return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static void RemoveKeys(
+        Google.Protobuf.Collections.MapField<string, string> values,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+            values.Remove(key);
     }
 
     private static void CopyScalarMap(JsonElement element, Google.Protobuf.Collections.MapField<string, string> target)

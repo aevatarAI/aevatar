@@ -58,31 +58,44 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
     }
 
     [Fact]
-    public async Task QueryReader_ShouldResolveLegacyReadModel_WhenReadableReadModelIsMissing()
+    public async Task QueryReader_ShouldRemapFreshSnapshotFromPersistedReadModelAcrossRepeatedReads()
     {
         var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
         var projector = new ResponsesAgentToolStateCurrentStateProjector(
             store,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")));
-        var reader = new ResponsesAgentToolStateQueryReader(store);
-        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(ScopeId, OwnerSubject);
+        var observedAt = DateTimeOffset.Parse("2026-05-12T00:01:00+00:00");
 
         await projector.ProjectAsync(
             new ResponsesAgentToolStateCurrentStateProjectionContext
             {
-                RootActorId = legacyActorId,
+                RootActorId = ActorId,
                 ProjectionKind = "responses-agent-tools",
             },
-            WrapCommittedState(DateTimeOffset.Parse("2026-05-12T00:01:00+00:00")));
+            WrapCommittedState(observedAt));
 
-        var readableActorId = ResponseAgentToolStateIds.BuildActorId(ScopeId, OwnerSubject);
-        (await store.GetAsync(readableActorId)).Should().BeNull();
-        var snapshot = await reader.GetAsync(ScopeId, OwnerSubject);
+        var reader = new ResponsesAgentToolStateQueryReader(store);
+        var first = await reader.GetAsync(ScopeId, OwnerSubject);
+        var persisted = await store.GetAsync(ActorId);
 
-        snapshot.Should().NotBeNull();
-        snapshot!.ActorId.Should().Be(legacyActorId);
-        snapshot.ScopeId.Should().Be(ScopeId);
-        snapshot.OwnerSubject.Should().Be(OwnerSubject);
+        persisted.Should().NotBeNull();
+        persisted!.Todos[0].Content = "Store changed";
+        persisted.Tasks[0].ChildActorId = "child-2";
+        persisted.WebCacheEntries[0].HitCount = 9;
+
+        var second = await new ResponsesAgentToolStateQueryReader(store).GetAsync(ScopeId, OwnerSubject);
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        first!.Todos.Should().ContainSingle(x => x.Content == "Ship");
+        first.Tasks.Should().ContainSingle(x => x.ChildActorId == "child-1");
+        first.WebCacheEntries.Should().ContainSingle(x => x.HitCount == 0);
+        second.Should().NotBeSameAs(first);
+        second!.ActorId.Should().Be(ActorId);
+        second.StateVersion.Should().Be(4);
+        second.Todos.Should().ContainSingle(x => x.Id == "todo-1" && x.Content == "Store changed");
+        second.Tasks.Should().ContainSingle(x => x.TaskId == "task_1" && x.ChildActorId == "child-2");
+        second.WebCacheEntries.Should().ContainSingle(x => x.CacheKey == "cache-1" && x.HitCount == 9);
     }
 
     private static EventEnvelope WrapCommittedState(DateTimeOffset observedAt)

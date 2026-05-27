@@ -40,6 +40,29 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.LastError.Should().Be("err");
     }
 
+    [Theory]
+    [InlineData(WorkflowExecutionCompletionStatus.Running, WorkflowRunCompletionStatus.Running)]
+    [InlineData(WorkflowExecutionCompletionStatus.Completed, WorkflowRunCompletionStatus.Completed)]
+    [InlineData(WorkflowExecutionCompletionStatus.Failed, WorkflowRunCompletionStatus.Failed)]
+    [InlineData(WorkflowExecutionCompletionStatus.Stopped, WorkflowRunCompletionStatus.Stopped)]
+    [InlineData(WorkflowExecutionCompletionStatus.NotFound, WorkflowRunCompletionStatus.NotFound)]
+    [InlineData(WorkflowExecutionCompletionStatus.Disabled, WorkflowRunCompletionStatus.Disabled)]
+    [InlineData(WorkflowExecutionCompletionStatus.WaitingForSignal, WorkflowRunCompletionStatus.Running)]
+    [InlineData((WorkflowExecutionCompletionStatus)999, WorkflowRunCompletionStatus.Unknown)]
+    public void WorkflowExecutionReadModelMapper_ShouldMapRunReportCompletionStatuses(
+        WorkflowExecutionCompletionStatus status,
+        WorkflowRunCompletionStatus expected)
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+
+        var report = mapper.ToRunReport(new WorkflowRunInsightReportDocument
+        {
+            CompletionStatus = status,
+        });
+
+        report.CompletionStatus.Should().Be(expected);
+    }
+
     [Fact]
     public async Task WorkflowCatalogReadModelQueryPort_ShouldOnlyReadAndMapReadModelDocuments()
     {

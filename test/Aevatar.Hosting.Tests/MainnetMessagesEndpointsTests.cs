@@ -81,18 +81,33 @@ public sealed class MainnetMessagesEndpointsTests
         root.GetProperty("type").GetString().Should().Be("message");
         root.GetProperty("role").GetString().Should().Be("assistant");
         root.GetProperty("model").GetString().Should().Be("claude-haiku-4-5");
-        root.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("stop_reason").GetString().Should().Be("end_turn");
         var content = root.GetProperty("content");
-        content.GetArrayLength().Should().Be(0);
-        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(0);
-        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(0);
+        content.GetArrayLength().Should().Be(1);
+        content[0].GetProperty("type").GetString().Should().Be("text");
+        content[0].GetProperty("text").GetString().Should().Be("Hi there");
+        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(5);
+        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(3);
 
         // Path B reuses the same LlmSession actor as Path A (no MessagesSessionGAgent).
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
         sessions.RecordedCompletions.Should().ContainSingle()
             .Which.Completion.OutputText.Should().Be("Hi there");
+        (await sessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!))!
+            .Completion!.Usage.Should().Be(new TokenUsage(5, 3, 8));
+
+        // System message + user message both flow into the intermediate ChatMessage list.
         provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Messages.Should().HaveCount(2);
+        provider.LastRequest.Messages[0].Role.Should().Be("system");
+        provider.LastRequest.Messages[0].Content.Should().Be("You are concise.");
+        provider.LastRequest.Messages[1].Role.Should().Be("user");
+        provider.LastRequest.Messages[1].Content.Should().Be("Hello");
+        provider.LastRequest.MaxTokens.Should().Be(256);
+        // Bearer goes on the typed CallerContext, not Metadata, per PR #625 round-2 fix.
+        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("anthropic-bearer");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
     }
 
     [Fact]
@@ -135,11 +150,14 @@ public sealed class MainnetMessagesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: message_start");
         body.Should().Contain("\"type\":\"message_start\"");
-        body.Should().NotContain("event: content_block_start");
-        body.Should().NotContain("event: content_block_delta");
-        body.Should().NotContain("\"text\":\"Hello\"");
+        body.Should().Contain("event: content_block_start");
+        body.Should().Contain("\"content_block\":{\"type\":\"text\"");
+        body.Should().Contain("event: content_block_delta");
+        body.Should().Contain("\"text\":\"Hel\"");
+        body.Should().Contain("\"text\":\"lo\"");
+        body.Should().Contain("event: content_block_stop");
         body.Should().Contain("event: message_delta");
-        body.Should().Contain("\"stop_reason\":null");
+        body.Should().Contain("\"stop_reason\":\"end_turn\"");
         body.Should().Contain("event: message_stop");
         body.Should().NotContain("stream-bearer");
 
@@ -195,13 +213,20 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
-        root.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("stop_reason").GetString().Should().Be("tool_use");
         var content = root.GetProperty("content");
-        content.GetArrayLength().Should().Be(0);
+        content.GetArrayLength().Should().Be(1);
+        content[0].GetProperty("type").GetString().Should().Be("tool_use");
+        content[0].GetProperty("id").GetString().Should().Be("toolu_abc");
+        content[0].GetProperty("name").GetString().Should().Be("get_weather");
+        content[0].GetProperty("input").GetProperty("city").GetString().Should().Be("SF");
 
         provider.LastRequest.Should().NotBeNull();
-        var tool = provider.LastRequest!.Tools.Should().ContainSingle().Subject;
-        tool.Name.Should().Be("get_weather");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["get_weather", "aevatar_invoke_gagent"]);
+        var tool = provider.LastRequest.Tools.Single(static tool => tool.Name == "get_weather");
         tool.Description.Should().Be("Look up the weather.");
         tool.ParametersSchema.Should().Contain("\"city\"");
         tool.IsReadOnly.Should().BeTrue();
@@ -376,8 +401,6 @@ public sealed class MainnetMessagesEndpointsTests
     [Fact]
     public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
     {
-        // /v1/messages shares the Responses tool classification path so Anthropic clients
-        // see the same substitute/additive tools as the other mainnet LLM facades.
         var provider = new MessagesRecordingLLMProvider
         {
             StreamChunks =
@@ -405,7 +428,14 @@ public sealed class MainnetMessagesEndpointsTests
             {
               "model": "claude-haiku-4-5",
               "max_tokens": 32,
-              "messages": [{"role": "user", "content": "ping"}]
+              "messages": [{"role": "user", "content": "ping"}],
+              "tools": [
+                {
+                  "name": "WebSearch",
+                  "description": "client declared search",
+                  "input_schema": {"type":"object","properties":{}}
+                }
+              ]
             }
             """),
         };
@@ -415,9 +445,7 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         provider.LastRequest.Should().NotBeNull();
         var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().Contain(["use_skill", "ornn_search_skills"]);
-        toolNames.Should().NotContain("WebSearch",
-            "the Messages request does not declare a client WebSearch tool to substitute");
+        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "WebSearch"]);
     }
 
     [Fact]
@@ -627,7 +655,7 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenChatRouteHasToolChoiceHint_AppliesHintToLlmCall()
+    public async Task PostMessages_WhenChatRoutePinsGAgentTool_RoutesThroughToolDrivenModelAction()
     {
         var provider = new MessagesRecordingLLMProvider
         {
@@ -635,25 +663,15 @@ public sealed class MainnetMessagesEndpointsTests
             [
                 new LLMStreamChunk
                 {
-                    DeltaContent = "routed",
-                    FinishReason = "stop",
+                    DeltaContent = "routed through model",
+                    IsLast = true,
                 },
             ],
         };
         var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentToolHint("target-agent"),
+            GAgentToolHintAction("target-agent"),
             []));
-        await using var app = await CreateAppAsync(
-            provider,
-            responsesToolProvider: new MessagesRecordingResponsesToolProvider(
-                substituteTools: [],
-                additiveTools:
-                [
-                    new MessagesStubAgentTool(
-                        "aevatar_invoke_gagent",
-                        """Invoke a GAgent with target-agent"""),
-                ]),
-            chatRoutePolicyQueryPort: queryPort);
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
@@ -673,10 +691,13 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        var hintedTool = provider.LastRequest!.Tools.Should()
-            .ContainSingle(tool => tool.Name == "aevatar_invoke_gagent")
-            .Subject;
-        hintedTool.Description.Should().Contain("target-agent");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should().Contain("aevatar_invoke_gagent");
+        provider.LastRequest.Model.Should().Be("original-claude");
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
+            .Should().Be("routed through model");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -699,31 +720,26 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IActorDispatchPort>(sp => new MessagesRecordingLlmRunDispatchPort(
-            provider,
-            sessions,
-            sp.GetServices<IResponsesToolProvider>(),
-            sp.GetRequiredService<IToolSetRegistry>()));
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
+        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<MessagesCommandFacade>();
+        builder.Services.AddSingleton<IMessagesCommandFacade, CompletingMessagesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
-        builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
+        builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
+            new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new MessagesStaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         builder.Services.AddToolSetRegistry(options =>
         {
             options.AddToolSet(
                 ToolSetNames.WorkspaceDefault,
-                [
-                    _ => new MessagesStubAgentToolSource(
-                    [
-                        new MessagesStubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
-                    ]),
-                ]);
+                static _ => new StaticAgentToolSource([new MessagesStubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent")]));
         });
-        builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
-            new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
-        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
-        builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
 
@@ -735,6 +751,137 @@ public sealed class MainnetMessagesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private sealed class AcceptedOnlyActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class CompletingMessagesCommandFacade(
+        MessagesCommandFacade inner,
+        ILLMProviderFactory providerFactory,
+        IResponsesCompletionApplicationService completionService,
+        ILlmSessionRegistrationPort sessionRegistrationPort) : IMessagesCommandFacade
+    {
+        public async Task<MessagesCreateCommandResult> CreateAsync(
+            MessagesCommandRequest request,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            if (request.Stream == true)
+                return await inner.CreateAsync(request, bearerToken, ct);
+
+            var planRequest = request with { Stream = true };
+            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            if (result.Error is not null || result.StreamPlan is null)
+                return result;
+
+            var plan = result.StreamPlan with
+            {
+                Normalized = result.StreamPlan.Normalized with { Stream = false },
+            };
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.CollectAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return MessagesCreateCommandResult.FromCompleted(
+                    new MessagesCreateCompletedCommandResult(plan.Normalized, snapshot));
+            }
+        }
+
+        public async Task<ResponsesStreamCommandResult> StreamAsync(
+            MessagesCreateCommandPlan plan,
+            Func<string, CancellationToken, ValueTask> onTextDelta,
+            CancellationToken ct = default)
+        {
+            _ = await inner.StreamAsync(plan, onTextDelta, ct);
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.StreamAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    onTextDelta,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesStreamCommandResult.FromCompleted(snapshot);
+            }
+        }
+
+        private async Task RecordCompletionAsync(
+            LlmSessionRegistrationResult session,
+            LlmSessionCompletionSnapshot snapshot,
+            CancellationToken ct)
+        {
+            await sessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                ToCompletion(snapshot),
+                ct);
+        }
+
+        private static LlmSessionCompletionSnapshot BuildCompletionSnapshot(ResponsesCompletionResult completion) =>
+            new(
+                completion.Text,
+                completion.ForwardedToolCalls
+                    .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                        call.Id,
+                        call.Name,
+                        string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson))
+                    .ToArray(),
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                completion.Usage);
+
+        private static LlmSessionCompletion ToCompletion(LlmSessionCompletionSnapshot snapshot)
+        {
+            var completion = new LlmSessionCompletion
+            {
+                OutputText = snapshot.OutputText,
+                CompletedAt = Timestamp.FromDateTimeOffset(snapshot.CompletedAt ?? DateTimeOffset.UtcNow),
+            };
+            if (snapshot.Usage is not null)
+            {
+                completion.Usage = new LlmSessionTokenUsage
+                {
+                    PromptTokens = snapshot.Usage.PromptTokens,
+                    CompletionTokens = snapshot.Usage.CompletionTokens,
+                    TotalTokens = snapshot.Usage.TotalTokens,
+                };
+            }
+
+            foreach (var call in snapshot.ToolCalls)
+            {
+                completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    Result = ResponsesJsonValues.ParseBoundaryPayload(call.ResultJson),
+                });
+            }
+
+            return completion;
+        }
+    }
+
+    private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
+        Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault,
+            },
+        });
 
     private sealed class MessagesRecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
@@ -826,24 +973,24 @@ public sealed class MainnetMessagesEndpointsTests
         Reject = new Reject { Reason = message },
     };
 
-    private static ChatRouteAction ForwardToGAgentToolHint(string actorId)
+    private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
-        var arguments = new Struct();
-        arguments.Fields["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId);
-
-        return new ChatRouteAction
+        ForwardToModel = new ForwardToModel
         {
-            ForwardToModel = new ForwardToModel
+            ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
             {
-                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
-                ToolChoiceHint = new ChatRouteToolChoiceHint
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
                 {
-                    ToolName = "aevatar_invoke_gagent",
-                    PrefilledArguments = arguments,
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
                 },
             },
-        };
-    }
+        },
+    };
 
     private sealed class MessagesRecordingSessionStore :
         ILlmSessionRegistrationPort,
@@ -978,236 +1125,10 @@ public sealed class MainnetMessagesEndpointsTests
             ValueTask.FromResult(_additiveTools);
     }
 
-    private sealed class MessagesRecordingLlmRunDispatchPort(
-        MessagesRecordingLLMProvider provider,
-        MessagesRecordingSessionStore sessions,
-        IEnumerable<IResponsesToolProvider> toolProviders,
-        IToolSetRegistry toolSetRegistry) : IActorDispatchPort
+    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
     {
-        public async Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default)
-        {
-            var command = envelope.Payload.Unpack<LlmRunRequested>();
-            var tools = await BuildEffectiveToolsAsync(command, ct);
-            var outputText = new StringBuilder();
-            TokenUsage? usage = null;
-            var toolCalls = new TestToolCallAccumulator();
-
-            var request = new LLMRequest
-            {
-                Messages = command.Messages.Select(ToChatMessage).ToList(),
-                RequestId = command.ResponseId,
-                Metadata = BuildRequestMetadata(command),
-                CallerContext = new LLMRequestCallerContext(
-                    command.ScopeId,
-                    command.OwnerSubject,
-                    command.ResponseId,
-                    new LLMRequestCallerCredentials(command.BearerToken)),
-                Tools = tools,
-                LlmControl = new LLMControlContext(
-                    NyxIdAccessToken: null,
-                    NyxIdOrgToken: null,
-                    SenderNyxIdAccessToken: null,
-                    ModelOverride: null,
-                    NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference)
-                        ? null
-                        : command.RoutePreference,
-                    MaxToolRoundsOverride: null,
-                    UserMemoryPrompt: null),
-                Model = string.IsNullOrWhiteSpace(command.Model) ? null : command.Model,
-                Temperature = command.HasTemperature ? command.Temperature : null,
-                MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
-            };
-
-            await foreach (var chunk in provider.ChatStreamAsync(request, ct))
-            {
-                var delta = ExtractChunkText(chunk);
-                if (!string.IsNullOrEmpty(delta))
-                    outputText.Append(delta);
-                if (chunk.Usage is not null)
-                    usage = chunk.Usage;
-                if (chunk.DeltaToolCall is not null)
-                    toolCalls.TrackDelta(chunk.DeltaToolCall);
-                if (chunk.IsLast)
-                    break;
-            }
-
-            await sessions.RecordCompletionAsync(
-                actorId,
-                command.ResponseId,
-                BuildCompletion(outputText.ToString(), toolCalls.BuildToolCalls(), usage),
-                ct);
-            return DispatchAdmissionFactory.Create(actorId, envelope);
-        }
-
-        private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
-            LlmRunRequested command,
-            CancellationToken ct)
-        {
-            var context = new ResponsesToolProviderContext(
-                new ResponsesToolProviderCallerScope(command.ScopeId, command.OwnerSubject, LlmSessionOriginKind.ApiKey.ToString()),
-                BuildRequestMetadata(command));
-            var providers = toolProviders.ToArray();
-            var substituteTools = new List<IAgentTool>();
-            var additiveTools = new List<IAgentTool>();
-            foreach (var toolProvider in providers)
-            {
-                substituteTools.AddRange(await toolProvider.GetSubstituteToolsAsync(context, ct));
-                additiveTools.AddRange(await toolProvider.GetAdditiveToolsAsync(context, ct));
-            }
-            var toolSet = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
-            if (toolSet.IsSuccess)
-            {
-                foreach (var source in toolSet.Sources)
-                    additiveTools.AddRange(await source.DiscoverToolsAsync(ct));
-            }
-
-            var substitutedNames = command.ToolSelection?.SubstitutedToolNames.ToHashSet(StringComparer.Ordinal)
-                ?? [];
-            var substitutesByName = substituteTools
-                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-                .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-            var effective = new List<IAgentTool>();
-            foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
-            {
-                if (substitutedNames.Contains(declaration.ToolName) &&
-                    substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
-                {
-                    effective.Add(substitute);
-                    continue;
-                }
-
-                effective.Add(new MessagesForwardedTestAgentTool(declaration));
-            }
-
-            var names = effective.Select(static tool => tool.Name).ToHashSet(StringComparer.Ordinal);
-            var additiveNames = command.ToolSelection?.AdditiveToolNames.ToHashSet(StringComparer.Ordinal)
-                ?? [];
-            foreach (var additive in additiveTools)
-            {
-                if (additiveNames.Contains(additive.Name) && names.Add(additive.Name))
-                    effective.Add(additive);
-            }
-
-            return effective;
-        }
-
-        private static Dictionary<string, string> BuildRequestMetadata(LlmRunRequested command) =>
-            new(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-                ["scope_id"] = command.ScopeId,
-            };
-
-        private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
-            new()
-            {
-                Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
-                Content = message.Content,
-                ReasoningContent = string.IsNullOrWhiteSpace(message.ReasoningContent) ? null : message.ReasoningContent,
-                ToolCallId = string.IsNullOrWhiteSpace(message.ToolCallId) ? null : message.ToolCallId,
-                ToolCalls = message.ToolCalls.Count == 0
-                    ? null
-                    : message.ToolCalls.Select(static call => new ToolCall
-                    {
-                        Id = call.CallId,
-                        Name = call.ToolName,
-                        ArgumentsJson = call.ArgumentsJson,
-                    }).ToArray(),
-            };
-
-        private static string? ExtractChunkText(LLMStreamChunk chunk)
-        {
-            if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
-                return chunk.DeltaContent;
-            return chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part
-                ? part.Text
-                : null;
-        }
-
-        private static LlmSessionCompletion BuildCompletion(
-            string outputText,
-            IReadOnlyList<ToolCall> toolCalls,
-            TokenUsage? usage)
-        {
-            var completion = new LlmSessionCompletion
-            {
-                OutputText = outputText,
-                CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            };
-            if (usage is not null)
-            {
-                completion.Usage = new LlmSessionTokenUsage
-                {
-                    PromptTokens = usage.PromptTokens,
-                    CompletionTokens = usage.CompletionTokens,
-                    TotalTokens = usage.TotalTokens,
-                };
-            }
-
-            completion.ToolCalls.AddRange(toolCalls.Select(static call => new LlmSessionCompletedToolCall
-            {
-                CallId = call.Id,
-                ToolName = call.Name,
-                Result = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson),
-            }));
-            return completion;
-        }
-
-        private sealed class TestToolCallAccumulator
-        {
-            private readonly Dictionary<string, (string Name, StringBuilder Arguments)> _calls = new(StringComparer.Ordinal);
-            private readonly List<string> _order = [];
-            private int _anonymousCounter;
-
-            public void TrackDelta(ToolCall delta)
-            {
-                var id = string.IsNullOrWhiteSpace(delta.Id)
-                    ? $"anonymous-{_anonymousCounter++}"
-                    : delta.Id;
-                if (!_calls.TryGetValue(id, out var current))
-                {
-                    current = (delta.Name, new StringBuilder());
-                    _calls[id] = current;
-                    _order.Add(id);
-                }
-
-                if (!string.IsNullOrWhiteSpace(delta.Name))
-                    current.Name = delta.Name;
-                if (!string.IsNullOrEmpty(delta.ArgumentsJson))
-                    current.Arguments.Append(delta.ArgumentsJson);
-                _calls[id] = current;
-            }
-
-            public IReadOnlyList<ToolCall> BuildToolCalls() =>
-                _order.Select(id =>
-                {
-                    var current = _calls[id];
-                    return new ToolCall
-                    {
-                        Id = id,
-                        Name = current.Name,
-                        ArgumentsJson = current.Arguments.ToString(),
-                    };
-                }).ToArray();
-        }
-
-        private sealed class MessagesForwardedTestAgentTool(LlmSessionRuntimeToolDeclaration declaration) : IAgentTool
-        {
-            public string Name { get; } = declaration.ToolName;
-
-            public string Description { get; } = declaration.Description;
-
-            public string ParametersSchema { get; } = declaration.ParametersJson;
-
-            public bool IsReadOnly => true;
-
-            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-                throw new InvalidOperationException("Forwarded test tool must not execute locally.");
-        }
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
     }
 
     private sealed class MessagesStubAgentTool : IAgentTool
@@ -1228,11 +1149,5 @@ public sealed class MainnetMessagesEndpointsTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
-    }
-
-    private sealed class MessagesStubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
-    {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
-            Task.FromResult(tools);
     }
 }

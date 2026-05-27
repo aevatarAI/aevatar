@@ -24,14 +24,14 @@ public sealed class UserConfigServiceTests
         var commandService = new RecordingUserConfigCommandService();
         var service = CreateService(commandService: commandService);
 
-        var result = await service.SaveAsync(
+        var receipt = await service.SaveAsync(
             "bearer",
             new SaveUserConfigCommand(DefaultModel: "chrono-llm/gpt-5.5"));
 
-        result.Accepted.Should().BeTrue();
-        var saved = commandService.Saved.Should().ContainSingle().Subject;
-        saved.DefaultModel.Should().Be("gpt-5.5");
-        saved.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
+        receipt.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.DefaultModel == "gpt-5.5" &&
+            config.PreferredLlmRoute == "/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
@@ -40,14 +40,13 @@ public sealed class UserConfigServiceTests
         var commandService = new RecordingUserConfigCommandService();
         var service = CreateService(commandService: commandService);
 
-        var result = await service.SaveAsync(
+        await service.SaveAsync(
             "bearer",
             new SaveUserConfigCommand(DefaultModel: "openai/gpt-5"));
 
-        result.Accepted.Should().BeTrue();
-        var saved = commandService.Saved.Should().ContainSingle().Subject;
-        saved.DefaultModel.Should().Be("openai/gpt-5");
-        saved.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.DefaultModel == "openai/gpt-5" &&
+            config.PreferredLlmRoute == UserConfigLlmRouteDefaults.Gateway);
     }
 
     [Fact]
@@ -56,27 +55,26 @@ public sealed class UserConfigServiceTests
         var commandService = new RecordingUserConfigCommandService();
         var service = CreateService(commandService: commandService);
 
-        var result = await service.SaveAsync(new SaveUserConfigCommand(
+        await service.SaveAsync(new SaveUserConfigCommand(
             DefaultModel: "chrono-llm/gpt-5.5"));
 
-        result.Accepted.Should().BeTrue();
-        var saved = commandService.Saved.Should().ContainSingle().Subject;
-        saved.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
-        saved.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.DefaultModel == "chrono-llm/gpt-5.5" &&
+            config.PreferredLlmRoute == UserConfigLlmRouteDefaults.Gateway);
     }
 
     [Fact]
-    public async Task GetOptionsAsync_ShouldResolveLegacyPrefixedCurrentModelThroughCatalog()
+    public async Task GetSettingsAsync_ShouldResolveLegacyPrefixedCurrentModelThroughCatalog()
     {
         var queryPort = new StubUserConfigQueryPort(new UserConfig(DefaultModel: "chrono-llm/gpt-5.5"));
         var catalogPort = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([ChronoLlm], null));
         var service = new UserLlmPreferenceService(queryPort, catalogPort);
 
-        var result = await service.GetOptionsAsync("bearer", CancellationToken.None);
+        var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.Current.Should().NotBeNull();
-        result.Current!.RouteValue.Should().Be(ChronoLlm.RouteValue);
-        result.Current.DefaultModel.Should().Be("gpt-5.5");
+        result.SavedRoute.Should().Be(ChronoLlm.RouteValue);
+        result.EffectiveRoute.Should().Be(ChronoLlm.RouteValue);
+        result.DefaultModel.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -85,14 +83,14 @@ public sealed class UserConfigServiceTests
         var commandService = new RecordingUserConfigCommandService();
         var service = CreateService(commandService: commandService);
 
-        var result = await service.SaveLlmPreferenceAsync(
+        var receipt = await service.SaveLlmPreferenceAsync(
             "bearer",
             new SaveUserLlmPreferenceCommand(Model: "chrono-llm/gpt-5.5"));
 
-        result.Accepted.Should().BeTrue();
-        var saved = commandService.Saved.Should().ContainSingle().Subject;
-        saved.DefaultModel.Should().Be("gpt-5.5");
-        saved.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        receipt.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.DefaultModel == "gpt-5.5" &&
+            config.PreferredLlmRoute == ChronoLlm.RouteValue);
     }
 
     [Fact]
@@ -114,14 +112,57 @@ public sealed class UserConfigServiceTests
         var commandService = new RecordingUserConfigCommandService();
         var service = CreateService(commandService: commandService);
 
-        var result = await service.SaveLlmPreferenceAsync(
+        await service.SaveLlmPreferenceAsync(
             "bearer",
             new SaveUserLlmPreferenceCommand(ServiceId: "chrono-llm", Model: "chrono-llm/gpt-5.5"));
 
-        result.Accepted.Should().BeTrue();
-        var saved = commandService.Saved.Should().ContainSingle().Subject;
-        saved.DefaultModel.Should().Be("gpt-5.5");
-        saved.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.DefaultModel == "gpt-5.5" &&
+            config.PreferredLlmRoute == ChronoLlm.RouteValue);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("cloud")]
+    public async Task SaveAsync_ShouldRejectInvalidRuntimeMode(string runtimeMode)
+    {
+        var service = CreateService();
+
+        var act = async () => await service.SaveAsync(new SaveUserConfigCommand(RuntimeMode: runtimeMode));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Runtime mode must be 'local' or 'remote'.");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("/relative")]
+    [InlineData("ftp://runtime.example.com")]
+    public async Task SaveAsync_ShouldRejectInvalidRuntimeUrl(string url)
+    {
+        var service = CreateService();
+
+        var act = async () => await service.SaveAsync(new SaveUserConfigCommand(LocalRuntimeBaseUrl: url));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("LocalRuntimeBaseUrl must be an absolute http(s) URL.");
+    }
+
+    [Fact]
+    public async Task SaveAsync_ShouldNormalizeRuntimeWriteFields()
+    {
+        var commandService = new RecordingUserConfigCommandService();
+        var service = CreateService(commandService: commandService);
+
+        await service.SaveAsync(new SaveUserConfigCommand(
+            RuntimeMode: " REMOTE ",
+            LocalRuntimeBaseUrl: " http://127.0.0.1:5080/ ",
+            RemoteRuntimeBaseUrl: " https://runtime.example.com/ "));
+
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.RuntimeMode == UserConfigRuntimeDefaults.RemoteMode &&
+            config.LocalRuntimeBaseUrl == "http://127.0.0.1:5080" &&
+            config.RemoteRuntimeBaseUrl == "https://runtime.example.com");
     }
 
     private static UserConfigService CreateService(

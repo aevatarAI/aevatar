@@ -934,9 +934,49 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         {
             WorkflowName = "wf-report",
             CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal,
+            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
+            TopologySource = (WorkflowExecutionTopologySource)999,
             Success = true,
             FinalOutput = "done",
             FinalError = "ignored",
+            Steps =
+            [
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "step-1",
+                    RequestedAt = new DateTimeOffset(2026, 3, 18, 7, 59, 0, TimeSpan.Zero),
+                    CompletedAt = new DateTimeOffset(2026, 3, 18, 8, 0, 0, TimeSpan.Zero),
+                    SuspensionTimeoutSeconds = 30,
+                },
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "step-2",
+                },
+            ],
+            RoleReplies =
+            [
+                new WorkflowExecutionRoleReply
+                {
+                    Timestamp = new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero),
+                    RoleId = "assistant",
+                },
+                new WorkflowExecutionRoleReply
+                {
+                    RoleId = "system",
+                },
+            ],
+            Timeline =
+            [
+                new WorkflowExecutionTimelineEvent
+                {
+                    Timestamp = new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero),
+                    Stage = "started",
+                },
+                new WorkflowExecutionTimelineEvent
+                {
+                    Stage = "finished",
+                },
+            ],
             Summary = new WorkflowExecutionSummary
             {
                 TotalSteps = 3,
@@ -1012,6 +1052,30 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         subgraph.RootNodeId.Should().Be("node-1");
         subgraph.Nodes.Should().ContainSingle();
         subgraph.Edges.Should().ContainSingle();
+
+        var mappedReport = mapper.ToRunReport(report);
+        mappedReport.ProjectionScope.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunProjectionScope.RunIsolated);
+        mappedReport.TopologySource.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunTopologySource.Unknown);
+        mappedReport.Steps.Should().HaveCount(2);
+        mappedReport.Steps[0].RequestedAt.Should().NotBeNull();
+        mappedReport.Steps[0].CompletedAt.Should().NotBeNull();
+        mappedReport.Steps[0].SuspensionTimeoutSeconds.Should().Be(30);
+        mappedReport.Steps[1].RequestedAt.Should().BeNull();
+        mappedReport.Steps[1].CompletedAt.Should().BeNull();
+        mappedReport.Steps[1].SuspensionTimeoutSeconds.Should().BeNull();
+        mappedReport.RoleReplies[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero));
+        mappedReport.RoleReplies[1].Timestamp.Should().Be(default);
+        mappedReport.Timeline[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero));
+        mappedReport.Timeline[1].Timestamp.Should().Be(default);
+        mapper.ToRunReport(new WorkflowRunInsightReportDocument
+        {
+            ProjectionScope = (WorkflowExecutionProjectionScope)999,
+            TopologySource = WorkflowExecutionTopologySource.CommittedProjection,
+            SummaryValue = null,
+        }).Should().Match<Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunReport>(mapped =>
+            mapped.ProjectionScope == Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunProjectionScope.Unknown &&
+            mapped.TopologySource == Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunTopologySource.CommittedProjection &&
+            mapped.Summary.TotalSteps == 0);
     }
 
     public static IEnumerable<object?[]> CurrentStateStatusCases()

@@ -162,7 +162,5 @@ public interface IUserLlmCatalogPort
 
 public interface IUserLlmPreferenceService
 {
-    Task<UserLlmOptionsView> GetOptionsAsync(string? bearerToken, CancellationToken ct);
-
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
 }
