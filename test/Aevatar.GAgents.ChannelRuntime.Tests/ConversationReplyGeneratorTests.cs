@@ -290,7 +290,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithToolCallPreamble_StreamsCumulativeAssistantText()
+    public async Task GenerateReplyAsync_WithToolCallPreamble_DoesNotStreamProcessNarration()
     {
         var providerFactory = new ToolCallingPreambleProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -314,9 +314,9 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Be("最终日报");
-        sink.Emissions.Should().Equal(
-            "…",
-            "最终日报");
+        sink.Emissions.Should().Equal("…", "最终日报");
+        sink.Emissions.Should().NotContain(text => text.Contains("开始执行", StringComparison.Ordinal));
+        sink.Emissions.Should().NotContain(text => text.Contains("先查目录", StringComparison.Ordinal));
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Any(message =>
             message.Role == "assistant" &&

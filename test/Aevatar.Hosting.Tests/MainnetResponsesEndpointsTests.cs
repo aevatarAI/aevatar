@@ -162,7 +162,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_item.added");
         body.Should().Contain("\"type\":\"response.output_text.delta\"");
-        body.Should().Contain("\"delta\":\"pong\"");
+        body.Should().Contain("\"delta\":\"po\"");
+        body.Should().Contain("\"delta\":\"ng\"");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("event: response.output_item.done");
         body.Should().Contain("event: response.completed");
@@ -1312,17 +1313,8 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
-        builder.Services.AddSingleton<IActorDispatchPort>(sp => new ResponsesRecordingLlmRunDispatchPort(
-            provider,
-            sessions,
-            sp.GetServices<IResponsesToolProvider>(),
-            sp.GetService<IToolSetRegistry>(),
-            sp.GetService<IChatRoutePolicyQueryPort>(),
-            sp.GetService<ChatRouteResolver>()));
-        builder.Services.AddSingleton<ResponsesCommandFacade>();
-        builder.Services.AddSingleton<IResponsesCommandFacade>(sp => new RecordingResponsesCommandFacade(
-            sp.GetRequiredService<ResponsesCommandFacade>(),
-            sessions));
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
@@ -1405,18 +1397,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
-        builder.Services.AddSingleton<IActorDispatchPort>(sp => new ResponsesRecordingLlmRunDispatchPort(
-            provider,
-            sessions,
-            sp.GetServices<IResponsesToolProvider>(),
-            sp.GetService<IToolSetRegistry>(),
-            sp.GetService<IChatRoutePolicyQueryPort>(),
-            sp.GetService<ChatRouteResolver>()));
         builder.Services.AddSingleton<ResponsesCommandFacade>();
-        builder.Services.AddSingleton<IResponsesCommandFacade>(sp => new RecordingResponsesCommandFacade(
-            sp.GetRequiredService<ResponsesCommandFacade>(),
-            sessions));
+        builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
@@ -2415,18 +2399,10 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(responseSessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
-        builder.Services.AddSingleton<IActorDispatchPort>(sp => new ResponsesRecordingLlmRunDispatchPort(
-            provider,
-            responseSessions,
-            sp.GetServices<IResponsesToolProvider>(),
-            sp.GetService<IToolSetRegistry>(),
-            sp.GetService<IChatRoutePolicyQueryPort>(),
-            sp.GetService<ChatRouteResolver>()));
         builder.Services.AddSingleton<ResponsesCommandFacade>();
-        builder.Services.AddSingleton<IResponsesCommandFacade>(sp => new RecordingResponsesCommandFacade(
-            sp.GetRequiredService<ResponsesCommandFacade>(),
-            responseSessions));
+        builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
@@ -2472,6 +2448,188 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private sealed class AcceptedOnlyActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class CompletingResponsesCommandFacade(
+        ResponsesCommandFacade inner,
+        ILLMProviderFactory providerFactory,
+        IResponsesCompletionApplicationService completionService,
+        ILlmSessionRegistrationPort sessionRegistrationPort) : IResponsesCommandFacade
+    {
+        public async Task<ResponsesCreateCommandResult> CreateAsync(
+            ResponsesCommandRequest request,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            if (request.Stream == true)
+                return await inner.CreateAsync(request, bearerToken, ct);
+
+            var planRequest = request with { Stream = true };
+            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            if (result.Error is not null || result.StreamPlan is null)
+                return result;
+
+            var plan = result.StreamPlan with
+            {
+                Normalized = result.StreamPlan.Normalized with { Stream = false },
+            };
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.CollectAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordForwardedToolCallsAsync(plan, completion, ct);
+                await ResolveIncomingToolResultsAsync(plan, ct);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesCreateCommandResult.FromCompleted(
+                    new ResponsesCreateCompletedCommandResult(
+                        plan.Normalized,
+                        plan.CreatedAt.ToUnixTimeSeconds(),
+                        snapshot));
+            }
+        }
+
+        public Task<ResponsesCancelCommandResult> CancelAsync(
+            string responseId,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            inner.CancelAsync(responseId, bearerToken, ct);
+
+        public async Task<ResponsesStreamCommandResult> StreamAsync(
+            ResponsesCreateCommandPlan plan,
+            Func<string, CancellationToken, ValueTask> onTextDelta,
+            CancellationToken ct = default)
+        {
+            _ = await inner.StreamAsync(plan, onTextDelta, ct);
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.StreamAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    onTextDelta,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordForwardedToolCallsAsync(plan, completion, ct);
+                await ResolveIncomingToolResultsAsync(plan, ct);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesStreamCommandResult.FromCompleted(snapshot);
+            }
+        }
+
+        private async Task RecordForwardedToolCallsAsync(
+            ResponsesCreateCommandPlan plan,
+            ResponsesCompletionResult completion,
+            CancellationToken ct)
+        {
+            foreach (var toolCall in completion.ForwardedToolCalls)
+            {
+                var declaration = plan.ToolClassification.ForwardedTools
+                    .FirstOrDefault(tool => string.Equals(tool.Name, toolCall.Name, StringComparison.Ordinal));
+                await sessionRegistrationPort.RecordForwardedToolCallAsync(
+                    plan.Session.ActorId,
+                    plan.Session.ResponseId,
+                    new LlmSessionForwardedToolCall
+                    {
+                        CallId = toolCall.Id,
+                        ToolName = toolCall.Name,
+                        SchemaHash = declaration?.SchemaHash ?? string.Empty,
+                        Arguments = ResponsesJsonValues.ParseBoundaryPayload(
+                            string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+                        Status = LlmSessionForwardedToolCallStatus.Pending,
+                        EmittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        Expiry = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(24)),
+                    },
+                    ct);
+            }
+        }
+
+        private async Task ResolveIncomingToolResultsAsync(
+            ResponsesCreateCommandPlan plan,
+            CancellationToken ct)
+        {
+            if (plan.PreviousSnapshot is null || plan.Normalized.ToolResults.Count == 0)
+                return;
+
+            foreach (var callId in plan.Normalized.ToolResults
+                         .Select(static result => result.CallId)
+                         .Where(static callId => !string.IsNullOrWhiteSpace(callId))
+                         .Distinct(StringComparer.Ordinal))
+            {
+                await sessionRegistrationPort.ResolveForwardedToolResultAsync(
+                    plan.PreviousSnapshot.ActorId,
+                    plan.PreviousSnapshot.ResponseId,
+                    callId,
+                    ct);
+            }
+        }
+
+        private async Task RecordCompletionAsync(
+            LlmSessionRegistrationResult session,
+            LlmSessionCompletionSnapshot snapshot,
+            CancellationToken ct)
+        {
+            await sessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                ToCompletion(snapshot),
+                ct);
+        }
+    }
+
+    private static LlmSessionCompletionSnapshot BuildCompletionSnapshot(ResponsesCompletionResult completion) =>
+        new(
+            completion.Text,
+            completion.ForwardedToolCalls
+                .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                    call.Id,
+                    call.Name,
+                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson))
+                .ToArray(),
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            completion.Usage);
+
+    private static LlmSessionCompletion ToCompletion(LlmSessionCompletionSnapshot snapshot)
+    {
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = snapshot.OutputText,
+            CompletedAt = Timestamp.FromDateTimeOffset(snapshot.CompletedAt ?? DateTimeOffset.UtcNow),
+        };
+        if (snapshot.Usage is not null)
+        {
+            completion.Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = snapshot.Usage.PromptTokens,
+                CompletionTokens = snapshot.Usage.CompletionTokens,
+                TotalTokens = snapshot.Usage.TotalTokens,
+            };
+        }
+
+        foreach (var call in snapshot.ToolCalls)
+        {
+            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(call.ResultJson),
+            });
+        }
+
+        return completion;
+    }
 
     private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
         Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
@@ -2704,551 +2862,6 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesToolProviderContext context,
             CancellationToken ct = default) =>
             ValueTask.FromResult(_additiveTools);
-    }
-
-    // Sync (PR #1106): host endpoint tests still assert the observed completion shape.
-    private sealed class RecordingResponsesCommandFacade(
-        ResponsesCommandFacade inner,
-        RecordingResponseSessionStore sessions) : IResponsesCommandFacade
-    {
-        public async Task<ResponsesCreateCommandResult> CreateAsync(
-            ResponsesCommandRequest request,
-            string bearerToken,
-            CancellationToken ct = default)
-        {
-            var result = await inner.CreateAsync(request, bearerToken, ct);
-            if (result.Accepted is null)
-                return result;
-
-            var snapshot = await sessions.GetByResponseIdAsync(result.Accepted.Session.ResponseId, ct);
-            return snapshot?.Completion is null
-                ? result
-                : ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
-                    result.Accepted.Normalized,
-                    result.Accepted.CreatedAt,
-                    snapshot.Completion));
-        }
-
-        public Task<ResponsesCancelCommandResult> CancelAsync(
-            string responseId,
-            string bearerToken,
-            CancellationToken ct = default) =>
-            inner.CancelAsync(responseId, bearerToken, ct);
-
-        public async Task<ResponsesStreamCommandResult> StreamAsync(
-            ResponsesCreateCommandPlan plan,
-            Func<string, CancellationToken, ValueTask> onTextDelta,
-            CancellationToken ct = default)
-        {
-            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
-            {
-                var result = await inner.StreamAsync(plan, onTextDelta, ct);
-                if (result.Accepted is null)
-                    return result;
-
-                var snapshot = await sessions.GetByResponseIdAsync(plan.Session.ResponseId, ct);
-                if (snapshot?.Completion is null)
-                    return result;
-
-                if (!string.IsNullOrEmpty(snapshot.Completion.OutputText))
-                    await onTextDelta(snapshot.Completion.OutputText, ct);
-                return ResponsesStreamCommandResult.FromCompleted(snapshot.Completion);
-            }
-        }
-    }
-
-    // Sync (PR #1106): add IActorDispatchPort fake for ResponsesCommandFacade DI.
-    private sealed class ResponsesRecordingLlmRunDispatchPort(
-        RecordingLLMProvider provider,
-        RecordingResponseSessionStore sessions,
-        IEnumerable<IResponsesToolProvider> toolProviders,
-        IToolSetRegistry? toolSetRegistry = null,
-        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        ChatRouteResolver? chatRouteResolver = null) : IActorDispatchPort
-    {
-        private static readonly TimeSpan DefaultToolCallTtl = TimeSpan.FromHours(1);
-
-        public async Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default)
-        {
-            var command = envelope.Payload.Unpack<LlmRunRequested>();
-            var contextMetadata = BuildRequestMetadata(command);
-            var classification = await BuildToolClassificationAsync(command, contextMetadata, ct);
-            var messages = command.Messages.Select(ToChatMessage).ToList();
-            var outputText = new StringBuilder();
-            TokenUsage? usage = null;
-
-            for (var round = 0; round < 8; round++)
-            {
-                var request = BuildRequest(command, messages, classification.EffectiveTools);
-                var toolCalls = new TestToolCallAccumulator();
-                await foreach (var chunk in provider.ChatStreamAsync(request, ct))
-                {
-                    var delta = ExtractChunkText(chunk);
-                    if (!string.IsNullOrEmpty(delta))
-                        outputText.Append(delta);
-                    if (chunk.Usage is not null)
-                        usage = chunk.Usage;
-                    if (chunk.DeltaToolCall is not null)
-                        toolCalls.TrackDelta(chunk.DeltaToolCall);
-                    if (chunk.IsLast)
-                        break;
-                }
-
-                var builtToolCalls = await ApplyToolChoiceHintAsync(
-                    toolCalls.BuildToolCalls(),
-                    command,
-                    ct);
-                var forwardedToolCalls = SelectForwardedToolCalls(builtToolCalls, classification);
-                if (forwardedToolCalls.Count > 0)
-                {
-                    foreach (var toolCall in forwardedToolCalls)
-                    {
-                        await sessions.RecordForwardedToolCallAsync(
-                            actorId,
-                            command.ResponseId,
-                            BuildForwardedToolCall(toolCall, command.ToolSelection),
-                            ct);
-                    }
-
-                    await sessions.RecordCompletionAsync(
-                        actorId,
-                        command.ResponseId,
-                        BuildCompletion(outputText.ToString(), forwardedToolCalls, usage),
-                        ct);
-                    return DispatchAdmissionFactory.Create(actorId, envelope);
-                }
-
-                var localToolCalls = SelectLocalToolCalls(builtToolCalls, classification);
-                if (localToolCalls.Count == 0)
-                {
-                    await sessions.RecordCompletionAsync(
-                        actorId,
-                        command.ResponseId,
-                        BuildCompletion(outputText.ToString(), [], usage),
-                        ct);
-                    return DispatchAdmissionFactory.Create(actorId, envelope);
-                }
-
-                messages.Add(new ChatMessage
-                {
-                    Role = "assistant",
-                    ToolCalls = localToolCalls,
-                });
-                await ExecuteLocalToolCallsAsync(localToolCalls, classification.EffectiveTools, messages, ct);
-            }
-
-            await sessions.RecordCompletionAsync(
-                actorId,
-                command.ResponseId,
-                BuildCompletion(outputText.ToString(), [], usage),
-                ct);
-            return DispatchAdmissionFactory.Create(actorId, envelope);
-        }
-
-        private async Task<ResponsesToolClassification> BuildToolClassificationAsync(
-            LlmRunRequested command,
-            IReadOnlyDictionary<string, string> contextMetadata,
-            CancellationToken ct)
-        {
-            var context = new ResponsesToolProviderContext(
-                new ResponsesToolProviderCallerScope(command.ScopeId, command.OwnerSubject, LlmSessionOriginKind.ApiKey.ToString()),
-                contextMetadata);
-            var substituteTools = new List<IAgentTool>();
-            var additiveTools = new List<IAgentTool>();
-            foreach (var toolProvider in toolProviders.ToArray())
-            {
-                substituteTools.AddRange(await toolProvider.GetSubstituteToolsAsync(context, ct));
-                additiveTools.AddRange(await toolProvider.GetAdditiveToolsAsync(context, ct));
-            }
-            if (toolSetRegistry is not null)
-            {
-                var toolSet = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
-                if (toolSet.IsSuccess)
-                {
-                    foreach (var source in toolSet.Sources)
-                        additiveTools.AddRange(await source.DiscoverToolsAsync(ct));
-                }
-            }
-
-            var substitutedNames = command.ToolSelection?.SubstitutedToolNames.ToHashSet(StringComparer.Ordinal)
-                ?? [];
-            var additiveNames = command.ToolSelection?.AdditiveToolNames.ToHashSet(StringComparer.Ordinal)
-                ?? [];
-            var substitutesByName = substituteTools
-                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-                .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-            var effective = new List<IAgentTool>();
-            foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
-            {
-                if (substitutedNames.Contains(declaration.ToolName) &&
-                    substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
-                    effective.Add(substitute);
-                else
-                    effective.Add(new ResponsesForwardedTestAgentTool(declaration));
-            }
-
-            var effectiveNames = new HashSet<string>(effective.Select(static tool => tool.Name), StringComparer.Ordinal);
-            foreach (var substitutedName in substitutedNames)
-            {
-                if (effectiveNames.Contains(substitutedName))
-                    continue;
-                if (substitutesByName.TryGetValue(substitutedName, out var substitute) &&
-                    effectiveNames.Add(substitute.Name))
-                {
-                    effective.Add(substitute);
-                }
-            }
-
-            foreach (var additive in additiveTools)
-            {
-                if (additiveNames.Contains(additive.Name) && effectiveNames.Add(additive.Name))
-                    effective.Add(additive);
-            }
-
-            var forwardedTools = (command.ToolSelection?.ForwardedTools ?? [])
-                .Select(static tool => new ResponsesApplicationToolDeclaration(
-                    tool.ToolName,
-                    tool.Description,
-                    tool.ParametersJson,
-                    tool.SchemaHash))
-                .ToArray();
-            return new ResponsesToolClassification(
-                forwardedTools,
-                effective,
-                [.. substitutedNames],
-                [.. additiveNames]);
-        }
-
-        private static LLMRequest BuildRequest(
-            LlmRunRequested command,
-            IReadOnlyList<ChatMessage> messages,
-            IReadOnlyList<IAgentTool> tools) =>
-            new()
-            {
-                Messages = [.. messages],
-                RequestId = command.ResponseId,
-                Metadata = BuildProviderMetadata(command),
-                CallerContext = new LLMRequestCallerContext(
-                    command.ScopeId,
-                    command.OwnerSubject,
-                    command.ResponseId,
-                    new LLMRequestCallerCredentials(command.BearerToken)),
-                Tools = tools,
-                LlmControl = new LLMControlContext(
-                    NyxIdAccessToken: null,
-                    NyxIdOrgToken: null,
-                    SenderNyxIdAccessToken: null,
-                    ModelOverride: null,
-                    NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference)
-                        ? null
-                        : command.RoutePreference,
-                    MaxToolRoundsOverride: null,
-                    UserMemoryPrompt: null),
-                Model = string.IsNullOrWhiteSpace(command.Model) ? null : command.Model,
-                Temperature = command.HasTemperature ? command.Temperature : null,
-                MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
-            };
-
-        private static async Task ExecuteLocalToolCallsAsync(
-            IReadOnlyList<ToolCall> localToolCalls,
-            IReadOnlyList<IAgentTool> tools,
-            List<ChatMessage> messages,
-            CancellationToken ct)
-        {
-            var toolsByName = tools
-                .Where(static tool => tool is not ResponsesForwardedTestAgentTool)
-                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-                .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-
-            foreach (var toolCall in localToolCalls)
-            {
-                var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
-                var result = ResponsesToolChoiceHintPlan.IsStructuredErrorArguments(argumentsJson)
-                    ? argumentsJson
-                    : toolsByName.TryGetValue(toolCall.Name, out var tool)
-                    ? await tool.ExecuteAsync(
-                        argumentsJson,
-                        ct)
-                    : JsonSerializer.Serialize(new
-                    {
-                        error = "aevatar_substitute_tool_not_registered",
-                        tool_name = toolCall.Name,
-                    });
-                messages.Add(ChatMessage.Tool(toolCall.Id, result));
-            }
-        }
-
-        private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(
-            IReadOnlyList<ToolCall> toolCalls,
-            ResponsesToolClassification classification)
-        {
-            if (toolCalls.Count == 0 || classification.ForwardedTools.Count == 0)
-                return [];
-
-            var forwardedToolNames = classification.ForwardedTools
-                .Select(static tool => tool.Name)
-                .Except(classification.SubstitutedToolNames, StringComparer.Ordinal)
-                .ToHashSet(StringComparer.Ordinal);
-            return toolCalls
-                .Where(call => forwardedToolNames.Contains(call.Name))
-                .ToArray();
-        }
-
-        private async Task<IReadOnlyList<ToolCall>> ApplyToolChoiceHintAsync(
-            IReadOnlyList<ToolCall> toolCalls,
-            LlmRunRequested command,
-            CancellationToken ct)
-        {
-            if (toolCalls.Count == 0 || chatRoutePolicyQueryPort is null || chatRouteResolver is null)
-                return toolCalls;
-
-            var ownerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
-            var snapshot = await chatRoutePolicyQueryPort.LookupForCallerAsync(ownerScope, ct);
-            var decision = chatRouteResolver.Resolve(snapshot, new ChatRouteInput
-            {
-                SourceKind = ChatSourceKind.NyxResponses,
-                CallerScope = ownerScope.Clone(),
-                Channel = string.Empty,
-                CommandName = string.Empty,
-                ContentHint = string.Empty,
-                ToolMode = command.ToolSelection?.ForwardedTools.Count > 0 ? ToolMode.Declared : ToolMode.None,
-                Model = command.Model,
-            });
-            var hint = decision.Action?.ForwardToModel?.ToolChoiceHint;
-            if (hint is null)
-                return toolCalls;
-
-            var plan = ResponsesToolChoiceHints.Create(hint.ToolName, hint.PrefilledArguments);
-            return toolCalls.Select(plan.Apply).ToArray();
-        }
-
-        private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
-            IReadOnlyList<ToolCall> toolCalls,
-            ResponsesToolClassification classification)
-        {
-            if (toolCalls.Count == 0 || classification.EffectiveTools.Count == 0)
-                return [];
-
-            var forwardedNames = classification.ForwardedTools
-                .Select(static tool => tool.Name)
-                .Except(classification.SubstitutedToolNames, StringComparer.Ordinal)
-                .ToHashSet(StringComparer.Ordinal);
-            var localNames = classification.EffectiveTools
-                .Where(static tool => tool is not ResponsesForwardedTestAgentTool)
-                .Select(static tool => tool.Name)
-                .Where(name => !forwardedNames.Contains(name))
-                .ToHashSet(StringComparer.Ordinal);
-            return toolCalls
-                .Where(call => localNames.Contains(call.Name))
-                .ToArray();
-        }
-
-        private static LlmSessionForwardedToolCall BuildForwardedToolCall(
-            ToolCall toolCall,
-            LlmSessionRuntimeToolSelection? selection)
-        {
-            var declaration = selection?.ForwardedTools
-                .FirstOrDefault(tool => string.Equals(tool.ToolName, toolCall.Name, StringComparison.Ordinal));
-            return new LlmSessionForwardedToolCall
-            {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                SchemaHash = declaration?.SchemaHash ?? string.Empty,
-                Arguments = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
-                Status = LlmSessionForwardedToolCallStatus.Pending,
-                EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                Expiry = Timestamp.FromDateTime(DateTime.UtcNow.Add(DefaultToolCallTtl)),
-            };
-        }
-
-        private static Dictionary<string, string> BuildRequestMetadata(LlmRunRequested command) =>
-            new(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-                [LLMRequestMetadataKeys.ResponseId] = command.ResponseId,
-                [LLMRequestMetadataKeys.ScopeId] = command.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = command.OwnerSubject,
-                ["scope_id"] = command.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = command.BearerToken,
-            };
-
-        private static Dictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>
-            new(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-                ["scope_id"] = command.ScopeId,
-            };
-
-        private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
-            new()
-            {
-                Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
-                Content = message.Content,
-                ReasoningContent = string.IsNullOrWhiteSpace(message.ReasoningContent) ? null : message.ReasoningContent,
-                ToolCallId = string.IsNullOrWhiteSpace(message.ToolCallId) ? null : message.ToolCallId,
-                ToolCalls = message.ToolCalls.Count == 0
-                    ? null
-                    : message.ToolCalls.Select(static call => new ToolCall
-                    {
-                        Id = call.CallId,
-                        Name = call.ToolName,
-                        ArgumentsJson = call.ArgumentsJson,
-                    }).ToArray(),
-            };
-
-        private static string? ExtractChunkText(LLMStreamChunk chunk)
-        {
-            if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
-                return chunk.DeltaContent;
-            return chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part
-                ? part.Text
-                : null;
-        }
-
-        private static LlmSessionCompletion BuildCompletion(
-            string outputText,
-            IReadOnlyList<ToolCall> toolCalls,
-            TokenUsage? usage)
-        {
-            var completion = new LlmSessionCompletion
-            {
-                OutputText = outputText,
-                CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            };
-            if (usage is not null)
-            {
-                completion.Usage = new LlmSessionTokenUsage
-                {
-                    PromptTokens = usage.PromptTokens,
-                    CompletionTokens = usage.CompletionTokens,
-                    TotalTokens = usage.TotalTokens,
-                };
-            }
-
-            completion.ToolCalls.AddRange(toolCalls.Select(static call => new LlmSessionCompletedToolCall
-            {
-                CallId = call.Id,
-                ToolName = call.Name,
-                Result = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson),
-            }));
-            return completion;
-        }
-
-        private sealed class TestToolCallAccumulator
-        {
-            private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
-            private readonly List<string> _order = [];
-            private int _anonymousCounter;
-            private string? _activeAnonymousKey;
-
-            public void TrackDelta(ToolCall delta)
-            {
-                var aggregate = ResolveAggregate(delta);
-                if (!string.IsNullOrWhiteSpace(delta.Name))
-                    aggregate.Name = delta.Name;
-                if (!string.IsNullOrEmpty(delta.ArgumentsJson))
-                    aggregate.Arguments.Append(delta.ArgumentsJson);
-            }
-
-            public IReadOnlyList<ToolCall> BuildToolCalls() =>
-                _order.Select(key =>
-                {
-                    var aggregate = _aggregates[key];
-                    return new ToolCall
-                    {
-                        Id = aggregate.Id,
-                        Name = aggregate.Name ?? string.Empty,
-                        ArgumentsJson = aggregate.Arguments.ToString(),
-                    };
-                }).ToArray();
-
-            private ToolCallAggregate ResolveAggregate(ToolCall delta)
-            {
-                if (!string.IsNullOrWhiteSpace(delta.Id))
-                    return ResolveKnownIdAggregate(delta.Id);
-                return ResolveAnonymousAggregate();
-            }
-
-            private ToolCallAggregate ResolveKnownIdAggregate(string id)
-            {
-                var knownKey = $"id:{id}";
-                if (TryPromoteActiveAnonymousAggregate(knownKey, id, out var promoted))
-                {
-                    _activeAnonymousKey = null;
-                    return promoted;
-                }
-
-                _activeAnonymousKey = null;
-                if (!_aggregates.TryGetValue(knownKey, out var aggregate))
-                {
-                    aggregate = new ToolCallAggregate(id);
-                    _aggregates[knownKey] = aggregate;
-                    _order.Add(knownKey);
-                }
-
-                return aggregate;
-            }
-
-            private ToolCallAggregate ResolveAnonymousAggregate()
-            {
-                if (!string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                    return _aggregates[_activeAnonymousKey];
-
-                _anonymousCounter++;
-                var anonymousKey = $"anon:{_anonymousCounter}";
-                var anonymousId = $"stream-tool-call-{_anonymousCounter}";
-                var aggregate = new ToolCallAggregate(anonymousId);
-                _aggregates[anonymousKey] = aggregate;
-                _order.Add(anonymousKey);
-                _activeAnonymousKey = anonymousKey;
-                return aggregate;
-            }
-
-            private bool TryPromoteActiveAnonymousAggregate(
-                string knownKey,
-                string knownId,
-                out ToolCallAggregate aggregate)
-            {
-                aggregate = default!;
-                if (string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                    return false;
-                var anonymousAggregate = _aggregates[_activeAnonymousKey];
-                if (_aggregates.ContainsKey(knownKey))
-                    return false;
-                anonymousAggregate.Id = knownId;
-                _aggregates.Remove(_activeAnonymousKey);
-                _aggregates[knownKey] = anonymousAggregate;
-                _order[_order.IndexOf(_activeAnonymousKey)] = knownKey;
-                aggregate = anonymousAggregate;
-                return true;
-            }
-
-            private sealed class ToolCallAggregate(string id)
-            {
-                public string Id { get; set; } = id;
-                public string? Name { get; set; }
-                public StringBuilder Arguments { get; } = new();
-            }
-        }
-
-        private sealed class ResponsesForwardedTestAgentTool(LlmSessionRuntimeToolDeclaration declaration) : IAgentTool
-        {
-            public string Name { get; } = declaration.ToolName;
-
-            public string Description { get; } = declaration.Description;
-
-            public string ParametersSchema { get; } = declaration.ParametersJson;
-
-            public bool IsReadOnly => true;
-
-            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-                throw new InvalidOperationException("Forwarded test tool must not execute locally.");
-        }
     }
 
     private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

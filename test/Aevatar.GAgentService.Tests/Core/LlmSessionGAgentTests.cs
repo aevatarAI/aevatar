@@ -1,15 +1,10 @@
-using System.Runtime.CompilerServices;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -214,6 +209,100 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleResolveForwardedToolResultAsync_WhenCallIsAlreadyResolved_ShouldPreserveFirstResolvedAt()
+    {
+        var actor = CreateActor("resp_1");
+        var firstResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:02:00+00:00"));
+        var secondResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:03:00+00:00"));
+
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_1"),
+        });
+        await actor.HandleReceiveForwardedToolResultAsync(new ReceiveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            SchemaHash = "schema-1",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
+        });
+
+        await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            ResolvedAt = firstResolvedAt,
+        });
+        var versionAfterFirstResolve = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            ResolvedAt = secondResolvedAt,
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstResolve);
+        var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Resolved);
+        call.ResolvedAt.Should().Be(firstResolvedAt);
+        ResponsesJsonValues.ToBoundaryJson(call.Result).Should().Be("""{"temperature":28}""");
+    }
+
+    [Fact]
+    public async Task ForwardedToolCallLifecycle_ShouldDurablyAdvanceFromPendingToReceivedToResolved()
+    {
+        var actor = CreateActor("resp_1");
+        var emittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00"));
+        var receivedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:01:00+00:00"));
+        var resolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:02:00+00:00"));
+
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var call = BuildToolCall("call_1");
+        call.EmittedAt = emittedAt.Clone();
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = call,
+        });
+
+        await actor.HandleReceiveForwardedToolResultAsync(new ReceiveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            SchemaHash = "schema-1",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
+            ReceivedAt = receivedAt.Clone(),
+        });
+
+        await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            ResolvedAt = resolvedAt.Clone(),
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(4);
+        actor.State.LastEventId.Should().Be("resp_1:tool:call_1:resolved");
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var persisted = actor.State.ForwardedToolCalls[0];
+        persisted.Status.Should().Be(LlmSessionForwardedToolCallStatus.Resolved);
+        persisted.EmittedAt.Should().Be(emittedAt);
+        persisted.ReceivedAt.Should().Be(receivedAt);
+        persisted.ResolvedAt.Should().Be(resolvedAt);
+        ResponsesJsonValues.ToBoundaryJson(persisted.Result).Should().Be("""{"temperature":28}""");
+    }
+
+    [Fact]
     public async Task HandleReceiveForwardedToolResultAsync_ShouldRejectSchemaMismatch()
     {
         var actor = CreateActor("resp_1");
@@ -264,6 +353,51 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleReceiveForwardedToolResultAsync_ShouldRejectCancelledCall_AndPreserveTerminalState()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_1"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
+        {
+            ResponseId = "resp_1",
+            Status = LlmSessionStatus.Cancelled,
+        });
+        var versionAfterCancel = actor.State.LastAppliedEventVersion;
+
+        var receive = () => actor.HandleReceiveForwardedToolResultAsync(new ReceiveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            SchemaHash = "schema-1",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
+        });
+        var resolve = () => actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+        });
+
+        await receive.Should().ThrowAsync<InvalidOperationException>();
+        await resolve.Should().ThrowAsync<InvalidOperationException>();
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterCancel);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var call = actor.State.ForwardedToolCalls[0];
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        call.Result.Should().BeNull();
+        call.ResolvedAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRecordCompletionAsync_ShouldRecordCompletedFact()
     {
         var actor = CreateActor("resp_1");
@@ -284,212 +418,6 @@ public sealed class LlmSessionGAgentTests
         actor.State.Completion.ToolCalls.Should().ContainSingle()
             .Which.CallId.Should().Be("call_done");
         actor.State.LastAppliedEventVersion.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task HandleLlmRunRequestedAsync_ShouldOwnStreamLoopAndRecordCompletion()
-    {
-        var provider = new RecordingLlmProvider([
-            new LLMStreamChunk { DeltaContent = "hel" },
-            new LLMStreamChunk
-            {
-                DeltaContent = "lo",
-                IsLast = true,
-                Usage = new TokenUsage(2, 3, 5),
-            },
-        ]);
-        var actor = CreateActor("resp_1", services =>
-            services.AddSingleton<ILLMProviderFactory>(provider));
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_1"),
-        });
-
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
-
-        provider.StreamCallCount.Should().Be(1);
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("token-1");
-        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
-        actor.State.Completion!.OutputText.Should().Be("hello");
-        actor.State.Completion.Usage!.TotalTokens.Should().Be(5);
-        actor.State.ActiveRun!.Status.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task HandleLlmRunRequestedAsync_ShouldExecuteSubstituteToolInsideActorLoop()
-    {
-        var provider = new RecordingLlmProvider(
-            [
-                new LLMStreamChunk
-                {
-                    DeltaToolCall = new ToolCall
-                    {
-                        Id = "call_task",
-                        Name = "Task",
-                        ArgumentsJson = """{"prompt":"work"}""",
-                    },
-                    IsLast = true,
-                },
-            ],
-            [
-                new LLMStreamChunk { DeltaContent = "delegated", IsLast = true },
-            ]);
-        var tool = new RecordingAgentTool("Task", """{"ok":true}""");
-        var actor = CreateActor("resp_1", services =>
-        {
-            services.AddSingleton<ILLMProviderFactory>(provider);
-            services.AddSingleton<IResponsesToolProvider>(new StaticResponsesToolProvider([tool], []));
-        });
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_1"),
-        });
-
-        var command = BuildRunRequested("resp_1");
-        command.ToolSelection.ForwardedTools.Add(new LlmSessionRuntimeToolDeclaration
-        {
-            ToolName = "Task",
-            Description = "Client task tool",
-            ParametersJson = """{"type":"object"}""",
-            SchemaHash = "schema-task",
-        });
-        command.ToolSelection.SubstitutedToolNames.Add("Task");
-
-        await actor.HandleLlmRunRequestedAsync(command);
-
-        provider.StreamCallCount.Should().Be(2);
-        tool.Calls.Should().ContainSingle().Which.Should().Be("""{"prompt":"work"}""");
-        provider.LastRequest!.Messages.Should().HaveCount(3);
-        provider.LastRequest.Messages[1].ToolCalls.Should().ContainSingle()
-            .Which.Name.Should().Be("Task");
-        provider.LastRequest.Messages[2].ToolCallId.Should().Be("call_task");
-        actor.State.ForwardedToolCalls.Should().BeEmpty();
-        actor.State.Completion!.OutputText.Should().Be("delegated");
-    }
-
-    [Fact]
-    public async Task HandleLlmRunRequestedAsync_ShouldForwardDeclaredClientToolInsideActorLoop()
-    {
-        var eventStore = new InMemoryEventStore();
-        var provider = new RecordingLlmProvider([
-            new LLMStreamChunk
-            {
-                DeltaToolCall = new ToolCall
-                {
-                    Id = "call_weather",
-                    Name = "get_weather",
-                    ArgumentsJson = """{"city":"Singapore"}""",
-                },
-                IsLast = true,
-                Usage = new TokenUsage(7, 11, 18),
-            },
-        ]);
-        var actor = CreateActor("resp_1", services =>
-            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_1"),
-        });
-
-        var command = BuildRunRequested("resp_1");
-        command.ToolSelection.ForwardedTools.Add(new LlmSessionRuntimeToolDeclaration
-        {
-            ToolName = "get_weather",
-            Description = "Weather client tool",
-            ParametersJson = """{"type":"object","properties":{"city":{"type":"string"}}}""",
-            SchemaHash = "schema-weather",
-        });
-
-        await actor.HandleLlmRunRequestedAsync(command);
-
-        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
-        forwarded.CallId.Should().Be("call_weather");
-        forwarded.ToolName.Should().Be("get_weather");
-        forwarded.SchemaHash.Should().Be("schema-weather");
-        ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
-        forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
-        actor.State.Completion!.ToolCalls.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new
-            {
-                CallId = "call_weather",
-                ToolName = "get_weather",
-            });
-        ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
-            .Should()
-            .Be("""{"city":"Singapore"}""");
-        actor.State.ActiveRun!.Status.Should().Be(2);
-
-        var events = await eventStore.GetEventsAsync("response-session-actor-resp_1");
-        var toolObserved = events
-            .Where(static evt => evt.EventData.Is(LlmToolCallObserved.Descriptor))
-            .Select(static evt => evt.EventData.Unpack<LlmToolCallObserved>())
-            .Should()
-            .ContainSingle()
-            .Subject;
-        toolObserved.Forwarded.Should().BeTrue();
-        toolObserved.ToolCall!.CallId.Should().Be("call_weather");
-        events.Should().Contain(evt => evt.EventData.Is(LlmSessionForwardedToolCallEmittedEvent.Descriptor));
-        events.Should().Contain(evt => evt.EventData.Is(LlmRunCompleted.Descriptor));
-    }
-
-    [Fact]
-    public async Task HandleLlmRunRequestedAsync_WhenProviderFails_ShouldRecordFailedStateAndTypedEvent()
-    {
-        var eventStore = new InMemoryEventStore();
-        var provider = new ThrowingLlmProvider(new InvalidOperationException("provider exploded"));
-        var actor = CreateActor("resp_1", services =>
-            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_1"),
-        });
-
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
-
-        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
-        actor.State.ActiveRun!.Status.Should().Be(3);
-        actor.State.Completion!.FailureCode.Should().Be("execution_failed");
-        actor.State.Completion.FailureMessage.Should().Be("provider exploded");
-
-        var failed = (await eventStore.GetEventsAsync("response-session-actor-resp_1"))
-            .Where(static evt => evt.EventData.Is(LlmRunFailed.Descriptor))
-            .Select(static evt => evt.EventData.Unpack<LlmRunFailed>())
-            .Should()
-            .ContainSingle()
-            .Subject;
-        failed.FailureCode.Should().Be("execution_failed");
-        failed.FailureMessage.Should().Be("provider exploded");
-    }
-
-    [Fact]
-    public async Task HandleLlmRunRequestedAsync_WhenProviderCancels_ShouldRecordCancelledStateAndTypedEvent()
-    {
-        var eventStore = new InMemoryEventStore();
-        var provider = new ThrowingLlmProvider(new OperationCanceledException("provider cancelled"));
-        var actor = CreateActor("resp_1", services =>
-            services.AddSingleton<ILLMProviderFactory>(provider), eventStore);
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_1"),
-        });
-
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequested("resp_1"));
-
-        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
-        actor.State.ActiveRun!.Status.Should().Be(4);
-        actor.State.Completion!.FailureCode.Should().Be("request_cancelled");
-        actor.State.Completion.FailureMessage.Should().Be("LLM run was cancelled.");
-
-        var cancelled = (await eventStore.GetEventsAsync("response-session-actor-resp_1"))
-            .Where(static evt => evt.EventData.Is(LlmRunCancelled.Descriptor))
-            .Select(static evt => evt.EventData.Unpack<LlmRunCancelled>())
-            .Should()
-            .ContainSingle()
-            .Subject;
-        cancelled.RunId.Should().Be("resp_1:llm-run");
     }
 
     [Fact]
@@ -653,15 +581,59 @@ public sealed class LlmSessionGAgentTests
         call.ReceivedAt.Should().NotBeNull();
     }
 
-    private static LlmSessionGAgent CreateActor(
-        string responseId,
-        Action<IServiceCollection>? configureServices = null,
-        InMemoryEventStore? eventStore = null) =>
+    [Fact]
+    public async Task HandleReceiveForwardedToolResultAsync_ShouldRejectExpiredCall_AndPreserveExpiredState()
+    {
+        var actor = CreateActor("resp_1");
+        var record = BuildRecord("resp_1");
+        record.CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(-2));
+        record.Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(1));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = record,
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_1"),
+        });
+        await actor.HandleExpireResponseSessionAsync(new ExpireResponseSessionRequested
+        {
+            ResponseId = "resp_1",
+            ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+        var versionAfterExpire = actor.State.LastAppliedEventVersion;
+
+        var receive = () => actor.HandleReceiveForwardedToolResultAsync(new ReceiveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            SchemaHash = "schema-1",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
+        });
+        var resolve = () => actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+        });
+
+        await receive.Should().ThrowAsync<InvalidOperationException>();
+        await resolve.Should().ThrowAsync<InvalidOperationException>();
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterExpire);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Expired);
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var call = actor.State.ForwardedToolCalls[0];
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Expired);
+        call.Result.Should().BeNull();
+        call.ResolvedAt.Should().BeNull();
+    }
+
+    private static LlmSessionGAgent CreateActor(string responseId) =>
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
-            eventStore ?? new InMemoryEventStore(),
+            new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
-            configureServices);
+            static () => new LlmSessionGAgent());
 
     private static LlmSessionRecord BuildRecord(string responseId) =>
         new()
@@ -703,114 +675,6 @@ public sealed class LlmSessionGAgentTests
                 },
             },
         };
-
-    private static LlmRunRequested BuildRunRequested(string responseId) =>
-        new()
-        {
-            ResponseId = responseId,
-            RunId = $"{responseId}:llm-run",
-            Model = "test-model",
-            ScopeId = "user-1",
-            OwnerSubject = "user-1",
-            BearerToken = "token-1",
-            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            Messages =
-            {
-                new LlmSessionRuntimeChatMessage
-                {
-                    Role = "user",
-                    Content = "hello",
-                },
-            },
-            ToolSelection = new LlmSessionRuntimeToolSelection(),
-        };
-
-    private sealed class RecordingLlmProvider(params IReadOnlyList<LLMStreamChunk>[] batches)
-        : ILLMProvider, ILLMProviderFactory
-    {
-        public string Name => "recording";
-
-        public int StreamCallCount { get; private set; }
-
-        public LLMRequest? LastRequest { get; private set; }
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            LastRequest = request;
-            StreamCallCount++;
-            var chunks = StreamCallCount <= batches.Length ? batches[StreamCallCount - 1] : [];
-            foreach (var chunk in chunks)
-            {
-                ct.ThrowIfCancellationRequested();
-                yield return chunk;
-                await Task.Yield();
-            }
-        }
-    }
-
-    private sealed class ThrowingLlmProvider(Exception exception) : ILLMProvider, ILLMProviderFactory
-    {
-        public string Name => "throwing";
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await Task.Yield();
-            throw exception;
-#pragma warning disable CS0162
-            yield break;
-#pragma warning restore CS0162
-        }
-    }
-
-    private sealed class StaticResponsesToolProvider(
-        IReadOnlyList<IAgentTool> substituteTools,
-        IReadOnlyList<IAgentTool> additiveTools) : IResponsesToolProvider
-    {
-        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
-            ResponsesToolProviderContext context,
-            CancellationToken ct = default) =>
-            ValueTask.FromResult(substituteTools);
-
-        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
-            ResponsesToolProviderContext context,
-            CancellationToken ct = default) =>
-            ValueTask.FromResult(additiveTools);
-    }
-
-    private sealed class RecordingAgentTool(string name, string result) : IAgentTool
-    {
-        public List<string> Calls { get; } = [];
-
-        public string Name { get; } = name;
-
-        public string Description => "test tool";
-
-        public string ParametersSchema => """{"type":"object"}""";
-
-        public bool IsReadOnly => true;
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            Calls.Add(argumentsJson);
-            return Task.FromResult(result);
-        }
-    }
 
     private static DateTimeOffset ResolveExpiry(LlmSessionRecord record) =>
         (record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow)

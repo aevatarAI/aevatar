@@ -260,7 +260,7 @@ public sealed class ChannelCallbackEndpointsTests
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
         var result = await InvokeAsync(
             "HandleDeleteRegistrationAsync",

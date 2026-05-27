@@ -1692,8 +1692,8 @@ public class NyxIdChatEndpointsCoverageTests
         cardAction.WorkflowResume.Approved.Should().BeFalse();
         cardAction.WorkflowResume.UserInput.Should().Be("Need stronger hook");
         cardAction.Arguments.Should().NotContainKeys("actor_id", "run_id", "step_id", "approved");
-        // Sync (PR #1106 r2): workflow resume form values now move into the typed payload.
-        cardAction.FormFields.Should().NotContainKey("user_input");
+        cardAction.FormFields.Should().ContainKey("user_input")
+            .WhoseValue.Should().Be("Need stronger hook");
     }
 
     [Fact]

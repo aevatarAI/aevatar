@@ -66,24 +66,4 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
             ? (savedRoute, defaultModel)
             : (UserConfigLlmRoute.Normalize(prefixedOption.RouteValue), prefixed.Model);
     }
-
-    public async Task<UserLlmOptionsView> GetOptionsAsync(string? bearerToken, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(bearerToken))
-            return UserLlmOptionsView.Empty;
-
-        var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
-        var route = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
-        var defaultModel = config.DefaultModel?.Trim() ?? string.Empty;
-        (route, defaultModel) = ResolveLegacyPrefixedModel(result, route, defaultModel);
-
-        var available = result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
-        var current = available.FirstOrDefault(option =>
-            string.Equals(option.RouteValue, route, StringComparison.OrdinalIgnoreCase));
-        if (current is not null && !string.IsNullOrWhiteSpace(defaultModel))
-            current = current with { DefaultModel = defaultModel };
-
-        return new UserLlmOptionsView(current, available, result.SetupHint);
-    }
 }

@@ -97,7 +97,7 @@ public sealed class GAgentDraftRunSessionEventProjector
             ? context.SessionId
             : completed.SessionId;
         var content = completed.Content ?? string.Empty;
-        return BuildTerminalEntries(context, messageId, content);
+        return BuildTerminalEntries(context, messageId, content, completed.ContentEmitted);
     }
 
     private static void CompleteRunFinishedFrame(
@@ -153,17 +153,46 @@ public sealed class GAgentDraftRunSessionEventProjector
     private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildTerminalEntries(
         GAgentDraftRunProjectionContext context,
         string messageId,
-        string output) =>
-        [
-            new ProjectionSessionEventEntry<AGUIEvent>(
+        string output,
+        bool contentEmitted)
+    {
+        var entries = new List<ProjectionSessionEventEntry<AGUIEvent>>();
+        if (!contentEmitted && !string.IsNullOrEmpty(output))
+        {
+            entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
                 context.RootActorId,
                 context.SessionId,
-                BuildTextMessageEnd(messageId)),
-            new ProjectionSessionEventEntry<AGUIEvent>(
+                new AGUIEvent
+                {
+                    TextMessageStart = new TextMessageStartEvent
+                    {
+                        MessageId = messageId,
+                        Role = "assistant",
+                    },
+                }));
+            entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
                 context.RootActorId,
                 context.SessionId,
-                BuildRunFinished(context, output)),
-        ];
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = messageId,
+                        Delta = output,
+                    },
+                }));
+        }
+
+        entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+            context.RootActorId,
+            context.SessionId,
+            BuildTextMessageEnd(messageId)));
+        entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+            context.RootActorId,
+            context.SessionId,
+            BuildRunFinished(context, output)));
+        return entries;
+    }
 
     private static AGUIEvent BuildTextMessageEnd(string messageId) =>
         new()
