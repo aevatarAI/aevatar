@@ -533,6 +533,10 @@ describe('StudioMemberBindPanel', () => {
     });
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(await screen.findByText(/Smoke test passed in \d+ms/)).toBeTruthy();
+    expect(screen.getByText('Run run-1')).toBeTruthy();
+    expect(
+      screen.queryByText('The current Studio draft accepted the request.'),
+    ).toBeNull();
     expect(screen.getByText('Second node final output.')).toBeTruthy();
     expect(
       screen.getByText(
@@ -542,6 +546,77 @@ describe('StudioMemberBindPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to Invoke' }));
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
+  });
+
+  it('describes non-chat smoke test success as a completed contract response', async () => {
+    (runtimeRunsApi.invokeEndpoint as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+    });
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'submit',
+                displayName: 'Submit',
+                kind: 'command',
+                requestTypeUrl: 'type.googleapis.com/example.Submit',
+                responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+                description: 'Submit a request.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Send smoke test' }));
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          endpointId: 'submit',
+        }),
+        expect.objectContaining({
+          serviceId: 'default',
+        }),
+      );
+    });
+    expect(await screen.findByText(/Smoke test passed in \d+ms/)).toBeTruthy();
+    expect(
+      screen.getByText('The selected contract returned without an error.'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('The selected contract accepted the request.'),
+    ).toBeNull();
   });
 
   it('blocks continuing to Invoke when the published service has no endpoints', async () => {

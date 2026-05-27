@@ -128,6 +128,33 @@ describe('proxy config', () => {
       changeOrigin: true,
       ws: true,
     });
+    expect(resolveProxyEntry(devProxy, '/api/scopes/scope-1/members')).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(resolveProxyEntry(devProxy, '/api/scopes/scope-1/members/m-alpha')).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/members/m-alpha/binding'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(
+        devProxy,
+        '/api/scopes/scope-1/members/m-alpha/endpoints/chat/contract',
+      ),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
     expect(
       resolveProxyEntry(devProxy, '/api/scopes/scope-1/teams/t-alpha/archive'),
     ).toEqual({

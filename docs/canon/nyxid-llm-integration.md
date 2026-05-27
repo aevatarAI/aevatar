@@ -72,6 +72,35 @@ openid urn:nyxid:scope:broker_binding proxy
 
 ---
 
+## Console Settings 契约
+
+Console 的 Settings、Chat composer、Studio workflow dry-run 必须共用后端 LLM Settings 视图，不再各自读取 NyxID catalog 后在前端推断 route、provider label 或 fallback。
+
+Canonical endpoints：
+
+- `GET /api/user-config/llm`：返回当前用户的 LLM settings view。
+- `PUT /api/user-config/llm`：投递保存 `routeValue` 与 `model` 的命令，返回 `202 Accepted` receipt（`accepted`、`commandId`、`ackStage = "accepted"`、`actorId`、`correlationId`、`ackedAtUtc`）；该响应只承诺命令已进入 dispatch/inbox 边界，不承诺 actor 已 handled、event 已 committed 或 read model 已 observed。前端保存成功后必须重新 `GET /api/user-config/llm` 读取 canonical settings view。
+- `GET /api/user-config/runtime`：返回 runtime mode、active runtime URL、local/remote URL 以及后端默认值。
+- `GET /api/auth/me`：返回最小 typed `profile` / `session`，不得回显 access token、refresh token、raw JWT 或 raw claims。
+
+`GET /api/user-config/llm` 是 Settings 闭环的唯一 route truth。响应必须至少表达：
+
+- `savedRoute` / `savedRouteLabel`：用户保存的 route 及展示名。
+- `effectiveRoute` / `effectiveRouteLabel`：本次实际可用的 route 及展示名；当 saved route 不可用时由后端选择 fallback。
+- `routeFallbackActive` / `fallbackReason`：诚实暴露 saved route 与 effective route 是否分离。
+- `routeOptions`：可选 route 列表，包含 `routeValue`、`label`、`source`、`status`、`allowed`、`ready`、`serviceId`、`serviceSlug`。
+- `modelGroupsByRoute`：按 route 分组的模型集合；前端不得用 provider slug 或 model 前缀重新拼装。
+- `catalogStatus` 与 `capabilities`：用于驱动禁用态、保存态与 retry 行为。
+- `defaultModel`：当前保存的默认模型。
+
+NyxID catalog 不可用时，后端返回 degraded view，而不是空列表：保留 `savedRoute`、`effectiveRoute`、`defaultModel`，设置 `catalogStatus = "unavailable"`，并通过 `capabilities` 禁止编辑和保存、允许 retry。前端只展示这个 degraded view，不做 query-time fallback 或本地补跑 catalog。
+
+Gateway route 的稳定值是空字符串 `""`。Gateway 的展示名由后端 settings view 返回；前端只消费 `savedRouteLabel`、`effectiveRouteLabel`、`routeOptions[].label`，不得把 `NyxID Gateway` 当作 route display source 硬编码。
+
+旧 Console surface 不再保留兼容入口：`/api/user-config/models`、`/api/user-config/llm/options`、`/api/user-config/llm/preference` 已被 canonical `/api/user-config/llm` 取代。
+
+---
+
 ## NyxID 端配置（管理员）
 
 ### 1. 创建 LLM Provider
@@ -121,7 +150,7 @@ Gateway Endpoint 自动推导为 `{Authority}/api/v1/llm/gateway/v1`。
 LLM 调用失败，NyxID 返回错误提示用户需要先连接 Provider。
 
 **Q: 支持多个 Provider 吗？**
-支持。model 名决定路由。用户可在 NyxID 上同时连接多个 Provider。
+支持。NyxID catalog 提供多个可用 route，Aevatar 后端把它们物化成 `routeOptions` 与 `modelGroupsByRoute`，Settings 中选择的 route 和 model 决定后续调用。
 
 **Q: 本地开发能直接用 API Key 吗？**
 可以。在 CLI Settings > LLM 页面配置 OpenAI/DeepSeek 等 Provider 并填入 API Key，与 NyxID Gateway 共存。

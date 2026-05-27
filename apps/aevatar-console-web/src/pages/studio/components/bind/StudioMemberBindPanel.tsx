@@ -1416,8 +1416,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     smokeTestResult.runId
                       ? `Run ${smokeTestResult.runId}`
                       : runsCurrentWorkflowDraft
-                        ? 'The current Studio draft accepted the request.'
-                        : 'The selected contract accepted the request.'
+                        ? 'The current Studio draft completed without an error.'
+                        : 'The selected contract returned without an error.'
                   }
                   type="success"
                 />

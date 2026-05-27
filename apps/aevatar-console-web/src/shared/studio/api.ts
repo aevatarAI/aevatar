@@ -49,7 +49,9 @@ import type {
   StudioTeamSummary,
   StudioTeamUpdateInput,
   StudioUserConfig,
-  StudioUserConfigModelsResponse,
+  StudioUserConfigSaveReceipt,
+  StudioUserConfigRuntime,
+  StudioUserLlmSettings,
   StudioWorkflowDraft,
   StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
@@ -300,85 +302,126 @@ function decodeOrnnSkillSearchResult(
   };
 }
 
-function decodeStudioUserConfigModelsResponse(
+function decodeStudioUserLlmSettings(
   value: unknown,
-  label = "StudioUserConfigModelsResponse"
-): StudioUserConfigModelsResponse {
+  label = "StudioUserLlmSettings"
+): StudioUserLlmSettings {
   const record = expectRecord(value, label);
-  const providersSource = record.providers ?? [];
-  const supportedModelsSource =
-    record.supportedModels ?? record.supported_models ?? [];
   return {
-    providers: expectArray(
-      providersSource,
-      `${label}.providers`,
-      (entry, providerLabel) => {
-        const resolvedProviderLabel =
-          providerLabel ?? `${label}.providers[]`;
-        const provider = expectRecord(entry, resolvedProviderLabel);
+    savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
+    savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
+    effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
+    effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
+    routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
+    fallbackReason: readNullableString(record, "fallbackReason", `${label}.fallbackReason`),
+    routeOptions: expectArray(
+      record.routeOptions ?? [],
+      `${label}.routeOptions`,
+      (entry, optionLabel) => {
+        const resolvedOptionLabel = optionLabel ?? `${label}.routeOptions[]`;
+        const option = expectRecord(entry, resolvedOptionLabel);
         return {
-          providerSlug: readNullableString(
-            provider,
-            ["providerSlug", "provider_slug"],
-            `${resolvedProviderLabel}.providerSlug`
-          ) ?? "",
-          providerName: readNullableString(
-            provider,
-            ["providerName", "provider_name"],
-            `${resolvedProviderLabel}.providerName`
-          ) ?? "",
-          status:
-            readNullableString(
-              provider,
-              "status",
-              `${resolvedProviderLabel}.status`
-            )?.trim().toLowerCase() ?? "",
-          proxyUrl:
-            readNullableString(
-              provider,
-              ["proxyUrl", "proxy_url"],
-              `${resolvedProviderLabel}.proxyUrl`
-            ) ?? "",
-          source:
-            readNullableString(
-              provider,
-              "source",
-              `${resolvedProviderLabel}.source`
-            ) ?? undefined,
+          routeValue: readString(option, "routeValue", `${resolvedOptionLabel}.routeValue`),
+          label: readString(option, "label", `${resolvedOptionLabel}.label`),
+          source: readString(option, "source", `${resolvedOptionLabel}.source`),
+          status: readString(option, "status", `${resolvedOptionLabel}.status`),
+          allowed: readBoolean(option, "allowed", `${resolvedOptionLabel}.allowed`),
+          ready: readBoolean(option, "ready", `${resolvedOptionLabel}.ready`),
+          serviceId: readNullableString(option, "serviceId", `${resolvedOptionLabel}.serviceId`),
+          serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
+          description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
       }
     ),
-    gatewayUrl:
-      readNullableString(
-        record,
-        ["gatewayUrl", "gateway_url"],
-        `${label}.gatewayUrl`
-      ) ?? "",
-    supportedModels: expectArray(
-      supportedModelsSource,
-      `${label}.supportedModels`,
-      (entry, entryLabel) =>
-        expectString(entry, entryLabel ?? `${label}.supportedModels[]`)
+    modelGroupsByRoute: expectArray(
+      record.modelGroupsByRoute ?? [],
+      `${label}.modelGroupsByRoute`,
+      (entry, groupLabel) => {
+        const resolvedGroupLabel = groupLabel ?? `${label}.modelGroupsByRoute[]`;
+        const group = expectRecord(entry, resolvedGroupLabel);
+        return {
+          routeValue: readString(group, "routeValue", `${resolvedGroupLabel}.routeValue`),
+          groupId: readString(group, "groupId", `${resolvedGroupLabel}.groupId`),
+          label: readString(group, "label", `${resolvedGroupLabel}.label`),
+          models: expectArray(
+            group.models ?? [],
+            `${resolvedGroupLabel}.models`,
+            (entryModel, modelLabel) =>
+              expectString(entryModel, modelLabel ?? `${resolvedGroupLabel}.models[]`)
+          ),
+        };
+      }
     ),
-    modelsByProvider: Object.fromEntries(
-      Object.entries(
-        expectRecord(
-          record.modelsByProvider ?? record.models_by_provider ?? {},
-          `${label}.modelsByProvider`
-        )
-      ).map(([providerSlug, models]) => [
-        providerSlug,
-        expectArray(
-          models,
-          `${label}.modelsByProvider.${providerSlug}`,
-          (entry, entryLabel) =>
-            expectString(
-              entry,
-              entryLabel ?? `${label}.modelsByProvider.${providerSlug}[]`
-            )
-        ),
-      ])
+    catalogStatus: readString(record, "catalogStatus", `${label}.catalogStatus`),
+    capabilities: (() => {
+      const capabilities = expectRecord(record.capabilities, `${label}.capabilities`);
+      return {
+        canEditRoute: readBoolean(capabilities, "canEditRoute", `${label}.capabilities.canEditRoute`),
+        canEditModel: readBoolean(capabilities, "canEditModel", `${label}.capabilities.canEditModel`),
+        canSave: readBoolean(capabilities, "canSave", `${label}.capabilities.canSave`),
+        canRetryCatalog: readBoolean(capabilities, "canRetryCatalog", `${label}.capabilities.canRetryCatalog`),
+      };
+    })(),
+    defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
+    setupHint: record.setupHint,
+  };
+}
+
+function decodeStudioUserConfigRuntime(
+  value: unknown,
+  label = "StudioUserConfigRuntime"
+): StudioUserConfigRuntime {
+  const record = expectRecord(value, label);
+  const runtimeDefaults = expectRecord(
+    record.runtimeDefaults,
+    `${label}.runtimeDefaults`
+  );
+  return {
+    runtimeMode: readString(record, "runtimeMode", `${label}.runtimeMode`),
+    activeRuntimeBaseUrl: readString(
+      record,
+      "activeRuntimeBaseUrl",
+      `${label}.activeRuntimeBaseUrl`
     ),
+    localRuntimeBaseUrl: readString(
+      record,
+      "localRuntimeBaseUrl",
+      `${label}.localRuntimeBaseUrl`
+    ),
+    remoteRuntimeBaseUrl: readString(
+      record,
+      "remoteRuntimeBaseUrl",
+      `${label}.remoteRuntimeBaseUrl`
+    ),
+    runtimeDefaults: {
+      localRuntimeBaseUrl: readString(
+        runtimeDefaults,
+        "localRuntimeBaseUrl",
+        `${label}.runtimeDefaults.localRuntimeBaseUrl`
+      ),
+      remoteRuntimeBaseUrl: readString(
+        runtimeDefaults,
+        "remoteRuntimeBaseUrl",
+        `${label}.runtimeDefaults.remoteRuntimeBaseUrl`
+      ),
+      localMode: readString(runtimeDefaults, "localMode", `${label}.runtimeDefaults.localMode`),
+      remoteMode: readString(runtimeDefaults, "remoteMode", `${label}.runtimeDefaults.remoteMode`),
+    },
+  };
+}
+
+function decodeStudioUserConfigSaveReceipt(
+  value: unknown,
+  label = "StudioUserConfigSaveReceipt"
+): StudioUserConfigSaveReceipt {
+  const record = expectRecord(value, label);
+  return {
+    accepted: readBoolean(record, "accepted", `${label}.accepted`),
+    commandId: readString(record, "commandId", `${label}.commandId`),
+    ackStage: readString(record, "ackStage", `${label}.ackStage`),
+    actorId: readString(record, "actorId", `${label}.actorId`),
+    correlationId: readString(record, "correlationId", `${label}.correlationId`),
+    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
   };
 }
 
@@ -2269,25 +2312,57 @@ export const studioApi = {
     return requestJson("/api/user-config");
   },
 
-  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfig> {
-    return requestJson("/api/user-config", {
-      method: "PUT",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        defaultModel: input.defaultModel.trim(),
-        preferredLlmRoute: trimOptional(input.preferredLlmRoute),
-        runtimeMode: trimOptional(input.runtimeMode),
-        localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
-        remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
-        maxToolRounds: input.maxToolRounds ?? null,
-      }),
-    });
+  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfigSaveReceipt> {
+    return requestDecodedJson(
+      "/api/user-config",
+      decodeStudioUserConfigSaveReceipt,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          defaultModel: input.defaultModel.trim(),
+          preferredLlmRoute:
+            input.preferredLlmRoute === undefined || input.preferredLlmRoute === null
+              ? undefined
+              : input.preferredLlmRoute.trim(),
+          runtimeMode: trimOptional(input.runtimeMode),
+          localRuntimeBaseUrl: trimOptional(input.localRuntimeBaseUrl),
+          remoteRuntimeBaseUrl: trimOptional(input.remoteRuntimeBaseUrl),
+          maxToolRounds: input.maxToolRounds ?? null,
+        }),
+      }
+    );
   },
 
-  getUserConfigModels(): Promise<StudioUserConfigModelsResponse> {
+  getUserLlmSettings(): Promise<StudioUserLlmSettings> {
     return requestDecodedJson(
-      "/api/user-config/models",
-      decodeStudioUserConfigModelsResponse
+      "/api/user-config/llm",
+      decodeStudioUserLlmSettings
+    );
+  },
+
+  saveUserLlmSettings(input: {
+    routeValue: string;
+    model?: string | null;
+  }): Promise<StudioUserConfigSaveReceipt> {
+    return requestDecodedJson(
+      "/api/user-config/llm",
+      decodeStudioUserConfigSaveReceipt,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          routeValue: input.routeValue.trim(),
+          model: input.model?.trim() ?? "",
+        }),
+      }
+    );
+  },
+
+  getUserConfigRuntime(): Promise<StudioUserConfigRuntime> {
+    return requestDecodedJson(
+      "/api/user-config/runtime",
+      decodeStudioUserConfigRuntime
     );
   },
 

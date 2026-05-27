@@ -6,9 +6,9 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IUserConfigCommandService
 {
-    Task SaveAsync(UserConfig config, CancellationToken ct = default);
+    Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default);
 
-    Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default);
+    Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default);
 
-    Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default);
+    Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default);
 }
