@@ -6,6 +6,7 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -310,6 +311,77 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task Selection_WritesThroughChannelCatalog_WhenGlobalWriterIsRegistered()
+    {
+        var provisioned = ChronoLlm with { RouteValue = "/api/v1/proxy/s/chrono-provisioned" };
+        var catalog = new StubCatalogClient
+        {
+            ProvisionedService = provisioned,
+            SetupHint = new UserLlmSetupHint(
+                "https://nyxid.example/services",
+                [
+                    new UserLlmPreset(
+                        "chrono-provision",
+                        "Provision chrono",
+                        "Provision shared service",
+                        new ProvisionThenUse("chrono/shared")),
+                ]),
+        };
+        var globalCatalog = new ThrowingGlobalCatalogPort();
+        var commandService = new StubUserConfigCommandService();
+        var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort())
+            .AddSingleton<IUserConfigCommandService>(commandService)
+            .AddSingleton<IUserLlmCatalogPort>(globalCatalog)
+            .AddSingleton<UserLlmPreferenceWriter>()
+            .BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var broker = new RecordingCapabilityBroker(
+            "token-for-service-list",
+            "token-for-preset-write",
+            "token-for-prefixed-model-write");
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory, broker);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
+        var context = BuildSelectionContext();
+
+        await selection.SetByServiceAsync(context, "openai-work", null, default);
+        await selection.ApplyPresetAsync(context, "chrono-provision", default);
+        await selection.SetModelOverrideAsync(context, "chrono-llm/gpt-5.5", default);
+
+        globalCatalog.GetServicesCount.Should().Be(0);
+        globalCatalog.ProvisionCount.Should().Be(0);
+        catalog.GetServicesCalls.Should().NotContain(call => call.AccessToken == "channel-context");
+        catalog.ProvisionCalls.Should().NotContain(call => call.AccessToken == "channel-context");
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "token-for-service-list");
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "token-for-preset-write");
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "token-for-prefixed-model-write");
+        catalog.ProvisionCalls.Should().ContainSingle()
+            .Which.Should().Match<StubCatalogClient.ProvisionCall>(call =>
+                call.Context.BindingId.Value == "bnd_sender" &&
+                call.Context.RegistrationScopeId == "owner-scope" &&
+                call.AccessToken == "token-for-preset-write" &&
+                call.ProvisionEndpointId == "chrono/shared");
+        broker.RequestedScopes.Should().Equal(
+            AevatarOAuthClientScopes.Proxy,
+            AevatarOAuthClientScopes.Proxy,
+            AevatarOAuthClientScopes.Proxy);
+        commandService.SavedConfigs.Should().HaveCount(3);
+        commandService.SavedConfigs[0].Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        commandService.SavedConfigs[1].Config.PreferredLlmRoute.Should().Be(provisioned.RouteValue);
+        commandService.SavedConfigs[2].Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        commandService.SavedConfigs[2].Config.DefaultModel.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task Use_ServiceNameAndModel_WritesRouteAndModelOverride()
     {
         var commandService = new StubUserConfigCommandService();
@@ -465,6 +537,7 @@ public sealed class ModelSlashCommandHandlerTests
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
+        broker ??= new RecordingCapabilityBroker();
         actorDispatchPort ??= new RecordingActorDispatchPort();
 
         var provider = new ServiceCollection()
@@ -525,6 +598,8 @@ public sealed class ModelSlashCommandHandlerTests
         public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
         public NyxIdLlmService ProvisionedService { get; init; } = ChronoLlm;
         public Exception? GetServicesError { get; init; }
+        public List<GetServicesCall> GetServicesCalls { get; } = [];
+        public List<ProvisionCall> ProvisionCalls { get; } = [];
 
         public UserLlmSetupHint SetupHint { get; init; } = new(
             "https://nyxid.example/services",
@@ -541,6 +616,7 @@ public sealed class ModelSlashCommandHandlerTests
             string accessToken,
             CancellationToken ct)
         {
+            GetServicesCalls.Add(new GetServicesCall(query, accessToken));
             if (GetServicesError is not null)
                 return Task.FromException<NyxIdLlmServicesResult>(GetServicesError);
 
@@ -557,13 +633,48 @@ public sealed class ModelSlashCommandHandlerTests
             UserLlmSelectionContext context,
             string accessToken,
             string provisionEndpointId,
-            CancellationToken ct) =>
-            Task.FromResult(ProvisionedService);
+            CancellationToken ct)
+        {
+            ProvisionCalls.Add(new ProvisionCall(context, accessToken, provisionEndpointId));
+            return Task.FromResult(ProvisionedService);
+        }
+
+        public sealed record GetServicesCall(UserLlmOptionsQuery Query, string AccessToken);
+        public sealed record ProvisionCall(
+            UserLlmSelectionContext Context,
+            string AccessToken,
+            string ProvisionEndpointId);
+    }
+
+    private sealed class ThrowingGlobalCatalogPort : IUserLlmCatalogPort
+    {
+        public int GetServicesCount { get; private set; }
+        public int ProvisionCount { get; private set; }
+
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            GetServicesCount++;
+            throw new InvalidOperationException("Global catalog must not be used by channel LLM selection.");
+        }
+
+        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct)
+        {
+            ProvisionCount++;
+            throw new InvalidOperationException("Global catalog must not be used by channel LLM selection.");
+        }
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
     {
+        private readonly Queue<string> _accessTokens;
+
         public List<string> RequestedScopes { get; } = new();
+
+        public RecordingCapabilityBroker(params string[] accessTokens)
+        {
+            _accessTokens = new Queue<string>(
+                accessTokens.Length == 0 ? ["token-for-model-list"] : accessTokens);
+        }
 
         public Task<BindingChallenge> StartExternalBindingAsync(
             ExternalSubjectRef externalSubject,
@@ -581,9 +692,10 @@ public sealed class ModelSlashCommandHandlerTests
             CancellationToken ct = default)
         {
             RequestedScopes.Add(scope.Value);
+            var accessToken = _accessTokens.Count == 0 ? "token-for-model-list" : _accessTokens.Dequeue();
             return Task.FromResult(new CapabilityHandle
             {
-                AccessToken = "token-for-model-list",
+                AccessToken = accessToken,
                 ExpiresAtUnix = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds(),
                 Scope = scope.Value,
             });
@@ -628,16 +740,28 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public List<(string ScopeId, StudioConfig Config)> SavedConfigs { get; } = new();
 
-        public Task SaveAsync(StudioConfig config, CancellationToken ct = default) =>
+        public Task<UserConfigSaveReceipt> SaveAsync(StudioConfig config, CancellationToken ct = default) =>
             SaveAsync(string.Empty, config, ct);
 
-        public Task SaveAsync(string scopeId, StudioConfig config, CancellationToken ct = default)
+        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, StudioConfig config, CancellationToken ct = default)
         {
             SavedConfigs.Add((scopeId, config));
-            return Task.CompletedTask;
+            return Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-1",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-1",
+                AckedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
+            Task.FromResult(new UserConfigSaveReceipt(
+                Accepted: true,
+                CommandId: "command-github",
+                AckStage: UserConfigCommandAckStage.Accepted,
+                ActorId: "user-config-default",
+                CorrelationId: "command-github",
+                AckedAtUtc: DateTimeOffset.UtcNow));
     }
 }

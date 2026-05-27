@@ -1,5 +1,19 @@
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
+public static class UserConfigCommandAckStage
+{
+    public const string Accepted = "accepted";
+    public const string AdmissionRejected = "admission_rejected";
+}
+
+public sealed record UserConfigSaveReceipt(
+    bool Accepted,
+    string CommandId,
+    string AckStage,
+    string ActorId,
+    string CorrelationId,
+    DateTimeOffset AckedAtUtc);
+
 public sealed record SaveUserConfigCommand(
     string? DefaultModel = null,
     string? PreferredLlmRoute = null,
@@ -13,14 +27,16 @@ public interface IUserConfigService
 {
     Task<UserConfig> GetAsync(CancellationToken ct = default);
 
-    Task<UserConfig> SaveAsync(SaveUserConfigCommand command, CancellationToken ct = default);
+    Task<UserConfigRuntimeView> GetRuntimeAsync(CancellationToken ct = default);
 
-    Task<UserConfig> SaveAsync(
+    Task<UserConfigSaveReceipt> SaveAsync(SaveUserConfigCommand command, CancellationToken ct = default);
+
+    Task<UserConfigSaveReceipt> SaveAsync(
         string? bearerToken,
         SaveUserConfigCommand command,
         CancellationToken ct = default);
 
-    Task<UserConfig> SaveLlmPreferenceAsync(
+    Task<UserConfigSaveReceipt> SaveLlmPreferenceAsync(
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
         CancellationToken ct = default);

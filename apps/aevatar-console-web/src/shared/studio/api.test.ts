@@ -153,7 +153,7 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('decodes NyxID model metadata from snake_case response fields', async () => {
+  it('decodes canonical LLM settings from the Studio host', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -169,39 +169,104 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        providers: [
+        savedRoute: '',
+        savedRouteLabel: 'NyxID Gateway',
+        effectiveRoute: '',
+        effectiveRouteLabel: 'NyxID Gateway',
+        routeFallbackActive: false,
+        fallbackReason: null,
+        catalogStatus: 'ready',
+        defaultModel: 'gpt-5.4-mini',
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
+        },
+        routeOptions: [
           {
-            provider_slug: 'openai',
-            provider_name: 'OpenAI',
+            routeValue: '',
+            label: 'NyxID Gateway',
+            source: 'gateway_provider',
+            status: 'ready',
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: '/api/v1/proxy/s/openai',
+            label: 'OpenAI',
             source: 'user_service',
             status: 'ready',
-            proxy_url: 'https://nyx.example/proxy/openai',
+            allowed: true,
+            ready: true,
+            serviceId: 'svc-openai',
+            serviceSlug: 'openai',
+            description: null,
           },
         ],
-        gateway_url: 'https://nyx.example/gateway',
-        models_by_provider: {
-          openai: ['gpt-5.4-mini'],
-        },
-        supported_models: ['gpt-5.4-mini'],
+        modelGroupsByRoute: [
+          {
+            routeValue: '',
+            groupId: 'openai',
+            label: 'OpenAI',
+            models: ['gpt-5.4-mini'],
+          },
+        ],
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getUserConfigModels()).resolves.toEqual({
-      providers: [
+    await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
+      savedRoute: '',
+      savedRouteLabel: 'NyxID Gateway',
+      effectiveRoute: '',
+      effectiveRouteLabel: 'NyxID Gateway',
+      routeFallbackActive: false,
+      fallbackReason: null,
+      catalogStatus: 'ready',
+      defaultModel: 'gpt-5.4-mini',
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: 'openai',
-          providerName: 'OpenAI',
+          routeValue: '',
+          label: 'NyxID Gateway',
+          source: 'gateway_provider',
+          status: 'ready',
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: '/api/v1/proxy/s/openai',
+          label: 'OpenAI',
           source: 'user_service',
           status: 'ready',
-          proxyUrl: 'https://nyx.example/proxy/openai',
+          allowed: true,
+          ready: true,
+          serviceId: 'svc-openai',
+          serviceSlug: 'openai',
+          description: null,
         },
       ],
-      gatewayUrl: 'https://nyx.example/gateway',
-      modelsByProvider: {
-        openai: ['gpt-5.4-mini'],
-      },
-      supportedModels: ['gpt-5.4-mini'],
+      modelGroupsByRoute: [
+        {
+          routeValue: '',
+          groupId: 'openai',
+          label: 'OpenAI',
+          models: ['gpt-5.4-mini'],
+        },
+      ],
+      setupHint: undefined,
     });
   });
 

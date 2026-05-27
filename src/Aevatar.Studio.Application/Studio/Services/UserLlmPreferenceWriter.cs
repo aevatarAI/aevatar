@@ -18,7 +18,7 @@ public sealed class UserLlmPreferenceWriter
         _catalogPort = catalogPort ?? throw new ArgumentNullException(nameof(catalogPort));
     }
 
-    public async Task<UserConfig> SaveAsync(
+    public async Task<UserConfigSaveReceipt> SaveAsync(
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
         CancellationToken ct)
@@ -27,8 +27,41 @@ public sealed class UserLlmPreferenceWriter
 
         var current = await _queryPort.GetAsync(ct).ConfigureAwait(false);
         var next = await MergePreferenceCommandAsync(current, bearerToken, command, ct).ConfigureAwait(false);
-        await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
-        return next;
+        return await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
+    }
+
+    public async Task<UserConfigSaveReceipt> SaveAsync(
+        string scopeId,
+        string? bearerToken,
+        SaveUserLlmPreferenceCommand command,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(command);
+
+        var current = await _queryPort.GetAsync(scopeId.Trim(), ct).ConfigureAwait(false);
+        var next = await MergePreferenceCommandAsync(current, bearerToken, command, ct).ConfigureAwait(false);
+        return await _commandService.SaveAsync(scopeId.Trim(), next, ct).ConfigureAwait(false);
+    }
+
+    public async Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
+        string scopeId,
+        UserLlmOption option,
+        string? model,
+        bool preserveCurrentModelWhenMissing,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(option);
+
+        var normalizedScopeId = scopeId.Trim();
+        var current = await _queryPort.GetAsync(normalizedScopeId, ct).ConfigureAwait(false);
+        var next = UserLlmPreferenceWriteCore.MergeSelectedOption(
+            current,
+            option,
+            model,
+            preserveCurrentModelWhenMissing);
+        return await _commandService.SaveAsync(normalizedScopeId, next, ct).ConfigureAwait(false);
     }
 
     public async Task<UserConfig> MergeLegacyFieldsAsync(
@@ -38,7 +71,7 @@ public sealed class UserLlmPreferenceWriter
         string? preferredLlmRoute,
         CancellationToken ct)
     {
-        var requestedModel = NormalizeOptional(defaultModel);
+        var requestedModel = UserLlmPreferenceWriteCore.NormalizeOptional(defaultModel);
         var requestedRoute = preferredLlmRoute is null
             ? current.PreferredLlmRoute
             : UserConfigLlmRoute.Normalize(preferredLlmRoute);
@@ -69,68 +102,48 @@ public sealed class UserLlmPreferenceWriter
         CancellationToken ct)
     {
         if (command.Reset == true)
-        {
-            return current with
-            {
-                DefaultModel = string.Empty,
-                PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
-            };
-        }
+            return UserLlmPreferenceWriteCore.Reset(current);
 
         if (!string.IsNullOrWhiteSpace(command.ServiceId))
         {
             var options = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
-            var option = FindLlmOption(options, command.ServiceId!);
+            var option = UserLlmPreferenceWriteCore.FindOption(options, command.ServiceId!);
             if (option is null)
                 throw new InvalidOperationException($"LLM service '{command.ServiceId}' is not routable for this user.");
 
-            EnsureSelectable(option);
-            return current with
-            {
-                PreferredLlmRoute = UserConfigLlmRoute.Normalize(option.RouteValue),
-                DefaultModel = NormalizeModelForRoute(NormalizeOptional(command.Model), option) ??
-                               option.DefaultModel ??
-                               string.Empty,
-            };
+            return UserLlmPreferenceWriteCore.MergeSelectedOption(
+                current,
+                option,
+                command.Model,
+                preserveCurrentModelWhenMissing: false);
         }
 
-        if (!string.IsNullOrWhiteSpace(command.RouteValue))
+        if (command.RouteValue is not null)
         {
             var routeValue = UserConfigLlmRoute.Normalize(command.RouteValue);
             if (string.Equals(routeValue, UserConfigLlmRouteDefaults.Gateway, StringComparison.OrdinalIgnoreCase))
-            {
-                return current with
-                {
-                    PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
-                    DefaultModel = NormalizeOptional(command.Model) ?? current.DefaultModel,
-                };
-            }
+                return UserLlmPreferenceWriteCore.MergeGatewayRoute(current, command.Model);
 
             var options = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
-            var option = FindLlmOption(options, routeValue);
+            var option = UserLlmPreferenceWriteCore.FindOption(options, routeValue);
             if (option is null)
                 throw new InvalidOperationException($"LLM route '{command.RouteValue}' is not routable for this user.");
 
-            EnsureSelectable(option);
-            return current with
-            {
-                PreferredLlmRoute = UserConfigLlmRoute.Normalize(option.RouteValue),
-                DefaultModel = NormalizeModelForRoute(NormalizeOptional(command.Model), option) ??
-                               option.DefaultModel ??
-                               string.Empty,
-            };
+            return UserLlmPreferenceWriteCore.MergeSelectedOption(
+                current,
+                option,
+                command.Model,
+                preserveCurrentModelWhenMissing: false);
         }
 
         if (!string.IsNullOrWhiteSpace(command.PresetId))
         {
             var activated = await ActivatePresetAsync(bearerToken, command.PresetId!, ct).ConfigureAwait(false);
-            return current with
-            {
-                PreferredLlmRoute = UserConfigLlmRoute.Normalize(activated.RouteValue),
-                DefaultModel = NormalizeModelForRoute(NormalizeOptional(command.Model), activated) ??
-                               activated.DefaultModel ??
-                               current.DefaultModel,
-            };
+            return UserLlmPreferenceWriteCore.MergeSelectedOption(
+                current,
+                activated,
+                command.Model,
+                preserveCurrentModelWhenMissing: true);
         }
 
         if (command.Model is not null)
@@ -147,22 +160,21 @@ public sealed class UserLlmPreferenceWriter
     {
         var normalized = model.Trim();
         if (string.IsNullOrWhiteSpace(normalized))
-            return current with { DefaultModel = string.Empty };
+            return UserLlmPreferenceWriteCore.MergeRawModel(current, normalized);
 
         if (UserConfigLlmModel.TryParseRouteModel(normalized) is not { } prefixed)
-            return current with { DefaultModel = normalized };
+            return UserLlmPreferenceWriteCore.MergeRawModel(current, normalized);
 
         var options = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
-        var option = FindLlmOption(options, prefixed.RouteSlug);
+        var option = UserLlmPreferenceWriteCore.FindOption(options, prefixed.RouteSlug);
         if (option is null)
             throw new InvalidOperationException($"LLM service '{prefixed.RouteSlug}' is not routable for this user.");
 
-        EnsureSelectable(option);
-        return current with
-        {
-            PreferredLlmRoute = UserConfigLlmRoute.Normalize(option.RouteValue),
-            DefaultModel = prefixed.Model,
-        };
+        return UserLlmPreferenceWriteCore.MergeSelectedOption(
+            current,
+            option,
+            prefixed.Model,
+            preserveCurrentModelWhenMissing: false);
     }
 
     private async Task<IReadOnlyList<UserLlmOption>> LoadOptionsAsync(string? bearerToken, CancellationToken ct)
@@ -183,11 +195,11 @@ public sealed class UserLlmPreferenceWriter
             return null;
 
         var options = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
-        var option = FindLlmOption(options, routeSlug);
+        var option = UserLlmPreferenceWriteCore.FindOption(options, routeSlug);
         if (option is null)
             return null;
 
-        EnsureSelectable(option);
+        UserLlmPreferenceWriteCore.EnsureSelectable(option);
         return option;
     }
 
@@ -226,9 +238,23 @@ public sealed class UserLlmPreferenceWriter
             string.Equals(candidate.ServiceId, existing.ServiceId, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(candidate.RouteValue, existing.RouteValue, StringComparison.OrdinalIgnoreCase));
         if (option is null)
-            throw new InvalidOperationException($"LLM service '{existing.ServiceId}' is not routable for this user.");
+        {
+            var serviceId = existing.ServiceId.Trim();
+            var routeValue = UserConfigLlmRoute.Normalize(existing.RouteValue);
+            return new UserLlmOption(
+                ServiceId: serviceId,
+                ServiceSlug: serviceId,
+                DisplayName: serviceId,
+                RouteValue: routeValue,
+                DefaultModel: existing.DefaultModel,
+                AvailableModels: [],
+                Status: UserLlmRouteStatus.Ready,
+                Source: UserLlmRouteSource.UserService,
+                Allowed: true,
+                Description: null);
+        }
 
-        EnsureSelectable(option);
+        UserLlmPreferenceWriteCore.EnsureSelectable(option);
         return option with { DefaultModel = existing.DefaultModel ?? option.DefaultModel };
     }
 
@@ -239,48 +265,7 @@ public sealed class UserLlmPreferenceWriter
     {
         var result = NyxIdLlmServiceMapping.ToOption(
             await _catalogPort.ProvisionAsync(bearerToken, provisionEndpointId, ct).ConfigureAwait(false));
-        EnsureSelectable(result);
+        UserLlmPreferenceWriteCore.EnsureSelectable(result);
         return result;
-    }
-
-    private static string? NormalizeModelForRoute(string? model, UserLlmOption option)
-    {
-        if (model is null)
-            return null;
-
-        if (UserConfigLlmModel.TryParseRouteModel(model) is { } prefixed &&
-            IsSameOption(option, prefixed.RouteSlug))
-        {
-            return prefixed.Model;
-        }
-
-        return model;
-    }
-
-    private static UserLlmOption? FindLlmOption(IReadOnlyList<UserLlmOption> options, string requested)
-    {
-        var normalized = requested.Trim();
-        return options.FirstOrDefault(option => IsSameOption(option, normalized));
-    }
-
-    private static bool IsSameOption(UserLlmOption option, string requested) =>
-        string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
-
-    private static void EnsureSelectable(UserLlmOption option)
-    {
-        if (!option.Allowed)
-            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not allowed for this user.");
-
-        if (!string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not ready: {option.Status}.");
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 }

@@ -63,6 +63,26 @@ export interface StudioAuthSession {
   readonly errorMessage?: string;
   readonly scopeId?: string | null;
   readonly scopeSource?: string | null;
+  readonly profile?: StudioAuthProfile | null;
+  readonly session?: StudioAuthSessionDetails | null;
+}
+
+export interface StudioAuthProfile {
+  readonly subject?: string | null;
+  readonly name?: string | null;
+  readonly email?: string | null;
+  readonly emailVerified?: boolean | null;
+  readonly picture?: string | null;
+  readonly roles: readonly string[];
+  readonly groups: readonly string[];
+}
+
+export interface StudioAuthSessionDetails {
+  readonly authenticated: boolean;
+  readonly providerDisplayName?: string | null;
+  readonly scopeId?: string | null;
+  readonly scopeSource?: string | null;
+  readonly expiresAtUtc?: string | null;
 }
 
 export interface StudioWorkflowDirectory {
@@ -784,19 +804,69 @@ export interface StudioUserConfig {
   readonly maxToolRounds?: number | null;
 }
 
-export interface StudioUserConfigProviderStatus {
-  readonly providerSlug: string;
-  readonly providerName: string;
+export interface StudioUserLlmRouteOption {
+  readonly routeValue: string;
+  readonly label: string;
+  readonly source: string;
   readonly status: string;
-  readonly proxyUrl: string;
-  readonly source?: string;
+  readonly allowed: boolean;
+  readonly ready: boolean;
+  readonly serviceId?: string | null;
+  readonly serviceSlug?: string | null;
+  readonly description?: string | null;
 }
 
-export interface StudioUserConfigModelsResponse {
-  readonly providers: StudioUserConfigProviderStatus[];
-  readonly gatewayUrl: string;
-  readonly modelsByProvider?: Record<string, string[]>;
-  readonly supportedModels: string[];
+export interface StudioUserLlmModelGroup {
+  readonly routeValue: string;
+  readonly groupId: string;
+  readonly label: string;
+  readonly models: readonly string[];
+}
+
+export interface StudioUserLlmSettingsCapabilities {
+  readonly canEditRoute: boolean;
+  readonly canEditModel: boolean;
+  readonly canSave: boolean;
+  readonly canRetryCatalog: boolean;
+}
+
+export interface StudioUserLlmSettings {
+  readonly savedRoute: string;
+  readonly savedRouteLabel: string;
+  readonly effectiveRoute: string;
+  readonly effectiveRouteLabel: string;
+  readonly routeFallbackActive: boolean;
+  readonly fallbackReason?: string | null;
+  readonly routeOptions: readonly StudioUserLlmRouteOption[];
+  readonly modelGroupsByRoute: readonly StudioUserLlmModelGroup[];
+  readonly catalogStatus: 'ready' | 'empty' | 'unavailable' | string;
+  readonly capabilities: StudioUserLlmSettingsCapabilities;
+  readonly defaultModel: string;
+  readonly setupHint?: unknown;
+}
+
+export interface StudioUserConfigSaveReceipt {
+  readonly accepted: boolean;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly ackedAtUtc: string;
+}
+
+export interface StudioUserConfigRuntimeDefaults {
+  readonly localRuntimeBaseUrl: string;
+  readonly remoteRuntimeBaseUrl: string;
+  readonly localMode: string;
+  readonly remoteMode: string;
+}
+
+export interface StudioUserConfigRuntime {
+  readonly runtimeMode: string;
+  readonly activeRuntimeBaseUrl: string;
+  readonly localRuntimeBaseUrl: string;
+  readonly remoteRuntimeBaseUrl: string;
+  readonly runtimeDefaults: StudioUserConfigRuntimeDefaults;
 }
 
 export interface StudioOrnnSkillSummary {

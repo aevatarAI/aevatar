@@ -20,10 +20,16 @@ public sealed class UserConfigService : IUserConfigService
 
     public Task<UserConfig> GetAsync(CancellationToken ct = default) => _queryPort.GetAsync(ct);
 
-    public Task<UserConfig> SaveAsync(SaveUserConfigCommand command, CancellationToken ct = default) =>
+    public async Task<UserConfigRuntimeView> GetRuntimeAsync(CancellationToken ct = default)
+    {
+        var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
+        return UserConfigRuntime.BuildView(config);
+    }
+
+    public Task<UserConfigSaveReceipt> SaveAsync(SaveUserConfigCommand command, CancellationToken ct = default) =>
         SaveAsync(null, command, ct);
 
-    public async Task<UserConfig> SaveAsync(
+    public async Task<UserConfigSaveReceipt> SaveAsync(
         string? bearerToken,
         SaveUserConfigCommand command,
         CancellationToken ct = default)
@@ -33,13 +39,19 @@ public sealed class UserConfigService : IUserConfigService
         var current = await _queryPort.GetAsync(ct).ConfigureAwait(false);
         var next = current with
         {
-            RuntimeMode = command.RuntimeMode is null ? current.RuntimeMode : command.RuntimeMode.Trim(),
+            RuntimeMode = command.RuntimeMode is null
+                ? current.RuntimeMode
+                : UserConfigRuntime.NormalizeConfiguredMode(command.RuntimeMode),
             LocalRuntimeBaseUrl = command.LocalRuntimeBaseUrl is null
                 ? current.LocalRuntimeBaseUrl
-                : command.LocalRuntimeBaseUrl.Trim(),
+                : UserConfigRuntime.NormalizeConfiguredBaseUrl(
+                    command.LocalRuntimeBaseUrl,
+                    nameof(command.LocalRuntimeBaseUrl)),
             RemoteRuntimeBaseUrl = command.RemoteRuntimeBaseUrl is null
                 ? current.RemoteRuntimeBaseUrl
-                : command.RemoteRuntimeBaseUrl.Trim(),
+                : UserConfigRuntime.NormalizeConfiguredBaseUrl(
+                    command.RemoteRuntimeBaseUrl,
+                    nameof(command.RemoteRuntimeBaseUrl)),
             GithubUsername = command.GithubUsername is null
                 ? current.GithubUsername
                 : NormalizeOptional(command.GithubUsername),
@@ -57,11 +69,10 @@ public sealed class UserConfigService : IUserConfigService
                 .ConfigureAwait(false);
         }
 
-        await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
-        return next;
+        return await _commandService.SaveAsync(next, ct).ConfigureAwait(false);
     }
 
-    public Task<UserConfig> SaveLlmPreferenceAsync(
+    public Task<UserConfigSaveReceipt> SaveLlmPreferenceAsync(
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
         CancellationToken ct = default) =>
