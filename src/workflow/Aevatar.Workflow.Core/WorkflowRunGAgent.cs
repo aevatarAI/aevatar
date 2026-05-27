@@ -27,6 +27,7 @@ namespace Aevatar.Workflow.Core;
 //                process-local runtime context.
 //   New principle: durable control/security facts live in typed WorkflowRunState;
 //                  runtime context carries only same-turn passthrough metadata.
+// Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id

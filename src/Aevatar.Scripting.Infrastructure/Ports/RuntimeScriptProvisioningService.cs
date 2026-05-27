@@ -4,6 +4,7 @@ using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter149/issue1132): Old pattern: provisioning could prepare a command then wait on handled-dispatch for actor handling.  New principle: provisioning uses accepted-only typed dispatch and returns the stable actor id receipt.
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
     private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;

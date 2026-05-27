@@ -5,6 +5,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter149/issue1132): Old pattern: runtime script commands had an optional handled-dispatch bypass around the typed command service.  New principle: runtime script commands always use the typed accepted-only dispatch service.
 public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
 {
     private readonly ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;

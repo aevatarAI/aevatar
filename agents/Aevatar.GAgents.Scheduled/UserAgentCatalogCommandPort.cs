@@ -25,6 +25,8 @@ namespace Aevatar.GAgents.Scheduled;
 /// Refactor (iter23/cluster-002):
 ///   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
 ///   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+///
+/// Refactor (iter149/issue1132): Old pattern: catalog mutations used handled-dispatch as a stronger synchronous ACK.  New principle: catalog command port uses accepted-only dispatch; catalog read model observes committed state later.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {
