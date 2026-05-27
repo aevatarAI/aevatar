@@ -56,7 +56,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         {[
           {
             key: 'tenantId',
-            label: 'Team / Tenant',
+            label: '团队 / Tenant',
             placeholder: '团队 ID',
             value: draft.tenantId,
           },
@@ -109,7 +109,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
             width: '100%',
           }}
         >
-          <Typography.Text style={fieldLabelStyle}>Result window</Typography.Text>
+          <Typography.Text style={fieldLabelStyle}>结果数量</Typography.Text>
           <InputNumber
             controls={false}
             min={1}
@@ -140,7 +140,11 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           <Button onClick={onLoad} type="primary">
             {loadLabel}
           </Button>
-          {onReset ? <Button onClick={onReset}>重置</Button> : null}
+          {onReset ? (
+            <Button aria-label="重置" onClick={onReset}>
+              重置
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>
