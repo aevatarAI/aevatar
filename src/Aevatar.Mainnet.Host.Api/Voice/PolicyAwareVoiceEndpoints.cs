@@ -77,19 +77,27 @@ public static class PolicyAwareVoiceEndpoints
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
                 return;
+            case ChatRouteAction.ActionOneofCase.ForwardToModel
+                when ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out _):
+                break;
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
                 http.Response.StatusCode = StatusCodes.Status501NotImplemented;
                 await http.Response.WriteAsync("Voice ForwardToModel is not supported in v1.", http.RequestAborted);
                 return;
-            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
-                break;
             default:
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await http.Response.WriteAsync("Voice route did not resolve to a GAgent target.", http.RequestAborted);
                 return;
         }
 
-        var actorId = action.ForwardToGagent.ActorId?.Trim();
+        if (!ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out var target))
+        {
+            http.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await http.Response.WriteAsync("Voice route did not resolve to a GAgent target.", http.RequestAborted);
+            return;
+        }
+
+        var actorId = target.ActorId.Trim();
         if (string.IsNullOrWhiteSpace(actorId))
         {
             http.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -104,7 +112,7 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        var moduleName = FirstNonEmpty(action.ForwardToGagent.VoiceModuleName, routeInput.Voice?.VoiceModuleName);
+        var moduleName = FirstNonEmpty(target.VoiceModuleName, routeInput.Voice?.VoiceModuleName);
         var resolution = await sessionResolver.ResolveAsync(
             new VoicePresenceSessionRequest(actorId, moduleName),
             http.RequestAborted);

@@ -39,6 +39,12 @@ public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
 
         first.Should().Be(runtimeActorId);
         second.Should().Be(runtimeActorId);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            revision,
+            CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         persisted.Count(x => x.EventData.Is(ScriptBehaviorBoundEvent.Descriptor)).Should().Be(1);

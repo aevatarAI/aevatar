@@ -71,6 +71,8 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().Contain("chrono-ai-daily");
+        systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
+        systemPrompt.Should().Contain("ornn_search_skills");
     }
 
     [Fact]
@@ -285,6 +287,43 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Should().Contain(message => message.Role == "tool");
         sink.Emissions.Should().Equal("…", "done");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithToolCallPreamble_StreamsCumulativeAssistantText()
+    {
+        var providerFactory = new ToolCallingPreambleProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-tool-preamble",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-preamble" },
+                Content = new MessageContent { Text = "/daily eanzhao" },
+            },
+            new Dictionary<string, string>(),
+            sink,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("开始执行 chrono-ai-daily，先查目录结构。\n\n最终日报");
+        sink.Emissions.Should().Equal(
+            "…",
+            "开始执行 chrono-ai-daily，先查目录结构。",
+            "开始执行 chrono-ai-daily，先查目录结构。\n\n",
+            "开始执行 chrono-ai-daily，先查目录结构。\n\n最终日报");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[1].Messages.Any(message =>
+            message.Role == "assistant" &&
+            message.Content == "开始执行 chrono-ai-daily，先查目录结构。" &&
+            message.ToolCalls is { Count: 1 }).Should().BeTrue();
     }
 
     [Fact]
@@ -721,6 +760,46 @@ public sealed class ConversationReplyGeneratorTests
                 yield break;
             }
 
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-calling-preamble";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (request.Messages.Any(static message => message.Role == "tool"))
+            {
+                yield return new LLMStreamChunk { DeltaContent = "最终日报" };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "开始执行 chrono-ai-daily，先查目录结构。" };
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall

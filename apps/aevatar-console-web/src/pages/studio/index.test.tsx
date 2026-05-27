@@ -2243,22 +2243,13 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         ? React.createElement(
             "button",
             {
-              key: "set-entry",
-              type: "button",
-              onClick: () => props.postBindEntryActions?.onSetEntry(),
-            },
-            "Set as Team entry"
-          )
-        : null,
-      props.postBindEntryActions
-        ? React.createElement(
-            "button",
-            {
               key: "set-entry-test",
               type: "button",
               onClick: () => props.postBindEntryActions?.onSetEntryAndTest(),
             },
-            "Set as Team entry and Test Team"
+            props.postBindEntryActions.isEntryMember
+              ? "测试 Team"
+              : "设为入口并测试 Team"
           )
         : null,
       React.createElement(
@@ -4777,7 +4768,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:default")).toBeTruthy();
     expect(screen.getByText("services:default")).toBeTruthy();
-    expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+    expect(screen.getByText("endpoint:chat")).toBeTruthy();
   });
 
   it("does not continue from Bind to Invoke without backend member identity", async () => {
@@ -5023,27 +5014,6 @@ describe("StudioPage", () => {
     });
   });
 
-  it("sets the bound Team member as entry from Studio", async () => {
-    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
-    renderStudioPage(
-      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
-    );
-
-    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: "Set as Team entry" }));
-
-    await waitFor(() => {
-      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
-        "scope-1",
-        "t-alpha",
-        "workspace-demo",
-      );
-    });
-    expect(message.success).toHaveBeenCalledWith(
-      "Team entry member update accepted.",
-    );
-  });
-
   it("sets the bound Team member as entry and returns to Team Detail for testing", async () => {
     (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
     (studioApi.getTeam as jest.Mock)
@@ -5076,7 +5046,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Set as Team entry and Test Team",
+        name: "设为入口并测试 Team",
       }),
     );
 
@@ -5099,6 +5069,39 @@ describe("StudioPage", () => {
     expect(message.warning).not.toHaveBeenCalled();
   });
 
+  it("returns to Team Detail for testing without resetting an existing Team entry", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValue({
+      teamId: "t-alpha",
+      scopeId: "scope-1",
+      displayName: "Alpha Team",
+      description: "",
+      entryMemberId: "workspace-demo",
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-05-01T08:00:00Z",
+      updatedAt: "2026-05-01T08:05:00Z",
+    });
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "测试 Team",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    });
+    expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+    expect(new URLSearchParams(window.location.search).get("memberId")).toBe(
+      "workspace-demo",
+    );
+    expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
+  });
+
   it("returns to Team Detail without auto-opening Test Team while entry visibility is pending", async () => {
     (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
     (studioApi.getTeam as jest.Mock).mockResolvedValue({
@@ -5119,7 +5122,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Set as Team entry and Test Team",
+        name: "设为入口并测试 Team",
       }),
     );
 
@@ -7149,7 +7152,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
-      expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+      expect(screen.getByText("endpoint:chat")).toBeTruthy();
     });
 
     const searchParams = new URLSearchParams(window.location.search);
@@ -7159,7 +7162,7 @@ describe("StudioPage", () => {
   });
 
   it("pins Observe to the selected member service and corrects stale run selection", async () => {
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValueOnce({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -7180,9 +7183,9 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Logs")).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      expect(mockScopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
         "scope-1",
-        "workspace-demo",
+        "default",
         {
           take: 12,
         }
@@ -7197,7 +7200,7 @@ describe("StudioPage", () => {
   });
 
   it("keeps Observe populated with the latest invoke session while runtime runs warm up", async () => {
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",
@@ -7223,7 +7226,7 @@ describe("StudioPage", () => {
 
   it("rehydrates Observe from the persisted invoke session after refresh", async () => {
     const now = Date.now();
-    mockScopeRuntimeApi.listMemberRuns.mockResolvedValue({
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValue({
       scopeId: "scope-1",
       serviceId: "default",
       serviceKey: "scope-1:default:default:default",

@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -129,6 +130,60 @@ internal static class ScriptEvolutionIntegrationTestKit
             .EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, resolvedSnapshot, ct);
     }
 
+    public static async Task WaitForScriptBindingAsync(
+        IServiceProvider provider,
+        string runtimeActorId,
+        string definitionActorId,
+        string revision,
+        CancellationToken ct)
+    {
+        var eventStore = provider.GetRequiredService<IEventStore>();
+        await WaitForAsync(
+            token => eventStore.GetEventsAsync(runtimeActorId, ct: token),
+            events => events.Any(evt =>
+                evt.EventData?.Is(ScriptBehaviorBoundEvent.Descriptor) == true &&
+                MatchesBinding(evt.EventData.Unpack<ScriptBehaviorBoundEvent>(), definitionActorId, revision)),
+            $"Script runtime binding not committed. actor_id={runtimeActorId}",
+            ct);
+    }
+
+    public static async Task<TState> WaitForStateAsync<TState>(
+        IServiceProvider provider,
+        string runtimeActorId,
+        Func<TState, bool> isReady,
+        CancellationToken ct)
+        where TState : class, IMessage<TState>, new()
+    {
+        ArgumentNullException.ThrowIfNull(isReady);
+
+        return await WaitForAsync(
+            token => TryGetStateAsync<TState>(provider, runtimeActorId, token),
+            state => state != null && isReady(state),
+            $"Script runtime state not ready. actor_id={runtimeActorId}",
+            ct) ?? throw new InvalidOperationException($"Script runtime state not ready. actor_id={runtimeActorId}");
+    }
+
+    private static async Task<TState?> TryGetStateAsync<TState>(
+        IServiceProvider provider,
+        string runtimeActorId,
+        CancellationToken ct)
+        where TState : class, IMessage<TState>, new()
+    {
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        var actor = await runtime.GetAsync(runtimeActorId);
+        if (actor?.Agent is not ScriptBehaviorGAgent agent || agent.State.StateRoot == null)
+            return null;
+
+        return agent.State.StateRoot.Unpack<TState>();
+    }
+
+    private static bool MatchesBinding(
+        ScriptBehaviorBoundEvent evt,
+        string definitionActorId,
+        string revision) =>
+        string.Equals(evt.DefinitionActorId, definitionActorId, StringComparison.Ordinal) &&
+        string.Equals(evt.Revision, revision, StringComparison.Ordinal);
+
     private static void RememberDefinitionSnapshot(
         string definitionActorId,
         ScriptDefinitionSnapshot snapshot)
@@ -202,40 +257,14 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
 
         try
         {
-            static bool IsReady(ScriptReadModelSnapshot? snapshot) =>
-                snapshot != null &&
-                !string.IsNullOrWhiteSpace(snapshot.DefinitionActorId) &&
-                !string.IsNullOrWhiteSpace(snapshot.Revision) &&
-                snapshot.ReadModelPayload != null;
-
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-            if (!IsReady(snapshot))
-            {
-                await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-                var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
-                try
-                {
-                    snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    while (!IsReady(snapshot))
-                    {
-                        await ScriptRunCommittedObservationTestHelper.WaitForAnyCommittedAsync(sink, ct);
-                        snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-                    }
-                }
-                finally
-                {
-                    await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
-                }
-            }
-
-            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
+            var snapshot = await WaitForSnapshotAsync(provider, runtimeActorId, ct);
+            return snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {

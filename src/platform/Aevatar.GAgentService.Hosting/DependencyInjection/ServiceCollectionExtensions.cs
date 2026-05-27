@@ -3,7 +3,9 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
@@ -36,7 +38,7 @@ using Microsoft.Extensions.Hosting;
 namespace Aevatar.GAgentService.Hosting.DependencyInjection;
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class ServiceCollectionExtensions
 {
@@ -64,9 +66,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
+        services.TryAddSingleton<IChatRunActorPort, ChatRunActorAdapter>();
+        services.TryAddSingleton<ChatRunToolCompletionCoordinator>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
-        services.TryAddSingleton<ResponsesForwardedCompletionRecorder>();
-        services.TryAddSingleton<IResponsesForwardingApplicationService, ResponsesForwardingApplicationService>();
+        services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        services.AddToolSetRegistry();
+        services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());

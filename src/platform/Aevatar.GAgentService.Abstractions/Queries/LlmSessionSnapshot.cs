@@ -4,7 +4,7 @@ using Aevatar.GAgentService.Abstractions;
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed record LlmSessionSnapshot(
     string ResponseId,
@@ -23,7 +23,7 @@ public sealed record LlmSessionSnapshot(
     LlmSessionCompletionSnapshot? Completion = null);
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed record LlmSessionForwardedToolCallSnapshot(
     string CallId,
@@ -38,7 +38,7 @@ public sealed record LlmSessionForwardedToolCallSnapshot(
     DateTimeOffset? ResolvedAt);
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed record LlmSessionCompletionSnapshot(
     string OutputText,
@@ -49,7 +49,7 @@ public sealed record LlmSessionCompletionSnapshot(
     TokenUsage? Usage = null);
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed record LlmSessionCompletedToolCallSnapshot(
     string CallId,

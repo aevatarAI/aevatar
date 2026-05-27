@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
@@ -17,6 +19,7 @@ internal static class VoiceDemoBootstrapEndpoints
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";
+    private const string InvokeGAgentToolName = "aevatar_invoke_gagent";
 
     public static IEndpointRouteBuilder MapVoiceDemoBootstrapEndpoints(this IEndpointRouteBuilder app)
     {
@@ -127,10 +130,21 @@ internal static class VoiceDemoBootstrapEndpoints
     private static ChatRouteAction ForwardToDemoActor(string actorId) =>
         new()
         {
-            ForwardToGagent = new ForwardToGAgent
+            ForwardToModel = new ForwardToModel
             {
-                ActorId = actorId,
-                VoiceModuleName = VoiceModuleName,
+                ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = InvokeGAgentToolName,
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["actor_id"] = Value.ForString(actorId),
+                            ["voice_module_name"] = Value.ForString(VoiceModuleName),
+                        },
+                    },
+                },
             },
         };
 

@@ -95,24 +95,148 @@ public sealed class HttpStatusProbeExecutorTests
             HttpStatusCode.OK,
             configuration: new Dictionary<string, string?>
             {
-                ["Aevatar:Status:ResponsesForwardToTeam:BearerToken"] = "token-from-pod",
+                ["Aevatar:Status:AuthenticatedProbe:BearerToken"] = "token-from-pod",
             },
             captureRequest: req =>
             {
                 capturedAuthorization = req.Headers.Authorization?.ToString();
             });
 
-        var descriptor = NewDescriptor("responses-forward-team", new()
+        var descriptor = NewDescriptor("authenticated-probe", new()
         {
             ["Url"] = "https://example.test/v1/responses",
             ["Header.Authorization"] =
-                "Bearer ${configuration:Aevatar:Status:ResponsesForwardToTeam:BearerToken}",
+                "Bearer ${configuration:Aevatar:Status:AuthenticatedProbe:BearerToken}",
         });
 
         var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
 
         outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
         capturedAuthorization.Should().Be("Bearer token-from-pod");
+    }
+
+    [Fact]
+    public async Task UsesClientCredentialsGrant_ForDynamicAuthorization()
+    {
+        var requests = new List<CapturedRequest>();
+        var executor = NewExecutor(
+            async req =>
+            {
+                requests.Add(await CloneRequestAsync(req));
+                if (req.RequestUri?.AbsoluteUri == "https://nyx.example.test/oauth/token")
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""
+                        {"access_token":"fresh-access","token_type":"Bearer","expires_in":28800}
+                        """),
+                    };
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            },
+            configuration: new Dictionary<string, string?>
+            {
+                ["Aevatar:Status:AuthenticatedProbe:BearerToken"] = "expired-access",
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
+            });
+
+        var descriptor = NewDescriptor("authenticated-probe", new()
+        {
+            ["Url"] = "https://example.test/v1/responses",
+            ["Header.Authorization"] =
+                "Bearer ${configuration:Aevatar:Status:AuthenticatedProbe:BearerToken}",
+            ["Auth.Mode"] = "auto",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
+            ["Auth.ClientCredentialsScope"] = "proxy:* llm:proxy",
+            ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
+        });
+
+        var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Ok);
+        requests.Should().HaveCount(2);
+        requests[0].RequestUri!.AbsoluteUri.Should().Be("https://nyx.example.test/oauth/token");
+        requests[0].ContentText.Should().Contain("grant_type=client_credentials");
+        requests[0].ContentText.Should().Contain("client_id=client-id");
+        requests[0].ContentText.Should().Contain("client_secret=client-secret");
+        requests[0].ContentText.Should().Contain("scope=proxy");
+        requests[1].RequestUri!.AbsoluteUri.Should().Be("https://example.test/v1/responses");
+        requests[1].Authorization.Should().Be("Bearer fresh-access");
+    }
+
+    [Fact]
+    public async Task CachesClientCredentialsAccessToken()
+    {
+        var tokenCalls = 0;
+        var executor = NewExecutor(
+            req =>
+            {
+                if (req.RequestUri?.AbsoluteUri == "https://nyx.example.test/oauth/token")
+                {
+                    tokenCalls++;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""
+                        {"access_token":"fresh-access","token_type":"Bearer","expires_in":28800}
+                        """),
+                    };
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            },
+            configuration: new Dictionary<string, string?>
+            {
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
+            });
+
+        var descriptor = NewDescriptor("authenticated-probe", new()
+        {
+            ["Url"] = "https://example.test/v1/responses",
+            ["Header.Authorization"] = "Bearer stale",
+            ["Auth.Mode"] = "auto",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
+            ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
+        });
+
+        await executor.ProbeAsync(descriptor, CancellationToken.None);
+        await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        tokenCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReturnsDown_WhenClientCredentialsGrantFails()
+    {
+        var executor = NewExecutor(
+            req => req.RequestUri?.AbsoluteUri == "https://nyx.example.test/oauth/token"
+                ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            : new HttpResponseMessage(HttpStatusCode.OK),
+            configuration: new Dictionary<string, string?>
+            {
+                ["Aevatar:Status:AuthenticatedProbe:ClientId"] = "client-id",
+                ["Aevatar:Status:AuthenticatedProbe:ClientSecret"] = "client-secret",
+            });
+
+        var descriptor = NewDescriptor("authenticated-probe", new()
+        {
+            ["Url"] = "https://example.test/v1/responses",
+            ["Header.Authorization"] = "Bearer stale",
+            ["Auth.Mode"] = "auto",
+            ["Auth.ClientIdConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientId",
+            ["Auth.ClientSecretConfigurationKey"] = "Aevatar:Status:AuthenticatedProbe:ClientSecret",
+            ["Auth.TokenEndpoint"] = "https://nyx.example.test/oauth/token",
+        });
+
+        var outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        outcome.Detail.Should().Be("oauth_token_failed");
+        outcome.ErrorMessage.Should().Contain("HTTP 401");
     }
 
     [Fact]
@@ -206,8 +330,32 @@ public sealed class HttpStatusProbeExecutorTests
             .AddInMemoryCollection(configuration)
             .Build();
         var factory = new TestHttpClientFactory(new StubHandler(status, captureRequest, responseBody));
-        return new HttpStatusProbeExecutor(factory, configRoot, timeProvider ?? TimeProvider.System);
+        return new HttpStatusProbeExecutor(
+            factory,
+            configRoot,
+            new StatusProbeAuthorizationResolver(factory, configRoot),
+            timeProvider ?? TimeProvider.System);
     }
+
+    private static HttpStatusProbeExecutor NewExecutor(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> handler,
+        Dictionary<string, string?> configuration)
+    {
+        var configRoot = new ConfigurationBuilder()
+            .AddInMemoryCollection(configuration)
+            .Build();
+        var factory = new TestHttpClientFactory(new DelegateHandler(handler));
+        return new HttpStatusProbeExecutor(
+            factory,
+            configRoot,
+            new StatusProbeAuthorizationResolver(factory, configRoot),
+            TimeProvider.System);
+    }
+
+    private static HttpStatusProbeExecutor NewExecutor(
+        Func<HttpRequestMessage, HttpResponseMessage> handler,
+        Dictionary<string, string?> configuration) =>
+        NewExecutor(req => Task.FromResult(handler(req)), configuration);
 
     private static HealthProbeTargetDescriptor NewDescriptor(string slug, Dictionary<string, string> parameters)
     {
@@ -225,7 +373,7 @@ public sealed class HttpStatusProbeExecutorTests
         return d;
     }
 
-    private sealed class TestHttpClientFactory(StubHandler handler) : IHttpClientFactory
+    private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler) { Timeout = TimeSpan.FromSeconds(5) };
     }
@@ -245,4 +393,26 @@ public sealed class HttpStatusProbeExecutorTests
             return Task.FromResult(response);
         }
     }
+
+    private sealed class DelegateHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler)
+        : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            await handler(request);
+    }
+
+    private static async Task<CapturedRequest> CloneRequestAsync(HttpRequestMessage request)
+    {
+        return new CapturedRequest(
+            request.RequestUri,
+            request.Headers.Authorization?.ToString(),
+            request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync());
+    }
+
+    private sealed record CapturedRequest(
+        Uri? RequestUri,
+        string? Authorization,
+        string ContentText);
 }

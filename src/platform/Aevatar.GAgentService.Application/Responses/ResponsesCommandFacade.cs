@@ -27,7 +27,8 @@ public sealed class ResponsesCommandFacade(
     ILlmSessionRegistrationPort responseSessionRegistrationPort,
     ILlmSessionQueryPort responseSessionQueryPort,
     IActorDispatchPort dispatchPort,
-    IEnumerable<IResponsesToolProvider> toolProviders,
+    IResponsesToolClassificationService toolClassificationService,
+    IResponsesDirectToolPlanService directToolPlanService,
     ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
 {
     private const string RegistrationScopeMetadataKey = "scope_id";
@@ -93,30 +94,23 @@ public sealed class ResponsesCommandFacade(
                     completionResult.Completion!));
         }
 
-        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
-        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-        if (routedModelResult.ForwardAction is not null)
-            return ResponsesCreateCommandResult.FromForward(new ResponsesForwardCommandResult(
-                normalized,
-                callerScope,
-                routedModelResult.ForwardAction,
-                sessionResult.Session!,
-                continuation.PreviousSnapshot,
-                createdAt));
-
         var prepared = await BuildExecutionPlanAsync(
             normalized,
             continuation.PreviousSnapshot,
             callerScope,
-            routedModelResult.Model!,
+            routedModelResult.Action!,
             bearerToken,
             sessionResult.Session!,
             createdAt,
             ct);
+        if (prepared.Error is not null)
+            return ResponsesCreateCommandResult.FromError(
+                prepared.Error.StatusCode,
+                prepared.Error.Code,
+                prepared.Error.Message);
         return normalized.Stream
-            ? ResponsesCreateCommandResult.FromStreamPlan(prepared)
-            : await ExecuteNonStreamingAsync(prepared, ct);
+            ? ResponsesCreateCommandResult.FromStreamPlan(prepared.Plan!)
+            : await ExecuteNonStreamingAsync(prepared.Plan!, ct);
     }
 
     // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -250,25 +244,17 @@ public sealed class ResponsesCommandFacade(
                     : routeDecision.Action.Reject.Reason);
         }
 
-        if (routeDecision.Action.ForwardToGagent is not null)
-        {
-            // Refactor (iter92/cluster-793): Old: /v1/responses treated ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only the direct actor target; Studio member routing uses ForwardToStudioMember.
-            return RouteTargetResult.FromError(
-                500,
-                "chat_route_action_not_supported",
-                "ForwardToGAgent is a direct actor target and is not supported by /v1/responses. Use ForwardToStudioMember or ForwardToTeam.");
-        }
-
-        if (routeDecision.Action.ForwardToTeam is not null ||
-            routeDecision.Action.ForwardToStudioMember is not null)
-        {
-            return RouteTargetResult.FromForward(routeDecision.Action);
-        }
-
-        var routedModel = !string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName)
-            ? routeDecision.Action.ForwardToModel.ModelName.Trim()
+        var action = routeDecision.Action.Clone();
+        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+            ? action.ForwardToModel.ModelName.Trim()
             : normalized.Model;
-        return RouteTargetResult.FromModel(routedModel);
+        if (action.ForwardToModel is null)
+        {
+            action.ForwardToModel = new ForwardToModel();
+        }
+
+        action.ForwardToModel.ModelName = routedModel;
+        return RouteTargetResult.FromModel(action);
     }
 
     private async Task<ContinuationResult> PrepareContinuationAsync(
@@ -351,23 +337,30 @@ public sealed class ResponsesCommandFacade(
         }
     }
 
-    private async Task<ResponsesCreateCommandPlan> BuildExecutionPlanAsync(
+    private async Task<ExecutionPlanResult> BuildExecutionPlanAsync(
         NormalizedResponsesRequest normalized,
         LlmSessionSnapshot? previousSnapshot,
         ResponsesCallerScope callerScope,
-        string routedModel,
+        ChatRouteAction routeAction,
         string bearerToken,
         LlmSessionRegistrationResult responseSession,
         DateTimeOffset createdAt,
         CancellationToken ct)
     {
         var toolProviderContext = BuildToolProviderContext(callerScope, normalized.ResponseId, bearerToken);
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
+        var forwardToModel = routeAction.ForwardToModel;
+        var toolPlan = directToolPlanService.Build(routeAction);
+        if (toolPlan.Error is not null)
+            return ExecutionPlanResult.FromError(toolPlan.Error);
+
+        var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
-            toolProviders,
             toolProviderContext,
-            logger,
+            toolPlan.AdditionalToolProviders,
             ct);
+        var routedModel = string.IsNullOrWhiteSpace(forwardToModel?.ModelName)
+            ? normalized.Model
+            : forwardToModel.ModelName.Trim();
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -378,14 +371,15 @@ public sealed class ResponsesCommandFacade(
             resolvedRouteValue,
             toolClassification);
 
-        return new ResponsesCreateCommandPlan(
+        return ExecutionPlanResult.FromPlan(new ResponsesCreateCommandPlan(
             normalized,
             responseSession,
             previousSnapshot,
             llmRequest,
             toolProviderContext.ToolContextMetadata,
             toolClassification,
-            createdAt);
+            toolPlan.ToolChoiceHintPlan,
+            createdAt));
     }
 
     private async Task<ResponsesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -1029,16 +1023,13 @@ public sealed class ResponsesCommandFacade(
         ResponsesCommandError? Error);
 
     private sealed record RouteTargetResult(
-        string? Model,
-        ChatRouteAction? ForwardAction,
+        ChatRouteAction? Action,
         ResponsesCommandError? Error)
     {
-        public static RouteTargetResult FromModel(string model) => new(model, null, null);
-
-        public static RouteTargetResult FromForward(ChatRouteAction action) => new(null, action, null);
+        public static RouteTargetResult FromModel(ChatRouteAction action) => new(action, null);
 
         public static RouteTargetResult FromError(int statusCode, string code, string message) =>
-            new(null, null, new ResponsesCommandError(statusCode, code, message));
+            new(null, new ResponsesCommandError(statusCode, code, message));
     }
 
     private sealed record ContinuationResult(
@@ -1058,6 +1049,15 @@ public sealed class ResponsesCommandFacade(
     private sealed record SessionRegistrationResult(
         LlmSessionRegistrationResult? Session,
         ResponsesCommandError? Error);
+
+    private sealed record ExecutionPlanResult(
+        ResponsesCreateCommandPlan? Plan,
+        ResponsesCommandError? Error)
+    {
+        public static ExecutionPlanResult FromPlan(ResponsesCreateCommandPlan plan) => new(plan, null);
+
+        public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
+    }
 
     private sealed record CompletionRecordResult(
         ResponsesCommandError? Error,

@@ -5,6 +5,7 @@ package aevatar.chat_routing.v1;
 option csharp_namespace = "Aevatar.ChatRouting.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 import "agent_messages.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
@@ -91,28 +92,26 @@ message ChatRouteInput {
 }
 
 // ─── Decision actions (oneof) ───
+message ChatRouteToolSetRef {
+  // Name of the registered tool set (e.g. "workspace.default",
+  // "lark.self_notify", "voice.realtime"). The registry resolves this to a
+  // concrete IAgentToolSource list at the boundary.
+  string name = 1;
+}
+
+message ChatRouteToolChoiceHint {
+  // Tool name to pin. Empty means no hint; the LLM is free to choose.
+  string tool_name = 1;
+  // Server-policy arguments for the chosen tool. Boundary mergers must reject
+  // LLM-supplied arguments that conflict on the same key; the prefilled values
+  // are trusted policy input, not model-supplied data.
+  google.protobuf.Struct prefilled_arguments = 2;
+}
+
 message ForwardToModel {
   string model_name = 1;
-}
-
-// Refactor (iter92/cluster-793): Old: /v1/responses treated
-// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
-// the direct actor target; Studio member routing uses ForwardToStudioMember.
-message ForwardToGAgent {
-  // Direct actor / Orleans grain key target. Used only by GAgent-native
-  // ingress paths that can bind to a raw actor address (Voice, Nyx Relay,
-  // Direct NyxIdChat create). LLM facades such as /v1/responses must not
-  // interpret this as a Studio member identity; use ForwardToStudioMember
-  // for that contract.
-  string actor_id = 1;
-  // Optional voice module to attach to on the target actor. Only used
-  // when source_kind = CHAT_SOURCE_KIND_VOICE; ignored otherwise.
-  string voice_module_name = 2;
-}
-
-message ForwardToWorkflow {
-  // Reserved for v2; no implementation in v1.
-  string workflow_id = 1;
+  ChatRouteToolSetRef tool_set_ref = 2;
+  ChatRouteToolChoiceHint tool_choice_hint = 3;
 }
 
 message Reject {
@@ -120,47 +119,13 @@ message Reject {
   string reason = 1;
 }
 
-// ForwardToTeam targets a Studio team entry-member's published GAgent service.
-// Ingress resolves (team_id, endpoint_id) into a concrete published_service_id
-// via ITeamEntryMemberResolver, then dispatches through
-// IStaticGAgentStreamInvocationPort<AGUIEvent>.
-//
-// Supported on GAgent-native entries (NyxIdChat / Relay / Voice) and on the
-// OpenAI Responses facade (/v1/responses), where AGUI events are mapped to
-// Responses SSE / JSON via AGUIEventToResponsesSseAdapter (~280 lines of typed
-// mapping; the event vocabularies are structurally isomorphic). The Anthropic
-// Messages facade (/v1/messages) currently still rejects this at HTTP 501;
-// adding it is symmetric to /v1/responses but tracked as separate work.
-message ForwardToTeam {
-  // Studio team id (REQUIRED).
-  string team_id = 1;
-  // Studio service endpoint id on the resolved entry member (REQUIRED).
-  string endpoint_id = 2;
-  // Optional override scope id. Empty means "use the ingress URL scope".
-  // Reserved for future cross-scope routing; v1 ingress endpoints stamp
-  // the URL scope and ignore non-empty values that disagree.
-  string scope_id = 3;
-}
-
-// ForwardToStudioMember targets one Studio member's published GAgent service.
-// Refactor (iter92/cluster-793): Old: /v1/responses treated
-// ForwardToGAgent.actor_id as a Studio member id. New: ForwardToGAgent is only
-// the direct actor target; Studio member routing uses ForwardToStudioMember.
-// LLM facades resolve member_id via IMemberPublishedServiceResolver, then
-// dispatch through IStaticGAgentStreamInvocationPort<AGUIEvent>. This keeps
-// Studio member identity separate from ForwardToGAgent's direct actor target.
-message ForwardToStudioMember {
-  // Studio member id (REQUIRED).
-  string member_id = 1;
-  // Published service endpoint id. Empty means the conventional "chat"
-  // endpoint.
-  string endpoint_id = 2;
-  // Optional override scope id. Empty means "use the ingress URL/caller
-  // scope".
-  string scope_id = 3;
-}
-
 message ChatRouteAction {
+  // tag 2 + name `forward_to_gagent` and tag 6 + name `forward_to_team`
+  // were removed when route policies became tool-first. GAgent/team routing
+  // now uses `forward_to_model.tool_choice_hint` with `aevatar_invoke_gagent`
+  // or `aevatar_invoke_team`.
+  reserved 2, 6;
+  reserved "forward_to_gagent", "forward_to_team";
   // tag 5 + name `bypass` were previously a `Bypass` oneof variant; removed
   // because the dev `/ws/voice/{actorId}` entry does not produce a
   // ChatRouteAction at all (it bypasses the resolver entirely). Don't reuse
@@ -168,13 +133,14 @@ message ChatRouteAction {
   // if this proto ever sees deployed binaries.
   reserved 5;
   reserved "bypass";
+  // tag 3 + name `forward_to_workflow` were removed when workflow routing
+  // became tool-first. Workflow invocation now uses
+  // `forward_to_model.tool_choice_hint` with `aevatar_start_workflow`.
+  reserved 3;
+  reserved "forward_to_workflow";
   oneof action {
     ForwardToModel forward_to_model = 1;
-    ForwardToGAgent forward_to_gagent = 2;
-    ForwardToWorkflow forward_to_workflow = 3;
     Reject reject = 4;
-    ForwardToTeam forward_to_team = 6;
-    ForwardToStudioMember forward_to_studio_member = 7;
   }
 }
 
@@ -259,6 +225,14 @@ message ChatRoutePolicyUpdated {
 // Resolver-level telemetry MAY record matched_rule_id + used_fallback +
 // resolved_at for observability, but the structured fields below stay
 // transient at the ingress boundary.
+message ChatRouteDeprecation {
+  string code = 1;
+  string message = 2;
+  string action_kind = 3;
+  string matched_rule_id = 4;
+  string translated_target = 5;
+}
+
 message ChatRouteDecision {
   ChatRouteAction action = 1;
   // rule_id of the matching ChatRouteRule. Empty when used_fallback=true
@@ -268,4 +242,10 @@ message ChatRouteDecision {
   // True iff resolver fell back to env-driven default because the
   // policy actor didn't exist or readmodel snapshot was unavailable.
   bool used_fallback = 4;
+  repeated ChatRouteDeprecation deprecations = 5;
+  // Original matched policy action before runtime canonicalization. This is
+  // transient ingress context for non-LLM actor-bound entries that still need
+  // actor-specific fields (for example voice_module_name); it must not be
+  // persisted.
+  ChatRouteAction original_action = 6;
 }

@@ -9,7 +9,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 // Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
 //   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
@@ -89,7 +89,7 @@ public sealed class LlmSessionCurrentStateProjector
             })
             .ToArray();
         // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+        //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
         //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
         if (state.Completion != null)
         {
