@@ -158,7 +158,7 @@ export const PageContainer: React.FC<PageContainerProps> = ({
   <div className={className} style={style}>
     {pageHeaderRender === false ? null : (
       <div data-testid="page-container-header">
-        <Space align="start" direction="vertical" size={8} style={{ width: '100%' }}>
+        <Space align="start" orientation="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
             {onBack ? (
               <button aria-label="Back" onClick={onBack} type="button">

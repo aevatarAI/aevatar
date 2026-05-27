@@ -19,6 +19,8 @@ STUDIO_API_TARGET="${AEVATAR_STUDIO_API_TARGET:-${API_TARGET}}"
 PRESERVE_AUTH_HOST="${AEVATAR_PROXY_PRESERVE_AUTH_HOST:-true}"
 LOG_FILE="${SCRIPT_DIR}/boot.log"
 PID_FILE="${SCRIPT_DIR}/boot.pid"
+PACKAGE_RUNNER=()
+SCREEN_SESSION_NAME="aevatar-console-web-${FRONTEND_PORT}"
 
 usage() {
   cat <<'EOF'
@@ -87,6 +89,26 @@ if [[ ! -f "${PACKAGE_JSON}" ]]; then
   echo "package.json not found: ${PACKAGE_JSON}" >&2
   exit 1
 fi
+
+resolve_package_runner() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PACKAGE_RUNNER=(pnpm start:dev)
+    return 0
+  fi
+
+  if [[ -x "${SCRIPT_DIR}/node_modules/.bin/max" ]]; then
+    PACKAGE_RUNNER=("${SCRIPT_DIR}/node_modules/.bin/max" dev)
+    return 0
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    PACKAGE_RUNNER=(npm run start:dev)
+    return 0
+  fi
+
+  echo "Neither pnpm, local max, nor npm is available." >&2
+  return 1
+}
 
 list_listening_pids() {
   lsof -tiTCP:"${1}" -sTCP:LISTEN 2>/dev/null | sort -u || true
@@ -194,6 +216,31 @@ write_listening_pid_file() {
   echo "${pids}" | head -n 1 > "${PID_FILE}"
 }
 
+start_dev_server() {
+  : > "${LOG_FILE}"
+
+  if command -v screen >/dev/null 2>&1; then
+    screen -S "${SCREEN_SESSION_NAME}" -X quit >/dev/null 2>&1 || true
+    screen -dmS "${SCREEN_SESSION_NAME}" \
+      bash -lc 'cd "$1"; log_file="$2"; shift 2; export PORT="$1"; export AEVATAR_CONSOLE_FRONTEND_PORT="$1"; shift; export AEVATAR_API_TARGET="$1"; shift; export AEVATAR_STUDIO_API_TARGET="$1"; shift; export AEVATAR_PROXY_PRESERVE_AUTH_HOST="$1"; shift; export UMI_ENV=dev; export MOCK=none; exec "$@" >> "$log_file" 2>&1' \
+      bash "${SCRIPT_DIR}" "${LOG_FILE}" "${FRONTEND_PORT}" "${API_TARGET}" "${STUDIO_API_TARGET}" "${PRESERVE_AUTH_HOST}" "${PACKAGE_RUNNER[@]}"
+    echo "screen:${SCREEN_SESSION_NAME}" > "${PID_FILE}"
+  else
+    (
+      cd "${SCRIPT_DIR}"
+      export PORT="${FRONTEND_PORT}"
+      export AEVATAR_CONSOLE_FRONTEND_PORT="${FRONTEND_PORT}"
+      export AEVATAR_API_TARGET="${API_TARGET}"
+      export AEVATAR_STUDIO_API_TARGET="${STUDIO_API_TARGET}"
+      export AEVATAR_PROXY_PRESERVE_AUTH_HOST="${PRESERVE_AUTH_HOST}"
+      export UMI_ENV=dev
+      export MOCK=none
+      nohup "${PACKAGE_RUNNER[@]}" > "${LOG_FILE}" 2>&1 &
+      echo $! > "${PID_FILE}"
+    )
+  fi
+}
+
 kill_existing_processes
 clean_generated_artifacts
 
@@ -209,16 +256,10 @@ echo "==> Studio API target: ${STUDIO_API_TARGET}"
 echo "==> Preserve auth Host: ${PRESERVE_AUTH_HOST}"
 echo "==> Log: ${LOG_FILE}"
 
-(
-  cd "${SCRIPT_DIR}"
-  export PORT="${FRONTEND_PORT}"
-  export AEVATAR_CONSOLE_FRONTEND_PORT="${FRONTEND_PORT}"
-  export AEVATAR_API_TARGET="${API_TARGET}"
-  export AEVATAR_STUDIO_API_TARGET="${STUDIO_API_TARGET}"
-  export AEVATAR_PROXY_PRESERVE_AUTH_HOST="${PRESERVE_AUTH_HOST}"
-  nohup pnpm start:dev > "${LOG_FILE}" 2>&1 &
-  echo $! > "${PID_FILE}"
-)
+resolve_package_runner
+echo "==> Runner: ${PACKAGE_RUNNER[*]}"
+
+start_dev_server
 
 if ! wait_for_port_ready; then
   echo "aevatar-console-web failed to start. Last log lines:" >&2
@@ -226,6 +267,9 @@ if ! wait_for_port_ready; then
   exit 1
 fi
 
-write_listening_pid_file
+if ! write_listening_pid_file; then
+  echo "aevatar-console-web is ready but no listening process was found." >&2
+  exit 1
+fi
 NEW_PID="$(cat "${PID_FILE}")"
 echo "==> Started aevatar-console-web (pid ${NEW_PID})"

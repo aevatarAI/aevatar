@@ -50,6 +50,36 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const memberTableMinWidth = 1220;
+
+const memberTableColumns = [
+  { key: "member", width: 250 },
+  { key: "role", width: 330 },
+  { key: "implementation", width: 160 },
+  { key: "service", width: 170 },
+  { key: "actions", width: 310 },
+] as const;
+
+const memberTableHeaderCellStyle: React.CSSProperties = {
+  color: "var(--ant-colorTextSecondary)",
+  fontSize: 12,
+  fontWeight: 600,
+  padding: "12px 16px",
+  textAlign: "left",
+  whiteSpace: "nowrap",
+};
+
+const memberTableCellStyle: React.CSSProperties = {
+  minWidth: 0,
+  padding: "14px 16px",
+  verticalAlign: "middle",
+};
+
+const memberTableGridCellStyle: React.CSSProperties = {
+  minWidth: 0,
+  width: "100%",
+};
+
 const EllipsisText: React.FC<{
   readonly children: string;
   readonly monospace?: boolean;
@@ -138,147 +168,218 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             }}
           >
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 980 }}>
-                <div
-                  style={{
-                    background: "var(--ant-colorBgContainerDisabled)",
-                    borderBottom: "1px solid var(--ant-colorBorderSecondary)",
-                    color: "var(--ant-colorTextSecondary)",
-                    display: "grid",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    gap: 16,
-                    gridTemplateColumns:
-                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
-                    padding: "12px 16px",
-                  }}
-                >
-                  <span>{t("team.members.columns.member")}</span>
-                  <span>{t("team.members.columns.role")}</span>
-                  <span>{t("team.members.columns.implementation")}</span>
-                  <span>{t("team.members.columns.service")}</span>
-                  <span>{t("team.members.columns.actions")}</span>
-                </div>
-                {rosterRows.map((row, index) => (
-                  <div
-                    key={row.key}
+              <table
+                style={{
+                  borderCollapse: "separate",
+                  borderSpacing: 0,
+                  minWidth: memberTableMinWidth,
+                  tableLayout: "fixed",
+                  width: "100%",
+                }}
+              >
+                <colgroup>
+                  {memberTableColumns.map((column) => (
+                    <col key={column.key} style={{ width: column.width }} />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr
                     style={{
-                      alignItems: "center",
-                      background: row.isEntryMember
-                        ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
-                        : undefined,
-                      borderTop:
-                        index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
-                      boxShadow: row.isEntryMember
-                        ? "inset 4px 0 0 var(--ant-colorPrimary)"
-                        : undefined,
-                      display: "grid",
-                      gap: 16,
-                      gridTemplateColumns:
-                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
-                      padding: "14px 16px",
+                      background: "var(--ant-colorBgContainerDisabled)",
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                      <div
+                    <th style={memberTableHeaderCellStyle} scope="col">
+                      {t("team.members.columns.member")}
+                    </th>
+                    <th style={memberTableHeaderCellStyle} scope="col">
+                      {t("team.members.columns.role")}
+                    </th>
+                    <th style={memberTableHeaderCellStyle} scope="col">
+                      {t("team.members.columns.implementation")}
+                    </th>
+                    <th style={memberTableHeaderCellStyle} scope="col">
+                      {t("team.members.columns.service")}
+                    </th>
+                    <th
+                      style={{
+                        ...memberTableHeaderCellStyle,
+                        textAlign: "right",
+                      }}
+                      scope="col"
+                    >
+                      {t("team.members.columns.actions")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rosterRows.map((row, index) => (
+                    <tr
+                      key={row.key}
+                      style={{
+                        background: row.isEntryMember
+                          ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
+                          : undefined,
+                      }}
+                    >
+                      <td
                         style={{
-                          alignItems: "center",
-                          display: "flex",
-                          gap: 8,
-                          minWidth: 0,
+                          ...memberTableCellStyle,
+                          borderTop:
+                            index === 0
+                              ? "1px solid var(--ant-colorBorderSecondary)"
+                              : "1px solid var(--ant-colorBorderSecondary)",
+                          boxShadow: row.isEntryMember
+                            ? "inset 4px 0 0 var(--ant-colorPrimary)"
+                            : undefined,
                         }}
                       >
-                        <EllipsisText strong>{row.name}</EllipsisText>
-                        {row.isEntryMember ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 4,
+                            ...memberTableGridCellStyle,
+                          }}
+                        >
+                          <div
+                            style={{
+                              alignItems: "center",
+                              display: "flex",
+                              gap: 8,
+                              minWidth: 0,
+                            }}
+                          >
+                            <EllipsisText strong>{row.name}</EllipsisText>
+                            {row.isEntryMember ? (
+                              <DetailPill
+                                compact
+                                style={{
+                                  background: token.colorSuccessBg,
+                                  border: `1px solid ${token.colorSuccessBorder}`,
+                                  color: token.colorSuccess,
+                                  flex: "0 0 auto",
+                                }}
+                                text={t("team.members.entryBadge")}
+                              />
+                            ) : null}
+                          </div>
+                          <EllipsisText
+                            monospace
+                            style={{
+                              fontSize: 12,
+                            }}
+                            type="secondary"
+                          >
+                            {row.memberId}
+                          </EllipsisText>
+                        </div>
+                      </td>
+                      <td style={memberTableCellStyle}>
+                        <div style={memberTableGridCellStyle}>
+                          <FactLine
+                            rows={1}
+                            text={
+                              row.description ||
+                              t("team.members.descriptionFallback", {
+                                teamId: rosterTeamId || "--",
+                              })
+                            }
+                          />
+                        </div>
+                      </td>
+                      <td style={memberTableCellStyle}>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                            ...memberTableGridCellStyle,
+                          }}
+                        >
                           <DetailPill
                             compact
-                            style={{
-                              background: token.colorSuccessBg,
-                              border: `1px solid ${token.colorSuccessBorder}`,
-                              color: token.colorSuccess,
-                            }}
-                            text={t("team.members.entryBadge")}
+                            style={{ ...row.lifecycleStyle, maxWidth: "100%" }}
+                            text={row.lifecycleLabel}
                           />
-                        ) : null}
-                      </div>
-                      <EllipsisText
-                        monospace
-                        style={{
-                          fontSize: 12,
-                        }}
-                        type="secondary"
-                      >
-                        {row.memberId}
-                      </EllipsisText>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <FactLine
-                        rows={1}
-                        text={
-                          row.description ||
-                          t("team.members.descriptionFallback", {
-                            teamId: rosterTeamId || "--",
-                          })
-                        }
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                      <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
-                      <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
-                        {row.implementationKind}
-                      </Typography.Text>
-                    </div>
-                    <CompactFactValue
-                      color="var(--ant-color-text-secondary)"
-                      strong={false}
-                      value={row.serviceId}
-                    />
-                    <Space wrap size={8}>
-                      {row.isEntryMember ? (
-                        <Button
-                          icon={<CheckCircleOutlined />}
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
-                          }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={onClearEntry}
-                          size="small"
+                          <Typography.Text
+                            style={{
+                              display: "block",
+                              fontFamily: factValueFontFamily,
+                              fontSize: 12,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {row.implementationKind}
+                          </Typography.Text>
+                        </div>
+                      </td>
+                      <td style={memberTableCellStyle}>
+                        <CompactFactValue
+                          color="var(--ant-color-text-secondary)"
+                          strong={false}
+                          value={row.serviceId}
+                        />
+                      </td>
+                      <td style={memberTableCellStyle}>
+                        <Space
+                          size={8}
+                          style={{
+                            display: "flex",
+                            justifyContent: "flex-end",
+                            minWidth: 0,
+                            width: "100%",
+                          }}
+                          wrap={false}
                         >
-                          {t("team.members.clearEntry")}
-                        </Button>
-                      ) : row.canInvokeAsEntry && onSetEntry ? (
-                        <Button
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
-                          }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={() => onSetEntry(row.memberId)}
-                          size="small"
-                        >
-                          {t("team.members.setEntry")}
-                        </Button>
-                      ) : null}
-                      <Button
-                        href={row.editStudioHref}
-                        icon={<EditOutlined />}
-                        onClick={handleNavigate(row.editStudioHref)}
-                        size="small"
-                      >
-                        {t("team.members.editInStudio")}
-                      </Button>
-                      <Button
-                        href={row.buildStudioHref}
-                        icon={<ToolOutlined />}
-                        onClick={handleNavigate(row.buildStudioHref)}
-                        size="small"
-                        type="primary"
-                      >
-                        {t("team.members.build")}
-                      </Button>
-                    </Space>
-                  </div>
-                ))}
-              </div>
+                          {row.isEntryMember ? (
+                            <Button
+                              icon={<CheckCircleOutlined />}
+                              disabled={
+                                isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                              }
+                              loading={entryActionBusyMemberId === row.memberId}
+                              onClick={onClearEntry}
+                              size="small"
+                            >
+                              {t("team.members.clearEntry")}
+                            </Button>
+                          ) : row.canInvokeAsEntry && onSetEntry ? (
+                            <Button
+                              disabled={
+                                isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                              }
+                              loading={entryActionBusyMemberId === row.memberId}
+                              onClick={() => onSetEntry(row.memberId)}
+                              size="small"
+                            >
+                              {t("team.members.setEntry")}
+                            </Button>
+                          ) : null}
+                          <Button
+                            href={row.editStudioHref}
+                            icon={<EditOutlined />}
+                            onClick={handleNavigate(row.editStudioHref)}
+                            size="small"
+                          >
+                            {t("team.members.editInStudio")}
+                          </Button>
+                          <Button
+                            href={row.buildStudioHref}
+                            icon={<ToolOutlined />}
+                            onClick={handleNavigate(row.buildStudioHref)}
+                            size="small"
+                            type="primary"
+                          >
+                            {t("team.members.build")}
+                          </Button>
+                        </Space>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : rosterTeamId ? (

@@ -12,6 +12,10 @@ function trimOptional(value: string | null | undefined): string {
 export function resolveStudioScopeContext(
   authSession?: StudioAuthSession | null,
 ): ResolvedScopeContext | null {
+  if (!authSession?.authenticated) {
+    return null;
+  }
+
   const authScopeId = trimOptional(authSession?.scopeId);
   if (authScopeId) {
     return {

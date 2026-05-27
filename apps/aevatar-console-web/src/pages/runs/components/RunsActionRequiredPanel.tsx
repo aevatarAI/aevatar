@@ -88,10 +88,10 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
           ) : null}
         </Space>
       </div>
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         {humanInputRecord ? (
           <div style={embeddedPanelStyle}>
-            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
               <div>
                 <Typography.Text strong>
                   {isHumanApprovalSuspension(humanInputRecord.suspensionType)
@@ -173,7 +173,7 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
 
         {waitingSignalRecord ? (
           <div style={embeddedPanelStyle}>
-            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
               <div>
                 <Typography.Text strong>Send the expected signal</Typography.Text>
                 <Typography.Paragraph
