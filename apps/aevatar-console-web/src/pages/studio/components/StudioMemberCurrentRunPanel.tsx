@@ -8,6 +8,7 @@ import {
 import { Button, Typography } from 'antd';
 import React, { useMemo } from 'react';
 import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
+import { translate } from '@/shared/i18n/localization';
 import type {
   CurrentRunRequest,
   InvokeResultState,
@@ -69,15 +70,15 @@ function getInputText(currentRunRequest: CurrentRunRequest | null): string {
 function getStatusLabel(status: InvokeResultState['status']): string {
   switch (status) {
     case 'running':
-      return 'Running';
+      return translate('studio.run.status.running');
     case 'success':
-      return 'Succeeded';
+      return translate('studio.run.status.succeeded');
     case 'error':
-      return 'Failed';
+      return translate('studio.run.status.failed');
     case 'cancelled':
-      return 'Cancelled';
+      return translate('studio.run.status.cancelled');
     default:
-      return 'Idle';
+      return translate('studio.run.status.idle');
   }
 }
 
@@ -87,23 +88,23 @@ function getRunMarker(input: {
   readonly status: InvokeResultState['status'];
 }): string {
   if (!input.currentRunHasData) {
-    return 'No run';
+    return translate('studio.run.marker.none');
   }
 
   if (input.runViewMode === 'historical') {
-    return 'Historical run · Read-only';
+    return translate('studio.run.marker.historical');
   }
 
   if (input.status === 'running') {
-    return 'Running run';
+    return translate('studio.run.marker.running');
   }
 
-  return 'Latest run';
+  return translate('studio.run.marker.latest');
 }
 
 function getShortRunId(runId: string): string {
   const normalized = trimOptional(runId);
-  return normalized ? truncateMiddle(normalized, 6, 4) : 'pending';
+  return normalized ? truncateMiddle(normalized, 6, 4) : translate('studio.run.pending');
 }
 
 function buildStatusSummary(input: {
@@ -113,7 +114,7 @@ function buildStatusSummary(input: {
 }): string {
   return `${getStatusLabel(input.invokeResult.status)} · ${
     input.runElapsedLabel
-  } · ${input.endpointLabel || 'chat'} · Run ${getShortRunId(
+  } · ${input.endpointLabel || 'chat'} · ${translate('common.id.run')} ${getShortRunId(
     input.invokeResult.runId,
   )}`;
 }
@@ -528,8 +529,8 @@ const StudioMemberCurrentRunPanel: React.FC<
 
     const items = [
       {
-        detail: startedAtLabel || 'Pending start timestamp',
-        label: 'Run started',
+        detail: startedAtLabel || translate('studio.run.timeline.pendingStart'),
+        label: translate('studio.run.timeline.started'),
       },
     ];
 
@@ -537,22 +538,34 @@ const StudioMemberCurrentRunPanel: React.FC<
       for (const event of invokeResult.events.slice(0, 8)) {
         const type = String(event.type || 'Event');
         if (type === 'TEXT_MESSAGE_CONTENT') {
-          items.push({ detail: getEventPreview(event), label: 'Agent message' });
+          items.push({
+            detail: getEventPreview(event),
+            label: translate('studio.run.timeline.agentMessage'),
+          });
         } else if (type === 'RUN_STARTED') {
-          items.push({ detail: getEventPreview(event), label: 'Run started' });
+          items.push({
+            detail: getEventPreview(event),
+            label: translate('studio.run.timeline.started'),
+          });
         } else if (type === 'RUN_FINISHED') {
-          items.push({ detail: getEventPreview(event), label: 'Run finished' });
+          items.push({
+            detail: getEventPreview(event),
+            label: translate('studio.run.timeline.finished'),
+          });
         } else if (type === 'RUN_ERROR') {
-          items.push({ detail: getEventPreview(event), label: 'Run failed' });
+          items.push({
+            detail: getEventPreview(event),
+            label: translate('studio.run.timeline.failed'),
+          });
         } else if (type === 'PARTICIPANT_JOINED') {
           items.push({
             detail: getEventPreview(event),
-            label: 'Participant joined',
+            label: translate('studio.run.timeline.participantJoined'),
           });
         } else if (type === 'PARTICIPANT_LEFT') {
           items.push({
             detail: getEventPreview(event),
-            label: 'Participant left',
+            label: translate('studio.run.timeline.participantLeft'),
           });
         } else {
           items.push({ detail: getEventPreview(event), label: type });
@@ -562,16 +575,22 @@ const StudioMemberCurrentRunPanel: React.FC<
 
     if (invokeResult.status === 'success') {
       items.push({
-        detail: finishedAtLabel || 'Completed',
-        label: 'Run finished',
+        detail: finishedAtLabel || translate('studio.run.timeline.completed'),
+        label: translate('studio.run.timeline.finished'),
       });
     } else if (invokeResult.status === 'error' || invokeResult.status === 'cancelled') {
       items.push({
-        detail: errorDescription || 'No extra error text',
-        label: invokeResult.status === 'cancelled' ? 'Run stopped' : 'Run failed',
+        detail: errorDescription || translate('studio.run.timeline.noExtraError'),
+        label:
+          invokeResult.status === 'cancelled'
+            ? translate('studio.run.stopped')
+            : translate('studio.run.timeline.failed'),
       });
     } else if (invokeResult.status === 'running') {
-      items.push({ detail: 'Waiting for output', label: 'Run in progress' });
+      items.push({
+        detail: translate('studio.run.waitingForOutput'),
+        label: translate('studio.run.timeline.inProgress'),
+      });
     }
 
     return items;
@@ -585,18 +604,18 @@ const StudioMemberCurrentRunPanel: React.FC<
   ]);
 
   const tabItems = [
-    { key: 'output' as const, label: 'Output' },
-    { key: 'timeline' as const, label: 'Timeline' },
-    { key: 'events' as const, label: 'Events' },
-    { key: 'metadata' as const, label: 'Metadata' },
+    { key: 'output' as const, label: translate('common.output') },
+    { key: 'timeline' as const, label: translate('studio.run.tabs.timeline') },
+    { key: 'events' as const, label: translate('studio.run.tabs.events') },
+    { key: 'metadata' as const, label: translate('studio.run.tabs.metadata') },
   ];
 
   const renderOutput = () => {
     if (!currentRunHasData) {
       return (
         <div style={emptyStateStyle}>
-          <div style={emptyTitleStyle}>No run yet</div>
-          <div>Send a prompt above to create the first run.</div>
+          <div style={emptyTitleStyle}>{translate('studio.run.none')}</div>
+          <div>{translate('studio.invoke.promptPlaceholder')}</div>
         </div>
       );
     }
@@ -606,8 +625,8 @@ const StudioMemberCurrentRunPanel: React.FC<
       return (
         <div style={outputPaneStyle}>
           <div style={sectionStyle}>
-            <span style={sectionLabelStyle}>Input</span>
-            <p style={bodyTextStyle}>{inputText || 'No prompt captured.'}</p>
+            <span style={sectionLabelStyle}>{translate('common.input')}</span>
+            <p style={bodyTextStyle}>{inputText || translate('studio.run.noPrompt')}</p>
           </div>
           <div style={isCancelled ? warningCardStyle : errorCardStyle}>
             {isCancelled ? (
@@ -617,13 +636,13 @@ const StudioMemberCurrentRunPanel: React.FC<
             )}
             <div style={{ minWidth: 0 }}>
               <div style={errorTitleStyle}>
-                {isCancelled ? 'Run stopped' : 'Run failed'}
+                {isCancelled ? translate('studio.run.stopped') : translate('studio.run.failed')}
               </div>
               <p style={errorDescriptionStyle}>
                 {errorDescription ||
                   (isCancelled
-                    ? '该 Run 已停止，当前可能只显示部分输出。'
-                    : 'This run failed without an additional error message.')}
+                    ? translate('studio.invoke.runStoppedPartial')
+                    : translate('studio.run.failedNoMessage'))}
               </p>
             </div>
           </div>
@@ -631,16 +650,16 @@ const StudioMemberCurrentRunPanel: React.FC<
             <div style={warningCardStyle}>
               <ExclamationCircleFilled style={warningIconStyle} />
               <div style={{ minWidth: 0 }}>
-                <div style={errorTitleStyle}>Partial output</div>
+                <div style={errorTitleStyle}>{translate('studio.run.partialOutput')}</div>
                 <p style={errorDescriptionStyle}>
-                  该 Run 已停止，当前可能只显示部分输出。
+                  {translate('studio.invoke.runStoppedPartial')}
                 </p>
               </div>
             </div>
           ) : null}
           {outputText ? (
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>Output</span>
+              <span style={sectionLabelStyle}>{translate('common.output')}</span>
               <p style={bodyTextStyle}>{outputText}</p>
             </div>
           ) : null}
@@ -649,13 +668,13 @@ const StudioMemberCurrentRunPanel: React.FC<
               icon={<UnorderedListOutlined />}
               onClick={() => onTabChange('events')}
             >
-              View events
+              {translate('studio.run.viewEvents')}
             </Button>
             <Button icon={<CopyOutlined />} onClick={onCopyError}>
-              Copy error
+              {translate('studio.run.copyError')}
             </Button>
             <Button icon={<ReloadOutlined />} onClick={onRetryAsNewRun}>
-              Retry as new run
+              {translate('studio.run.retryAsNew')}
             </Button>
           </div>
         </div>
@@ -669,32 +688,30 @@ const StudioMemberCurrentRunPanel: React.FC<
         style={outputPaneStyle}
       >
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>Status summary</span>
+          <span style={sectionLabelStyle}>{translate('studio.run.summary')}</span>
           <div style={summaryStyle}>{statusSummary}</div>
         </div>
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>Input</span>
-          <p style={bodyTextStyle}>{inputText || 'No prompt captured.'}</p>
+          <span style={sectionLabelStyle}>{translate('common.input')}</span>
+          <p style={bodyTextStyle}>{inputText || translate('studio.run.noPrompt')}</p>
         </div>
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>Output</span>
+          <span style={sectionLabelStyle}>{translate('common.output')}</span>
           {invokeResult.status === 'running' && !outputText ? (
             <Typography.Text style={helperTextStyle} type="secondary">
-              Waiting for output...
+              {translate('studio.run.waitingForOutput')}
             </Typography.Text>
           ) : outputText ? (
             <p style={bodyTextStyle}>{outputText}</p>
           ) : invokeResult.status === 'success' ? (
             <div style={helperTextStyle}>
-              <div>没有返回可展示内容。</div>
-              <div>
-                该 Run 已成功结束，但没有返回用户可见的 Output。
-              </div>
-              <div>你可以查看 Events 或 Metadata 排查原因。</div>
+              <div>{translate('studio.run.noVisibleContent')}</div>
+              <div>{translate('studio.run.successNoVisibleOutput')}</div>
+              <div>{translate('studio.run.inspectEventsMetadata')}</div>
             </div>
           ) : (
             <Typography.Text style={helperTextStyle} type="secondary">
-              Waiting for output...
+              {translate('studio.run.waitingForOutput')}
             </Typography.Text>
           )}
         </div>
@@ -706,7 +723,7 @@ const StudioMemberCurrentRunPanel: React.FC<
     <div style={timelineStyle}>
       {timelineItems.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          No run yet.
+          {translate('studio.run.none')}
         </Typography.Text>
       ) : (
         timelineItems.map((item, index) => (
@@ -728,13 +745,15 @@ const StudioMemberCurrentRunPanel: React.FC<
     <div style={eventListStyle}>
       {invokeResult.events.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          当前 Run 还没有结构化事件。
+          {translate('studio.run.noStructuredEvents')}
         </Typography.Text>
       ) : (
         <>
           <RuntimeEventPreviewPanel
             events={invokeResult.events}
-            title={`Events (${invokeResult.events.length})`}
+            title={translate('studio.run.eventsTitle', {
+              count: invokeResult.events.length,
+            })}
           />
           {invokeResult.events.map((event, index) => (
             <div
@@ -756,50 +775,50 @@ const StudioMemberCurrentRunPanel: React.FC<
   const renderMetadata = () => (
     <div style={outputPaneStyle}>
       <div style={sectionStyle}>
-        <span style={sectionLabelStyle}>Technical fields</span>
+        <span style={sectionLabelStyle}>{translate('studio.run.technicalFields')}</span>
         <div style={metadataGridStyle}>
           <MetadataItem
-            label="Full Run ID"
+            label={translate('studio.run.fullRunId')}
             value={<MetadataValue value={invokeResult.runId} />}
           />
           <MetadataItem
-            label="Command ID"
+            label={translate('studio.run.commandId')}
             value={<MetadataValue value={invokeResult.commandId} />}
           />
           <MetadataItem
-            label="Actor ID"
+            label={translate('studio.run.actorId')}
             value={<MetadataValue value={invokeResult.actorId} />}
           />
           <MetadataItem
-            label="Member ID"
+            label={translate('studio.run.memberId')}
             value={<MetadataValue value={memberId} />}
           />
           <MetadataItem
-            label="Endpoint"
+            label={translate('studio.run.endpoint')}
             value={<MetadataValue value={endpointLabel} />}
           />
           <MetadataItem
-            label="Revision"
+            label={translate('studio.run.revision')}
             value={<MetadataValue value={revisionId} />}
           />
           <MetadataItem
-            label="Published context"
+            label={translate('studio.run.publishedContext')}
             value={<MetadataValue value={publishedContext} />}
           />
           <MetadataItem
-            label="Started at"
+            label={translate('studio.run.startedAt')}
             value={<MetadataValue value={startedAtLabel} />}
           />
           <MetadataItem
-            label="Finished at"
+            label={translate('studio.run.finishedAt')}
             value={<MetadataValue value={finishedAtLabel} />}
           />
           <MetadataItem
-            label="Duration"
+            label={translate('studio.run.duration')}
             value={<MetadataValue value={runElapsedLabel} />}
           />
           <MetadataItem
-            label="Event count"
+            label={translate('studio.run.eventCount')}
             value={
               <div style={contractValueStyle}>
                 {invokeResult.eventCount || invokeResult.events.length}
@@ -809,8 +828,8 @@ const StudioMemberCurrentRunPanel: React.FC<
         </div>
       </div>
       <details style={sectionStyle}>
-        <summary style={contractValueStyle}>Advanced details</summary>
-        <pre style={rawOutputStyle}>{currentRawOutput || 'No raw JSON.'}</pre>
+        <summary style={contractValueStyle}>{translate('studio.run.advancedDetails')}</summary>
+        <pre style={rawOutputStyle}>{currentRawOutput || translate('studio.run.noRawJson')}</pre>
       </details>
     </div>
   );
@@ -845,7 +864,11 @@ const StudioMemberCurrentRunPanel: React.FC<
         ) : null}
       </div>
       <div style={tabsStyle}>
-        <div aria-label="Run output views" role="tablist" style={tabListStyle}>
+        <div
+          aria-label={translate('studio.run.outputViewsAria')}
+          role="tablist"
+          style={tabListStyle}
+        >
           {tabItems.map((item) => {
             const selected = item.key === activeTab;
             return (

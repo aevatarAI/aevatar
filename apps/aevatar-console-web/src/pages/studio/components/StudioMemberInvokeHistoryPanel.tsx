@@ -1,6 +1,7 @@
 import { CopyOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Button, Typography } from 'antd';
 import React from 'react';
+import { translate } from '@/shared/i18n/localization';
 import { AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 import type { InvokeHistoryEntry } from './StudioMemberInvokePanel.currentRun';
@@ -39,6 +40,19 @@ function formatRunElapsed(startedAt: number, completedAt: number): string {
     .padStart(2, '0');
   const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
+}
+
+function getRunStatusLabel(status: InvokeHistoryEntry['status']): string {
+  switch (status) {
+    case 'success':
+      return translate('studio.run.status.succeeded');
+    case 'running':
+      return translate('studio.run.status.running');
+    case 'cancelled':
+      return translate('studio.run.status.cancelled');
+    default:
+      return translate('studio.run.status.failed');
+  }
 }
 
 const historyPanelStyle: React.CSSProperties = {
@@ -158,22 +172,24 @@ const StudioMemberInvokeHistoryPanel: React.FC<
   style,
 }) => (
   <details
-    aria-label="Run history"
+    aria-label={translate('studio.invoke.history.aria')}
     data-testid="studio-invoke-history-panel"
     style={{ ...historyPanelStyle, ...style }}
   >
     <summary style={historySummaryStyle}>
-      <span style={historyTitleStyle}>Run history ({entries.length})</span>
+      <span style={historyTitleStyle}>
+        {translate('studio.invoke.history.title', { count: entries.length })}
+      </span>
       {entries.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          No runs yet
+          {translate('studio.invoke.history.empty')}
         </Typography.Text>
       ) : null}
     </summary>
     <div data-testid="studio-invoke-history-scroll" style={historyBodyStyle}>
       {entries.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          No runs yet
+          {translate('studio.invoke.history.empty')}
         </Typography.Text>
       ) : (
         entries.map((entry) => {
@@ -199,26 +215,21 @@ const StudioMemberInvokeHistoryPanel: React.FC<
               }}
             >
               <button
-                aria-label={`View historical run ${entry.prompt || entry.summary}`}
+                aria-label={translate('studio.invoke.history.viewAria', {
+                  summary: entry.prompt || entry.summary,
+                })}
                 style={historyCardButtonStyle}
                 type="button"
                 onClick={() => onSelectEntry(entry.id)}
               >
                 <div style={historyCardHeaderStyle}>
                   <span style={historyCardTitleStyle}>
-                    {trimPreview(entry.prompt || entry.summary, 72) || 'Run'}
+                    {trimPreview(entry.prompt || entry.summary, 72) ||
+                      translate('studio.invoke.history.runFallback')}
                   </span>
                   <AevatarStatusTag
                     domain="run"
-                    label={
-                      entry.status === 'success'
-                        ? 'Succeeded'
-                        : entry.status === 'running'
-                          ? 'Running'
-                          : entry.status === 'cancelled'
-                            ? 'Cancelled'
-                            : 'Failed'
-                    }
+                    label={getRunStatusLabel(entry.status)}
                     status={entry.status}
                   />
                 </div>
@@ -229,13 +240,21 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                     {formatRunElapsed(entry.startedAt, entry.completedAt)}
                   </span>
                   <span>·</span>
-                  <span>{entry.eventCount} events</span>
+                  <span>
+                    {translate('studio.invoke.history.eventCount', {
+                      count: entry.eventCount,
+                    })}
+                  </span>
                   <span>·</span>
                   <span>{entry.endpointLabel || 'chat'}</span>
                   {runId ? (
                     <>
                       <span>·</span>
-                      <span>Run {truncateMiddle(runId, 6, 4)}</span>
+                      <span>
+                        {translate('studio.invoke.history.runIdShort', {
+                          runId: truncateMiddle(runId, 6, 4),
+                        })}
+                      </span>
                     </>
                   ) : null}
                 </div>
@@ -251,7 +270,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyInput(entry.id);
                     }}
                   >
-                    Copy input
+                    {translate('studio.invoke.history.copyInput')}
                   </Button>
                   <Button
                     disabled={!hasOutput}
@@ -262,7 +281,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyOutput(entry.id);
                     }}
                   >
-                    Copy output
+                    {translate('studio.invoke.history.copyOutput')}
                   </Button>
                   <Button
                     disabled={!runId}
@@ -273,7 +292,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyRunId(entry.id);
                     }}
                   >
-                    Copy run id
+                    {translate('studio.invoke.history.copyRunId')}
                   </Button>
                   <Button
                     icon={<ReloadOutlined />}
@@ -283,7 +302,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onRetryAsNewRun(entry.id);
                     }}
                   >
-                    Retry as new run
+                    {translate('studio.invoke.history.retryAsNew')}
                   </Button>
                 </div>
               ) : null}

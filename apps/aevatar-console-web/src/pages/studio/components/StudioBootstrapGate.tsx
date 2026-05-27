@@ -1,4 +1,5 @@
 import React from 'react';
+import { translate } from '@/shared/i18n/localization';
 import { describeError } from '@/shared/ui/errorText';
 import StudioStatusBanner from './StudioStatusBanner';
 
@@ -39,15 +40,21 @@ const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({
   const issues: string[] = [];
 
   if (appContextError) {
-    issues.push(`团队上下文：${renderErrorMessage(appContextError)}`);
+    issues.push(
+      `${translate('studio.bootstrap.teamContext')}：${renderErrorMessage(appContextError)}`,
+    );
   }
 
   if (workspaceError) {
-    issues.push(`工作区设置：${renderErrorMessage(workspaceError)}`);
+    issues.push(
+      `${translate('studio.bootstrap.workspaceSettings')}：${renderErrorMessage(workspaceError)}`,
+    );
   }
 
   if (authError) {
-    issues.push(`登录状态：${renderErrorMessage(authError)}`);
+    issues.push(
+      `${translate('studio.bootstrap.loginState')}：${renderErrorMessage(authError)}`,
+    );
   }
 
   const authOnlyIssue =
@@ -64,19 +71,19 @@ const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({
         type: appContextError || workspaceError ? 'error' : 'warning',
         title:
           issues.length > 1
-            ? 'Studio 当前有部分能力暂时不可用'
+            ? translate('studio.bootstrap.partialTitle')
             : appContextError
-              ? '团队上下文暂时不可用'
+              ? translate('studio.bootstrap.teamContextUnavailable')
               : workspaceError
-                ? '工作区设置暂时不可用'
-                : '登录状态待确认',
+                ? translate('studio.bootstrap.workspaceUnavailable')
+                : translate('studio.bootstrap.authPending'),
         description: issues.join(' · '),
       }
     : loading
       ? {
           type: 'info',
-          title: '正在准备 Studio',
-          description: '正在加载团队上下文、登录状态和工作区设置。',
+          title: translate('studio.bootstrap.loadingTitle'),
+          description: translate('studio.bootstrap.loadingDescription'),
         }
       : null;
 

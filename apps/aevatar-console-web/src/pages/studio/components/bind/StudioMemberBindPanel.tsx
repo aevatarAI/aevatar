@@ -1,26 +1,17 @@
 import {
   ApiOutlined,
-  CheckCircleOutlined,
   CopyOutlined,
   LinkOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Collapse, Empty, Input, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Collapse, Empty, Space, Tag, Typography } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  applyRuntimeEvent,
-  createRuntimeEventAccumulator,
-} from '@/shared/agui/runtimeEventSemantics';
-import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
-import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import { translate, useTranslation } from '@/shared/i18n/localization';
 import type {
   ScopeServiceBindingCatalogSnapshot,
 } from '@/shared/models/runtime/scopeServices';
-import type {
-  ServiceCatalogSnapshot,
-  ServiceEndpointSnapshot,
-} from '@/shared/models/services';
+import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import {
   describeScopeServiceBindingTarget,
@@ -30,7 +21,6 @@ import {
   describeStudioMemberBindingRevisionContext,
   describeStudioMemberBindingRevisionTarget,
   formatStudioMemberBindingImplementationKind,
-  normalizeStudioMemberBindingImplementationKind,
   type StudioAuthSession,
   type StudioMemberBindingContract,
   type StudioMemberBindingRevision,
@@ -51,10 +41,8 @@ import {
 } from './bindSnippets';
 
 type StudioMemberBindPanelProps = {
-  readonly buildWorkflowYamls?: (() => Promise<string[]>) | null;
   readonly initialEndpointId?: string;
   readonly memberId?: string;
-  readonly teamId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
@@ -88,15 +76,6 @@ type PendingBindNotice = {
 
 type SnippetTab = 'curl' | 'fetch' | 'sdk';
 
-type SmokeTestResult = {
-  readonly error: string;
-  readonly eventCount: number;
-  readonly latencyMs: number;
-  readonly responseSummary: string;
-  readonly runId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error';
-};
-
 function isStudioMemberBindingRunTerminal(
   run: StudioMemberBindingRunStatusResponse | null | undefined,
 ): boolean {
@@ -110,7 +89,7 @@ function describeStudioMemberBindingRunStatus(
 ): PendingBindNotice {
   if (run.status === 'succeeded') {
     return {
-      message: 'Binding completed. Studio is refreshing the published contract.',
+      message: translate('team.bind.run.completed'),
       type: 'success',
     };
   }
@@ -120,31 +99,28 @@ function describeStudioMemberBindingRunStatus(
       message:
         run.failure?.message ||
         (run.status === 'rejected'
-          ? 'Binding request was rejected by the member authority.'
-          : 'Binding failed while publishing the member contract.'),
+          ? translate('team.bind.run.rejected')
+          : translate('team.bind.run.failed')),
       type: 'error',
     };
   }
 
   if (run.status === 'platform_binding_pending') {
     return {
-      message:
-        'Binding request accepted. Platform publication is still running; Invoke is not ready until the run completes.',
+      message: translate('team.bind.run.platformPending'),
       type: 'info',
     };
   }
 
   if (run.status === 'admitted') {
     return {
-      message:
-        'Binding request admitted. Studio is starting platform publication; the member is not callable yet.',
+      message: translate('team.bind.run.admitted'),
       type: 'info',
     };
   }
 
   return {
-    message:
-      'Binding request accepted. Studio is waiting for the member authority; this does not mean the member is bound yet.',
+    message: translate('team.bind.run.waiting'),
     type: 'info',
   };
 }
@@ -240,15 +216,21 @@ const sourceStatusStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
-const contractAndActionsGridStyle: React.CSSProperties = {
-  alignItems: 'stretch',
-  display: 'grid',
-  gap: 14,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))',
-};
-
 const equalHeightPanelStyle: React.CSSProperties = {
   height: '100%',
+};
+
+const contractActionRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+  minWidth: 0,
+};
+
+const invokeActionButtonStyle: React.CSSProperties = {
+  minWidth: 132,
 };
 
 const sourceControlStackStyle: React.CSSProperties = {
@@ -256,64 +238,6 @@ const sourceControlStackStyle: React.CSSProperties = {
   gap: 8,
   gridTemplateRows: 'auto minmax(58px, 1fr)',
   minWidth: 0,
-};
-
-const endpointChoiceRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))',
-};
-
-const endpointChoiceButtonStyle: React.CSSProperties = {
-  alignItems: 'flex-start',
-  background: '#ffffff',
-  border: '1px solid #d9e2ef',
-  borderRadius: 8,
-  color: '#334155',
-  cursor: 'pointer',
-  display: 'grid',
-  fontSize: 12,
-  gap: 6,
-  minHeight: 94,
-  padding: '10px 12px',
-  textAlign: 'left',
-  width: '100%',
-};
-
-const endpointChoiceButtonActiveStyle: React.CSSProperties = {
-  ...endpointChoiceButtonStyle,
-  background: '#0f172a',
-  border: '1px solid #0f172a',
-  color: '#ffffff',
-};
-
-const endpointChoiceTitleStyle: React.CSSProperties = {
-  alignItems: 'center',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 6,
-  justifyContent: 'space-between',
-  minWidth: 0,
-};
-
-const endpointChoiceNameStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  lineHeight: 1.25,
-  minWidth: 0,
-  overflowWrap: 'anywhere',
-};
-
-const endpointChoiceMetaStyle: React.CSSProperties = {
-  fontFamily: monoFontFamily,
-  fontSize: 11,
-  lineHeight: 1.35,
-  overflowWrap: 'anywhere',
-};
-
-const endpointChoiceDescriptionStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.45,
 };
 
 const parameterGridStyle: React.CSSProperties = {
@@ -383,12 +307,6 @@ const workflowSectionStyle: React.CSSProperties = {
   overflow: 'hidden',
 };
 
-const smokeFieldStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-  minWidth: 0,
-};
-
 const listColumnStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -400,27 +318,6 @@ const compactCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
   padding: 12,
-};
-
-const smokeInputStyle: React.CSSProperties = {
-  boxSizing: 'border-box',
-  fontFamily: monoFontFamily,
-  maxWidth: '100%',
-  minWidth: 0,
-  width: '100%',
-};
-
-const smokeTypedPayloadDescriptionStyle: React.CSSProperties = {
-  lineHeight: 1.45,
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
-};
-
-const smokeActionStackStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  minWidth: 0,
-  width: '100%',
 };
 
 const contractUrlCardStyle: React.CSSProperties = {
@@ -472,7 +369,7 @@ function trimOptional(value: string | null | undefined): string {
 function formatDateTime(value: string | null | undefined): string {
   const normalized = trimOptional(value);
   if (!normalized) {
-    return 'n/a';
+    return translate('common.notAvailable');
   }
 
   const date = new Date(normalized);
@@ -481,17 +378,6 @@ function formatDateTime(value: string | null | undefined): string {
   }
 
   return date.toLocaleString();
-}
-
-function createIdleSmokeTestResult(): SmokeTestResult {
-  return {
-    error: '',
-    eventCount: 0,
-    latencyMs: 0,
-    responseSummary: '',
-    runId: '',
-    status: 'idle',
-  };
 }
 
 function copyText(value: string): Promise<void> | void {
@@ -503,19 +389,23 @@ function copyText(value: string): Promise<void> | void {
 }
 
 function buildBindingSectionTitle(count: number): string {
-  return count === 1 ? 'Bound dependency' : `Bound dependencies (${count})`;
+  return count === 1
+    ? translate('team.bind.dependencies.one')
+    : translate('team.bind.dependencies.many', { count });
 }
 
-function describeEndpointKind(endpoint: ServiceEndpointSnapshot): string {
-  return isChatServiceEndpoint(endpoint) ? '默认测试' : '高级输入';
-}
-
-function describeEndpointPurpose(endpoint: ServiceEndpointSnapshot): string {
-  if (isChatServiceEndpoint(endpoint)) {
-    return '输入一句话，快速确认成员能不能正常响应。';
+function resolveBindDefaultEndpointId(
+  service: Pick<ServiceCatalogSnapshot, 'endpoints'> | null | undefined,
+): string {
+  if (!service?.endpoints.length) {
+    return '';
   }
 
-  return '给需要固定输入格式的 API/SDK 调用场景使用。';
+  return (
+    service.endpoints.find(isChatServiceEndpoint)?.endpointId ||
+    service.endpoints[0]?.endpointId ||
+    ''
+  );
 }
 
 function renderPostBindEntryAction(
@@ -526,7 +416,7 @@ function renderPostBindEntryAction(
       {postBindEntryActions.isEntryMember ? (
         <>
           <Typography.Text>
-            当前成员已经是团队入口。可以直接返回 Team 页面测试完整链路。
+            {translate('team.bind.entry.already')}
           </Typography.Text>
           <Button
             loading={postBindEntryActions.busy}
@@ -534,13 +424,13 @@ function renderPostBindEntryAction(
             size="small"
             type="primary"
           >
-            测试 Team
+            {translate('team.bind.entry.testTeam')}
           </Button>
         </>
       ) : (
         <>
           <Typography.Text>
-            Bind 已完成。下一步建议设为团队入口，并返回 Team 页面测试完整链路。
+            {translate('team.bind.entry.completed')}
           </Typography.Text>
           <Button
             loading={postBindEntryActions.busy}
@@ -548,7 +438,7 @@ function renderPostBindEntryAction(
             size="small"
             type="primary"
           >
-            设为入口并测试 Team
+            {translate('team.bind.entry.setAndTest')}
           </Button>
         </>
       )}
@@ -557,11 +447,9 @@ function renderPostBindEntryAction(
 }
 
 const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
-  buildWorkflowYamls,
   scopeId,
   services,
   memberId,
-  teamId,
   initialServiceId,
   initialEndpointId,
   preferredServiceId,
@@ -573,6 +461,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   authSession,
   servicesLoading,
 }) => {
+  const { t } = useTranslation();
   const [selectedServiceId, setSelectedServiceId] = useState(() =>
     trimOptional(initialServiceId),
   );
@@ -580,16 +469,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     trimOptional(initialEndpointId),
   );
   const [snippetTab, setSnippetTab] = useState<SnippetTab>('curl');
-  const [smokeInput, setSmokeInput] = useState('');
-  const [smokeTestResult, setSmokeTestResult] = useState<SmokeTestResult>(
-    createIdleSmokeTestResult(),
-  );
   const [pendingBindBusy, setPendingBindBusy] = useState(false);
   const [pendingBindNotice, setPendingBindNotice] =
     useState<PendingBindNotice | null>(null);
-  const runsCurrentWorkflowDraft = Boolean(buildWorkflowYamls);
   const normalizedMemberId = trimOptional(memberId);
-  const normalizedTeamId = trimOptional(teamId);
 
   const selectedService =
     services.find((service) => service.serviceId === selectedServiceId) ?? null;
@@ -631,7 +514,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     setSelectedServiceId((current) =>
       current && services.some((service) => service.serviceId === current)
         ? current
-        : services[0]?.serviceId || '',
+        : services.find((service) =>
+            service.endpoints.some(isChatServiceEndpoint),
+          )?.serviceId ||
+          services[0]?.serviceId ||
+          '',
     );
   }, [initialServiceId, preferredServiceId, services]);
 
@@ -660,7 +547,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       current &&
       selectedService.endpoints.some((endpoint) => endpoint.endpointId === current)
         ? current
-        : selectedService.endpoints[0]?.endpointId || '',
+        : resolveBindDefaultEndpointId(selectedService),
     );
   }, [initialEndpointId, initialServiceId, selectedService]);
 
@@ -731,141 +618,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       selectedService,
     ],
   );
-  const publishedSmokeRequiresAuth =
-    !runsCurrentWorkflowDraft &&
-    Boolean(bindContract?.authEnabled && !bindContract.authAuthenticated);
   const canUsePublishedMemberInvoke = Boolean(
     normalizedMemberId && selectedService && selectedEndpoint && bindContract,
   );
-
-  useEffect(() => {
-    const nextDefaultInput = createDefaultBindSampleInput(bindContract);
-    setSmokeInput((current) => (current ? current : nextDefaultInput));
-    setSmokeTestResult(createIdleSmokeTestResult());
-  }, [bindContract?.endpointId, bindContract?.serviceId]);
-
-  const handleRunSmokeTest = useCallback(async () => {
-    if (!scopeId) {
-      return;
-    }
-
-    const startedAt = Date.now();
-    setSmokeTestResult({
-      ...createIdleSmokeTestResult(),
-      status: 'running',
-    });
-
-    try {
-      if (buildWorkflowYamls) {
-        const accumulator = createRuntimeEventAccumulator();
-        const response = await runtimeRunsApi.streamDraftRun(
-          scopeId,
-          {
-            prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
-            workflowYamls: await buildWorkflowYamls(),
-          },
-          new AbortController().signal,
-        );
-
-        for await (const event of parseBackendSSEStream(response, {})) {
-          applyRuntimeEvent(accumulator, event);
-        }
-
-        setSmokeTestResult({
-          error: accumulator.errorText,
-          eventCount: accumulator.events.length,
-          latencyMs: Date.now() - startedAt,
-          responseSummary:
-            accumulator.errorText ||
-            accumulator.finalOutput ||
-            accumulator.assistantText ||
-            'Model returned an empty response.',
-          runId: accumulator.runId,
-          status: accumulator.errorText ? 'error' : 'success',
-        });
-        return;
-      }
-
-      if (!selectedService || !selectedEndpoint || !normalizedMemberId || !bindContract) {
-        return;
-      }
-
-      const invokeRouteTarget =
-        normalizeStudioMemberBindingImplementationKind(
-          currentPublishedRevision?.implementationKind,
-        ) === 'gagent' && normalizedTeamId
-          ? { teamId: normalizedTeamId }
-          : { serviceId: selectedService.serviceId };
-
-      if (isChatServiceEndpoint(selectedEndpoint)) {
-        const accumulator = createRuntimeEventAccumulator();
-        const response = await runtimeRunsApi.streamChat(
-          scopeId,
-          {
-            prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
-          },
-          new AbortController().signal,
-          invokeRouteTarget,
-        );
-
-        for await (const event of parseBackendSSEStream(response, {})) {
-          applyRuntimeEvent(accumulator, event);
-        }
-
-        setSmokeTestResult({
-          error: accumulator.errorText,
-          eventCount: accumulator.events.length,
-          latencyMs: Date.now() - startedAt,
-          responseSummary:
-            accumulator.errorText ||
-            accumulator.finalOutput ||
-            accumulator.assistantText ||
-            'Model returned an empty response.',
-          runId: accumulator.runId,
-          status: accumulator.errorText ? 'error' : 'success',
-        });
-        return;
-      }
-
-      const response = await runtimeRunsApi.invokeEndpoint(
-        scopeId,
-        {
-          endpointId: selectedEndpoint.endpointId,
-          prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
-        },
-        invokeRouteTarget,
-      );
-
-      setSmokeTestResult({
-        error: '',
-        eventCount: 0,
-        latencyMs: Date.now() - startedAt,
-        responseSummary: JSON.stringify(response, null, 2),
-        runId: trimOptional(String(response.request_id || response.requestId || '')),
-        status: 'success',
-      });
-    } catch (error) {
-      setSmokeTestResult({
-        error: error instanceof Error ? error.message : String(error),
-        eventCount: 0,
-        latencyMs: Date.now() - startedAt,
-        responseSummary: '',
-        runId: '',
-        status: 'error',
-      });
-      void message.error(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }, [
-    bindContract,
-    buildWorkflowYamls,
-    normalizedMemberId,
-    scopeId,
-    selectedEndpoint,
-    selectedService,
-    smokeInput,
-  ]);
 
   const snippetMap = useMemo(() => {
     if (!bindContract) {
@@ -876,21 +631,23 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       };
     }
 
+    const sampleInput = createDefaultBindSampleInput(bindContract);
     return {
-      curl: buildCurlSnippet(bindContract, smokeInput),
-      fetch: buildFetchSnippet(bindContract, smokeInput),
-      sdk: buildSdkSnippet(bindContract, smokeInput),
+      curl: buildCurlSnippet(bindContract, sampleInput),
+      fetch: buildFetchSnippet(bindContract, sampleInput),
+      sdk: buildSdkSnippet(bindContract, sampleInput),
     };
-  }, [bindContract, smokeInput]);
+  }, [bindContract]);
 
   const selectedSnippet = snippetMap[snippetTab];
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
   const revisionList = revisionCatalogQuery.data?.revisions ?? [];
   const hasEndpointOptions = Boolean(selectedService?.endpoints.length);
+  const endpointCount = selectedService?.endpoints.length ?? 0;
   const endpointUnavailableMessage =
     selectedService && !hasEndpointOptions
-      ? 'This published service has no endpoint data available yet.'
+      ? t('team.bind.endpoint.unavailable.title')
       : '';
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
@@ -940,7 +697,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       setPendingBindNotice({
         message:
           resultNotice?.message ||
-          `${pendingBindingCandidate.displayName} binding request was accepted. Studio will show the published contract after the run completes.`,
+          t('team.bind.pending.accepted', {
+            name: pendingBindingCandidate.displayName,
+          }),
         type: resultNotice?.type || 'info',
       });
     } catch (error) {
@@ -962,7 +721,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     return (
       <Alert
         showIcon
-        message="Resolve a workspace before binding this member."
+        message={t('team.bind.noScope')}
         type="info"
       />
     );
@@ -974,8 +733,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <div data-testid="studio-bind-surface" style={rootStyle}>
           <Alert
             showIcon
-            message="Loading current member contracts..."
-            description="Studio is checking whether this member already has a callable published contract in the current workspace."
+            message={t('team.bind.loadingContracts.title')}
+            description={t('team.bind.loadingContracts.description')}
             type="info"
           />
         </div>
@@ -987,18 +746,21 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <div data-testid="studio-bind-surface" style={rootStyle}>
           <Alert
             showIcon
-            message={`No published contract exists for ${pendingBindingCandidate.displayName} yet.`}
+            message={t('team.bind.pending.noContract', {
+              name: pendingBindingCandidate.displayName,
+            })}
             description={pendingBindingCandidate.description}
             type="info"
           />
           <AevatarPanel
-            title="Publish current member"
-            titleHelp="Bind publishes the current revision first, then Studio reveals the invoke URL, endpoint contract, and smoke-test entry for this member."
+            title={t('team.bind.pending.publishTitle')}
           >
             <div style={{ display: 'grid', gap: 12 }}>
               <div style={parameterGridStyle}>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Implementation kind</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {t('team.bind.pending.implementationKind')}
+                  </Typography.Text>
                   <Typography.Text strong>
                     {pendingBindingCandidate.kind === 'workflow'
                       ? 'Workflow'
@@ -1008,13 +770,17 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Current member</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {t('team.bind.pending.currentMember')}
+                  </Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {pendingBindingCandidate.displayName}
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Workspace ID</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {t('common.id.scope')}
+                  </Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {scopeId}
                   </Typography.Text>
@@ -1034,7 +800,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   message={currentBindingRunNotice.message}
-                  description={`Run ${currentBindingRun?.bindingRunId}`}
+                  description={t('team.bind.run.description', {
+                    runId: currentBindingRun?.bindingRunId || '',
+                  })}
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
@@ -1044,8 +812,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   type="success"
                   message={
                     postBindEntryActions.isEntryMember
-                      ? 'This member is the Team entry.'
-                      : 'This member can be the Team entry.'
+                      ? t('team.bind.entry.isEntry')
+                      : t('team.bind.entry.canBeEntry')
                   }
                   description={renderPostBindEntryAction(postBindEntryActions)}
                 />
@@ -1069,8 +837,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       <div data-testid="studio-bind-surface" style={rootStyle}>
         <Alert
           showIcon
-          message="No published contract is available for this member in the current workspace yet."
-          description="Bind a workflow, script, or gagent revision first so Studio can reveal the invoke contract."
+          message={t('team.bind.noContract.title')}
+          description={t('team.bind.noContract.description')}
           type="warning"
         />
       </div>
@@ -1083,15 +851,20 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <AevatarPanel
           layoutMode="document"
           padding={14}
-          title="Current member publication"
-          titleHelp="Bind is pinned to the selected member. Published service ids stay visible only as supporting diagnostics."
+          title={t('team.bind.publication.title')}
           extra={
             <Space wrap size={[6, 6]}>
               <Tag color={bindContract ? 'green' : 'default'}>
-                {bindContract ? 'member contract selected' : 'needs endpoint'}
+                {bindContract
+                  ? t('team.bind.publication.selected')
+                  : t('team.bind.publication.needsEndpoint')}
               </Tag>
               {revisionList.length > 0 ? (
-                <Tag>revisions · {revisionList.length}</Tag>
+                <Tag>
+                  {t('team.bind.publication.revisions', {
+                    count: revisionList.length,
+                  })}
+                </Tag>
               ) : null}
             </Space>
           }
@@ -1102,8 +875,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               type="success"
               message={
                 postBindEntryActions.isEntryMember
-                  ? 'This member is the Team entry.'
-                  : 'This member can be the Team entry.'
+                  ? t('team.bind.entry.isEntry')
+                  : t('team.bind.entry.canBeEntry')
               }
               description={renderPostBindEntryAction(postBindEntryActions)}
             />
@@ -1115,7 +888,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Typography.Text strong>
                   {selectedService?.displayName ||
                     selectedService?.serviceId ||
-                    'No published service'}
+                    t('team.bind.publication.noService')}
                 </Typography.Text>
                 {selectedEndpoint ? (
                   <Typography.Text type="secondary">
@@ -1128,98 +901,75 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   icon={<CopyOutlined />}
                   onClick={() => void copyText(bindContract.invokeUrl)}
                 >
-                  Copy URL
+                  {t('common.copyUrl')}
                 </Button>
               ) : null}
             </div>
             <div style={controlsGridStyle}>
               <div style={sourceControlStackStyle}>
-                <Typography.Text type="secondary">Current member</Typography.Text>
+                <Typography.Text type="secondary">
+                  {t('team.bind.pending.currentMember')}
+                </Typography.Text>
                 <div style={valueCardStyle}>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {selectedService?.displayName ||
                       selectedService?.serviceId ||
-                      'No published contract'}
+                      t('team.bind.publication.noContract')}
                   </Typography.Text>
                   <Typography.Text type="secondary">
                     {normalizedMemberId
                       ? `member:${normalizedMemberId}`
-                      : 'No member selected'}
+                      : t('team.bind.publication.noMember')}
                   </Typography.Text>
                 </div>
               </div>
               <div style={sourceControlStackStyle}>
-                <Space direction="vertical" size={2}>
-                  <Typography.Text type="secondary">Test mode</Typography.Text>
-                  <Typography.Text type="secondary">
-                    普通测试直接输入一句话即可；需要固定格式时再选高级输入。
-                  </Typography.Text>
-                </Space>
+                <Typography.Text type="secondary">
+                  {t('team.bind.publication.invokeTarget')}
+                </Typography.Text>
                 {selectedService && hasEndpointOptions ? (
-                  <div style={endpointChoiceRowStyle}>
-                    {selectedService.endpoints.map((endpoint) => {
-                      const active = endpoint.endpointId === selectedEndpointId;
-                      const label = endpoint.displayName || endpoint.endpointId;
-                      const foregroundColor = active ? '#ffffff' : '#0f172a';
-                      const secondaryColor = active
-                        ? 'rgba(255, 255, 255, 0.74)'
-                        : '#64748b';
-                      return (
-                        <button
-                          aria-pressed={active}
-                          className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-                          key={endpoint.endpointId}
-                          type="button"
-                          style={
-                            active
-                              ? endpointChoiceButtonActiveStyle
-                              : endpointChoiceButtonStyle
+                  <div style={valueCardStyle}>
+                    <Space wrap size={[6, 6]}>
+                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                        {selectedEndpoint?.displayName ||
+                          selectedEndpoint?.endpointId ||
+                          t('team.bind.publication.callableEndpoint')}
+                      </Typography.Text>
+                      {selectedEndpoint ? (
+                        <Tag
+                          color={
+                            isChatServiceEndpoint(selectedEndpoint)
+                              ? 'geekblue'
+                              : 'default'
                           }
-                          onClick={() => setSelectedEndpointId(endpoint.endpointId)}
+                          style={{ marginInlineEnd: 0 }}
                         >
-                          <span style={endpointChoiceTitleStyle}>
-                            <span
-                              style={{
-                                ...endpointChoiceNameStyle,
-                                color: foregroundColor,
-                              }}
-                            >
-                              {label}
-                            </span>
-                            <Tag
-                              color={isChatServiceEndpoint(endpoint) ? 'geekblue' : 'default'}
-                              style={{ marginInlineEnd: 0 }}
-                            >
-                              {describeEndpointKind(endpoint)}
-                            </Tag>
-                          </span>
-                          <span
-                            style={{
-                              ...endpointChoiceMetaStyle,
-                              color: secondaryColor,
-                            }}
-                          >
-                            id · {endpoint.endpointId}
-                          </span>
-                          <span
-                            style={{
-                              ...endpointChoiceDescriptionStyle,
-                              color: secondaryColor,
-                            }}
-                          >
-                            {trimOptional(endpoint.description) ||
-                              describeEndpointPurpose(endpoint)}
-                          </span>
-                        </button>
-                      );
-                    })}
+                          {isChatServiceEndpoint(selectedEndpoint)
+                            ? 'chat'
+                            : 'command'}
+                        </Tag>
+                      ) : null}
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {selectedEndpoint
+                        ? `${t('common.id.endpoint')}: ${selectedEndpoint.endpointId}`
+                        : t('team.bind.publication.noEndpoint')}
+                    </Typography.Text>
+                    {endpointCount > 1 ? (
+                      <Typography.Text type="secondary">
+                        {t('team.bind.endpoint.moreEntrypoints', {
+                          count: endpointCount - 1,
+                        })}
+                      </Typography.Text>
+                    ) : null}
                   </div>
                 ) : (
                   <div style={valueCardStyle}>
-                    <Typography.Text strong>No endpoint data available</Typography.Text>
+                    <Typography.Text strong>
+                      {t('team.bind.endpoint.noData.title')}
+                    </Typography.Text>
                     <Typography.Text type="secondary">
-                      This member publication has not exposed callable endpoints
-                      yet. Bind can still show revision diagnostics below.
+                      {t('team.bind.endpoint.noData.description')}
                     </Typography.Text>
                   </div>
                 )}
@@ -1229,250 +979,113 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               <Alert
                 showIcon
                 message={endpointUnavailableMessage}
-                description="The service revision history can still load, but Invoke needs endpoint data on the selected service contract."
+                description={t('team.bind.endpoint.unavailable.description')}
                 type="warning"
               />
             ) : null}
             {!normalizedMemberId && selectedService && selectedEndpoint ? (
               <Alert
                 showIcon
-                message="Select a Team member before using Invoke."
-                description="Bind can inspect the published service, but Studio only reveals invoke URLs and live requests after the route resolves to a backend member."
+                message={t('team.bind.invoke.memberRequired.title')}
+                description={t('team.bind.invoke.memberRequired.description')}
                 type="info"
               />
             ) : null}
           </div>
         </AevatarPanel>
 
-        <div style={contractAndActionsGridStyle}>
-          <AevatarPanel
-            layoutMode="document"
-            padding={14}
-            style={equalHeightPanelStyle}
-            title="Current member contract"
-            titleHelp="Keep only the callable essentials here so the page opens with the method, URL, auth, and revision at a glance."
+        <AevatarPanel
+          layoutMode="document"
+          padding={14}
+          title={t('team.bind.contract.title')}
+        >
+          <div
+            data-testid="studio-bind-contract-section"
+            style={contractSectionStyle}
           >
-            <div
-              data-testid="studio-bind-contract-section"
-              style={contractSectionStyle}
-            >
-              <Typography.Text type="secondary">
-                {runsCurrentWorkflowDraft
-                  ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
-                  : 'Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions.'}
-              </Typography.Text>
-              {bindContract ? (
-                <>
-                  <div
-                    data-testid="studio-bind-contract-card"
-                    style={contractUrlCardStyle}
-                  >
-                    <div style={contractMethodStyle}>
-                      {bindContract.method}
-                    </div>
-                    <div style={contractUrlStyle}>
-                      {bindContract.invokeUrl}
-                    </div>
-                  </div>
-                  <Space wrap size={[6, 6]}>
-                    <Tag>auth · {bindContract.authLabel}</Tag>
-                    <Tag>revision · {bindContract.revisionId}</Tag>
-                    {bindContract.streaming.sse ? (
-                      <Tag color="gold">stream · text/event-stream</Tag>
-                    ) : (
-                      <Tag>response · application/json</Tag>
-                    )}
-                    {bindContract.streaming.aguiFrames ? (
-                      <Tag color="geekblue">AGUI frames</Tag>
-                    ) : null}
-                  </Space>
-                </>
-              ) : (
-                <Alert
-                  showIcon
-                  message="Select an endpoint to reveal the invoke contract."
-                  description={
-                    normalizedMemberId
-                      ? 'The contract URL, revision badge, snippets, and smoke test are generated from the selected member endpoint.'
-                      : 'Invoke is member-scoped. Select or create a backend member before Studio reveals the invoke contract.'
-                  }
-                  type="info"
-                />
-              )}
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            layoutMode="document"
-            padding={14}
-            style={equalHeightPanelStyle}
-            title="Quick smoke test"
-            titleHelp={
-              runsCurrentWorkflowDraft
-                ? 'Quick smoke test runs the current Studio workflow draft before publish. Continue to Invoke when you want to verify the published contract and endpoint.'
-                : 'Use a light contract check here, then move into Invoke for the full transcript and event stream.'
-            }
-          >
-            <div
-              data-testid="studio-bind-smoke-test-section"
-              style={workflowSectionStyle}
-            >
-              <div style={{ display: 'grid', gap: 6 }}>
-                <Typography.Text strong>Authorization</Typography.Text>
-                <Typography.Text type="secondary">
-                  {runsCurrentWorkflowDraft
-                    ? 'Current draft smoke tests use Studio draft execution. Published endpoint authorization is checked after you continue to Invoke.'
-                    : bindContract?.authAuthenticated
-                      ? `${bindContract.authHint} In-browser Studio requests attach the active bearer session automatically.`
-                      : bindContract?.authEnabled
-                        ? `${bindContract?.authHint} Sign in before running a smoke test.`
-                        : bindContract?.authHint || 'Studio auth is not enabled for this environment.'}
-                </Typography.Text>
-                {runsCurrentWorkflowDraft ? (
-                  <Space wrap size={[6, 6]}>
-                    <Tag color="blue">Current draft</Tag>
-                    <Typography.Text type="secondary">
-                      Quick smoke test runs the current Studio draft before publish.
-                    </Typography.Text>
-                  </Space>
-                ) : null}
-              </div>
-              <div style={smokeFieldStyle}>
-                <Typography.Text strong>
-                  {runsCurrentWorkflowDraft ||
-                  (selectedEndpoint && isChatServiceEndpoint(selectedEndpoint))
-                    ? 'Prompt'
-                    : 'Prompt / command input'}
-                </Typography.Text>
-                <Input.TextArea
-                  aria-label="Bind smoke test input"
-                  autoSize={{ minRows: 4, maxRows: 8 }}
-                  placeholder={
-                    runsCurrentWorkflowDraft
-                      ? 'Ask the current workflow draft to do a quick task...'
-                      : selectedEndpoint && isChatServiceEndpoint(selectedEndpoint)
-                      ? 'Ask the selected member to do a quick task...'
-                      : 'Enter a quick smoke test input. Use Invoke for typed payload debugging.'
-                  }
-                  style={smokeInputStyle}
-                  value={smokeInput}
-                  onChange={(event) => setSmokeInput(event.target.value)}
-                />
-              </div>
-              {bindContract?.requestTypeUrl &&
-              !runsCurrentWorkflowDraft &&
-              !isChatServiceEndpoint(selectedEndpoint) ? (
-                <Alert
-                  showIcon
-                  message="固定格式输入"
-                  description={
-                    <Typography.Text style={smokeTypedPayloadDescriptionStyle}>
-                      这个入口主要给 API/SDK 调用。当前输入会作为简单文本发送；
-                      需要调试完整固定格式输入时，请继续到 Invoke。
-                      <br />
-                      Request type: {bindContract.requestTypeUrl}
-                    </Typography.Text>
-                  }
-                  type="warning"
-                />
-              ) : null}
-              <div style={smokeActionStackStyle}>
-                <Button
-                  block
-                  icon={<CheckCircleOutlined />}
-                  loading={smokeTestResult.status === 'running'}
-                  type="primary"
-                  disabled={
-                    (!runsCurrentWorkflowDraft && !canUsePublishedMemberInvoke) ||
-                    publishedSmokeRequiresAuth
-                  }
-                  onClick={() => void handleRunSmokeTest()}
+            <Typography.Text type="secondary">
+              {t('team.bind.contract.description')}
+            </Typography.Text>
+            {bindContract ? (
+              <>
+                <div
+                  data-testid="studio-bind-contract-card"
+                  style={contractUrlCardStyle}
                 >
-                  Send smoke test
-                </Button>
-                <Button
-                  block
-                  icon={<LinkOutlined />}
-                  disabled={!canUsePublishedMemberInvoke}
-                  onClick={() => {
-                    if (!canUsePublishedMemberInvoke || !selectedService || !selectedEndpoint) {
-                      return;
-                    }
-
-                    onContinueToInvoke?.(
-                      selectedService.serviceId,
-                      selectedEndpoint.endpointId,
-                    );
-                  }}
-                >
-                  Continue to Invoke
-                </Button>
-              </div>
-              {smokeTestResult.status === 'success' ? (
-                <Alert
-                  showIcon
-                  message={`Smoke test passed in ${smokeTestResult.latencyMs}ms`}
-                  description={
-                    smokeTestResult.runId
-                      ? `Run ${smokeTestResult.runId}`
-                      : runsCurrentWorkflowDraft
-                        ? 'The current Studio draft completed without an error.'
-                        : 'The selected contract returned without an error.'
+                  <div style={contractMethodStyle}>
+                    {bindContract.method}
+                  </div>
+                  <div style={contractUrlStyle}>
+                    {bindContract.invokeUrl}
+                  </div>
+                </div>
+                <Space wrap size={[6, 6]}>
+                  <Tag>
+                    {t('team.bind.contract.auth', {
+                      auth: bindContract.authLabel,
+                    })}
+                  </Tag>
+                  <Tag>
+                    {t('team.bind.contract.revision', {
+                      revision: bindContract.revisionId,
+                    })}
+                  </Tag>
+                  {bindContract.streaming.sse ? (
+                    <Tag color="gold">
+                      {t('team.bind.contract.stream')}
+                    </Tag>
+                  ) : (
+                    <Tag>{t('team.bind.contract.response')}</Tag>
+                  )}
+                  {bindContract.streaming.aguiFrames ? (
+                    <Tag color="geekblue">AGUI frames</Tag>
+                  ) : null}
+                </Space>
+              </>
+            ) : (
+              <Alert
+                showIcon
+                message={t('team.bind.contract.selectEndpoint.title')}
+                description={
+                  normalizedMemberId
+                    ? t('team.bind.contract.selectEndpoint.memberDescription')
+                    : t('team.bind.contract.selectEndpoint.noMemberDescription')
+                }
+                type="info"
+              />
+            )}
+            <div
+              data-testid="studio-bind-next-step-section"
+              style={contractActionRowStyle}
+            >
+              <Button
+                icon={<LinkOutlined />}
+                disabled={!canUsePublishedMemberInvoke}
+                style={invokeActionButtonStyle}
+                type="primary"
+                onClick={() => {
+                  if (!canUsePublishedMemberInvoke || !selectedService || !selectedEndpoint) {
+                    return;
                   }
-                  type="success"
-                />
-              ) : smokeTestResult.status === 'error' ? (
-                <Alert
-                  showIcon
-                  message="Smoke test failed"
-                  description={smokeTestResult.error}
-                  type="error"
-                />
-              ) : null}
-              {smokeTestResult.responseSummary ? (
-                runsCurrentWorkflowDraft || bindContract?.streaming.sse ? (
-                  <div style={{ display: 'grid', gap: 10 }}>
-                    <Typography.Text strong>Streaming summary</Typography.Text>
-                    <Typography.Text type="secondary">
-                      {smokeTestResult.eventCount} observed events
-                    </Typography.Text>
-                    <div
-                      style={{
-                        background: '#f8fafc',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 12,
-                        color: '#0f172a',
-                        fontFamily: monoFontFamily,
-                        fontSize: 12.5,
-                        lineHeight: 1.65,
-                        padding: 12,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {smokeTestResult.responseSummary}
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'grid', gap: 10 }}>
-                    <Typography.Text strong>Response summary</Typography.Text>
-                    <pre style={{ ...snippetBlockStyle, margin: 0 }}>
-                      {smokeTestResult.responseSummary}
-                    </pre>
-                  </div>
-                )
-              ) : null}
+
+                  onContinueToInvoke?.(
+                    selectedService.serviceId,
+                    selectedEndpoint.endpointId,
+                  );
+                }}
+              >
+                {t('common.openInvoke')}
+              </Button>
             </div>
-          </AevatarPanel>
-        </div>
+          </div>
+        </AevatarPanel>
 
         <div data-testid="studio-bind-primary-grid" style={workflowGridStyle}>
           <AevatarPanel
             layoutMode="document"
             padding={14}
             style={equalHeightPanelStyle}
-            title="Integration snippets"
-            titleHelp="Give the user a ready-to-copy call shape right away, without making them hunt through the support sections."
+            title={t('team.bind.snippets.title')}
           >
             {bindContract ? (
               <div
@@ -1500,18 +1113,17 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     ))}
                   </div>
                   <Button icon={<CopyOutlined />} onClick={() => void copyText(selectedSnippet)}>
-                    Copy snippet
+                    {t('team.bind.snippets.copy')}
                   </Button>
                 </div>
                 <Typography.Text type="secondary">
-                  Use the selected snippet to call the current member contract from your shell,
-                  browser, or SDK.
+                  {t('team.bind.snippets.description')}
                 </Typography.Text>
                 <pre style={snippetPreviewStyle}>{selectedSnippet}</pre>
               </div>
             ) : (
               <Empty
-                description="Inspect one contract first to generate its snippets."
+                description={t('team.bind.snippets.empty')}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
             )}
@@ -1521,8 +1133,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <AevatarPanel
           layoutMode="document"
           padding={14}
-          title="Supporting details"
-          titleHelp="Keep the source selector, routing, bindings, and revision history available below the primary workflow."
+          title={t('team.bind.supporting.title')}
         >
           <div
             data-testid="studio-bind-supporting-section"
@@ -1535,50 +1146,64 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               items={[
               {
                 key: 'contract-details',
-                label: 'Contract details',
+                label: t('team.bind.contractDetails.title'),
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Published service</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.publishedService')}
+                      </Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                         {bindContract.serviceId}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        Platform diagnostic id for this member contract.
+                        {t('team.bind.contractDetails.diagnostic')}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Workspace ID</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.workspace')}
+                      </Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                         {bindContract.scopeLabel}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.scopeSource
-                          ? `Resolved from ${bindContract.scopeSource}.`
-                          : 'Bound to the current Studio workspace.'}
+                          ? t('team.bind.contractDetails.resolvedFrom', {
+                              source: bindContract.scopeSource,
+                            })
+                          : t('team.bind.contractDetails.boundWorkspace')}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Authorization</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.authorization')}
+                      </Typography.Text>
                       <Typography.Text strong>{bindContract.authLabel}</Typography.Text>
                       <Typography.Text type="secondary">{bindContract.authHint}</Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Revision</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.revision')}
+                      </Typography.Text>
                       <Typography.Text strong>{bindContract.revisionId}</Typography.Text>
                       <Typography.Text type="secondary">{bindContract.serviceDisplayName}</Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Delivery</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.delivery')}
+                      </Typography.Text>
                       <Typography.Text strong>{bindContract.method}</Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.streaming.sse
-                          ? 'Streams through text/event-stream.'
-                          : 'Returns a single JSON response.'}
+                          ? t('team.bind.contractDetails.deliveryStream')
+                          : t('team.bind.contractDetails.deliveryJson')}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Streaming</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('team.bind.contractDetails.streaming')}
+                      </Typography.Text>
                       <Space wrap size={[6, 6]}>
                         <Tag color={bindContract.streaming.sse ? 'blue' : 'default'}>SSE</Tag>
                         <Tag color={bindContract.streaming.webSocket ? 'blue' : 'default'}>
@@ -1591,7 +1216,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     </div>
                     {bindContract.requestTypeUrl ? (
                       <div style={valueCardStyle}>
-                        <Typography.Text type="secondary">Request schema</Typography.Text>
+                        <Typography.Text type="secondary">
+                          {t('team.bind.contractDetails.requestSchema')}
+                        </Typography.Text>
                         <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                           {bindContract.requestTypeUrl}
                         </Typography.Text>
@@ -1599,7 +1226,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                     ) : null}
                     {bindContract.responseTypeUrl ? (
                       <div style={valueCardStyle}>
-                        <Typography.Text type="secondary">Response schema</Typography.Text>
+                        <Typography.Text type="secondary">
+                          {t('team.bind.contractDetails.responseSchema')}
+                        </Typography.Text>
                         <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                           {bindContract.responseTypeUrl}
                         </Typography.Text>
@@ -1608,7 +1237,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </div>
                 ) : (
                   <Empty
-                    description="Keep one published contract in focus to review its details."
+                    description={t('team.bind.contractDetails.empty')}
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),
@@ -1617,7 +1246,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 key: 'bound-dependencies',
                 label: buildBindingSectionTitle(bindingList.length),
                 children: bindingsQuery.isLoading ? (
-                  <Typography.Text type="secondary">Loading bindings...</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {t('team.bind.dependencies.loading')}
+                  </Typography.Text>
                 ) : bindingList.length > 0 ? (
                   <div style={listColumnStyle}>
                     {bindingList.map((binding) => (
@@ -1633,34 +1264,45 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                           />
                         </Space>
                         <Typography.Text type="secondary">
-                          Target {describeScopeServiceBindingTarget(binding)}
+                          {t('team.bind.dependencies.target', {
+                            target: describeScopeServiceBindingTarget(binding),
+                          })}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          Policies {binding.policyIds.length > 0 ? binding.policyIds.join(', ') : 'none'}
+                          {t('team.bind.dependencies.policies', {
+                            policies:
+                              binding.policyIds.length > 0
+                                ? binding.policyIds.join(', ')
+                                : t('common.none'),
+                          })}
                         </Typography.Text>
                       </div>
                     ))}
                   </div>
                 ) : (
                   <Empty
-                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current workspace."
+                    description={t('team.bind.dependencies.empty')}
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),
               },
               {
                 key: 'revisions',
-                label: `Revisions (${revisionList.length})`,
+                label: t('team.bind.revisions.title', {
+                  count: revisionList.length,
+                }),
                 children: revisionCatalogQuery.isLoading ? (
-                  <Typography.Text type="secondary">Loading published revisions...</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {t('team.bind.revisions.loading')}
+                  </Typography.Text>
                 ) : revisionCatalogQuery.error ? (
                   <Alert
                     showIcon
-                    message="Failed to load revisions"
+                    message={t('team.bind.revisions.failed')}
                     description={
                       revisionCatalogQuery.error instanceof Error
                         ? revisionCatalogQuery.error.message
-                        : 'Studio could not load the published revisions for this contract.'
+                        : t('team.bind.revisions.failedFallback')
                     }
                     type="error"
                   />
@@ -1689,21 +1331,39 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                               status={revision.status || 'draft'}
                             />
                             {revision.isDefaultServing ? (
-                              <Tag color="green">default</Tag>
+                              <Tag color="green">
+                                {t('team.bind.revisions.default')}
+                              </Tag>
                             ) : null}
                             {revision.isActiveServing ? (
-                              <Tag color="blue">active</Tag>
+                              <Tag color="blue">
+                                {t('team.bind.revisions.active')}
+                              </Tag>
                             ) : null}
-                            {revision.retiredAt ? <Tag color="red">retired</Tag> : null}
-                            {isCurrent ? <Tag color="gold">current contract</Tag> : null}
+                            {revision.retiredAt ? (
+                              <Tag color="red">
+                                {t('team.bind.revisions.retired')}
+                              </Tag>
+                            ) : null}
+                            {isCurrent ? (
+                              <Tag color="gold">
+                                {t('team.bind.revisions.current')}
+                              </Tag>
+                            ) : null}
                           </Space>
                           <Typography.Text type="secondary">
                             {describeStudioMemberBindingRevisionTarget(revision)} ·{' '}
-                            {describeStudioMemberBindingRevisionContext(revision) || 'No detail'}
+                            {describeStudioMemberBindingRevisionContext(revision) ||
+                              t('team.bind.revisions.noDetail')}
                           </Typography.Text>
                           <Typography.Text type="secondary">
-                            Serving {revision.servingState || revision.status || 'unknown'} · Published{' '}
-                            {formatDateTime(revision.publishedAt)}
+                            {t('team.bind.revisions.serving', {
+                              state:
+                                revision.servingState ||
+                                revision.status ||
+                                t('common.status.unknown'),
+                              time: formatDateTime(revision.publishedAt),
+                            })}
                           </Typography.Text>
                         </div>
                       );
@@ -1711,7 +1371,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </div>
                 ) : (
                   <Empty
-                    description="No published revisions are available for this contract yet."
+                    description={t('team.bind.revisions.empty')}
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),

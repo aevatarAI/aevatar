@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { translate } from '@/shared/i18n/localization';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
   applyStepInspectorDraft,
@@ -109,6 +110,17 @@ const mockedScriptsApi = scriptsApi as unknown as {
   runDraftScript: jest.Mock;
   proposeEvolution: jest.Mock;
 };
+
+function getButtonByText(label: string): HTMLButtonElement {
+  const button = screen
+    .getAllByRole('button')
+    .find((element) => element.textContent?.replace(/\s+/g, '') === label);
+  if (!button) {
+    throw new Error(`Unable to find button ${label}`);
+  }
+
+  return button as HTMLButtonElement;
+}
 
 const scriptDetail = {
   available: true,
@@ -467,10 +479,10 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Dry-run' })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Run' })).toHaveLength(1);
+    expect(screen.getByText(translate('studio.script.readyToBindShort'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: translate('studio.script.dryRun') })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: translate('common.run') })).toHaveLength(1);
 
     fireEvent.change(screen.getByLabelText('Mock script code editor'), {
       target: {
@@ -478,9 +490,9 @@ describe('StudioWorkflowBuildPanel', () => {
       },
     });
 
-    expect(screen.getByText('Validate current source')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+    expect(screen.getByText(translate('studio.script.validateCurrent'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeDisabled();
   });
 
   it('offers Add script from the empty Script build state', () => {
@@ -502,7 +514,7 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.addScript') }));
     expect(handleCreateScriptDraft).toHaveBeenCalled();
   });
 
@@ -545,10 +557,10 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(
       (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
     ).toContain('DraftBehavior');
-    expect(screen.getByText('Validate current source')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+    expect(screen.getByText(translate('studio.script.validateCurrent'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
 
     await waitFor(() => {
       expect(mockedScriptsApi.validateDraft).toHaveBeenCalledWith(
@@ -559,9 +571,9 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.saveScript') }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.saveScript).toHaveBeenCalledWith(
@@ -579,9 +591,9 @@ describe('StudioWorkflowBuildPanel', () => {
       expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
     });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeEnabled();
     });
-    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
+    expect(screen.getByText(translate('studio.script.readyToBindShort'))).toBeInTheDocument();
   });
 
   it('renders validation diagnostics and focuses the selected problem', async () => {
@@ -627,7 +639,7 @@ describe('StudioWorkflowBuildPanel', () => {
         value: 'using System;\n// changed',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
 
     expect(await screen.findByText('; expected')).toBeInTheDocument();
     expect(screen.getByText('Behavior.cs:12:8')).toBeInTheDocument();
@@ -668,9 +680,9 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.run') }));
 
-    expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
+    expect(await screen.findByLabelText(translate('studio.script.runFactsAria'))).toBeInTheDocument();
     expect(screen.getByText('run-script-1')).toBeInTheDocument();
     expect(screen.getByText('runtime-run')).toBeInTheDocument();
     expect(screen.getByText('type.googleapis.com/AppScriptCommand')).toBeInTheDocument();
@@ -718,18 +730,18 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.saveScript') }));
 
-    expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' }));
+    expect(await screen.findByText(/等待目录同步/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.refreshCatalog') }));
     expect(handleRefreshScripts).toHaveBeenCalled();
   });
 
@@ -774,18 +786,18 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.saveScript') }));
 
     expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
-    expect(screen.getByText('Save needs attention')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(screen.getByText(translate('studio.script.saveNeedsAttention'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeDisabled();
   });
 
   it('polls save observation until a pending Script save is applied', async () => {
@@ -848,21 +860,21 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.saveScript') }));
 
-    expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 秒后再次检查/)).toBeInTheDocument();
     await waitFor(
       () => {
         expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
         expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
-        expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeEnabled();
       },
       { timeout: 2500 },
     );
@@ -922,11 +934,11 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    fireEvent.click(getButtonByText(translate('studio.script.validate')));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.saveScript') }));
     await waitFor(() => {
       expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalled();
     });
@@ -956,10 +968,10 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: translate('studio.script.saveScript') })).toBeDisabled();
     });
-    expect(screen.queryByText(/Save applied/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(screen.queryByText(/保存已应用/)).toBeNull();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeDisabled();
   });
 
   it('edits a multi-file package and entry settings', () => {
@@ -983,23 +995,31 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Script package tree')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Advanced package'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add C#' }));
+    expect(screen.getByLabelText(translate('studio.script.packageTreeAria'))).toBeInTheDocument();
+    fireEvent.click(screen.getByText(translate('studio.script.advancedPackage')));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.addCsharp') }));
     expect(screen.getByRole('button', { name: /Support\.cs/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.rename') }));
     expect(screen.getByRole('button', { name: /SupportRenamed\.cs/ })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Entry behavior type'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.script.entryBehaviorAria')), {
       target: {
         value: 'SupportBehavior',
       },
     });
-    expect(screen.getByText(/Behavior: SupportBehavior/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        new RegExp(`${translate('studio.script.behaviorLabel')}: SupportBehavior`),
+      ),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Set entry source' }));
-    expect(screen.getByText(/Entry: SupportRenamed\.cs/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.setEntrySource') }));
+    expect(
+      screen.getByText(
+        new RegExp(`${translate('studio.script.entryLabel')}: SupportRenamed\\.cs`),
+      ),
+    ).toBeInTheDocument();
     promptSpy.mockRestore();
   });
 
@@ -1019,13 +1039,13 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Promotion'));
-    fireEvent.change(screen.getByLabelText('Promotion reason'), {
+    fireEvent.click(screen.getByText(translate('studio.script.promotion')));
+    fireEvent.change(screen.getByLabelText(translate('studio.script.promotionReasonAria')), {
       target: {
         value: 'ready for binding',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Propose evolution' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.proposeEvolution') }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.proposeEvolution).toHaveBeenCalledWith(
@@ -1037,8 +1057,8 @@ describe('StudioWorkflowBuildPanel', () => {
         }),
       );
     });
-    expect(await screen.findByText(/Promotion accepted/)).toBeInTheDocument();
-    expect(screen.getByText('Accepted')).toBeInTheDocument();
+    expect(await screen.findByText(/晋级已接受/)).toBeInTheDocument();
+    expect(screen.getByText(translate('studio.script.accepted'))).toBeInTheDocument();
   });
 
   it('walks a complete workflow build loop', async () => {
@@ -1052,19 +1072,19 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    expect(await screen.findByText('DAG Canvas')).toBeInTheDocument();
+    expect(await screen.findByText(translate('studio.workflow.dagCanvas'))).toBeInTheDocument();
     expect(screen.getByTestId('workflow-stage-actions')).toBeInTheDocument();
     const workflowEditorWorkspace = screen.getByTestId('workflow-editor-workspace');
     const workflowDryRunPanel = screen.getByTestId('workflow-dry-run-panel');
     expect(workflowEditorWorkspace).toBeInTheDocument();
     expect(workflowDryRunPanel).toBeInTheDocument();
-    expect(within(workflowEditorWorkspace).queryByText('Dry-run')).not.toBeInTheDocument();
+    expect(within(workflowEditorWorkspace).queryByText(translate('studio.workflow.dryRun'))).not.toBeInTheDocument();
     expect(
       workflowEditorWorkspace.compareDocumentPosition(workflowDryRunPanel) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.workflow.addStep') }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
       overflowY: 'auto',
@@ -1072,15 +1092,15 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Step ID')).toHaveValue('llm_call');
+      expect(screen.getByLabelText(translate('studio.workflow.stepId'))).toHaveValue('llm_call');
     });
 
-    fireEvent.change(screen.getByLabelText('Step ID'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.workflow.stepId')), {
       target: {
         value: 'review_step',
       },
     });
-    fireEvent.change(screen.getByLabelText('Step parameters'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.workflow.stepParametersAria')), {
       target: {
         value: JSON.stringify(
           {
@@ -1091,10 +1111,10 @@ describe('StudioWorkflowBuildPanel', () => {
         ),
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.workflow.applyChanges') }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Step ID')).toHaveValue('review_step');
+      expect(screen.getByLabelText(translate('studio.workflow.stepId'))).toHaveValue('review_step');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'YAML' }));
@@ -1105,16 +1125,16 @@ describe('StudioWorkflowBuildPanel', () => {
       ).toContain('review_step');
     });
     expect(screen.getByTestId('workflow-step-detail-panel')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.workflow.saveDraft') })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate('studio.script.continueToBind') })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.workflow.saveDraft') }));
 
     expect(handleSaveDraft).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.run') }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
@@ -1132,7 +1152,7 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(await screen.findByText('workflow draft output')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.script.continueToBind') }));
 
     expect(handleContinueToBind).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
@@ -1163,11 +1183,11 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.run') }));
 
     expect(await screen.findByText('final workflow answer')).toBeInTheDocument();
 
-    const outputSection = screen.getByText('Output');
+    const outputSection = screen.getByText(translate('common.output'));
     const outputPanel = outputSection.parentElement;
     expect(outputPanel).not.toBeNull();
     expect(within(outputPanel as HTMLElement).getByText('final workflow answer')).toBeInTheDocument();
@@ -1175,7 +1195,7 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(within(outputPanel as HTMLElement).queryByText(/actorId:/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Run summary')).not.toBeInTheDocument();
 
-    const debugDetailsToggle = await screen.findByText('Debug details');
+    const debugDetailsToggle = await screen.findByText(translate('common.debugDetails'));
     fireEvent.click(debugDetailsToggle);
     expect(await screen.findByText(/runId: run-1/i)).toBeInTheDocument();
     expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
@@ -1207,10 +1227,10 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.run') }));
 
     expect(await screen.findByText('second node final answer')).toBeInTheDocument();
-    const outputSection = screen.getByText('Output');
+    const outputSection = screen.getByText(translate('common.output'));
     const outputPanel = outputSection.parentElement;
     expect(outputPanel).not.toBeNull();
     expect(within(outputPanel as HTMLElement).queryByText('first node answer')).toBeNull();
@@ -1231,10 +1251,10 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('common.run') }));
 
     expect(
-      await screen.findByText(/provider 还没有连好/i),
+      await screen.findByText(/模型提供方还没有连接/i),
     ).toBeInTheDocument();
   });
 
@@ -1255,7 +1275,7 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    const applyButton = screen.getByRole('button', { name: 'Apply changes' });
+    const applyButton = screen.getByRole('button', { name: translate('studio.workflow.applyChanges') });
     fireEvent.click(applyButton);
     fireEvent.click(applyButton);
 

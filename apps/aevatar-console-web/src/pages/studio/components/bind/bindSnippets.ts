@@ -1,4 +1,5 @@
 import type { StudioBindContract } from './bindContract';
+import { translate } from '@/shared/i18n/localization';
 
 function escapeForDoubleQuotes(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -9,7 +10,7 @@ function escapeForTemplateLiteral(value: string): string {
 }
 
 function buildRequestBody(sampleInput: string): string {
-  const normalizedInput = sampleInput.trim() || 'Smoke test this member.';
+  const normalizedInput = sampleInput.trim() || translate('studio.snippets.defaultSmoke');
   return JSON.stringify(
     {
       prompt: normalizedInput,
@@ -21,14 +22,14 @@ function buildRequestBody(sampleInput: string): string {
 
 function buildAuthSnippetComment(contract: StudioBindContract): string {
   if (!contract.authEnabled) {
-    return "// This Studio environment does not expose an auth session for invoke requests.";
+    return `// ${translate('studio.snippets.authNoSession')}`;
   }
 
   if (!contract.authAuthenticated) {
-    return "// Sign in first, then supply a bearer access token when calling this endpoint outside Studio.";
+    return `// ${translate('studio.snippets.authRequired')}`;
   }
 
-  return "// Studio browser requests reuse your authenticated session. External callers still need their own bearer access token.";
+  return `// ${translate('studio.snippets.authBrowser')}`;
 }
 
 export function createDefaultBindSampleInput(
@@ -39,8 +40,8 @@ export function createDefaultBindSampleInput(
   }
 
   return contract.streaming.sse
-    ? 'Give me a quick summary of what this member can do.'
-    : 'Smoke test this member.';
+    ? translate('studio.snippets.defaultStreaming')
+    : translate('studio.snippets.defaultSmoke');
 }
 
 export function buildCurlSnippet(
@@ -72,7 +73,7 @@ export function buildFetchSnippet(
     : 'application/json';
   const responseHandling = contract.streaming.sse
     ? [
-        '// Parse the streaming response in Invoke or your SSE client.',
+        `// ${translate('studio.snippets.parseStreaming')}`,
         'const text = await response.text();',
         'console.log(text);',
       ].join('\n')
@@ -107,10 +108,16 @@ export function buildSdkSnippet(
   sampleInput: string,
 ): string {
   return [
-    '// SDK snippet is not available yet for this Studio bind contract.',
-    '// Use the Fetch tab below or Continue to Invoke for a live request.',
-    `// Service: ${escapeForTemplateLiteral(contract.serviceId)}`,
-    `// Endpoint: ${escapeForTemplateLiteral(contract.endpointId)}`,
-    `// Sample input: ${escapeForTemplateLiteral(sampleInput.trim() || createDefaultBindSampleInput(contract))}`,
+    `// ${translate('studio.snippets.sdkUnavailable')}`,
+    `// ${translate('studio.snippets.sdkUseFetch')}`,
+    `// ${translate('studio.snippets.service', {
+      service: escapeForTemplateLiteral(contract.serviceId),
+    })}`,
+    `// ${translate('studio.snippets.endpoint', {
+      endpoint: escapeForTemplateLiteral(contract.endpointId),
+    })}`,
+    `// ${translate('studio.snippets.sampleInput', {
+      input: escapeForTemplateLiteral(sampleInput.trim() || createDefaultBindSampleInput(contract)),
+    })}`,
   ].join('\n');
 }

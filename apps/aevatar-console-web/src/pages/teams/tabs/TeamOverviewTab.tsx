@@ -1,5 +1,6 @@
 import { Button, Space, Typography, theme } from "antd";
 import React from "react";
+import { useTranslation } from "@/shared/i18n/localization";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
   DetailPill,
@@ -85,6 +86,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   onClearEntryMember,
 }) => {
   const { token } = theme.useToken();
+  const { t } = useTranslation();
   const hasEntryMember = Boolean(entryMemberId?.trim());
 
   return (
@@ -102,7 +104,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <Space wrap size={8}>
               <Typography.Text strong style={{ fontSize: 16 }}>
-                当前态势
+                {t("team.overview.posture")}
               </Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
@@ -130,29 +132,29 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           }}
         >
           <SignalCard
-            label="当前服务"
+            label={t("team.overview.currentService")}
             value={currentServiceFriendly}
             caption={currentServiceCardCaption}
             captionTooltip={currentServiceCardTooltip}
           />
           <SignalCard
-            label="最近运行"
+            label={t("team.overview.recentRun")}
             value={currentRunFriendly}
             caption={currentRunCardCaption}
             captionTooltip={currentRunCardTooltip}
           />
           <SignalCard
-            label="最近一次更新"
+            label={t("team.overview.latestUpdate")}
             value={latestVisibleUpdateLabel}
             caption={latestVisibleUpdateNote}
           />
           <SignalCard
-            label="入口成员"
-            value={entryMemberLabel || entryMemberId || "未配置"}
+            label={t("team.overview.entryMember")}
+            value={entryMemberLabel || entryMemberId || t("common.notConfigured")}
             caption={
               hasEntryMember
-                ? "调用这支 Team 时会先路由到这个成员。"
-                : "测试或调用前，请先设置一个入口成员。"
+                ? t("team.overview.entryCaption.configured")
+                : t("team.overview.entryCaption.missing")
             }
           />
         </div>
@@ -163,7 +165,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               onClick={onClearEntryMember}
               size="small"
             >
-              清除入口成员
+              {t("team.overview.clearEntry")}
             </Button>
           </div>
         ) : null}
@@ -180,7 +182,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <div>
               <Typography.Title level={3} style={{ margin: 0 }}>
-                团队构成
+                {t("team.overview.composition")}
               </Typography.Title>
             </div>
           </div>
@@ -205,8 +207,8 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             ))
           ) : (
             <AevatarInspectorEmpty
-              title="暂无团队构成"
-              description="当前还没有足够事实来生成团队构成。"
+              title={t("team.overview.compositionEmptyTitle")}
+              description={t("team.overview.compositionEmptyDescription")}
             />
           )}
         </div>
@@ -214,7 +216,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
         {configurationDetailRows.length > 0 ? (
           <section style={surfaceStyle(token)}>
             <Typography.Title level={3} style={{ margin: 0 }}>
-              配置明细
+              {t("team.overview.configuration")}
             </Typography.Title>
             <div style={{ display: "grid", gap: 12 }}>
               {configurationDetailRows.map((row, index) => (

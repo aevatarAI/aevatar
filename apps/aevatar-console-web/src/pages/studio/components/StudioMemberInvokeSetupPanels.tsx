@@ -5,6 +5,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Collapse, Input, Typography } from 'antd';
 import React from 'react';
+import { useTranslation } from '@/shared/i18n/localization';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
 import {
@@ -115,10 +116,13 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   payloadTypeUrl,
   prompt,
 }) => {
+  const { t } = useTranslation();
   const isRunning = invokeStatus === 'running';
   const promptPlaceholder =
-    defaultPrompt || '输入 Prompt，发起一次独立 Invoke。';
-  const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
+    defaultPrompt || t('studio.invoke.promptPlaceholder');
+  const primaryButtonLabel = isRunning
+    ? t('studio.invoke.primary.stop')
+    : t('studio.invoke.primary.invoke');
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
   ) : (
@@ -132,10 +136,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     >
       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
         <div style={promptLabelRowStyle}>
-          <span style={promptKickerStyle}>Prompt</span>
+          <span style={promptKickerStyle}>{t('studio.invoke.promptLabel')}</span>
           {layout === 'dock' ? (
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              New run per Invoke
+              {t('studio.invoke.newRunShort')}
             </Typography.Text>
           ) : null}
         </div>
@@ -145,7 +149,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label="调用请求输入"
+              aria-label={t('studio.invoke.promptInputAria')}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
@@ -169,7 +173,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 size="large"
                 style={dockComposerSecondaryButtonStyle}
               >
-                Stop
+                {t('studio.invoke.primary.stop')}
               </Button>
             ) : null}
             {layout === 'dock' ? (
@@ -179,13 +183,13 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 style={dockComposerSecondaryButtonStyle}
                 onClick={onClear}
               >
-                Clear
+                {t('studio.invoke.clear')}
               </Button>
             ) : null}
           </div>
         ) : (
           <Input.TextArea
-            aria-label="调用请求输入"
+            aria-label={t('studio.invoke.promptInputAria')}
             autoSize={{ minRows: 4, maxRows: 8 }}
             placeholder={promptPlaceholder}
             value={prompt}
@@ -199,22 +203,22 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            Sending this prompt will create a new independent Run.
+            {t('studio.invoke.sendingHistorical')}
           </Typography.Text>
         ) : !canInvoke ? (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            请选择可调用的 Team member 和 endpoint。
+            {t('studio.invoke.selectCallable')}
           </Typography.Text>
         ) : isChatEndpoint ? (
           <Typography.Text
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。
+            {t('studio.invoke.newRunHint')}
           </Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。
+            {t('studio.invoke.newRunHint')}
           </Typography.Text>
         )}
       </div>
@@ -226,15 +230,15 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           items={[
             {
               key: 'typed-payload',
-              label: 'Advanced typed payload',
+              label: t('studio.invoke.advancedPayload'),
               children: (
                 <div style={typedPayloadGridStyle}>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      Payload type URL
+                      {t('studio.invoke.payloadTypeUrl')}
                     </Typography.Text>
                     <Input
-                      aria-label="Payload type URL"
+                      aria-label={t('studio.invoke.payloadTypeUrl')}
                       placeholder="type.googleapis.com/google.protobuf.StringValue"
                       value={payloadTypeUrl}
                       onChange={(event) =>
@@ -244,12 +248,12 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                   </div>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      Payload base64
+                      {t('studio.invoke.payloadBase64')}
                     </Typography.Text>
                     <Input.TextArea
-                      aria-label="Payload base64"
+                      aria-label={t('studio.invoke.payloadBase64')}
                       autoSize={{ minRows: 2, maxRows: 5 }}
-                      placeholder="Paste encoded protobuf payload when this type cannot be built from text."
+                      placeholder={t('studio.invoke.payloadBase64Placeholder')}
                       value={payloadBase64}
                       onChange={(event) =>
                         onPayloadBase64Change(event.target.value)
@@ -278,10 +282,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             {primaryButtonLabel}
           </Button>
           <Button disabled={!isRunning} icon={<StopOutlined />} onClick={onAbort}>
-            Stop
+            {t('studio.invoke.primary.stop')}
           </Button>
           <Button icon={<ClearOutlined />} onClick={onClear}>
-            Clear
+            {t('studio.invoke.clear')}
           </Button>
         </div>
       )}
@@ -296,8 +300,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title="调试台"
-      titleHelp="先输入 prompt 或载荷，再直接执行当前成员调用。"
+      title={t('studio.invoke.debugTitle')}
+      titleHelp={t('studio.invoke.debugHelp')}
     >
       {content}
     </AevatarPanel>

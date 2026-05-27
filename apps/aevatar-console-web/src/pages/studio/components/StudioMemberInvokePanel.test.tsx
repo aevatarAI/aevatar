@@ -10,6 +10,7 @@ import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import { translate } from '@/shared/i18n/localization';
 import { createIdleInvokeResult } from './StudioMemberInvokePanel.currentRun';
 import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
@@ -154,20 +155,24 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     const targetSummary = screen.getByTestId('studio-invoke-target-summary');
     expect(targetSummary).toHaveTextContent('workspace-demo');
-    expect(targetSummary).toHaveTextContent('Endpoint: Submit (submit)');
-    expect(targetSummary).toHaveTextContent('Lifecycle: Active');
-    expect(targetSummary).toHaveTextContent('Ready');
-    expect(targetSummary).not.toHaveTextContent('Command ID');
-    expect(targetSummary).not.toHaveTextContent('Actor ID');
-    expect(targetSummary).not.toHaveTextContent('Member ID');
+    expect(targetSummary).toHaveTextContent(
+      `${translate('studio.invoke.endpointLabel')}: Submit (submit)`,
+    );
+    expect(targetSummary).toHaveTextContent(
+      `${translate('studio.invoke.lifecycleLabel')}: ${translate('status.active')}`,
+    );
+    expect(targetSummary).toHaveTextContent(translate('studio.invoke.status.ready'));
+    expect(targetSummary).not.toHaveTextContent(translate('studio.run.commandId'));
+    expect(targetSummary).not.toHaveTextContent(translate('studio.run.actorId'));
+    expect(targetSummary).not.toHaveTextContent(translate('studio.run.memberId'));
     expect(screen.queryByText('缺少提示词')).toBeNull();
-    expect(screen.getByText('Run output')).toBeTruthy();
+    expect(screen.getByText(translate('common.output'))).toBeTruthy();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getByText('Events')).toBeTruthy();
-    expect(screen.getByText('Metadata')).toBeTruthy();
-    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
+    expect(screen.getAllByText(translate('common.output')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(translate('studio.run.tabs.timeline'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.tabs.events'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.tabs.metadata'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.advancedPayload'))).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
     const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
@@ -187,7 +192,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(invokeWorkspace.children[1]).toBe(invokeComposerDock);
     expect(mainDebugArea).not.toContainElement(invokeComposerDock);
     expect(invokeComposerDock).toContainElement(
-      screen.getByLabelText('调用请求输入'),
+      screen.getByLabelText(translate('studio.invoke.promptInputAria')),
     );
     expect(mainDebugArea.style.overflow).toBe('visible');
     expect(mainDebugArea.style.minHeight).toBe('0');
@@ -197,14 +202,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(historyPanel.style.minHeight).toBe('0');
     expect(currentRunViewport.style.overflow).toBe('visible');
     expect(invokeComposerDock.style.flex).toBe('0 0 auto');
-    expect(screen.getByRole('button', { name: 'Invoke' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
-    expect(
-      screen.getByText('Send a prompt above to create the first run.'),
-    ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.primary.stop') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.clear') })).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.none'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.history.title', { count: 0 }))).toBeTruthy();
+    expect(screen.getAllByText(translate('studio.invoke.history.empty')).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
     expect(screen.queryByText('调用契约')).toBeNull();
@@ -240,20 +243,18 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Invoke' }));
+    fireEvent.click(await screen.findByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
-    expect(await screen.findByText('请输入 Prompt 后再发起 Invoke。')).toBeTruthy();
+    expect(await screen.findByText(translate('studio.invoke.promptRequired'))).toBeTruthy();
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.getByText('Run output')).toBeTruthy();
-    expect(
-      screen.getByText('Send a prompt above to create the first run.'),
-    ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('Run failed')).toBeNull();
+    expect(screen.getByText(translate('common.output'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.none'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.history.title', { count: 0 }))).toBeTruthy();
+    expect(screen.getAllByText(translate('studio.invoke.history.empty')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(translate('studio.run.failed'))).toBeNull();
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
@@ -296,13 +297,13 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Give me a quick summary of what this member can do.',
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -339,9 +340,9 @@ describe('StudioMemberInvokePanel', () => {
     ).toBe(true);
     expect(screen.getByText(/빠른 요약/)).toBeTruthy();
     expect(screen.queryByText('可以拆成这些重点词：')).toBeNull();
-    expect(screen.getByText('Latest run')).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.marker.latest'))).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-run-status-summary')).toHaveTextContent(
-      'Succeeded',
+      translate('studio.run.status.succeeded'),
     );
   });
 
@@ -396,15 +397,15 @@ describe('StudioMemberInvokePanel', () => {
     expect(historyScroll.style.minHeight).toBe('0');
     expect(historyScroll.style.display).toBe('flex');
     expect(screen.getByText('Run prompt 11')).toBeTruthy();
-    expect(screen.getByText('Run history (12)')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.history.title', { count: 12 }))).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyInput') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyOutput') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyRunId') })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: translate('studio.invoke.history.retryAsNew') }),
     ).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
-    expect(screen.queryByText('Member ID')).toBeNull();
+    expect(screen.queryByText(translate('studio.run.memberId'))).toBeNull();
     expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
   });
 
@@ -456,15 +457,15 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.copyInput') }));
     expect(copyInput).toHaveBeenCalledWith('failed-run');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy output' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.copyOutput') }));
     expect(copyOutput).toHaveBeenCalledWith('failed-run');
 
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyRunId') })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.retryAsNew') }));
     expect(retryAsNewRun).toHaveBeenCalledWith('failed-run');
   });
 
@@ -525,13 +526,13 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Run the gagent team.',
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -604,13 +605,13 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Run the team member.',
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -663,13 +664,13 @@ describe('StudioMemberInvokePanel', () => {
       'submit',
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Route this escalation to billing review.',
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -697,71 +698,77 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect(await screen.findByText('Run history (1)')).toBeTruthy();
+    expect(await screen.findByText(translate('studio.invoke.history.title', { count: 1 }))).toBeTruthy();
     expect(
       screen.getByTestId('studio-invoke-history-scroll').style.overflow,
     ).toBe('visible');
     expect(
       screen.getAllByText('Route this escalation to billing review.').length,
     ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Latest run')).toBeTruthy();
-    expect(screen.getByText('Status summary')).toBeTruthy();
-    expect(screen.getByText('Input')).toBeTruthy();
-    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getByText('没有返回可展示内容。'),
-    ).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.marker.latest'))).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.summary'))).toBeTruthy();
+    expect(screen.getByText(translate('common.input'))).toBeTruthy();
+    expect(screen.getAllByText(translate('common.output')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(translate('studio.run.noVisibleContent'))).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Full Run ID')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: translate('studio.run.tabs.metadata') }));
+    expect(screen.getByText(translate('studio.run.fullRunId'))).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.commandId'))).toBeTruthy();
     expect(screen.getByText('cmd-1')).toBeTruthy();
-    expect(screen.getByText('Actor ID')).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.actorId'))).toBeTruthy();
     expect(screen.getByText('actor-1')).toBeTruthy();
-    expect(screen.getByText('Member ID')).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.memberId'))).toBeTruthy();
     expect(screen.getByText('default')).toBeTruthy();
-    expect(screen.getByText('Advanced details')).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.advancedDetails'))).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
-    expect(
-      screen.getByText('Send a prompt above to create the first run.'),
-    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.clear') }));
+    expect(screen.getByText(translate('studio.run.none'))).toBeTruthy();
 
     const historyScroll = screen.getByTestId('studio-invoke-history-scroll');
     fireEvent.click(
       screen.getByRole('button', {
-        name: /View historical run Route this escalation to billing review./,
+        name: translate('studio.invoke.history.viewAria', {
+          summary: 'Route this escalation to billing review.',
+        }),
       }),
     );
     expect(historyScroll).toBeTruthy();
-    expect(screen.getByText('Historical run · Read-only')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.getByText(translate('studio.run.marker.historical'))).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyInput') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyOutput') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyRunId') })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: translate('studio.invoke.history.retryAsNew') }),
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Continue|Resume|Edit/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.copyInput') }));
     expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
       'Route this escalation to billing review.',
     );
-    expect(message.success).toHaveBeenCalledWith('Input copied.');
+    expect(message.success).toHaveBeenCalledWith(
+      translate('studio.invoke.copy.copied', {
+        label: translate('studio.invoke.copy.label.input'),
+      }),
+    );
 
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: translate('studio.invoke.history.copyOutput') })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy run id' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.copyRunId') }));
     expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('run-1');
-    expect(message.success).toHaveBeenCalledWith('Run id copied.');
+    expect(message.success).toHaveBeenCalledWith(
+      translate('studio.invoke.copy.copied', {
+        label: translate('studio.invoke.copy.label.runId'),
+      }),
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
-    expect(screen.getByLabelText('调用请求输入')).toHaveValue(
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.history.retryAsNew') }));
+    expect(screen.getByLabelText(translate('studio.invoke.promptInputAria'))).toHaveValue(
       'Route this escalation to billing review.',
     );
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
@@ -769,16 +776,16 @@ describe('StudioMemberInvokePanel', () => {
       block: 'start',
     });
     expect(message.info).toHaveBeenCalledWith(
-      'Prompt restored. Click Invoke to create a new Run.',
+      translate('studio.invoke.retry.promptRestored'),
     );
 
-    fireEvent.change(screen.getByLabelText('调用请求输入'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Overwrite prompt',
       },
     });
 
-    expect(screen.getByLabelText('调用请求输入')).toHaveValue(
+    expect(screen.getByLabelText(translate('studio.invoke.promptInputAria'))).toHaveValue(
       'Overwrite prompt',
     );
   });
@@ -837,20 +844,20 @@ describe('StudioMemberInvokePanel', () => {
     );
 
     expect(
-      await screen.findByText('Advanced typed payload'),
+      await screen.findByText(translate('studio.invoke.advancedPayload')),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByLabelText('Payload type URL')).toHaveValue(
+      expect(screen.getByLabelText(translate('studio.invoke.payloadTypeUrl'))).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',
       );
     });
 
-    fireEvent.change(screen.getByLabelText('调用请求输入'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Route this escalation to billing review.',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     expect(
       await screen.findByText(
@@ -858,14 +865,14 @@ describe('StudioMemberInvokePanel', () => {
       ),
     ).toBeTruthy();
     expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.history.title', { count: 0 }))).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Payload base64'), {
+    fireEvent.change(screen.getByLabelText(translate('studio.invoke.payloadBase64')), {
       target: {
         value: 'CgVIZWxsbw==',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -917,24 +924,24 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'hello',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
-    expect(await screen.findByText('Run failed')).toBeTruthy();
+    expect(await screen.findByText(translate('studio.run.failed'))).toBeTruthy();
     const errorNode = screen.getByText(/telegram_chats_tool_with_a_really_long/);
     expect(errorNode).toHaveStyle({
       overflowWrap: 'anywhere',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
     });
-    expect(screen.getByRole('button', { name: 'View events' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy error' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.run.viewEvents') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: translate('studio.run.copyError') })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: translate('studio.invoke.history.retryAsNew') }),
     ).toBeTruthy();
   });
 
@@ -972,20 +979,20 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText(translate('studio.invoke.promptInputAria')), {
       target: {
         value: 'Dispatch this typed command.',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: translate('studio.invoke.primary.invoke') }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalled();
     });
 
-    expect(screen.getByText('Run history (1)')).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText(translate('studio.invoke.history.title', { count: 1 }))).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: translate('studio.run.tabs.metadata') }));
+    expect(screen.getByText(translate('studio.run.commandId'))).toBeTruthy();
     expect(screen.getByText('cmd-only')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });

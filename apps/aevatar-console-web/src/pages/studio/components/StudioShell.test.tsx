@@ -6,6 +6,8 @@ import StudioShell, {
 } from './StudioShell';
 
 describe('StudioShell', () => {
+  const originalInnerWidth = window.innerWidth;
+
   const members: readonly StudioShellMemberItem[] = [
     {
       key: 'workflow:workspace-demo',
@@ -26,6 +28,13 @@ describe('StudioShell', () => {
       tone: 'draft',
     },
   ];
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: originalInnerWidth,
+    });
+  });
 
   const lifecycleSteps: readonly StudioLifecycleStep[] = [
     {
@@ -245,6 +254,38 @@ describe('StudioShell', () => {
     expect(screen.getByTestId('studio-shell-content').parentElement).toHaveStyle({
       minWidth: '0',
       overflow: 'hidden',
+    });
+  });
+
+  it('stacks the member rail above Studio content on narrow screens', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 430,
+    });
+
+    const { container } = render(
+      <StudioShell
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={[]}
+        pageTitle="Studio page"
+        selectedMemberKey=""
+      >
+        <div>Studio content</div>
+      </StudioShell>,
+    );
+
+    expect(container.firstChild).toHaveStyle({
+      flexDirection: 'column',
+      overflowY: 'auto',
+    });
+    expect(screen.getByLabelText('Team members')).toHaveStyle({
+      maxHeight: '360px',
+      width: '100%',
+    });
+    expect(screen.getByTestId('studio-shell-main')).toHaveStyle({
+      flex: '0 0 auto',
+      overflow: 'visible',
     });
   });
 });

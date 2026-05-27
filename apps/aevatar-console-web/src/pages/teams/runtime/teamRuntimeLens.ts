@@ -4,6 +4,7 @@ import type {
 } from "@/shared/models/runtime/scopeServices";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import { translate } from "@/shared/i18n/localization";
 import type { StudioMemberBindingRevision } from "@/shared/studio/models";
 
 export type TeamRuntimeLens = {
@@ -102,17 +103,23 @@ export function deriveTeamRuntimeLens(
     (allowServiceFallback ? sortedServices[0] : null) ||
     null;
   const subtitleParts = [
-    input.workflowCount > 0 ? `${input.workflowCount} 个 workflow` : "",
-    input.services.length > 0 ? `${input.services.length} 个 service` : "",
+    input.workflowCount > 0
+      ? translate("team.runtime.workflowCount", { count: input.workflowCount })
+      : "",
+    input.services.length > 0
+      ? translate("team.runtime.serviceCount", { count: input.services.length })
+      : "",
   ].filter(Boolean);
 
   return {
     scopeId: input.scopeId,
-    title: "当前团队",
+    title: translate("team.runtime.title"),
     subtitle:
       subtitleParts.length > 0
-        ? `团队容器 · ${subtitleParts.join(" / ")}`
-        : "团队容器，成员绑定与运行信号会在这里汇总。",
+        ? translate("team.runtime.subtitleWithFacts", {
+            facts: subtitleParts.join(" / "),
+          })
+        : translate("team.runtime.subtitleEmpty"),
     activeRevision,
     currentService,
     currentRun,

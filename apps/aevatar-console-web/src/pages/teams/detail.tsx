@@ -13,6 +13,7 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
+import { translate, useTranslation } from "@/shared/i18n/localization";
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
@@ -21,9 +22,6 @@ import {
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
-import {
-  formatStudioMemberLifecycleStage,
-} from "@/shared/studio/models";
 import type { StudioTeamSummary } from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { describeError } from "@/shared/ui/errorText";
@@ -104,9 +102,10 @@ function resolveTeamHeading(input: {
     };
   }
 
-  const genericLensTitle =
-    normalizedScopeId ? `Team ${normalizedScopeId}` : "";
-  if (normalizedLensTitle === "当前团队") {
+  const genericLensTitle = normalizedScopeId
+    ? `${translate("common.team")} ${normalizedScopeId}`
+    : "";
+  if (normalizedLensTitle === translate("team.detail.currentTeam")) {
     return {
       metaScopeId: normalizedScopeId || undefined,
       title: normalizedLensTitle,
@@ -125,14 +124,14 @@ function resolveTeamHeading(input: {
 
   return {
     metaScopeId: normalizedScopeId || undefined,
-    title: "团队详情",
+    title: translate("team.detail.title"),
   };
 }
 
 function compactId(value: string | null | undefined): string {
   const normalized = trimText(value);
   if (!normalized) {
-    return "n/a";
+    return translate("common.notAvailable");
   }
 
   const segment = normalized.split("/").pop() || normalized;
@@ -154,9 +153,9 @@ function compactOptionalId(value: string | null | undefined): string {
 function formatTeamTabLabel(tab: TeamDetailTab): string {
   switch (tab) {
     case "members":
-      return "团队成员";
+      return translate("team.detail.tabs.members");
     default:
-      return "概览";
+      return translate("team.detail.tabs.overview");
   }
 }
 
@@ -174,25 +173,25 @@ function formatFriendlyStatus(value: string | null | undefined): string {
     case "active":
     case "running":
     case "processing":
-      return "运行中";
+      return translate("status.running");
     case "published":
-      return "已发布";
+      return translate("status.published");
     case "default":
-      return "默认版本";
+      return translate("status.default");
     case "completed":
     case "finished":
     case "succeeded":
     case "success":
-      return "已完成";
+      return translate("status.completed");
     case "draft":
-      return "草稿";
+      return translate("status.draft");
     case "retired":
-      return "已停用";
+      return translate("status.retired");
     case "failed":
     case "error":
     case "cancelled":
     case "degraded":
-      return "运行异常";
+      return translate("status.error");
     case "waiting":
     case "waiting_signal":
     case "waiting_approval":
@@ -200,22 +199,45 @@ function formatFriendlyStatus(value: string | null | undefined): string {
     case "human_approval":
     case "suspended":
     case "blocked":
-      return "等待处理";
+      return translate("status.waiting");
+    case "created":
+      return translate("team.test.lifecycle.created");
+    case "build ready":
+    case "build_ready":
+      return translate("team.test.lifecycle.buildReady");
+    case "bind ready":
+    case "bind_ready":
+      return translate("team.test.lifecycle.bindReady");
     default:
       return trimText(value) || "--";
+  }
+}
+
+function formatMemberLifecycleStage(value: string | null | undefined): string {
+  switch (normalizeStatus(value)) {
+    case "created":
+      return translate("team.test.lifecycle.created");
+    case "build_ready":
+    case "buildready":
+      return translate("team.test.lifecycle.buildReady");
+    case "bind_ready":
+    case "bindready":
+      return translate("team.test.lifecycle.bindReady");
+    default:
+      return translate("team.test.lifecycle.unknown");
   }
 }
 
 function formatTeamLifecycleLabel(value: string | null | undefined): string {
   switch (normalizeStatus(value)) {
     case "active":
-      return "已启用";
+      return translate("team.lifecycle.active");
     case "archived":
-      return "已归档";
+      return translate("team.lifecycle.archived");
     case "unknown":
-      return "状态未知";
+      return translate("team.lifecycle.unknown");
     default:
-      return trimText(value) || "状态未知";
+      return trimText(value) || translate("team.lifecycle.unknown");
   }
 }
 
@@ -223,21 +245,21 @@ function formatCompositionKind(kind: string | null | undefined): string {
   switch (normalizeStatus(kind)) {
     case "":
     case "unknown":
-      return "暂未识别";
+      return translate("team.kind.unknown");
     case "workflow role":
-      return "角色";
+      return translate("team.kind.workflowRole");
     case "workflow":
-      return "流程";
+      return translate("team.kind.workflow");
     case "service":
-      return "服务";
+      return translate("team.kind.service");
     case "actor":
       return "Actor";
     case "runtime":
-      return "运行";
+      return translate("team.kind.runtime");
     case "script":
-      return "脚本";
+      return translate("team.kind.script");
     case "gagent":
-      return "Agent";
+      return translate("team.kind.gagent");
     default:
       return kind || "--";
   }
@@ -339,7 +361,25 @@ function resolveStatusPillStyle(
 }
 
 function formatCompactTimestamp(value: string | null | undefined): string {
-  return formatCompactDateTime(value, "暂无");
+  return formatCompactDateTime(value, translate("common.notAvailable"));
+}
+
+function resolveOverviewPostureStatus(input: {
+  readonly fallbackStatus: string;
+  readonly hasVisibleRun: boolean;
+  readonly hasVisibleTeam: boolean;
+  readonly hasVisibleService: boolean;
+}): string {
+  const fallback = trimText(input.fallbackStatus);
+  if (fallback && fallback !== "--") {
+    return fallback;
+  }
+
+  if (input.hasVisibleTeam || input.hasVisibleService || input.hasVisibleRun) {
+    return "no-visible-run";
+  }
+
+  return "--";
 }
 
 function formatLocalTimeLabel(date: Date): string {
@@ -365,6 +405,7 @@ function delay(ms: number): Promise<void> {
 
 const TeamDetailPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -624,7 +665,7 @@ const TeamDetailPage: React.FC = () => {
   const runtimeServiceId =
     focusedOperationalUnit?.matchedService?.serviceId ||
     lens.currentService?.serviceId ||
-    lens.currentRun?.serviceId ||
+    (hasExplicitRuntimeFocus ? lens.currentRun?.serviceId : "") ||
     undefined;
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
@@ -684,7 +725,7 @@ const TeamDetailPage: React.FC = () => {
       <Space size={[10, 6]} wrap>
         {selectedTeamId ? (
           <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>teamId</span>
+            <span style={{ textTransform: "none" }}>{t("common.id.team")}</span>
             <AevatarCompactText
               color="inherit"
               head={8}
@@ -697,7 +738,7 @@ const TeamDetailPage: React.FC = () => {
         ) : null}
         {teamMetaScopeId ? (
           <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>scopeId</span>
+            <span style={{ textTransform: "none" }}>{t("common.id.scope")}</span>
             <AevatarCompactText
               color="inherit"
               head={8}
@@ -709,7 +750,11 @@ const TeamDetailPage: React.FC = () => {
           </Space>
         ) : null}
         {teamSummaryQuery.data ? (
-          <span>{teamSummaryQuery.data.memberCount} 个成员</span>
+          <span>
+            {t("team.detail.meta.memberCount", {
+              count: teamSummaryQuery.data.memberCount,
+            })}
+          </span>
         ) : null}
         {teamSummaryDescription ? <span>{teamSummaryDescription}</span> : null}
       </Space>
@@ -738,6 +783,18 @@ const TeamDetailPage: React.FC = () => {
   );
   const entryMemberLabel =
     trimText(entryMemberSummary?.displayName) || entryMemberId;
+  const entryMemberServiceId = trimText(entryMemberSummary?.publishedServiceId);
+  const entryMemberServiceSummary = React.useMemo(
+    () =>
+      entryMemberServiceId
+        ? (servicesQuery.data ?? []).find(
+            (service) => trimText(service.serviceId) === entryMemberServiceId,
+          ) ?? null
+        : null,
+    [entryMemberServiceId, servicesQuery.data],
+  );
+  const entryMemberServiceLabel =
+    trimText(entryMemberServiceSummary?.displayName) || entryMemberServiceId;
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => ({
@@ -761,7 +818,9 @@ const TeamDetailPage: React.FC = () => {
         }),
         implementationKind: formatCompositionKind(member.implementationKind),
         key: member.memberId,
-        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+        lifecycleLabel: formatFriendlyStatus(
+          formatMemberLifecycleStage(member.lifecycleStage),
+        ),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
         isEntryMember: trimText(member.memberId) === entryMemberId,
         memberId: member.memberId,
@@ -793,14 +852,16 @@ const TeamDetailPage: React.FC = () => {
     activeWorkflowSummary?.updatedAt ||
     "";
   const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
-    ? "来自 Team 更新时间"
+    ? t("team.detail.latest.teamUpdated")
     : lens.currentRun?.lastUpdatedAt
       ? trimText(lens.currentRun?.runId)
-      ? `来自 run ${compactId(lens.currentRun?.runId)}`
-      : "来自最近可见运行"
+      ? t("team.detail.latest.run", {
+          runId: compactId(lens.currentRun?.runId),
+        })
+      : t("team.detail.latest.recentRun")
       : activeWorkflowSummary?.updatedAt
-        ? "来自 workflow 更新时间"
-        : "当前还没有可见更新时间";
+        ? t("team.detail.latest.workflowUpdated")
+        : t("team.detail.latest.none");
   const activeRunId =
     lens.currentRun?.runId ||
     focusedOperationalUnit?.latestRun?.runId ||
@@ -816,54 +877,68 @@ const TeamDetailPage: React.FC = () => {
     "--";
   const currentHeaderStatus =
     trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
-  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
+  const currentOverviewPostureStatus = resolveOverviewPostureStatus({
+    fallbackStatus: currentHeaderStatus,
+    hasVisibleRun: Boolean(activeRunId),
+    hasVisibleService: Boolean(runtimeServiceId || entryMemberServiceId),
+    hasVisibleTeam: Boolean(teamSummaryQuery.data),
+  });
+  const currentHeaderStatusFriendly =
+    currentOverviewPostureStatus === "no-visible-run"
+      ? t("team.detail.currentRun.none")
+      : formatFriendlyStatus(currentOverviewPostureStatus);
   const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
   const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
   const currentServiceKey =
     trimText(lens.currentService?.serviceKey) ||
     trimText(activeWorkflowSummary?.serviceKey) ||
+    trimText(entryMemberServiceSummary?.serviceKey) ||
     "--";
+  const runtimeServiceDisplayName = trimText(lens.currentService?.displayName);
   const currentServiceDisplayName =
-    trimText(lens.currentService?.displayName) || "--";
+    runtimeServiceDisplayName ||
+    (runtimeServiceId ? "" : entryMemberServiceLabel) ||
+    "--";
   const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
   const currentRunFriendly = activeRunId
     ? formatFriendlyStatus(currentRunStatus)
-    : "暂无可见运行";
+    : t("team.detail.currentRun.none");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
-      : runtimeServiceId || "--";
+      : runtimeServiceId || entryMemberServiceId || "--";
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
       : currentDeploymentFriendly;
   const currentServicePillText =
     currentServiceFriendly !== "--"
-      ? `服务 · ${currentServiceFriendly}`
-      : "服务待配置";
+      ? `${t("team.kind.service")} · ${currentServiceFriendly}`
+      : t("team.detail.service.pending");
   const currentDeploymentPillText =
     currentVersionFriendly !== "--"
-      ? `版本 · ${currentVersionFriendly}`
-      : "版本待确认";
+      ? `${t("team.detail.version.label")} · ${currentVersionFriendly}`
+      : t("team.detail.version.pending");
   const currentRunPillText = activeRunId
-    ? `运行 · ${currentRunFriendly}`
-    : "暂无近期可见运行";
-  const currentServiceCardCaption = runtimeServiceId
-    ? `serviceId · ${compactOptionalId(runtimeServiceId)}`
+    ? `${t("team.kind.runtime")} · ${currentRunFriendly}`
+    : t("team.detail.run.noneRecent");
+  const displayServiceId = runtimeServiceId || entryMemberServiceId;
+  const currentServiceCardCaption = displayServiceId
+    ? `${t("common.id.service")} · ${compactOptionalId(displayServiceId)}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? `serviceKey · ${compactId(currentServiceKey)}`
-      : "当前还没有更多服务标识";
-  const currentServiceCardTooltip = runtimeServiceId
-    ? `serviceId · ${runtimeServiceId}`
+      ? `${t("common.id.serviceKey")} · ${compactId(currentServiceKey)}`
+      : t("team.detail.service.noMoreId");
+  const currentServiceCardTooltip = displayServiceId
+    ? `${t("common.id.service")} · ${displayServiceId}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? `serviceKey · ${currentServiceKey}`
-      : "当前还没有更多服务标识";
+      ? `${t("common.id.serviceKey")} · ${currentServiceKey}`
+      : t("team.detail.service.noMoreId");
   const currentRunCardCaption = activeRunId
-    ? `runId · ${compactId(activeRunId)}`
-    : "当前还没有同步到可见运行";
+    ? `${t("common.id.run")} · ${compactId(activeRunId)}`
+    : t("team.detail.run.noSynced");
   const currentRunCardTooltip = activeRunId
-    ? `runId · ${activeRunId}`
-    : "当前还没有同步到可见运行";
+    ? `${t("common.id.run")} · ${activeRunId}`
+    : t("team.detail.run.noSynced");
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -871,28 +946,34 @@ const TeamDetailPage: React.FC = () => {
   const configurationDetailRows = React.useMemo(
     () => [
       {
-        label: "团队流程",
-        note: `workflowId: ${activeWorkflowId || "--"}`,
+        label: t("team.detail.workflow.label"),
+        note: `${t("common.id.workflow")}: ${activeWorkflowId || "--"}`,
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
-        label: "绑定方式",
+        label: t("team.detail.binding.label"),
         note:
-          currentServiceFriendly !== "--"
-            ? `当前会落到 ${currentServiceFriendly}`
-            : "当前还没有匹配到主服务入口",
+          runtimeServiceId
+            ? t("team.detail.binding.currentService", {
+                service: currentServiceFriendly,
+              })
+            : entryMemberServiceId
+              ? t("team.detail.binding.entryService", {
+                  service: currentServiceFriendly,
+                })
+            : t("team.detail.binding.noPrimary"),
         value: formatCompositionKind(lens.activeRevision?.implementationKind),
       },
       {
-        label: "主服务入口",
-        note: `serviceId: ${compactOptionalId(runtimeServiceId)} · serviceKey: ${compactOptionalId(currentServiceKey)}`,
-        noteTooltip: `serviceId: ${runtimeServiceId || "--"} · serviceKey: ${currentServiceKey}`,
+        label: t("team.detail.primaryService.label"),
+        note: `${t("common.id.service")}: ${compactOptionalId(displayServiceId)} · ${t("common.id.serviceKey")}: ${compactOptionalId(currentServiceKey)}`,
+        noteTooltip: `${t("common.id.service")}: ${displayServiceId || "--"} · ${t("common.id.serviceKey")}: ${currentServiceKey}`,
         value: currentServiceFriendly,
       },
       {
-        label: "版本标识",
-        note: `revisionId: ${compactOptionalId(currentRevisionId)}`,
-        noteTooltip: `revisionId: ${currentRevisionId}`,
+        label: t("team.detail.version.label"),
+        note: `${t("common.id.revision")}: ${compactOptionalId(currentRevisionId)}`,
+        noteTooltip: `${t("common.id.revision")}: ${currentRevisionId}`,
         value: currentVersionFriendly,
       },
     ],
@@ -902,8 +983,11 @@ const TeamDetailPage: React.FC = () => {
       currentServiceFriendly,
       currentServiceKey,
       currentVersionFriendly,
+      displayServiceId,
+      entryMemberServiceId,
       lens.activeRevision?.implementationKind,
       runtimeServiceId,
+      t,
       teamTitle,
       workflowNameValue,
     ],
@@ -914,7 +998,11 @@ const TeamDetailPage: React.FC = () => {
         key: row.key,
         kind: row.implementationKind,
         name: row.name,
-        summary: row.description || `服务入口 ${compactOptionalId(row.serviceId)}`,
+        summary:
+          row.description ||
+          t("team.detail.composition.serviceSummary", {
+            serviceId: compactOptionalId(row.serviceId),
+          }),
       }));
     }
 
@@ -926,19 +1014,21 @@ const TeamDetailPage: React.FC = () => {
       {
         key: "fallback-workflow",
         kind: "workflow",
-        name: "团队流程",
+        name: t("team.detail.composition.fallbackWorkflowName"),
         summary: workflowNameValue !== "--" ? workflowNameValue : activeWorkflowId || "--",
       },
       {
         key: "fallback-actor",
         kind: "actor",
-        name: "当前执行",
-        summary: activeRunId ? currentRunFriendly : "暂无最近运行",
+        name: t("team.detail.composition.fallbackActorName"),
+        summary: activeRunId
+          ? currentRunFriendly
+          : t("team.detail.composition.noRecentRun"),
       },
       {
         key: "fallback-service",
         kind: "service",
-        name: "主服务",
+        name: t("team.detail.composition.fallbackServiceName"),
         summary: currentServiceFriendly,
       },
     ];
@@ -948,6 +1038,7 @@ const TeamDetailPage: React.FC = () => {
     currentRunFriendly,
     currentServiceFriendly,
     hasExplicitRuntimeFocus,
+    t,
     teamRosterRows,
     workflowNameValue,
   ]);
@@ -963,8 +1054,8 @@ const TeamDetailPage: React.FC = () => {
     [compositionDisplayRows, token],
   );
   const tabOptions: TeamTabOption[] = [
-    { label: "概览", value: "overview" },
-    { label: "团队成员", value: "members" },
+    { label: t("team.detail.tabs.overview"), value: "overview" },
+    { label: t("team.detail.tabs.members"), value: "members" },
   ];
 
   const initialLoading =
@@ -1001,11 +1092,11 @@ const TeamDetailPage: React.FC = () => {
     ],
   );
 
-  const editTeamActionLabel = "编辑团队";
+  const editTeamActionLabel = t("team.detail.action.edit");
   const canEditSelectedTeam = Boolean(teamSummaryQuery.data && selectedTeamId);
   const editTeamHint = selectedTeamId
-    ? "Team summary 读取完成后才能编辑。"
-    : "当前路由还没有选中真实 Team。";
+    ? t("team.detail.edit.disabled.noSummary")
+    : t("team.detail.edit.disabled.noTeam");
   const openTeamEditor = React.useCallback(() => {
     if (!teamSummaryQuery.data) {
       return;
@@ -1029,7 +1120,7 @@ const TeamDetailPage: React.FC = () => {
 
     const displayName = teamEditorName.trim();
     if (!displayName) {
-      void message.error("Team name is required.");
+      void message.error(t("team.detail.message.nameRequired"));
       return;
     }
 
@@ -1041,11 +1132,11 @@ const TeamDetailPage: React.FC = () => {
         displayName,
         description: teamEditorDescription.trim() || null,
       });
-      void message.success("Team updated.");
+      void message.success(t("team.detail.message.updated"));
       setTeamEditorOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
-      void message.error(describeError(error, "Team update failed."));
+      void message.error(describeError(error, t("team.detail.message.updateFailed")));
     } finally {
       setTeamEditorSaving(false);
     }
@@ -1057,12 +1148,26 @@ const TeamDetailPage: React.FC = () => {
     teamEditorName,
     teamEditorSaving,
     teamSummaryQuery.data,
+    t,
   ]);
   const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
-  const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "Archive Team" : "";
+  const teamTestRosterUnavailable =
+    teamMembersQuery.isError && !isTeamMembersProjectionSyncing;
+  const teamTestDisabled =
+    isTeamArchived || !teamSummaryQuery.data || teamTestRosterUnavailable;
+  const teamTestHint = isTeamArchived
+    ? t("team.detail.action.testArchivedHint")
+    : !teamSummaryQuery.data
+      ? "团队权威状态暂不可见，暂时不能测试团队。"
+      : teamTestRosterUnavailable
+        ? "成员清单暂不可见，暂时不能测试团队。"
+        : undefined;
+  const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived
+    ? t("team.detail.action.archive")
+    : "";
   const archiveTeamHint = selectedTeamId
-    ? "Team summary 读取完成后才能归档。"
-    : "当前路由还没有选中真实 Team。";
+    ? t("team.detail.archive.disabled.noSummary")
+    : t("team.detail.archive.disabled.noTeam");
   const openTeamArchive = React.useCallback(() => {
     if (!teamSummaryQuery.data || isTeamArchived) {
       return;
@@ -1085,11 +1190,11 @@ const TeamDetailPage: React.FC = () => {
     setTeamArchiving(true);
     try {
       await studioApi.archiveTeam(scopeId, selectedTeamId);
-      void message.success("Team archived.");
+      void message.success(t("team.detail.message.archived"));
       setTeamArchiveOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
-      void message.error(describeError(error, "Team archive failed."));
+      void message.error(describeError(error, t("team.detail.message.archiveFailed")));
     } finally {
       setTeamArchiving(false);
     }
@@ -1100,6 +1205,7 @@ const TeamDetailPage: React.FC = () => {
     selectedTeamId,
     teamArchiving,
     teamSummaryQuery.data,
+    t,
   ]);
   const handleOpenTeamsList = React.useCallback(() => {
     history.push(teamsListHref);
@@ -1155,7 +1261,7 @@ const TeamDetailPage: React.FC = () => {
           accumulator.assistantText ||
           accumulator.finalOutput ||
           accumulator.errorText ||
-          "Team Test stopped.";
+          t("team.test.stoppedSummary");
         setTeamTestStatus("stopped");
         setTeamTestLastResult({
           finishedAtLabel: formatLocalTimeLabel(new Date()),
@@ -1170,7 +1276,7 @@ const TeamDetailPage: React.FC = () => {
         accumulator.errorText ||
         accumulator.finalOutput ||
         accumulator.assistantText ||
-        "Team returned an empty response.";
+        t("team.test.emptyResponse");
       const nextStatus = accumulator.errorText ? "error" : "success";
       setTeamTestResultText(summary);
       setTeamTestStatus(nextStatus);
@@ -1190,7 +1296,7 @@ const TeamDetailPage: React.FC = () => {
         setTeamTestLastResult({
           finishedAtLabel: formatLocalTimeLabel(new Date()),
           status: "stopped",
-          summary: "Team Test stopped.",
+          summary: t("team.test.stoppedSummary"),
         });
         return;
       }
@@ -1209,7 +1315,7 @@ const TeamDetailPage: React.FC = () => {
         teamTestAbortRef.current = null;
       }
     }
-  }, [isTeamArchived, scopeId, selectedTeamId, teamTestPrompt]);
+  }, [isTeamArchived, scopeId, selectedTeamId, t, teamTestPrompt]);
   const handleStopTeamTest = React.useCallback(() => {
     teamTestAbortRef.current?.abort();
   }, []);
@@ -1261,17 +1367,16 @@ const TeamDetailPage: React.FC = () => {
             updatedTeam,
           );
         }
-        void message.info("Team entry 变更已提交，正在等待同步确认。");
+        void message.info(t("team.detail.message.entrySubmitted"));
         await refreshTeamAuthority();
         if (options?.test) {
           const entryVisible = await waitForTeamEntryVisibility(normalizedMemberId);
           if (!entryVisible) {
             const errorDescription: TeamTestErrorDescription = {
-              actionLabel: "Retry",
-              description:
-                "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
+              actionLabel: t("common.retry"),
+              description: t("team.detail.entrySync.description"),
               kind: "entry_syncing",
-              title: "Team entry 正在同步",
+              title: t("team.detail.entrySync.title"),
             };
             setTeamTestStatus("error");
             setTeamTestError(errorDescription);
@@ -1290,7 +1395,7 @@ const TeamDetailPage: React.FC = () => {
       } catch (error) {
         const errorDescription = describeTeamTestError(
           error,
-          "Team entry update failed.",
+          t("team.detail.message.entryUpdateFailed"),
         );
         setTeamTestStatus("error");
         setTeamTestError(errorDescription);
@@ -1307,6 +1412,7 @@ const TeamDetailPage: React.FC = () => {
       streamTeamTest,
       teamTestPrompt,
       teamSummaryQueryKey,
+      t,
       waitForTeamEntryVisibility,
     ],
   );
@@ -1325,13 +1431,13 @@ const TeamDetailPage: React.FC = () => {
           updatedTeam,
         );
       }
-      void message.info("Team entry 清除已提交，正在等待同步确认。");
+      void message.info(t("team.detail.message.entryCleared"));
       await refreshTeamAuthority();
       setTeamTestStatus("idle");
     } catch (error) {
       const errorDescription = describeTeamTestError(
         error,
-        "Team entry update failed.",
+        t("team.detail.message.entryUpdateFailed"),
       );
       setTeamTestStatus("error");
       setTeamTestError(errorDescription);
@@ -1347,6 +1453,7 @@ const TeamDetailPage: React.FC = () => {
     scopeId,
     selectedTeamId,
     teamSummaryQueryKey,
+    t,
   ]);
   const teamTestPanel = (
     <TeamTestPanel
@@ -1381,7 +1488,7 @@ const TeamDetailPage: React.FC = () => {
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
         currentDeploymentPillText={currentDeploymentPillText}
         currentHeaderStatusFriendly={currentHeaderStatusFriendly}
-        currentHeaderStatusStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
+        currentHeaderStatusStyle={resolveStatusPillStyle(token, currentOverviewPostureStatus)}
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
@@ -1462,9 +1569,9 @@ const TeamDetailPage: React.FC = () => {
           onArchiveTeam={openTeamArchive}
         onOpenTeamEditor={openTeamEditor}
         onOpenTeamTest={openTeamTestModal}
-        testTeamDisabled={isTeamArchived}
-        testTeamHint="归档后的 Team 不能继续发起测试。"
-        testTeamLabel="测试团队"
+        testTeamDisabled={teamTestDisabled}
+        testTeamHint={teamTestHint}
+        testTeamLabel={t("team.detail.action.test")}
       />
       }
       activeTab={activeTab}
@@ -1495,7 +1602,7 @@ const TeamDetailPage: React.FC = () => {
         footer={null}
         onCancel={closeTeamTestModal}
         open={teamTestModalOpen}
-        title="测试团队"
+        title={t("team.detail.modal.testTitle")}
         width={960}
         styles={{
           body: {
@@ -1510,26 +1617,28 @@ const TeamDetailPage: React.FC = () => {
       <Modal
         confirmLoading={teamEditorSaving}
         okButtonProps={{ disabled: !teamEditorName.trim() }}
-        okText="保存团队"
+        okText={t("team.detail.modal.editOk")}
         onCancel={closeTeamEditor}
         onOk={() => void saveTeamEditor()}
         open={teamEditorOpen}
-        title="编辑团队"
+        title={t("team.detail.modal.editTitle")}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Typography.Text strong>团队名称</Typography.Text>
+            <Typography.Text strong>{t("team.detail.modal.editName")}</Typography.Text>
             <Input
-              aria-label="编辑团队名称"
+              aria-label={t("team.detail.modal.editNameAria")}
               disabled={teamEditorSaving}
               onChange={(event) => setTeamEditorName(event.target.value)}
               value={teamEditorName}
             />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Typography.Text strong>团队说明</Typography.Text>
+            <Typography.Text strong>
+              {t("team.detail.modal.editDescription")}
+            </Typography.Text>
             <Input.TextArea
-              aria-label="编辑团队说明"
+              aria-label={t("team.detail.modal.editDescriptionAria")}
               autoSize={{ minRows: 3, maxRows: 5 }}
               disabled={teamEditorSaving}
               onChange={(event) => setTeamEditorDescription(event.target.value)}
@@ -1537,21 +1646,21 @@ const TeamDetailPage: React.FC = () => {
             />
           </div>
           <Typography.Text type="secondary">
-            这里更新的是 Team summary。即使团队已归档，仍然可以继续编辑和维护。
+            {t("team.detail.modal.editHint")}
           </Typography.Text>
         </div>
       </Modal>
       <Modal
         confirmLoading={teamArchiving}
-        okText="归档团队"
+        okText={t("team.detail.modal.archiveOk")}
         okButtonProps={{ danger: true }}
         onCancel={closeTeamArchive}
         onOk={() => void confirmTeamArchive()}
         open={teamArchiveOpen}
-        title="归档这支团队？"
+        title={t("team.detail.modal.archiveTitle")}
       >
         <Typography.Text>
-          归档后，这支 Team 会从活跃 roster 中降权显示，但你仍然可以继续编辑配置并查看历史。
+          {t("team.detail.modal.archiveDescription")}
         </Typography.Text>
       </Modal>
     </TeamDetailShell>

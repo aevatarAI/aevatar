@@ -7,6 +7,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Input, Space, Typography, theme } from "antd";
 import React from "react";
+import { useTranslation } from "@/shared/i18n/localization";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
   CompactFactValue,
@@ -105,37 +106,43 @@ function resolveTestStatusPill(
   }
 }
 
-function formatStatusLabel(status: TeamTestStatus): string {
+function formatStatusLabel(
+  status: TeamTestStatus,
+  t: (key: string) => string,
+): string {
   switch (status) {
     case "setting-entry":
-      return "正在设置入口";
+      return t("team.test.status.settingEntry");
     case "running":
-      return "测试中";
+      return t("team.test.status.running");
     case "success":
-      return "已完成";
+      return t("team.test.status.success");
     case "error":
-      return "失败";
+      return t("team.test.status.error");
     case "stopped":
-      return "已停止";
+      return t("team.test.status.stopped");
     default:
-      return "待测试";
+      return t("team.test.status.idle");
   }
 }
 
-function formatLifecycleLabelForTeamTest(label: string): string {
+function formatLifecycleLabelForTeamTest(
+  label: string,
+  t: (key: string) => string,
+): string {
   switch (label.trim().toLowerCase()) {
     case "created":
-      return "已创建";
+      return t("team.test.lifecycle.created");
     case "build ready":
     case "build_ready":
-      return "可绑定";
+      return t("team.test.lifecycle.buildReady");
     case "bind ready":
     case "bind_ready":
-      return "可调用";
+      return t("team.test.lifecycle.bindReady");
     case "unknown":
-      return "状态未知";
+      return t("common.status.unknown");
     default:
-      return label || "状态未知";
+      return label || t("common.status.unknown");
   }
 }
 
@@ -162,6 +169,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   teamId,
 }) => {
   const { token } = theme.useToken();
+  const { t } = useTranslation();
   const normalizedEntryMemberId = entryMemberId?.trim() ?? "";
   const entryMember =
     rosterRows.find((row) => row.memberId === normalizedEntryMemberId) ?? null;
@@ -196,8 +204,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
       return (
         <AevatarInspectorEmpty
           compact
-          title="正在检查入口成员"
-          description="成员清单同步完成后即可选择入口成员。"
+          title={t("team.test.entry.checking.title")}
+          description={t("team.test.entry.checking.description")}
         />
       );
     }
@@ -206,8 +214,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
       return (
         <AevatarInspectorEmpty
           compact
-          title="成员清单暂不可见"
-          description="当前无法读取 Team 成员，暂时不能选择入口成员。"
+          title={t("team.members.error.title")}
+          description={t("team.test.entry.error.description")}
         />
       );
     }
@@ -217,8 +225,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <AevatarInspectorEmpty
             compact
-            title="这支 Team 还没有成员"
-            description="先创建一个成员，完成 Build / Bind 后再测试 Team。"
+            title={t("team.members.empty.title")}
+            description={t("team.test.empty.description")}
           />
           {createMemberHref ? (
             <Button
@@ -226,7 +234,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(createMemberHref)}
               type="primary"
             >
-              创建第一个成员
+              {t("team.members.empty.createFirst")}
             </Button>
           ) : null}
         </div>
@@ -239,8 +247,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <Alert
             showIcon
             type="warning"
-            message="还没有可作为入口的成员"
-            description="成员需要完成 Build / Bind，并进入可调用状态后才能测试 Team。"
+            message={t("team.test.noReady.message")}
+            description={t("team.test.noReady.description")}
           />
         ) : null}
         {rosterRows.map((row) => (
@@ -274,7 +282,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               <DetailPill
                 compact
                 style={row.lifecycleStyle}
-                text={formatLifecycleLabelForTeamTest(row.lifecycleLabel)}
+                text={formatLifecycleLabelForTeamTest(row.lifecycleLabel, t)}
               />
               {row.canInvokeAsEntry ? (
                 <DetailPill
@@ -284,7 +292,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                     border: `1px solid ${token.colorSuccessBorder}`,
                     color: token.colorSuccess,
                   }}
-                  text="可测试"
+                  text={t("team.test.readyBadge")}
                 />
               ) : null}
             </Space>
@@ -301,10 +309,10 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   loading={entryActionBusyMemberId === row.memberId}
                   onClick={() => onSetEntryAndTest(row.memberId)}
                   size="small"
-                  title={!hasPrompt ? "请先输入测试问题。" : undefined}
+                  title={!hasPrompt ? t("team.test.promptRequired") : undefined}
                   type="primary"
                 >
-                  设为入口并测试
+                  {t("team.test.setEntryAndTest")}
                 </Button>
               ) : (
                 <Button
@@ -313,7 +321,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   onClick={handleNavigate(row.buildStudioHref)}
                   size="small"
                 >
-                  先 Build / Bind
+                  {t("team.test.buildBindFirst")}
                 </Button>
               )}
             </Space>
@@ -329,7 +337,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space align="center" size={8} wrap>
             <WarningOutlined style={{ color: token.colorWarning }} />
-            <Typography.Text strong>未选择入口成员</Typography.Text>
+            <Typography.Text strong>{t("team.test.noEntry")}</Typography.Text>
           </Space>
           {renderEntrySelection()}
         </div>
@@ -341,7 +349,9 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space align="center" size={8} wrap>
             <WarningOutlined style={{ color: token.colorWarning }} />
-            <Typography.Text strong>入口成员不在当前 Team 成员清单中</Typography.Text>
+            <Typography.Text strong>
+              {t("team.test.entryMissingFromRoster")}
+            </Typography.Text>
             <CompactFactValue value={normalizedEntryMemberId} />
           </Space>
           {renderEntrySelection()}
@@ -377,13 +387,13 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               }}
             />
             <Typography.Text strong>
-              {entryMember?.name || "入口成员"}
+              {entryMember?.name || t("team.test.entryFallback")}
             </Typography.Text>
             {entryMember ? (
               <DetailPill
                 compact
                 style={entryMember.lifecycleStyle}
-                text={formatLifecycleLabelForTeamTest(entryMember.lifecycleLabel)}
+                text={formatLifecycleLabelForTeamTest(entryMember.lifecycleLabel, t)}
               />
             ) : null}
           </Space>
@@ -405,7 +415,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           }}
         >
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            服务
+            {t("team.members.columns.service")}
           </Typography.Text>
           <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
@@ -416,7 +426,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(entryMember.editStudioHref)}
               size="small"
             >
-              在 Studio 编辑
+              {t("team.test.editInStudio")}
             </Button>
           ) : null}
           {onClearEntry ? (
@@ -430,7 +440,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onClearEntry}
               size="small"
             >
-              清除入口成员
+              {t("team.members.clearEntry")}
             </Button>
           ) : null}
         </Space>
@@ -464,16 +474,16 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <Space align="center" size={8} wrap>
             <PlayCircleOutlined style={{ color: token.colorPrimary }} />
             <Typography.Text strong style={{ fontSize: 16 }}>
-              测试团队
+              {t("team.test.title")}
             </Typography.Text>
             <DetailPill
               compact
               style={resolveTestStatusPill(token, status)}
-              text={formatStatusLabel(status)}
+              text={formatStatusLabel(status, t)}
             />
           </Space>
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
-            通过入口成员发起一次真实 Team 调用。
+            {t("team.test.subtitle")}
           </Typography.Text>
         </div>
         {lastResult ? (
@@ -487,13 +497,13 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             }}
           >
             <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              上次测试 · {lastResult.finishedAtLabel}
+              {t("team.test.last", { time: lastResult.finishedAtLabel })}
             </Typography.Text>
             <Space size={6} wrap>
               <DetailPill
                 compact
                 style={resolveTestStatusPill(token, lastResult.status)}
-                text={formatStatusLabel(lastResult.status)}
+                text={formatStatusLabel(lastResult.status, t)}
               />
               {lastResult.runId ? (
                 <CompactFactValue head={6} tail={6} value={lastResult.runId} />
@@ -541,11 +551,11 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         }}
       >
         <Input.TextArea
-          aria-label="测试问题"
+          aria-label={t("team.test.promptAria")}
           autoSize={{ minRows: 3, maxRows: 8 }}
           disabled={disabled || isRunning || isSettingEntry}
           onChange={(event) => onPromptChange(event.target.value)}
-          placeholder="输入这支 Team 要处理的问题..."
+          placeholder={t("team.test.promptPlaceholder")}
           style={{ flex: "1 1 280px" }}
           value={prompt}
         />
@@ -558,7 +568,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onStop}
               type="primary"
             >
-              停止
+              {t("common.stop")}
             </Button>
           ) : (
             <Button
@@ -569,12 +579,12 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={onTest}
               type="primary"
             >
-              开始测试
+              {t("team.test.start")}
             </Button>
           )}
-          {error?.actionLabel === "Retry" && !isRunning ? (
+          {error?.actionLabel && !isRunning ? (
             <Button block disabled={!canTest} onClick={onTest}>
-              重试
+              {error.actionLabel}
             </Button>
           ) : null}
         </Space>
@@ -601,7 +611,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             padding: "10px 14px",
           }}
         >
-          <span>测试记录</span>
+          <span>{t("team.test.resultTitle")}</span>
           <Space size={6}>
             <LinkOutlined />
             <CompactFactValue
@@ -626,8 +636,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         >
           {resultText ||
             (isRunning
-              ? "等待 Team 返回..."
-              : "测试结果会显示在这里。")}
+              ? t("team.test.waiting")
+              : t("team.test.resultEmpty"))}
         </Typography.Paragraph>
       </div>
     </section>

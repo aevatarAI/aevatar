@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { Popover, Typography } from 'antd';
 import React from 'react';
+import { translate, useTranslation } from '@/shared/i18n/localization';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
@@ -74,6 +75,32 @@ const shellRootStyle: React.CSSProperties = {
   overflow: 'hidden',
   width: '100%',
 };
+
+const studioShellNarrowBreakpoint = 760;
+
+function useNarrowStudioShell(): boolean {
+  const [isNarrow, setIsNarrow] = React.useState(() =>
+    typeof window === 'undefined'
+      ? false
+      : window.innerWidth < studioShellNarrowBreakpoint,
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      setIsNarrow(window.innerWidth < studioShellNarrowBreakpoint);
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return isNarrow;
+}
 
 const railStyle: React.CSSProperties = {
   background:
@@ -362,15 +389,36 @@ function resolveMemberToneStyles(
 function formatMemberKindLabel(kind: StudioShellMemberKind | undefined): string {
   switch (kind) {
     case 'workflow':
-      return 'Workflow';
+      return translateShellText('studio.shell.filter.workflow');
     case 'script':
-      return 'Script';
+      return translateShellText('studio.shell.filter.script');
     case 'gagent':
-      return 'GAgent';
+      return translateShellText('studio.shell.filter.gagent');
     case 'member':
-      return 'Member';
+      return translateShellText('studio.shell.filter.member');
     default:
-      return 'Focus';
+      return translateShellText('studio.shell.filter.focus');
+  }
+}
+
+function translateShellText(key: string): string {
+  return translate(key);
+}
+
+function formatMemberToneLabel(
+  t: (key: string) => string,
+  tone: StudioShellMemberTone | undefined,
+): string {
+  switch (tone) {
+    case 'live':
+      return t('studio.shell.tone.live');
+    case 'draft':
+      return t('studio.shell.tone.draft');
+    case 'planned':
+      return t('studio.shell.tone.planned');
+    case 'idle':
+    default:
+      return t('studio.shell.tone.idle');
   }
 }
 
@@ -417,6 +465,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
   showPageHeader = true,
   children,
 }) => {
+  const { t } = useTranslation();
   const [memberSearch, setMemberSearch] = React.useState('');
   const [memberFilter, setMemberFilter] = React.useState<
     'all' | StudioShellMemberKind
@@ -432,31 +481,31 @@ const StudioShell: React.FC<StudioShellProps> = ({
     return [
       {
         key: 'all' as const,
-        label: 'All',
+        label: t('studio.shell.filter.all'),
         count: members.length,
       },
       {
         key: 'workflow' as const,
-        label: 'Workflow',
+        label: t('studio.shell.filter.workflow'),
         count: counts.workflow ?? 0,
       },
       {
         key: 'script' as const,
-        label: 'Script',
+        label: t('studio.shell.filter.script'),
         count: counts.script ?? 0,
       },
       {
         key: 'gagent' as const,
-        label: 'GAgent',
+        label: t('studio.shell.filter.gagent'),
         count: counts.gagent ?? 0,
       },
       {
         key: 'member' as const,
-        label: 'Member',
+        label: t('studio.shell.filter.member'),
         count: counts.member ?? 0,
       },
     ].filter((item) => item.key === 'all' || item.count > 0);
-  }, [members]);
+  }, [members, t]);
 
   const filteredMembers = React.useMemo(() => {
     const normalizedSearch = memberSearch.trim().toLowerCase();
@@ -473,14 +522,39 @@ const StudioShell: React.FC<StudioShellProps> = ({
       return buildMemberSearchText(member).includes(normalizedSearch);
     });
   }, [memberFilter, memberSearch, members]);
+  const isNarrowShell = useNarrowStudioShell();
   const usesPageScroll = contentScrollMode === 'page';
+  const rootStyle = isNarrowShell
+    ? ({
+        ...shellRootStyle,
+        flexDirection: 'column',
+        overflowY: 'auto',
+      } satisfies React.CSSProperties)
+    : shellRootStyle;
+  const responsiveRailStyle = isNarrowShell
+    ? ({
+        ...railStyle,
+        borderBottom: '1px solid #ebe2d4',
+        borderRight: 0,
+        flex: '0 0 auto',
+        maxHeight: 360,
+        width: '100%',
+      } satisfies React.CSSProperties)
+    : railStyle;
   const mainStyle = usesPageScroll
     ? ({
         ...shellMainStyle,
+        flex: isNarrowShell ? '0 0 auto' : shellMainStyle.flex,
         overflowX: 'hidden',
         overflowY: 'auto',
       } satisfies React.CSSProperties)
-    : shellMainStyle;
+    : isNarrowShell
+      ? ({
+          ...shellMainStyle,
+          flex: '0 0 auto',
+          overflow: 'visible',
+        } satisfies React.CSSProperties)
+      : shellMainStyle;
   const contentStyle = usesPageScroll
     ? ({
         ...shellContentStyle,
@@ -500,8 +574,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
       } satisfies React.CSSProperties);
 
   return (
-    <div style={shellRootStyle}>
-      <aside style={railStyle} aria-label="Team members">
+    <div style={rootStyle}>
+      <aside style={responsiveRailStyle} aria-label={t('studio.shell.members.aria')}>
         <div style={railHeaderStyle}>
           <div
             style={{
@@ -521,19 +595,19 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 lineHeight: '20px',
               }}
             >
-              Team members
+              {t('studio.shell.members.title')}
             </Typography.Title>
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
-              ariaLabel="Open team members help"
-              content="Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench."
+              ariaLabel={t('studio.shell.members.helpAria')}
+              content={t('studio.shell.members.help')}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
             <input
-              aria-label="Search team members"
+              aria-label={t('studio.shell.members.searchAria')}
               onChange={(event) => setMemberSearch(event.target.value)}
-              placeholder="Search members or revisions"
+              placeholder={t('studio.shell.members.searchPlaceholder')}
               style={railSearchInputStyle}
               type="search"
               value={memberSearch}
@@ -574,7 +648,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           <div style={railSectionHeaderStackStyle}>
             <div style={railSectionHeaderRowStyle}>
               <div style={railSectionHeaderStyle}>
-                <span>Member inventory</span>
+                <span>{t('studio.shell.members.inventory')}</span>
               </div>
             </div>
             {inventoryActions}
@@ -737,7 +811,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                             width: 7,
                           }}
                         />
-                        {member.tone ?? 'idle'}
+                        {formatMemberToneLabel(t, member.tone)}
                       </div>
                     </div>
                   </div>
@@ -753,8 +827,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
               }}
             >
               {members.length > 0
-                ? 'No members match the current search or filter. Try clearing the rail controls.'
-                : 'No team members yet. Create a member to start building in Studio.'}
+                ? t('studio.shell.members.empty.filtered')
+                : t('studio.shell.members.empty.none')}
             </Typography.Text>
           )}
         </div>
@@ -775,15 +849,15 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   textTransform: 'uppercase',
                 }}
               >
-                Member lifecycle
+                {t('studio.lifecycle.member')}
               </Typography.Text>
               <InlineInfoButton
-                ariaLabel="Open lifecycle help"
-                content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
+                ariaLabel={t('studio.lifecycle.helpAria')}
+                content={t('studio.lifecycle.help')}
               />
             </div>
             <nav
-              aria-label="Member lifecycle"
+              aria-label={t('studio.lifecycle.aria')}
               data-testid="studio-lifecycle-stepper"
               style={lifecycleRowStyle}
             >

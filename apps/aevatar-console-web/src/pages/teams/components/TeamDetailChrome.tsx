@@ -1,6 +1,7 @@
 import { MoreOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Space, Typography, theme } from "antd";
 import React from "react";
+import { useTranslation } from "@/shared/i18n/localization";
 import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
@@ -56,13 +57,22 @@ const topActionButtonStyle: React.CSSProperties = {
   paddingInline: 18,
 };
 
-export const TeamDetailEmptyState: React.FC = () => (
-  <AevatarPageShell title="团队详情" content="请先从团队列表选择一个具体团队，再查看详情。">
-    <AevatarPanel title="未选择团队">
-      <AevatarInspectorEmpty description="当前链接只有工作区上下文，没有具体 Team 标识。返回团队列表后选择一个团队。" />
-    </AevatarPanel>
-  </AevatarPageShell>
-);
+export const TeamDetailEmptyState: React.FC = () => {
+  const { t } = useTranslation();
+
+  return (
+    <AevatarPageShell
+      title={t("team.detail.empty.pageTitle")}
+      content={t("team.detail.empty.pageContent")}
+    >
+      <AevatarPanel title={t("team.detail.empty.panelTitle")}>
+        <AevatarInspectorEmpty
+          description={t("team.detail.empty.description")}
+        />
+      </AevatarPanel>
+    </AevatarPageShell>
+  );
+};
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   archiveTeamActionLabel,
@@ -76,8 +86,9 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   onOpenTeamTest,
   testTeamDisabled = false,
   testTeamHint,
-  testTeamLabel = "测试团队",
+  testTeamLabel,
 }) => {
+  const { t } = useTranslation();
   const archiveMenuItems =
     archiveTeamActionLabel && onArchiveTeam
       ? [
@@ -100,7 +111,7 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
           style={topActionButtonStyle}
           title={testTeamDisabled ? testTeamHint : undefined}
         >
-          {testTeamLabel}
+          {testTeamLabel ?? t("team.detail.action.test")}
         </Button>
       ) : null}
       <Button
@@ -126,11 +137,11 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
         >
           <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
             <Button
-              aria-label="团队更多操作"
+              aria-label={t("team.detail.action.moreAria")}
               disabled={archiveTeamDisabled}
               icon={<MoreOutlined />}
               style={{ ...topActionButtonStyle, paddingInline: 14 }}
-              title="更多操作"
+              title={t("team.detail.action.more")}
             />
           </span>
         </Dropdown>
@@ -145,11 +156,12 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({
   tabOptions,
 }) => {
   const { token } = theme.useToken();
+  const { t } = useTranslation();
 
   return (
     <div
       role="tablist"
-      aria-label="团队详情标签"
+      aria-label={t("team.detail.tabs.aria")}
       style={{
         alignItems: "center",
         background: token.colorBgContainer,
@@ -207,6 +219,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
   teamsListHref,
 }) => {
   const { token } = theme.useToken();
+  const { t } = useTranslation();
 
   return (
     <AevatarPageShell
@@ -233,7 +246,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
                 fontWeight: "inherit",
               }}
             >
-              Aevatar
+              {t("common.appName")}
             </Typography.Link>
             {" / "}
             <Typography.Link
@@ -248,9 +261,9 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
                 fontWeight: "inherit",
               }}
             >
-              Teams
+              {t("common.teams")}
             </Typography.Link>
-            {` / 团队详情 / ${activeTabLabel}`}
+            {` / ${t("team.detail.title")} / ${activeTabLabel}`}
           </Typography.Text>
           <div
             style={{
@@ -301,7 +314,9 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
         />
         {children}
         {initialLoading ? (
-          <Typography.Text type="secondary">正在加载团队详情...</Typography.Text>
+          <Typography.Text type="secondary">
+            {t("team.detail.loading")}
+          </Typography.Text>
         ) : null}
       </div>
     </AevatarPageShell>

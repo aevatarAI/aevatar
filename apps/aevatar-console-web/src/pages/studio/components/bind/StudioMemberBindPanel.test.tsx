@@ -1,8 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
-import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../../../tests/reactQueryTestUtils';
 import StudioMemberBindPanel from './StudioMemberBindPanel';
@@ -12,18 +10,6 @@ jest.mock('@/shared/api/scopeRuntimeApi', () => ({
     getServiceBindings: jest.fn(),
     getServiceRevisions: jest.fn(),
   },
-}));
-
-jest.mock('@/shared/api/runtimeRunsApi', () => ({
-  runtimeRunsApi: {
-    streamDraftRun: jest.fn(),
-    streamChat: jest.fn(),
-    invokeEndpoint: jest.fn(),
-  },
-}));
-
-jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
-  parseBackendSSEStream: jest.fn(),
 }));
 
 jest.mock('@/shared/studio/api', () => ({
@@ -163,40 +149,6 @@ describe('StudioMemberBindPanel', () => {
         },
       ],
     });
-    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue({ ok: true });
-    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
-    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
-      yield {
-        type: 'RUN_STARTED',
-        runId: 'run-1',
-        threadId: 'thread-1',
-        timestamp: Date.now(),
-      };
-      yield {
-        type: 'CUSTOM',
-        name: 'aevatar.run.context',
-        value: {
-          actorId: 'actor-default',
-          commandId: 'cmd-1',
-        },
-        timestamp: Date.now(),
-      };
-      yield {
-        type: 'TEXT_MESSAGE_CONTENT',
-        delta: 'First node output.',
-        messageId: 'msg-1',
-        timestamp: Date.now(),
-      };
-      yield {
-        type: 'RUN_FINISHED',
-        result: {
-          output: 'Second node final output.',
-        },
-        runId: 'run-1',
-        threadId: 'thread-1',
-        timestamp: Date.now(),
-      };
-    });
   });
 
   it('renders a current-member contract layout and reports the default selection', async () => {
@@ -247,20 +199,14 @@ describe('StudioMemberBindPanel', () => {
     );
 
     expect(await screen.findByTestId('studio-bind-surface')).toBeTruthy();
-    const currentContractTitle = screen.getByText('Current member contract');
-    const smokeTestTitle = screen.getByText('Quick smoke test');
-    const snippetsTitle = screen.getByText('Integration snippets');
-    const supportingDetailsTitle = screen.getByText('Supporting details');
+    const currentContractTitle = screen.getByText('当前成员合约');
+    const snippetsTitle = screen.getByText('集成代码片段');
+    const supportingDetailsTitle = screen.getByText('补充明细');
     expect(currentContractTitle).toBeTruthy();
-    expect(smokeTestTitle).toBeTruthy();
     expect(snippetsTitle).toBeTruthy();
     expect(supportingDetailsTitle).toBeTruthy();
     expect(
-      currentContractTitle.compareDocumentPosition(smokeTestTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      smokeTestTitle.compareDocumentPosition(snippetsTitle) &
+      currentContractTitle.compareDocumentPosition(snippetsTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
@@ -280,32 +226,36 @@ describe('StudioMemberBindPanel', () => {
     const primaryGridStyle = primaryGrid.getAttribute('style') || '';
     expect(primaryGridStyle).not.toContain('height');
     expect(primaryGridStyle).not.toContain('grid-auto-rows');
-    expect(screen.getByTestId('studio-bind-contract-section')).toBeTruthy();
-    expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
+    const contractSection = screen.getByTestId('studio-bind-contract-section');
+    const nextStepSection = screen.getByTestId('studio-bind-next-step-section');
+    expect(contractSection).toBeTruthy();
+    expect(nextStepSection).toBeTruthy();
+    expect(contractSection.contains(nextStepSection)).toBe(true);
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
-    expect(screen.getByText('Current member publication')).toBeTruthy();
+    expect(screen.getByText('当前成员发布')).toBeTruthy();
     expect(screen.getByText('member:default')).toBeTruthy();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(
-      screen.queryByText('Select a published service'),
+      screen.queryByText('选择发布服务'),
     ).toBeNull();
+    expect(screen.getByRole('button', { name: '打开调用' })).not.toBeDisabled();
+    expect(screen.queryByText('Quick smoke test')).toBeNull();
+    expect(screen.queryByText('Test mode')).toBeNull();
     expect(
-      screen.getByRole('button', {
-        name: 'Chat 默认测试 id · chat Chat with the published workflow.',
-      }),
-    ).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    expect(
-      screen.getByText(
+      screen.queryByText(
         '普通测试直接输入一句话即可；需要固定格式时再选高级输入。',
       ),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByText('Contract details'));
-    expect(await screen.findByText('Published service')).toBeTruthy();
-    expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
+    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send smoke test' })).toBeNull();
+    expect(
+      screen.queryByRole('button', {
+        name: 'Chat 默认测试 id · chat Chat with the published workflow.',
+      }),
+    ).toBeNull();
+    fireEvent.click(screen.getByText('合约明细'));
+    expect(await screen.findByText('发布服务')).toBeTruthy();
+    expect(primaryGrid.contains(screen.getByText('发布服务'))).toBe(false);
     expect(screen.queryByText('Binding Contract')).toBeNull();
     expect(screen.queryByText('Current contract')).toBeNull();
     expect(screen.queryByText('Published contract context')).toBeNull();
@@ -314,7 +264,7 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.queryByRole('button', { name: 'Activate' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
     expect(screen.queryByText('Need auth for a smoke test?')).toBeNull();
-    expect(screen.getAllByText('Authorization').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('鉴权').length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(scopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
         'scope-1',
@@ -391,11 +341,11 @@ describe('StudioMemberBindPanel', () => {
       }),
     );
 
-    expect(await screen.findByText('This member can be the Team entry.')).toBeTruthy();
+    expect(await screen.findByText('这个成员可以设为团队入口。')).toBeTruthy();
     expect(
-      screen.queryByRole('button', { name: 'Set as Team entry' }),
+      screen.queryByRole('button', { name: '设为团队入口' }),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '设为入口并测试 Team' }));
+    fireEvent.click(screen.getByRole('button', { name: '设为入口并测试团队' }));
 
     expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
   });
@@ -449,19 +399,15 @@ describe('StudioMemberBindPanel', () => {
       }),
     );
 
-    expect(await screen.findByText('This member is the Team entry.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '设为入口并测试 Team' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '测试 Team' }));
+    expect(await screen.findByText('这个成员是团队入口。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '设为入口并测试团队' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '测试团队' }));
 
     expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
   });
 
-  it('runs a chat smoke test and offers a continue-to-invoke action', async () => {
+  it('opens Invoke from the bind next step', async () => {
     const handleContinueToInvoke = jest.fn();
-    const buildWorkflowYamls = jest.fn().mockResolvedValue([
-      'name: workspace-demo',
-      'steps:\n  tell_joke:\n    type: llm_call',
-    ]);
 
     renderWithQueryClient(
       React.createElement(StudioMemberBindPanel, {
@@ -472,7 +418,6 @@ describe('StudioMemberBindPanel', () => {
           scopeId: 'scope-1',
           scopeSource: 'nyxid',
         },
-        buildWorkflowYamls,
         memberId: 'default',
         scopeId: 'scope-1',
         preferredServiceId: 'default',
@@ -507,116 +452,12 @@ describe('StudioMemberBindPanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('Bind smoke test input'), {
-      target: {
-        value: 'Give me a quick health summary.',
-      },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Send smoke test' }));
-    });
-
     await waitFor(() => {
-      expect(buildWorkflowYamls).toHaveBeenCalledTimes(1);
-      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
-        'scope-1',
-        expect.objectContaining({
-          prompt: 'Give me a quick health summary.',
-          workflowYamls: [
-            'name: workspace-demo',
-            'steps:\n  tell_joke:\n    type: llm_call',
-          ],
-        }),
-        expect.any(AbortSignal),
-      );
+      expect(screen.getByRole('button', { name: '打开调用' })).not.toBeDisabled();
     });
-    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Smoke test passed in \d+ms/)).toBeTruthy();
-    expect(screen.getByText('Run run-1')).toBeTruthy();
-    expect(
-      screen.queryByText('The current Studio draft accepted the request.'),
-    ).toBeNull();
-    expect(screen.getByText('Second node final output.')).toBeTruthy();
-    expect(
-      screen.getByText(
-        'Current draft',
-      ),
-    ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开调用' }));
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
-  });
-
-  it('describes non-chat smoke test success as a completed contract response', async () => {
-    (runtimeRunsApi.invokeEndpoint as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-    });
-
-    renderWithQueryClient(
-      React.createElement(StudioMemberBindPanel, {
-        authSession: {
-          enabled: true,
-          authenticated: true,
-          name: 'Abigail Deng',
-          scopeId: 'scope-1',
-          scopeSource: 'nyxid',
-        },
-        memberId: 'default',
-        scopeId: 'scope-1',
-        preferredServiceId: 'default',
-        services: [
-          {
-            serviceKey: 'scope-1:default:workspace-demo',
-            tenantId: 'scope-1',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'default',
-            displayName: 'workspace-demo',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'dep-2',
-            primaryActorId: 'actor-default',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'submit',
-                displayName: 'Submit',
-                kind: 'command',
-                requestTypeUrl: 'type.googleapis.com/example.Submit',
-                responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
-                description: 'Submit a request.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-03-26T08:00:00Z',
-          },
-        ],
-      }),
-    );
-
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: 'Send smoke test' }));
-    });
-
-    await waitFor(() => {
-      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
-        'scope-1',
-        expect.objectContaining({
-          endpointId: 'submit',
-        }),
-        expect.objectContaining({
-          serviceId: 'default',
-        }),
-      );
-    });
-    expect(await screen.findByText(/Smoke test passed in \d+ms/)).toBeTruthy();
-    expect(
-      screen.getByText('The selected contract returned without an error.'),
-    ).toBeTruthy();
-    expect(
-      screen.queryByText('The selected contract accepted the request.'),
-    ).toBeNull();
   });
 
   it('blocks continuing to Invoke when the published service has no endpoints', async () => {
@@ -655,9 +496,9 @@ describe('StudioMemberBindPanel', () => {
       }),
     );
 
-    expect(await screen.findByText('No endpoint data available')).toBeTruthy();
+    expect(await screen.findByText('暂无接口数据')).toBeTruthy();
     const continueButton = screen.getByRole('button', {
-      name: 'Continue to Invoke',
+      name: '打开调用',
     });
     expect(continueButton).toBeDisabled();
 
@@ -711,81 +552,15 @@ describe('StudioMemberBindPanel', () => {
       }),
     );
 
-    expect(await screen.findByText('Select a Team member before using Invoke.')).toBeTruthy();
+    expect(await screen.findByText('使用调用前请先选择团队成员。')).toBeTruthy();
     expect(screen.queryByTestId('studio-bind-contract-card')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeDisabled();
-    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(screen.queryByRole('button', { name: 'Send smoke test' })).toBeNull();
+    const continueButton = screen.getByRole('button', { name: '打开调用' });
     expect(continueButton).toBeDisabled();
 
     fireEvent.click(continueButton);
 
     expect(handleContinueToInvoke).not.toHaveBeenCalled();
-    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
-    expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
-  });
-
-  it('does not block current draft smoke tests on published endpoint auth state', async () => {
-    const buildWorkflowYamls = jest.fn().mockResolvedValue(['name: workspace-demo']);
-
-    renderWithQueryClient(
-      React.createElement(StudioMemberBindPanel, {
-        authSession: {
-          enabled: true,
-          authenticated: false,
-          name: '',
-          scopeId: 'scope-1',
-          scopeSource: 'nyxid',
-        },
-        buildWorkflowYamls,
-        scopeId: 'scope-1',
-        preferredServiceId: 'default',
-        services: [
-          {
-            serviceKey: 'scope-1:default:workspace-demo',
-            tenantId: 'scope-1',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'default',
-            displayName: 'workspace-demo',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'dep-2',
-            primaryActorId: 'actor-default',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'Chat',
-                kind: 'chat',
-                requestTypeUrl: '',
-                responseTypeUrl: '',
-                description: 'Chat with the published workflow.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-03-26T08:00:00Z',
-          },
-        ],
-      }),
-    );
-
-    const smokeButton = await screen.findByRole('button', { name: 'Send smoke test' });
-    expect(smokeButton).not.toBeDisabled();
-
-    await act(async () => {
-      fireEvent.click(smokeButton);
-    });
-
-    await waitFor(() => {
-      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
-        'scope-1',
-        expect.objectContaining({
-          workflowYamls: ['name: workspace-demo'],
-        }),
-        expect.any(AbortSignal),
-      );
-    });
-    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
   it('offers a bind action for the current workflow draft before any published service exists', async () => {
@@ -804,9 +579,8 @@ describe('StudioMemberBindPanel', () => {
         pendingBindingCandidate: {
           kind: 'workflow',
           displayName: 'draft',
-          description:
-            'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-          actionLabel: 'Bind current revision',
+          description: '先发布当前流程版本，工作室随后会展示这个成员的调用 URL 和接口合约。',
+          actionLabel: '绑定当前版本',
         },
         onBindPendingCandidate: handleBindPendingCandidate,
         services: [],
@@ -815,12 +589,12 @@ describe('StudioMemberBindPanel', () => {
 
     expect(await screen.findByTestId('studio-bind-surface')).toBeTruthy();
     expect(
-      screen.getByText('No published contract exists for draft yet.'),
+      screen.getByText('draft 暂时还没有发布合约。'),
     ).toBeTruthy();
-    expect(screen.getByText('Publish current member')).toBeTruthy();
+    expect(screen.getByText('发布当前成员')).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
+      fireEvent.click(screen.getByRole('button', { name: '绑定当前版本' }));
     });
 
     expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
@@ -832,9 +606,8 @@ describe('StudioMemberBindPanel', () => {
       const [candidate, setCandidate] = React.useState({
         kind: 'workflow' as const,
         displayName: 'draft1',
-        description:
-          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-        actionLabel: 'Bind current revision',
+        description: '先发布当前流程版本，工作室随后会展示这个成员的调用 URL 和接口合约。',
+        actionLabel: '绑定当前版本',
       });
 
       return React.createElement(React.Fragment, null, [
@@ -847,9 +620,8 @@ describe('StudioMemberBindPanel', () => {
               setCandidate({
                 kind: 'workflow',
                 displayName: 'joker',
-                description:
-                  'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-                actionLabel: 'Bind current revision',
+                description: '先发布当前流程版本，工作室随后会展示这个成员的调用 URL 和接口合约。',
+                actionLabel: '绑定当前版本',
               }),
           },
           'Switch candidate',
@@ -874,26 +646,26 @@ describe('StudioMemberBindPanel', () => {
     renderWithQueryClient(React.createElement(CandidateHarness));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
+      fireEvent.click(screen.getByRole('button', { name: '绑定当前版本' }));
     });
 
     expect(
       await screen.findByText(
-        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+        'draft1 的绑定请求已受理。运行完成后，工作室会展示发布后的调用合约。',
       ),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch candidate' }));
 
-    expect(await screen.findByText('No published contract exists for joker yet.')).toBeTruthy();
+    expect(await screen.findByText('joker 暂时还没有发布合约。')).toBeTruthy();
     expect(
       screen.queryByText(
-        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+        'draft1 的绑定请求已受理。运行完成后，工作室会展示发布后的调用合约。',
       ),
     ).toBeNull();
     expect(
       screen.queryByText(
-        'joker binding request was accepted. Studio will show the published contract after the run completes.',
+        'joker 的绑定请求已受理。运行完成后，工作室会展示发布后的调用合约。',
       ),
     ).toBeNull();
   });

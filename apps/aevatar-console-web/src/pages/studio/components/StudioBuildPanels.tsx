@@ -66,6 +66,7 @@ import type {
   ScriptValidationResult,
 } from '@/shared/studio/scriptsModels';
 import type { StudioGraphStep } from '@/shared/studio/graph';
+import { translate } from '@/shared/i18n/localization';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -487,7 +488,7 @@ const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
 const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
 
 function createGAgentDraftRunTimeoutError(): Error {
-  return new Error('GAgent draft run timed out before the backend returned any event.');
+  return new Error(translate('studio.gagent.timeout'));
 }
 
 function getRunDebugLines(state: DraftRunState): string[] {
@@ -513,14 +514,14 @@ function renderRunOutput(state: DraftRunState): string {
   }
 
   if (state.status === 'running') {
-    return 'Waiting for assistant output...';
+    return translate('studio.draftRun.output.waiting');
   }
 
   if (state.status === 'success' && getRunDebugLines(state).length > 0) {
-    return 'Run completed, but no assistant output was returned.';
+    return translate('studio.draftRun.output.completedNoAssistant');
   }
 
-  return 'Run the current draft to inspect the assistant output here.';
+  return translate('studio.draftRun.output.idle');
 }
 
 function renderRunSummary(state: DraftRunState): string {
@@ -713,7 +714,7 @@ async function consumeAguiDraftRun(
       if (event.type === AGUIEventType.RUN_ERROR) {
         nextError =
           String((event as { message?: string }).message || '').trim() ||
-          'Draft run failed.';
+          translate('studio.draftRun.output.failed');
         nextStatus = 'error';
       }
 
@@ -806,14 +807,14 @@ function ScriptLeaveDialog(props: {
   return (
     <div style={modalCardStyle}>
       <Typography.Text strong style={{ fontSize: 16 }}>
-        Leave Script Build?
+        {translate('studio.script.leaveTitle')}
       </Typography.Text>
       <Typography.Text type="secondary">
-        当前脚本草稿还没有保存。离开 Build 会丢掉这次 source editor 里的未保存修改。
+        {translate('studio.script.leaveDescription')}
       </Typography.Text>
       <Space>
         <Button className={AEVATAR_INTERACTIVE_BUTTON_CLASS} onClick={props.onStay}>
-          继续编辑
+          {translate('studio.script.continueEditing')}
         </Button>
         <Button
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -821,7 +822,7 @@ function ScriptLeaveDialog(props: {
           type="primary"
           onClick={props.onLeave}
         >
-          离开页面
+          {translate('studio.script.leavePage')}
         </Button>
       </Space>
     </div>
@@ -1007,7 +1008,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         return {
           stepType,
           description:
-            descriptor?.description?.trim() || 'Create a new workflow step of this type.',
+            descriptor?.description?.trim() ||
+            translate('studio.workflow.defaultStepDescription'),
         };
       }),
     [availableStepTypes, runtimePrimitives],
@@ -1068,7 +1070,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
 
     if (!scopeId) {
-      const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
+      const visibleMessage = translate('studio.workflow.workspaceRequired');
       setWorkflowRunError(visibleMessage);
       void message.error(visibleMessage);
       return;
@@ -1082,7 +1084,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
 
     if (!runPrompt.trim()) {
-      const visibleMessage = 'Sample input is required before running the workflow draft.';
+      const visibleMessage = translate('studio.workflow.inputRequired');
       setWorkflowRunError(visibleMessage);
       void message.error(visibleMessage);
       return;
@@ -1127,7 +1129,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       const disconnectedProvider = rawMessage.match(/Provider '([^']+)' not connected/i);
       const visibleMessage =
         disconnectedProvider
-          ? `Dry-run 还不能运行，因为 ${disconnectedProvider[1]} provider 还没有连好。先连接可用 provider，再回来运行当前 workflow draft。`
+          ? translate('studio.workflow.providerDisconnected', {
+              provider: disconnectedProvider[1],
+            })
           : rawMessage;
       setWorkflowRunError(
         visibleMessage,
@@ -1283,9 +1287,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       <div data-testid="workflow-stage-actions" style={workflowStageActionsStyle}>
         <div style={workflowStageActionsRowStyle}>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
-            <div style={sectionEyebrowStyle}>Build actions</div>
+            <div style={sectionEyebrowStyle}>
+              {translate('studio.workflow.actions')}
+            </div>
             <Tag color={canSaveWorkflow ? 'gold' : 'default'}>
-              {canSaveWorkflow ? 'draft ready' : 'saved'}
+              {canSaveWorkflow
+                ? translate('studio.workflow.draftReady')
+                : translate('studio.workflow.saved')}
             </Tag>
           </div>
           <Space wrap size={[8, 8]}>
@@ -1295,14 +1303,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               loading={savePending}
               onClick={onSaveDraft}
             >
-              Save draft
+              {translate('studio.workflow.saveDraft')}
             </Button>
             <Button
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="primary"
               onClick={onContinueToBind}
             >
-              Continue to Bind
+              {translate('studio.workflow.continueToBind')}
             </Button>
           </Space>
         </div>
@@ -1322,10 +1330,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         >
           <div style={workflowToolbarStyle}>
             <Space wrap size={[8, 8]}>
-              <div style={sectionEyebrowStyle}>DAG Canvas</div>
-              <Tag color="processing">canvas · live</Tag>
+              <div style={sectionEyebrowStyle}>
+                {translate('studio.workflow.dagCanvas')}
+              </div>
+              <Tag color="processing">{translate('studio.workflow.canvasLive')}</Tag>
               <Typography.Text type="secondary">
-                {workflowName || 'Untitled workflow'}
+                {workflowName || translate('studio.workflow.untitled')}
               </Typography.Text>
             </Space>
             <div style={workflowToolbarActionsStyle}>
@@ -1337,7 +1347,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   size="small"
                   type={viewMode === 'canvas' ? 'primary' : 'text'}
                 >
-                  Canvas
+                  {translate('studio.workflow.canvas')}
                 </Button>
                 <Button
                   className={AEVATAR_INTERACTIVE_CHIP_CLASS}
@@ -1355,23 +1365,25 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 loading={stepMutationPending === 'add'}
                 onClick={() => setStepTypePickerOpen((current) => !current)}
               >
-                Add step
+                {translate('studio.workflow.addStep')}
               </Button>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 disabled={viewMode !== 'canvas' || Boolean(stepMutationPending)}
                 onClick={onAutoLayout}
               >
-                Auto-layout
+                {translate('studio.workflow.autoLayout')}
               </Button>
             </div>
           </div>
           <div style={workflowCanvasBodyStyle}>
             {stepTypePickerOpen ? (
               <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
-                <div style={workflowSectionHeadingStyle}>Choose step type</div>
+                <div style={workflowSectionHeadingStyle}>
+                  {translate('studio.workflow.chooseStepType')}
+                </div>
                 <div style={workflowInlineMetaStyle}>
-                  先决定要插入哪种 step，再把它接到当前选中的节点后面。
+                  {translate('studio.workflow.chooseStepHint')}
                 </div>
                 <div
                   data-testid="workflow-step-type-picker-grid"
@@ -1428,8 +1440,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     justifyContent: 'space-between',
                   }}
                 >
-                  <div style={sectionEyebrowStyle}>Workflow YAML</div>
-                  <Tag color="blue">raw draft</Tag>
+                  <div style={sectionEyebrowStyle}>
+                    {translate('studio.workflow.yaml')}
+                  </div>
+                  <Tag color="blue">{translate('studio.workflow.rawDraft')}</Tag>
                 </div>
                 <Input.TextArea
                   aria-label="定义 YAML"
@@ -1455,7 +1469,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             }}
           >
             <div style={{ display: 'grid', gap: 4 }}>
-              <div style={sectionEyebrowStyle}>Step Detail</div>
+              <div style={sectionEyebrowStyle}>
+                {translate('studio.workflow.stepDetail')}
+              </div>
               {selectedStep ? <Typography.Text strong>{selectedStep.id}</Typography.Text> : null}
             </div>
             {selectedStep ? <Tag>{selectedStep.type}</Tag> : null}
@@ -1466,13 +1482,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               <>
                 <div style={workflowDetailsGridStyle}>
                 <div style={workflowFieldStyle}>
-                  <div style={workflowSectionHeadingStyle}>Basics</div>
+                  <div style={workflowSectionHeadingStyle}>
+                    {translate('studio.workflow.basics')}
+                  </div>
                   <label htmlFor="workflow-step-id" style={workflowFieldLabelStyle}>
-                    Step ID
+                    {translate('studio.workflow.stepId')}
                   </label>
                   <Input
                     id="workflow-step-id"
-                    aria-label="Step ID"
+                    aria-label={translate('studio.workflow.stepId')}
                     value={stepDraft.id}
                     onChange={(event) =>
                       updateStepDraft((current) =>
@@ -1486,10 +1504,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }
                   />
                   <label htmlFor="workflow-step-type" style={workflowFieldLabelStyle}>
-                    Step type
+                    {translate('studio.workflow.stepType')}
                   </label>
                   <Select
-                    aria-label="Step type"
+                    aria-label={translate('studio.workflow.stepType')}
                     id="workflow-step-type"
                     options={availableStepTypes.map((stepType) => ({
                       label: stepType,
@@ -1509,19 +1527,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   />
                 </div>
                 <div style={workflowFieldStyle}>
-                  <div style={workflowSectionHeadingStyle}>Routing</div>
+                  <div style={workflowSectionHeadingStyle}>
+                    {translate('studio.workflow.routing')}
+                  </div>
                   <label htmlFor="workflow-step-role" style={workflowFieldLabelStyle}>
-                    Target role
+                    {translate('studio.workflow.targetRole')}
                   </label>
                   <Select
                     allowClear
-                    aria-label="Target role"
+                    aria-label={translate('studio.workflow.targetRole')}
                     id="workflow-step-role"
                     options={workflowRoles.map((role) => ({
                       label: `${role.name} (${role.id})`,
                       value: role.id,
                     }))}
-                    placeholder={workflowRoleIds[0] || 'Select role'}
+                    placeholder={workflowRoleIds[0] || translate('studio.workflow.selectRole')}
                     value={stepDraft.targetRole || undefined}
                     onChange={(value) =>
                       updateStepDraft((current) =>
@@ -1535,17 +1555,17 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     }
                   />
                   <label htmlFor="workflow-step-next" style={workflowFieldLabelStyle}>
-                    Next step
+                    {translate('studio.workflow.nextStep')}
                   </label>
                   <Select
                     allowClear
-                    aria-label="Next step"
+                    aria-label={translate('studio.workflow.nextStep')}
                     id="workflow-step-next"
                     options={availableNextStepIds.map((stepId) => ({
                       label: stepId,
                       value: stepId,
                     }))}
-                    placeholder="No next step"
+                    placeholder={translate('studio.workflow.noNextStep')}
                     value={stepDraft.next || undefined}
                     onChange={(value) =>
                       updateStepDraft((current) =>
@@ -1560,7 +1580,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   />
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
-                  <div style={workflowSectionHeadingStyle}>Parameters</div>
+                  <div style={workflowSectionHeadingStyle}>
+                    {translate('studio.workflow.parameters')}
+                  </div>
                   {selectedPrimitiveDescriptor?.parameters.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
                       {selectedPrimitiveDescriptor.parameters.map((parameter) => {
@@ -1590,7 +1612,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                                   label: value,
                                   value,
                                 }))}
-                                placeholder={parameter.default || 'Select value'}
+                                placeholder={parameter.default || translate('studio.workflow.selectValue')}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
@@ -1609,7 +1631,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               <Input
                                 aria-label={`Parameter ${parameter.name}`}
                                 id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameter.default || parameter.type || 'Value'}
+                                placeholder={
+                                  parameter.default ||
+                                  parameter.type ||
+                                  translate('studio.workflow.valuePlaceholder')
+                                }
                                 value={currentValue}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1626,7 +1652,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameter.description || `Type: ${parameter.type}`}
+                              {parameter.description ||
+                                translate('studio.workflow.typeLabel', {
+                                  type: parameter.type,
+                                })}
                             </div>
                           </div>
                         );
@@ -1634,20 +1663,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     </div>
                   ) : (
                     <div style={workflowInlineMetaStyle}>
-                      当前 step type 没有声明可引导参数，直接使用下面的 raw JSON 编辑。
+                      {translate('studio.workflow.noGuidedParameters')}
                     </div>
                   )}
                   <details style={workflowAdvancedSectionStyle}>
                     <summary style={{ ...workflowSectionHeadingStyle, cursor: 'pointer' }}>
-                      Raw parameters JSON
+                      {translate('studio.workflow.rawParametersJson')}
                     </summary>
                     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
                       <label htmlFor="workflow-step-parameters" style={workflowFieldLabelStyle}>
-                        Parameters JSON
+                        {translate('studio.workflow.parametersJson')}
                       </label>
                       <Input.TextArea
                         id="workflow-step-parameters"
-                        aria-label="Step parameters"
+                        aria-label={translate('studio.workflow.stepParametersAria')}
                         autoSize={{ minRows: 8, maxRows: 14 }}
                         value={stepDraft.parametersText}
                         onChange={(event) =>
@@ -1667,15 +1696,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <details style={workflowAdvancedSectionStyle}>
                     <summary style={{ ...workflowSectionHeadingStyle, cursor: 'pointer' }}>
-                      Advanced routing JSON
+                      {translate('studio.workflow.advancedRoutingJson')}
                     </summary>
                     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
                       <label htmlFor="workflow-step-branches" style={workflowFieldLabelStyle}>
-                        Branches JSON
+                        {translate('studio.workflow.branchesJson')}
                       </label>
                       <Input.TextArea
                         id="workflow-step-branches"
-                        aria-label="Step branches"
+                        aria-label={translate('studio.workflow.stepBranchesAria')}
                         autoSize={{ minRows: 5, maxRows: 10 }}
                         value={stepDraft.branchesText}
                         onChange={(event) =>
@@ -1701,7 +1730,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   loading={stepMutationPending === 'remove'}
                   onClick={() => void handleRemoveStep()}
                 >
-                  Delete step
+                  {translate('studio.workflow.deleteStep')}
                 </Button>
                 <Button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1710,12 +1739,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
                 >
-                  Apply changes
+                  {translate('studio.workflow.applyChanges')}
                 </Button>
               </div>
             </>
           ) : (
-            <Empty description="Select a step from the DAG canvas first." />
+            <Empty description={translate('studio.workflow.selectStepFirst')} />
           )}
           </div>
         </section>
@@ -1724,19 +1753,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       <section data-testid="workflow-dry-run-panel" style={workflowDryRunSectionStyle}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>Workflow draft run</Typography.Text>
+            <div style={sectionEyebrowStyle}>{translate('studio.workflow.dryRun')}</div>
+            <Typography.Text strong>
+              {translate('studio.workflow.draftRun')}
+            </Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            {translate('studio.workflow.fixtureTag')}
           </span>
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={workflowInlineMetaStyle}>
-            Route: {dryRunRouteLabel || 'Config default'}
+            {translate('studio.workflow.routeLabel')}: {dryRunRouteLabel || translate('studio.workflow.configDefault')}
           </div>
           <div style={workflowInlineMetaStyle}>
-            Model: {dryRunModelLabel || 'Use configured default'}
+            {translate('studio.workflow.modelLabel')}: {dryRunModelLabel || translate('studio.workflow.useConfiguredDefault')}
           </div>
         </div>
         {dryRunBlockedReason ? (
@@ -1749,7 +1780,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   type="link"
                   onClick={onOpenRunSetup}
                 >
-                  Connect provider
+                  {translate('studio.workflow.connectProvider')}
                 </Button>
               ) : undefined
             }
@@ -1759,9 +1790,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           />
         ) : null}
         <Input.TextArea
-          aria-label="Workflow dry run input"
+          aria-label={translate('studio.workflow.dryRunInputAria')}
           autoSize={{ minRows: 4, maxRows: 6 }}
-          placeholder="Describe the input you want this workflow member to handle."
+          placeholder={translate('studio.workflow.dryRunPlaceholder')}
           value={runPrompt}
           onChange={(event) => onRunPromptChange(event.target.value)}
         />
@@ -1774,7 +1805,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
             onClick={() => void handleRun()}
           >
-            Run
+            {translate('common.run')}
           </Button>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1793,19 +1824,21 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               )
             }
           >
-            Load fixture
+            {translate('common.loadFixture')}
           </Button>
         </Space>
         {workflowRunError ? (
           <Alert message={workflowRunError} showIcon type="error" />
         ) : null}
         <div>
-          <div style={sectionEyebrowStyle}>Output</div>
+          <div style={sectionEyebrowStyle}>{translate('common.output')}</div>
           <pre style={workflowDryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
         {renderRunSummary(runState) ? (
           <details style={dryRunDebugDetailsStyle}>
-            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <summary style={dryRunDebugSummaryStyle}>
+              {translate('common.debugDetails')}
+            </summary>
             <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
           </details>
         ) : null}
@@ -2140,44 +2173,45 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   );
   const hasActiveScript = Boolean(activeScript?.script?.scriptId);
   const lifecycleStatus = !activeScript?.script?.scriptId
-    ? 'No script'
+    ? translate('studio.script.noScript')
     : isDirty && effectiveSaveStatus !== 'failed'
-        ? 'Unsaved edits'
+        ? translate('studio.script.unsavedEdits')
         : saveObservationStatus === 'accepted' || effectiveSaveStatus === 'accepted'
-          ? 'Save accepted'
+          ? translate('studio.script.saveAccepted')
           : saveObservationStatus === 'pending'
-            ? 'Waiting for catalog'
+            ? translate('studio.script.waitingForCatalog')
             : effectiveSaveStatus === 'failed'
-              ? 'Save needs attention'
+              ? translate('studio.script.saveNeedsAttention')
               : activeScriptIsDraft
-                ? 'Draft'
+                ? translate('studio.script.draft')
                 : scriptReadyToBind
-                  ? 'Catalog applied'
-                  : 'Catalog script';
+                  ? translate('studio.script.catalogApplied')
+                  : translate('studio.script.catalogScript');
   const lifecycleStatusColor =
-    lifecycleStatus === 'Catalog applied'
+    lifecycleStatus === translate('studio.script.catalogApplied')
       ? 'green'
-      : lifecycleStatus === 'Save needs attention'
+      : lifecycleStatus === translate('studio.script.saveNeedsAttention')
         ? 'red'
-        : lifecycleStatus === 'Waiting for catalog' || lifecycleStatus === 'Save accepted'
+        : lifecycleStatus === translate('studio.script.waitingForCatalog') ||
+            lifecycleStatus === translate('studio.script.saveAccepted')
           ? 'gold'
           : activeScriptIsDraft
             ? 'blue'
             : 'default';
   const bindReadinessLabel =
     !activeScript?.script?.scriptId
-      ? 'Create or select a script'
+      ? translate('studio.script.createOrSelect')
       : validationStatus === 'invalid'
-        ? 'Fix validation errors'
+        ? translate('studio.script.fixValidation')
         : isDirty && validationStatus !== 'valid'
-          ? 'Validate current source'
+          ? translate('studio.script.validateCurrent')
           : isDirty
-            ? 'Save script'
+            ? translate('studio.script.saveScript')
         : effectiveSaveStatus === 'accepted'
-          ? 'Waiting for catalog'
+          ? translate('studio.script.waitingForCatalog')
           : scriptReadyToBind
-            ? 'Ready to bind'
-            : 'Save script';
+            ? translate('studio.script.readyToBindShort')
+            : translate('studio.script.saveScript');
   const saveObservationInFlight =
     saveObservationStatus === 'accepted' || saveObservationStatus === 'pending';
   const saveNoticeType =
@@ -2317,7 +2351,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setSaveObservationStatus('applied');
       setSaveStatus('applied');
       setSaveNotice(
-        `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+        translate('studio.script.saveAppliedNotice', {
+          scriptId: accepted.acceptedScript.scriptId,
+          revision: accepted.acceptedScript.revisionId,
+        }),
       );
     },
     [onRefreshScripts, onScriptDraftSaved, scopeId],
@@ -2372,7 +2409,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           setSaveStatus('failed');
           setSaveNotice(
             observation.message ||
-              `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+              translate('studio.script.saveRejectedNotice', {
+                scriptId: accepted.acceptedScript.scriptId,
+                revision: accepted.acceptedScript.revisionId,
+              }),
           );
           return;
         }
@@ -2382,13 +2422,20 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         if (nextDelay == null) {
           saveObservationTimerRef.current = null;
           setSaveNotice(
-            `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Still waiting for catalog; use Refresh catalog to check again.`,
+            translate('studio.script.saveAcceptedStillWaiting', {
+              scriptId: accepted.acceptedScript.scriptId,
+              revision: accepted.acceptedScript.revisionId,
+            }),
           );
           return;
         }
 
         setSaveNotice(
-          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog; checking again in ${Math.round(nextDelay / 1000)}s.`,
+          translate('studio.script.saveAcceptedChecking', {
+            scriptId: accepted.acceptedScript.scriptId,
+            revision: accepted.acceptedScript.revisionId,
+            seconds: Math.round(nextDelay / 1000),
+          }),
         );
         saveObservationTimerRef.current = window.setTimeout(() => {
           void pollSaveObservation(
@@ -2416,7 +2463,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handleSave = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setSaveNotice('Resolve the current workspace and select a script before saving.');
+      setSaveNotice(translate('studio.script.saveRequired'));
       return;
     }
 
@@ -2463,7 +2510,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     (kind: 'csharp' | 'proto') => {
       const fallbackPath = kind === 'csharp' ? 'Behavior.cs' : 'schema.proto';
       const nextPath = window.prompt(
-        kind === 'csharp' ? 'C# source path' : 'Proto file path',
+        kind === 'csharp'
+          ? translate('studio.script.addCsharpPrompt')
+          : translate('studio.script.addProtoPrompt'),
         fallbackPath,
       );
       if (!nextPath?.trim()) {
@@ -2481,7 +2530,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       return;
     }
 
-    const nextPath = window.prompt('Rename file', selectedPackageEntry.path);
+    const nextPath = window.prompt(
+      translate('studio.script.renameFilePrompt'),
+      selectedPackageEntry.path,
+    );
     if (!nextPath?.trim() || nextPath.trim() === selectedPackageEntry.path) {
       return;
     }
@@ -2519,7 +2571,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handlePromoteEvolution = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setPromotionNotice('Resolve the current workspace and script before proposing evolution.');
+      setPromotionNotice(translate('studio.script.promoteRequired'));
       return;
     }
 
@@ -2539,8 +2591,13 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setPromotionHistory((current) => [decision, ...current].slice(0, 6));
       setPromotionNotice(
         decision.accepted
-          ? `Promotion accepted: ${decision.candidateRevision || decision.proposalId}.`
-          : decision.failureReason || `Promotion ${decision.status || 'not accepted'}.`,
+          ? translate('studio.script.promotionAccepted', {
+              target: decision.candidateRevision || decision.proposalId,
+            })
+          : decision.failureReason ||
+              translate('studio.script.promotionFallback', {
+                status: decision.status || translate('studio.script.notAccepted'),
+              }),
       );
     } catch (error) {
       setPromotionNotice(describeError(error));
@@ -2558,7 +2615,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handleRun = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setRunOutput('Resolve the current workspace and select a script before running.');
+      setRunOutput(translate('studio.script.runRequired'));
       return;
     }
 
@@ -2621,9 +2678,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
         <section style={buildSurfaceCardStyle}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Script Source</div>
+            <div style={sectionEyebrowStyle}>
+              {translate('studio.script.sourceTitle')}
+            </div>
             <div style={sectionDescriptionStyle}>
-              Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。
+              {translate('studio.script.sourceDescription')}
             </div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
@@ -2637,9 +2696,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 </>
               ) : null}
               <Select
-                aria-label="Script ID"
+                aria-label={translate('studio.script.scriptIdAria')}
                 style={{ minWidth: 220 }}
-                placeholder="Create or select a script"
+                placeholder={translate('studio.script.createOrSelect')}
                 value={activeScript?.script?.scriptId || undefined}
                 onChange={onSelectScriptId}
                 options={[
@@ -2678,7 +2737,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 loading={validationPending}
                 onClick={() => void handleValidate()}
               >
-                Validate
+                {translate('studio.script.validate')}
               </Button>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -2687,7 +2746,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 loading={savePending}
                 onClick={() => void handleSave()}
               >
-                Save script
+                {translate('studio.script.saveScript')}
               </Button>
             </Space>
           </div>
@@ -2703,7 +2762,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     size="small"
                     onClick={() => void onRefreshScripts?.()}
                   >
-                    Refresh catalog
+                    {translate('studio.script.refreshCatalog')}
                   </Button>
                 ) : undefined
               }
@@ -2711,7 +2770,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           ) : null}
           {hasActiveScript ? (
             <div
-              aria-label="Script lifecycle status"
+              aria-label={translate('studio.script.lifecycleStatusAria')}
               style={{
                 alignItems: 'center',
                 color: '#667085',
@@ -2735,7 +2794,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           {hasActiveScript && selectedPackageEntry ? (
             <div style={{ display: 'grid', gap: 12 }}>
               <details
-                aria-label="Script package tree"
+                aria-label={translate('studio.script.packageTreeAria')}
                 style={{
                   border: '1px solid #efe7da',
                   borderRadius: 16,
@@ -2753,10 +2812,14 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     listStyle: 'none',
                   }}
                 >
-                  <span style={sectionEyebrowStyle}>Advanced package</span>
+                  <span style={sectionEyebrowStyle}>
+                    {translate('studio.script.advancedPackage')}
+                  </span>
                   <Typography.Text type="secondary">
-                    {packageEntries.length} file{packageEntries.length === 1 ? '' : 's'} ·{' '}
-                    {scriptPackage.entrySourcePath || 'no entry'} entry
+                    {translate('studio.script.packageSummary', {
+                      count: packageEntries.length,
+                      entry: scriptPackage.entrySourcePath || translate('studio.script.noEntry'),
+                    })}
                   </Typography.Text>
                 </summary>
                 <div
@@ -2770,10 +2833,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   }}
                 >
                   <div>
-                    <div style={sectionEyebrowStyle}>Package</div>
+                    <div style={sectionEyebrowStyle}>
+                      {translate('studio.script.package')}
+                    </div>
                     <Typography.Text type="secondary">
-                      Entry: {scriptPackage.entrySourcePath || '-'} · Behavior:{' '}
-                      {scriptPackage.entryBehaviorTypeName || '-'}
+                      {translate('studio.script.entryLabel')}: {scriptPackage.entrySourcePath || '-'} ·{' '}
+                      {translate('studio.script.behaviorLabel')}: {scriptPackage.entryBehaviorTypeName || '-'}
                     </Typography.Text>
                   </div>
                   <Space wrap size={[8, 8]}>
@@ -2782,21 +2847,21 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       size="small"
                       onClick={() => handleAddPackageFile('csharp')}
                     >
-                      Add C#
+                      {translate('studio.script.addCsharp')}
                     </Button>
                     <Button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       size="small"
                       onClick={() => handleAddPackageFile('proto')}
                     >
-                      Add proto
+                      {translate('studio.script.addProto')}
                     </Button>
                     <Button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                       size="small"
                       onClick={handleRenamePackageFile}
                     >
-                      Rename
+                      {translate('common.rename')}
                     </Button>
                     <Button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -2804,7 +2869,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       size="small"
                       onClick={handleRemovePackageFile}
                     >
-                      Remove
+                      {translate('common.delete')}
                     </Button>
                   </Space>
                 </div>
@@ -2829,14 +2894,16 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       }}
                     >
                       {entry.kind === 'csharp' ? 'C#' : 'proto'} · {entry.path}
-                      {entry.path === scriptPackage.entrySourcePath ? ' · entry' : ''}
+                      {entry.path === scriptPackage.entrySourcePath
+                        ? ` · ${translate('studio.script.entryMarker')}`
+                        : ''}
                     </button>
                   ))}
                 </div>
                 <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
                   <Input
-                    aria-label="Entry behavior type"
-                    placeholder="Entry behavior type, for example DraftBehavior"
+                    aria-label={translate('studio.script.entryBehaviorAria')}
+                    placeholder={translate('studio.script.entryBehaviorPlaceholder')}
                     value={scriptPackage.entryBehaviorTypeName}
                     onChange={(event) =>
                       commitScriptPackage(
@@ -2850,7 +2917,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     disabled={selectedPackageEntry.kind !== 'csharp'}
                     onClick={handleSetEntrySource}
                   >
-                    Set entry source
+                    {translate('studio.script.setEntrySource')}
                   </Button>
                 </div>
               </details>
@@ -2886,28 +2953,32 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 }}
               >
                 <div>
-                  <div style={sectionEyebrowStyle}>Compiler</div>
+                  <div style={sectionEyebrowStyle}>
+                    {translate('studio.script.compiler')}
+                  </div>
                   <Typography.Text type="secondary">
                     {validationResult
                       ? validationResult.success
-                        ? 'Validation completed without blocking errors.'
-                        : 'Validation returned blocking diagnostics.'
-                      : 'Run Validate to refresh compiler diagnostics.'}
+                        ? translate('studio.script.validationClean')
+                        : translate('studio.script.validationBlocked')
+                      : translate('studio.script.validationPrompt')}
                   </Typography.Text>
                 </div>
                 <Space wrap size={[8, 8]}>
                   {validationResult?.diagnostics?.length ? (
                     <Tag color={validationResult.success ? 'blue' : 'red'}>
-                      Problems {validationResult.diagnostics.length}
+                      {translate('studio.script.problemCount', {
+                        count: validationResult.diagnostics.length,
+                      })}
                     </Tag>
                   ) : (
-                    <Tag color="green">Clean</Tag>
+                    <Tag color="green">{translate('studio.script.clean')}</Tag>
                   )}
                 </Space>
               </div>
               {validationResult?.diagnostics?.length ? (
                 <div
-                  aria-label="Script validation diagnostics"
+                  aria-label={translate('studio.script.validationDiagnosticsAria')}
                   style={{
                     border: '1px solid #efe7da',
                     borderRadius: 16,
@@ -2916,7 +2987,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     padding: 12,
                   }}
                 >
-                  <div style={sectionEyebrowStyle}>Diagnostics</div>
+                  <div style={sectionEyebrowStyle}>
+                    {translate('studio.script.diagnostics')}
+                  </div>
                   {validationResult.diagnostics.map((diagnostic, index) => {
                     const diagnosticKey = `${diagnostic.filePath || 'source'}:${diagnostic.startLine || 0}:${diagnostic.startColumn || 0}:${diagnostic.code || index}`;
                     const severityColor =
@@ -2974,14 +3047,14 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             </div>
           ) : (
             <Empty
-              description="Create a Script draft or select a saved workspace script to start editing."
+              description={translate('studio.script.emptyDescription')}
             >
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={onCreateScriptDraft}
                 type="primary"
               >
-                Add script
+                {translate('studio.script.addScript')}
               </Button>
             </Empty>
           )}
@@ -2990,8 +3063,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
             {scriptReadyToBind
-              ? 'Script revision is catalog-applied. Continue to Bind to publish the callable member contract.'
-              : `Script Build keeps code editing here. ${bindReadinessLabel}.`}
+              ? translate('studio.script.readyToBind')
+              : translate('studio.script.keepEditing', {
+                  status: bindReadinessLabel,
+                })}
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -2999,7 +3074,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             type="primary"
             onClick={onContinueToBind}
           >
-            Continue to Bind
+            {translate('studio.script.continueToBind')}
           </Button>
         </div>
 
@@ -3013,18 +3088,20 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       <aside style={dryRunAsideStyle}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>Script draft run</Typography.Text>
+            <div style={sectionEyebrowStyle}>{translate('studio.script.dryRun')}</div>
+            <Typography.Text strong>
+              {translate('studio.script.draftRun')}
+            </Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
-            seeded fixture
+            {translate('studio.script.fixtureTag')}
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
-          Draft-run 会直接调用当前 source editor 里的脚本，不需要先把 scope 默认服务切到这个 script。
+          {translate('studio.script.dryRunDescription')}
         </div>
         <Input.TextArea
-          aria-label="Script dry run input"
+          aria-label={translate('studio.script.dryRunInputAria')}
           autoSize={{ minRows: 6, maxRows: 10 }}
           disabled={!hasActiveScript}
           value={runInput}
@@ -3039,7 +3116,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             type="primary"
             onClick={() => void handleRun()}
           >
-            Run
+            {translate('common.run')}
           </Button>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3057,13 +3134,13 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               )
             }
           >
-            Load fixture
+            {translate('common.loadFixture')}
           </Button>
         </Space>
         <div>
           {lastRunResult ? (
             <div
-              aria-label="Script dry run facts"
+              aria-label={translate('studio.script.runFactsAria')}
               style={{
                 border: '1px solid #efe7da',
                 borderRadius: 14,
@@ -3073,14 +3150,14 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 padding: 12,
               }}
             >
-              <div style={sectionEyebrowStyle}>Run facts</div>
+              <div style={sectionEyebrowStyle}>{translate('studio.script.runFacts')}</div>
               {[
-                ['Run', lastRunResult.runId],
-                ['Runtime', lastRunResult.runtimeActorId],
-                ['Definition', lastRunResult.definitionActorId],
-                ['Command type', lastRunResult.commandTypeUrl],
-                ['Source hash', lastRunResult.sourceHash],
-                ['Activity', lastRunResult.activityUrl],
+                [translate('studio.script.runFact.run'), lastRunResult.runId],
+                [translate('studio.script.runFact.runtime'), lastRunResult.runtimeActorId],
+                [translate('studio.script.runFact.definition'), lastRunResult.definitionActorId],
+                [translate('studio.script.runFact.commandType'), lastRunResult.commandTypeUrl],
+                [translate('studio.script.runFact.sourceHash'), lastRunResult.sourceHash],
+                [translate('studio.script.runFact.activity'), lastRunResult.activityUrl],
               ].map(([label, value]) => (
                 <div key={label} style={{ display: 'grid', gap: 2 }}>
                   <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>
@@ -3093,12 +3170,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               ))}
             </div>
           ) : null}
-          <div style={sectionEyebrowStyle}>Output</div>
+          <div style={sectionEyebrowStyle}>{translate('common.output')}</div>
           <pre style={dryRunOutputStyle}>{runOutput}</pre>
         </div>
         {hasActiveScript ? (
           <details
-            aria-label="Script promotion history"
+            aria-label={translate('studio.script.promotionHistoryAria')}
             style={{
               border: '1px solid #efe7da',
               borderRadius: 14,
@@ -3106,13 +3183,13 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             }}
           >
             <summary style={{ ...sectionEyebrowStyle, cursor: 'pointer' }}>
-              Promotion
+              {translate('studio.script.promotion')}
             </summary>
             <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
               <Input.TextArea
-                aria-label="Promotion reason"
+                aria-label={translate('studio.script.promotionReasonAria')}
                 autoSize={{ minRows: 2, maxRows: 4 }}
-                placeholder="Why is this revision ready to promote?"
+                placeholder={translate('studio.script.promotionReasonPlaceholder')}
                 value={promotionReason}
                 onChange={(event) => setPromotionReason(event.target.value)}
               />
@@ -3122,13 +3199,22 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 loading={promotionPending}
                 onClick={() => void handlePromoteEvolution()}
               >
-                Propose evolution
+                {translate('studio.script.proposeEvolution')}
               </Button>
               {promotionNotice ? (
                 <Alert
                   showIcon
                   message={promotionNotice}
-                  type={promotionNotice.startsWith('Promotion accepted') ? 'success' : 'warning'}
+                  type={
+                    promotionNotice.startsWith(
+                      translate('studio.script.promotionAccepted', { target: '' }).replace(
+                        /\s*$/,
+                        '',
+                      ),
+                    )
+                      ? 'success'
+                      : 'warning'
+                  }
                 />
               ) : null}
               {promotionHistory.length > 0 ? (
@@ -3146,7 +3232,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       }}
                     >
                       <Typography.Text strong>
-                        {decision.accepted ? 'Accepted' : decision.status || 'Decision'}
+                        {decision.accepted
+                          ? translate('studio.script.accepted')
+                          : decision.status || translate('studio.script.decision')}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
@@ -3205,17 +3293,19 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   onBuildStateChange,
   onContinueToBind,
 }) => {
-  const [displayName, setDisplayName] = React.useState(currentMemberLabel || 'Member GAgent');
+  const [displayName, setDisplayName] = React.useState(
+    currentMemberLabel || translate('studio.gagent.defaultName'),
+  );
   const [role, setRole] = React.useState('intake-classifier');
   const [initialPrompt, setInitialPrompt] = React.useState(
-    'You are the team member gagent. Own long-lived state and answer through the selected tools.',
+    translate('studio.gagent.defaultPrompt'),
   );
   const [toolsDraft, setToolsDraft] = React.useState('classify_intent, detect_language');
   const [persistenceMode, setPersistenceMode] = React.useState<'grain' | 'ephemeral'>(
     'grain',
   );
   const [runPrompt, setRunPrompt] = React.useState(
-    'Classify this refund request and keep the member state in context.',
+    translate('studio.gagent.defaultRunPrompt'),
   );
   const [runState, setRunState] = React.useState<DraftRunState>(IDLE_DRAFT_RUN_STATE);
   const abortControllerRef = React.useRef<AbortController | null>(null);
@@ -3256,7 +3346,9 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   }, [onSelectGAgentTypeName, selectedGAgentTypeName, selectedTypeName]);
 
   React.useEffect(() => {
-    setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
+    setDisplayName(
+      (current) => current || currentMemberLabel || translate('studio.gagent.defaultName'),
+    );
   }, [currentMemberLabel]);
 
   React.useEffect(() => {
@@ -3274,7 +3366,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     if (!scopeId || !selectedTypeName.trim() || !runPrompt.trim()) {
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
-        error: 'Workspace, GAgent type, and prompt are required before running.',
+        error: translate('studio.gagent.runRequired'),
         status: 'error',
       });
       return;
@@ -3344,14 +3436,16 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
         <section style={buildSurfaceCardStyle}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>GAgent Definition</div>
+            <div style={sectionEyebrowStyle}>
+              {translate('studio.gagent.definition')}
+            </div>
             <div style={sectionDescriptionStyle}>
-              GAgent mode 在 Build 里定义当前 member 的 actor 类型、展示名、角色、初始提示词、工具和状态持久化语义。
+              {translate('studio.gagent.description')}
             </div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
-              <Tag color="green">template · seeded</Tag>
+              <Tag color="green">{translate('studio.gagent.seededTag')}</Tag>
               {selectedType ? (
                 <Tag>{buildRuntimeGAgentTypeLabel(selectedType)}</Tag>
               ) : null}
@@ -3367,9 +3461,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               gridTemplateColumns: '160px minmax(0, 1fr)',
             }}
           >
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Type URL</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.typeUrl')}
+            </div>
             <Select
-              aria-label="GAgent type"
+              aria-label={translate('studio.gagent.typeAria')}
               loading={gAgentTypesLoading}
               value={selectedTypeName || undefined}
               onChange={onSelectGAgentTypeName}
@@ -3377,35 +3473,43 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
                 label: buildRuntimeGAgentTypeLabel(descriptor),
                 value: buildRuntimeGAgentAssemblyQualifiedName(descriptor),
               }))}
-              placeholder="Select a typed GAgent"
+              placeholder={translate('studio.gagent.selectType')}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Display name</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.displayName')}
+            </div>
             <Input
-              aria-label="GAgent display name"
+              aria-label={translate('studio.gagent.displayNameAria')}
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Role</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.role')}
+            </div>
             <Input
-              aria-label="GAgent role"
+              aria-label={translate('studio.gagent.roleAria')}
               value={role}
               onChange={(event) => setRole(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Initial prompt</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.initialPrompt')}
+            </div>
             <Input.TextArea
-              aria-label="GAgent initial prompt"
+              aria-label={translate('studio.gagent.initialPromptAria')}
               autoSize={{ minRows: 4, maxRows: 8 }}
               value={initialPrompt}
               onChange={(event) => setInitialPrompt(event.target.value)}
             />
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>Tools</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.tools')}
+            </div>
             <div style={{ display: 'grid', gap: 10 }}>
               <Input
-                aria-label="GAgent tools"
+                aria-label={translate('studio.gagent.toolsAria')}
                 value={toolsDraft}
                 onChange={(event) => setToolsDraft(event.target.value)}
                 placeholder="classify_intent, detect_language"
@@ -3418,19 +3522,25 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
                     </Tag>
                   ))
                 ) : (
-                  <Tag>+ add tool</Tag>
+                  <Tag>{translate('studio.gagent.addTool')}</Tag>
                 )}
               </Space>
             </div>
 
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>State persistence</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>
+              {translate('studio.gagent.statePersistence')}
+            </div>
             <Radio.Group
               value={persistenceMode}
               onChange={(event) => setPersistenceMode(event.target.value)}
             >
               <Space direction="vertical">
-                <Radio value="grain">Orleans grain</Radio>
-                <Radio value="ephemeral">Ephemeral</Radio>
+                <Radio value="grain">
+                  {translate('studio.gagent.persistence.grain')}
+                </Radio>
+                <Radio value="ephemeral">
+                  {translate('studio.gagent.persistence.ephemeral')}
+                </Radio>
               </Space>
             </Radio.Group>
           </div>
@@ -3438,7 +3548,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
 
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
-            GAgent Build 只负责定义 actor 语义；真正发布 service / endpoint 还是下一步去 Bind。
+            {translate('studio.gagent.footer')}
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3446,7 +3556,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             type="primary"
             onClick={() => onContinueToBind(currentBuildState)}
           >
-            Continue to Bind
+            {translate('studio.gagent.continueToBind')}
           </Button>
         </div>
       </div>
@@ -3454,18 +3564,22 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       <aside style={dryRunAsideStyle}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>GAgent draft run</Typography.Text>
+            <div style={sectionEyebrowStyle}>
+              {translate('studio.gagent.dryRun')}
+            </div>
+            <Typography.Text strong>
+              {translate('studio.gagent.draftRun')}
+            </Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            {translate('studio.gagent.fixtureTag')}
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
-          这里用当前选中的 GAgent 类型直接做一次草稿运行，验证 prompt 和 transcript 是否符合预期。
+          {translate('studio.gagent.dryRunDescription')}
         </div>
         <Input.TextArea
-          aria-label="GAgent dry run input"
+          aria-label={translate('studio.gagent.dryRunInputAria')}
           autoSize={{ minRows: 6, maxRows: 10 }}
           value={runPrompt}
           onChange={(event) => setRunPrompt(event.target.value)}
@@ -3478,24 +3592,26 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             type="primary"
             onClick={() => void handleRun()}
           >
-            Run
+            {translate('common.run')}
           </Button>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={() =>
-              setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
+              setRunPrompt(translate('studio.gagent.fixturePrompt'))
             }
           >
-            Load fixture
+            {translate('studio.gagent.loadFixture')}
           </Button>
         </Space>
         <div>
-          <div style={sectionEyebrowStyle}>Output</div>
+          <div style={sectionEyebrowStyle}>{translate('common.output')}</div>
           <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
         {renderRunSummary(runState) ? (
           <details style={dryRunDebugDetailsStyle}>
-            <summary style={dryRunDebugSummaryStyle}>Debug details</summary>
+            <summary style={dryRunDebugSummaryStyle}>
+              {translate('common.debugDetails')}
+            </summary>
             <pre style={{ ...dryRunSummaryStyle, marginTop: 10 }}>{renderRunSummary(runState)}</pre>
           </details>
         ) : null}
@@ -3516,27 +3632,24 @@ export function getDefaultBuildModeCards(scriptsEnabled: boolean): readonly Stud
   return [
     {
       key: 'workflow',
-      label: 'Workflow',
-      description:
-        'Compose steps as a DAG. Best when the flow is known and parallel fan-out matters.',
-      hint: 'When · Multiple agents hand off predictably',
+      label: translate('studio.build.mode.workflow.label'),
+      description: translate('studio.build.mode.workflow.description'),
+      hint: translate('studio.build.mode.workflow.hint'),
     },
     {
       key: 'script',
-      label: 'Script',
-      description:
-        'Write a typed script that handles deterministic business logic and code-level branches.',
+      label: translate('studio.build.mode.script.label'),
+      description: translate('studio.build.mode.script.description'),
       hint: scriptsEnabled
-        ? 'When · You need code-level control'
-        : '当前环境暂未启用脚本能力。',
+        ? translate('studio.build.mode.script.hint')
+        : translate('studio.build.mode.script.disabled'),
       disabled: !scriptsEnabled,
     },
     {
       key: 'gagent',
-      label: 'GAgent',
-      description:
-        'Wire a typed GAgent actor with long-lived state. Best when one member owns durable behavior.',
-      hint: 'When · State lives with one agent',
+      label: translate('studio.build.mode.gagent.label'),
+      description: translate('studio.build.mode.gagent.description'),
+      hint: translate('studio.build.mode.gagent.hint'),
     },
   ];
 }

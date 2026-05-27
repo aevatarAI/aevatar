@@ -5,6 +5,7 @@ import {
   AevatarInspectorEmpty,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
+import { useTranslation } from "@/shared/i18n/localization";
 import {
   DetailPill,
   FactLine,
@@ -84,6 +85,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   rosterTeamId = "",
 }) => {
   const { token } = theme.useToken();
+  const { t } = useTranslation();
   const isEntryActionBusy = entryActionBusyMemberId.trim().length > 0;
   const handleNavigate = React.useCallback(
     (href: string) => (event: React.MouseEvent<HTMLElement>) => {
@@ -100,30 +102,32 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
-        title="团队成员"
+        title={t("team.members.title")}
         extra={
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            {rosterRows.length > 0 ? `${rosterRows.length} 个成员` : "成员清单"}
+            {rosterRows.length > 0
+              ? t("team.members.count", { count: rosterRows.length })
+              : t("team.members.roster")}
           </Typography.Text>
         }
       >
         {rosterSyncing ? (
           <AevatarInspectorEmpty
             compact
-            title="成员清单正在同步"
-            description="Team 已创建，成员清单正在同步。这里会自动刷新。"
+            title={t("team.members.syncing.title")}
+            description={t("team.members.syncing.description")}
           />
         ) : rosterLoading ? (
           <AevatarInspectorEmpty
             compact
-            title="正在读取成员清单"
-            description="正在读取这支 Team 的成员。"
+            title={t("team.members.loading.title")}
+            description={t("team.members.loading.description")}
           />
         ) : rosterError ? (
           <AevatarInspectorEmpty
             compact
-            title="成员清单暂不可见"
-            description="当前无法读取这支 Team 的成员清单。"
+            title={t("team.members.error.title")}
+            description={t("team.members.error.description")}
           />
         ) : rosterRows.length > 0 ? (
           <div
@@ -149,11 +153,11 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     padding: "12px 16px",
                   }}
                 >
-                  <span>成员</span>
-                  <span>职责</span>
-                  <span>实现</span>
-                  <span>服务</span>
-                  <span>操作</span>
+                  <span>{t("team.members.columns.member")}</span>
+                  <span>{t("team.members.columns.role")}</span>
+                  <span>{t("team.members.columns.implementation")}</span>
+                  <span>{t("team.members.columns.service")}</span>
+                  <span>{t("team.members.columns.actions")}</span>
                 </div>
                 {rosterRows.map((row, index) => (
                   <div
@@ -193,7 +197,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               border: `1px solid ${token.colorSuccessBorder}`,
                               color: token.colorSuccess,
                             }}
-                            text="入口成员"
+                            text={t("team.members.entryBadge")}
                           />
                         ) : null}
                       </div>
@@ -208,7 +212,15 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       </EllipsisText>
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <FactLine rows={1} text={row.description || `归属 Team ${rosterTeamId || "--"}`} />
+                      <FactLine
+                        rows={1}
+                        text={
+                          row.description ||
+                          t("team.members.descriptionFallback", {
+                            teamId: rosterTeamId || "--",
+                          })
+                        }
+                      />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                       <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
@@ -232,7 +244,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           onClick={onClearEntry}
                           size="small"
                         >
-                          清除入口成员
+                          {t("team.members.clearEntry")}
                         </Button>
                       ) : row.canInvokeAsEntry && onSetEntry ? (
                         <Button
@@ -243,7 +255,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           onClick={() => onSetEntry(row.memberId)}
                           size="small"
                         >
-                          Set entry
+                          {t("team.members.setEntry")}
                         </Button>
                       ) : null}
                       <Button
@@ -252,7 +264,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         onClick={handleNavigate(row.editStudioHref)}
                         size="small"
                       >
-                        Edit in Studio
+                        {t("team.members.editInStudio")}
                       </Button>
                       <Button
                         href={row.buildStudioHref}
@@ -261,7 +273,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         size="small"
                         type="primary"
                       >
-                        Build
+                        {t("team.members.build")}
                       </Button>
                     </Space>
                   </div>
@@ -273,8 +285,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <AevatarInspectorEmpty
               compact
-              title="这支 Team 还没有成员"
-              description="Team 已经是后端事实，但当前 roster 为空。新增 member 后会出现在这里。"
+              title={t("team.members.empty.title")}
+              description={t("team.members.empty.description")}
             />
             {createMemberHref ? (
               <div style={{ display: "flex", justifyContent: "center" }}>
@@ -283,7 +295,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   onClick={handleNavigate(createMemberHref)}
                   type="primary"
                 >
-                  创建第一个成员
+                  {t("team.members.empty.createFirst")}
                 </Button>
               </div>
             ) : null}
@@ -291,8 +303,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
         ) : (
           <AevatarInspectorEmpty
             compact
-            title="尚未选中真实 Team"
-            description="当前路由还没有 teamId，所以只能展示运行时观察到的成员身份。"
+            title={t("team.members.noTeam.title")}
+            description={t("team.members.noTeam.description")}
           />
         )}
       </AevatarPanel>

@@ -1,8 +1,13 @@
-import { TeamOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Space, Typography, message } from 'antd';
+import {
+  InfoCircleOutlined,
+  TeamOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
+import { Button, Input, Space, Typography, message, theme } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React from 'react';
 import { loadRestorableAuthSession } from '@/shared/auth/session';
+import { useTranslation } from '@/shared/i18n/localization';
 import { history } from '@/shared/navigation/history';
 import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
@@ -27,6 +32,15 @@ const primaryActionButtonStyle: React.CSSProperties = {
   paddingInline: 18,
 };
 
+type TeamCreateNoticeTone = 'info' | 'warning';
+
+type TeamCreateNotice = {
+  readonly description?: string;
+  readonly key: string;
+  readonly title: string;
+  readonly tone: TeamCreateNoticeTone;
+};
+
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
@@ -46,8 +60,97 @@ function readCreateTeamDraftFromLocation(): {
   };
 }
 
+const TeamCreateNoticeRail: React.FC<{
+  readonly notices: readonly TeamCreateNotice[];
+}> = ({ notices }) => {
+  const { token } = theme.useToken();
+  const { t } = useTranslation();
+
+  if (notices.length === 0) {
+    return null;
+  }
+
+  const toneStyle: Record<TeamCreateNoticeTone, React.CSSProperties> = {
+    info: {
+      background: 'rgba(24, 144, 255, 0.06)',
+      borderColor: 'rgba(24, 144, 255, 0.18)',
+      color: token.colorInfo,
+    },
+    warning: {
+      background: 'rgba(250, 173, 20, 0.08)',
+      borderColor: 'rgba(250, 173, 20, 0.24)',
+      color: token.colorWarning,
+    },
+  };
+
+  return (
+    <section
+      aria-label={t('team.create.status.aria')}
+      role="status"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        marginBottom: 20,
+      }}
+    >
+      {notices.map((notice) => {
+        const isWarning = notice.tone === 'warning';
+        return (
+          <div
+            key={notice.key}
+            style={{
+              ...toneStyle[notice.tone],
+              alignItems: 'flex-start',
+              border: '1px solid',
+              borderRadius: 8,
+              display: 'grid',
+              gap: 10,
+              gridTemplateColumns: '16px minmax(0, 1fr)',
+              padding: '10px 12px',
+            }}
+          >
+            {isWarning ? <WarningOutlined /> : <InfoCircleOutlined />}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                minWidth: 0,
+              }}
+            >
+              <Typography.Text
+                style={{
+                  color: token.colorText,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  lineHeight: 1.4,
+                }}
+              >
+                {notice.title}
+              </Typography.Text>
+              {notice.description ? (
+                <Typography.Text
+                  style={{
+                    color: token.colorTextSecondary,
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {notice.description}
+                </Typography.Text>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+};
+
 const TeamCreatePage: React.FC = () => {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
   const [routeScopeId, setRouteScopeId] = React.useState(
     () => readScopeQueryDraft().scopeId.trim(),
@@ -75,6 +178,10 @@ const TeamCreatePage: React.FC = () => {
   const resolvedScope = React.useMemo(
     () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
     [authSessionQuery.data, locallyResolvedScope],
+  );
+  const serverResolvedScope = React.useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
   );
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -120,7 +227,46 @@ const TeamCreatePage: React.FC = () => {
       '登录状态暂时不可用，请刷新后重试。',
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
-  const canCreateTeam = Boolean(scopeId && teamName.trim());
+  const createScopeId =
+    serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : '';
+  const authUnavailable = Boolean(
+    authSessionIssue ||
+      (authSessionQuery.isSuccess && !authSessionQuery.data?.authenticated),
+  );
+  const createNotices = React.useMemo(() => {
+    const notices: TeamCreateNotice[] = [];
+
+    if (authSessionIssue) {
+      notices.push({
+        description: authSessionIssue,
+        key: 'auth-session-error',
+        title: t('team.create.authFailed'),
+        tone: 'warning',
+      });
+    } else if (authUnavailable) {
+      notices.push({
+        description: t('team.create.authUnavailableDescription'),
+        key: 'auth-session-unavailable',
+        title: t('team.create.authUnavailable'),
+        tone: 'warning',
+      });
+    }
+
+    if (!scopeId) {
+      notices.push({
+        key: 'missing-scope',
+        title: t('team.create.missingScope'),
+        tone: 'info',
+      });
+    }
+
+    return notices;
+  }, [authSessionIssue, authUnavailable, scopeId, t]);
+  const canCreateTeam = Boolean(createScopeId && teamName.trim());
+  const canEditTeamDraft = Boolean(createScopeId) && !authUnavailable && !isCreatingTeam;
+  const createTeamButtonStyle = canCreateTeam
+    ? primaryActionButtonStyle
+    : undefined;
   const handleCreateTeam = async () => {
     if (!canCreateTeam || isCreatingTeam) {
       return;
@@ -129,7 +275,7 @@ const TeamCreatePage: React.FC = () => {
     setIsCreatingTeam(true);
     try {
       const team = await studioApi.createTeam({
-        scopeId,
+        scopeId: createScopeId,
         displayName: teamName.trim(),
         description: teamDescription.trim() || undefined,
       });
@@ -141,7 +287,7 @@ const TeamCreatePage: React.FC = () => {
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });
-      void message.success('已创建 Team。');
+      void message.success(t('team.create.success'));
       history.push(
         buildTeamDetailHref({
           scopeId: team.scopeId,
@@ -152,7 +298,7 @@ const TeamCreatePage: React.FC = () => {
       const errorMessage =
         error instanceof Error && error.message.trim()
           ? error.message
-          : '创建 Team 失败。';
+          : t('team.create.failed');
       void message.error(errorMessage);
     } finally {
       setIsCreatingTeam(false);
@@ -160,52 +306,27 @@ const TeamCreatePage: React.FC = () => {
   };
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Teams"
+      breadcrumb={t('team.create.breadcrumb')}
       extra={
         <Space wrap>
           <Button
             disabled={!canCreateTeam}
             loading={isCreatingTeam}
             onClick={() => void handleCreateTeam()}
-            style={primaryActionButtonStyle}
+            style={createTeamButtonStyle}
           >
-            Create Team
+            {t('team.create.action')}
           </Button>
         </Space>
       }
-      title="Create Team"
+      title={t('team.create.title')}
     >
-      {authSessionIssue ? (
-        <Alert
-          description={
-            resolvedScope?.scopeId
-              ? `${authSessionIssue} 已使用本地登录信息继续创建 Team。`
-              : authSessionIssue
-          }
-          showIcon
-          style={{ marginBottom: 20 }}
-          title={
-            resolvedScope?.scopeId
-              ? '当前登录态校验失败，已使用本地登录信息'
-              : '当前登录态校验失败'
-          }
-          type="warning"
-        />
-      ) : null}
-
-      {!scopeId ? (
-        <Alert
-          showIcon
-          style={{ marginBottom: 20 }}
-          title="当前登录状态还没有解析出可用的团队范围，请刷新后重试。"
-          type="info"
-        />
-      ) : null}
+      <TeamCreateNoticeRail notices={createNotices} />
 
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="团队信息"
+        title={t('team.create.panelTitle')}
       >
         <div
           style={{
@@ -216,19 +337,21 @@ const TeamCreatePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Team name</Typography.Text>
+            <Typography.Text strong>{t('team.create.name')}</Typography.Text>
             <Input
-              aria-label="Team name"
-              placeholder="例如：订单助手团队"
+              aria-label={t('team.create.nameAria')}
+              disabled={!canEditTeamDraft}
+              placeholder={t('team.create.namePlaceholder')}
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Description</Typography.Text>
+            <Typography.Text strong>{t('team.create.description')}</Typography.Text>
             <Input
-              aria-label="Team description"
-              placeholder="这个 Team 负责什么"
+              aria-label={t('team.create.descriptionAria')}
+              disabled={!canEditTeamDraft}
+              placeholder={t('team.create.descriptionPlaceholder')}
               value={teamDescription}
               onChange={(event) => setTeamDescription(event.target.value)}
             />
@@ -239,14 +362,26 @@ const TeamCreatePage: React.FC = () => {
               disabled={!canCreateTeam}
               loading={isCreatingTeam}
               onClick={() => void handleCreateTeam()}
-              style={primaryActionButtonStyle}
+              style={createTeamButtonStyle}
             >
-              Create Team
+              {t('team.create.action')}
             </Button>
-            <Button onClick={() => history.push(buildTeamsHref())}>
-              Back to My Teams
+            <Button
+              disabled={isCreatingTeam}
+              onClick={() =>
+                history.push(
+                  scopeId ? buildScopeHref('/teams', { scopeId }) : buildTeamsHref(),
+                )
+              }
+            >
+              {t('team.create.back')}
             </Button>
           </Space>
+          {authUnavailable ? (
+            <Typography.Text type="secondary">
+              {t('team.create.authRequiredHint')}
+            </Typography.Text>
+          ) : null}
         </div>
       </AevatarPanel>
     </ConsoleMenuPageShell>

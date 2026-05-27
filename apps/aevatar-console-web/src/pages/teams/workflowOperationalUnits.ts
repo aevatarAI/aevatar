@@ -1,6 +1,7 @@
 import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import { translate } from "@/shared/i18n/localization";
 
 export const WORKFLOW_RUNTIME_GUARDRAIL = 12;
 
@@ -275,9 +276,8 @@ function deriveAttention(input: {
   if (!servicesAvailable || runtimeUnavailable) {
     return {
       attention: "runtime-unresolved",
-      attentionDetail:
-        "The service catalog or runtime sample for this workflow-backed team is incomplete right now.",
-      attentionLabel: "Runtime unresolved",
+      attentionDetail: translate("team.workflowAttention.runtimeUnresolved.detail"),
+      attentionLabel: translate("team.workflowAttention.runtimeUnresolved.label"),
       isDraftOnly: false,
     };
   }
@@ -287,8 +287,8 @@ function deriveAttention(input: {
       attention: "failed",
       attentionDetail:
         trimOptional(latestRun.lastError) ||
-        "The latest team run ended in a failed state.",
-      attentionLabel: "Failed",
+        translate("team.workflowAttention.failed.detail"),
+      attentionLabel: translate("team.workflowAttention.failed.label"),
       isDraftOnly: false,
     };
   }
@@ -298,8 +298,8 @@ function deriveAttention(input: {
       attention: "waiting",
       attentionDetail:
         trimOptional(latestRun.lastError) ||
-        "The latest team run is waiting on a human or upstream signal.",
-      attentionLabel: "Waiting",
+        translate("team.workflowAttention.waiting.detail"),
+      attentionLabel: translate("team.workflowAttention.waiting.label"),
       isDraftOnly: false,
     };
   }
@@ -307,8 +307,8 @@ function deriveAttention(input: {
   if (latestRun && isSuccessfulRun(latestRun)) {
     return {
       attention: "healthy",
-      attentionDetail: "Recent runtime proof looks healthy for this team.",
-      attentionLabel: "Healthy",
+      attentionDetail: translate("team.workflowAttention.healthy.detail"),
+      attentionLabel: translate("team.workflowAttention.healthy.label"),
       isDraftOnly: false,
     };
   }
@@ -316,9 +316,8 @@ function deriveAttention(input: {
   if (matchedService) {
     return {
       attention: "no-recent-runs",
-      attentionDetail:
-        "This team has a published service, but no recent workflow-specific run is visible yet.",
-      attentionLabel: "No recent runs",
+      attentionDetail: translate("team.workflowAttention.noRecentRuns.detail"),
+      attentionLabel: translate("team.workflowAttention.noRecentRuns.label"),
       isDraftOnly: false,
     };
   }
@@ -326,18 +325,16 @@ function deriveAttention(input: {
   if (trimOptional(workflow.serviceKey)) {
     return {
       attention: "no-bound-service",
-      attentionDetail:
-        "This workflow advertises a service key, but no matching bound service is visible in the current workspace.",
-      attentionLabel: "No bound service",
+      attentionDetail: translate("team.workflowAttention.noBoundService.detail"),
+      attentionLabel: translate("team.workflowAttention.noBoundService.label"),
       isDraftOnly: false,
     };
   }
 
   return {
     attention: "draft",
-    attentionDetail:
-      "This workflow has not been turned into a live operational team yet.",
-    attentionLabel: "Draft",
+    attentionDetail: translate("team.workflowAttention.draft.detail"),
+    attentionLabel: translate("team.workflowAttention.draft.label"),
     isDraftOnly: true,
   };
 }

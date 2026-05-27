@@ -48,23 +48,37 @@ export const SignalCard: React.FC<{
         {value}
       </Typography.Title>
       {typeof caption === "string" ? (
-        <Tooltip
-          placement="topLeft"
-          title={typeof captionTooltip === "string" ? captionTooltip : caption}
-        >
+        captionTooltip ? (
+          <Tooltip placement="topLeft" title={captionTooltip}>
+            <Typography.Text
+              ellipsis
+              style={{
+                display: "block",
+                fontFamily: captionMonospace ? factValueFontFamily : undefined,
+                fontSize: 13,
+                maxWidth: "100%",
+              }}
+              type="secondary"
+            >
+              {caption}
+            </Typography.Text>
+          </Tooltip>
+        ) : (
           <Typography.Text
-            ellipsis
             style={{
               display: "block",
               fontFamily: captionMonospace ? factValueFontFamily : undefined,
               fontSize: 13,
               maxWidth: "100%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
             type="secondary"
           >
             {caption}
           </Typography.Text>
-        </Tooltip>
+        )
       ) : caption ? (
         <Typography.Text style={{ fontSize: 13 }} type="secondary">
           {caption}

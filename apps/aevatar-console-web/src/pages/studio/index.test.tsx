@@ -2271,11 +2271,6 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
           ? `candidate:${props.pendingBindingCandidate.displayName}`
           : "candidate:none"
       ),
-      React.createElement(
-        "div",
-        { key: "workflow-yamls" },
-        `workflow-yamls:${props.buildWorkflowYamls ? "present" : "none"}`
-      ),
       props.postBindEntryActions
         ? React.createElement(
             "button",
@@ -2329,13 +2324,13 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
           key: "continue",
           type: "button",
           disabled: !props.memberId,
-          onClick: () =>
-            props.memberId
-              ? props.onContinueToInvoke?.("default", "support-chat")
-              : undefined,
-        },
-        "Continue to Invoke"
-      ),
+        onClick: () =>
+          props.memberId
+            ? props.onContinueToInvoke?.("default", "support-chat")
+            : undefined,
+      },
+      "Open Invoke"
+    ),
     ]);
   },
 }));
@@ -4019,6 +4014,144 @@ describe("StudioPage", () => {
     });
   });
 
+  it("shows a newly created workflow member in the current Team rail before roster projection catches up", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "alpha-member",
+        displayName: "Alpha member",
+        teamId: "t-alpha",
+      },
+    ];
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async (_scopeId: string, teamId: string) => ({
+        scopeId: "scope-1",
+        members: mockStudioMembers.filter(
+          (member) =>
+            member.teamId === teamId && member.memberId !== "projection-lag-worker",
+        ),
+        nextPageToken: null,
+      }),
+    );
+    (studioApi.createMember as jest.Mock).mockImplementationOnce(
+      async (input: {
+        scopeId: string;
+        displayName: string;
+        implementationKind: "workflow";
+        teamId?: string | null;
+      }) => ({
+        memberId: "projection-lag-worker",
+        scopeId: input.scopeId,
+        displayName: input.displayName,
+        description: "",
+        implementationKind: input.implementationKind,
+        lifecycleStage: "created",
+        publishedServiceId: "member-projection-lag-worker",
+        lastBoundRevisionId: null,
+        teamId: input.teamId ?? null,
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:10:00Z",
+      }),
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member");
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    fireEvent.change(within(createDialog).getByLabelText("Member name"), {
+      target: {
+        value: "projection-lag-worker",
+      },
+    });
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(
+      await within(rail).findByRole("button", { name: "projection-lag-worker" }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("member")).toBe(
+        "member:projection-lag-worker",
+      );
+    });
+  });
+
+  it("keeps a newly created workflow member available after switching away from its Team before projection catches up", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "alpha-member",
+        displayName: "Alpha member",
+        teamId: "t-alpha",
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "beta-member",
+        displayName: "Beta member",
+        teamId: "t-beta",
+      },
+    ];
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async (_scopeId: string, teamId: string) => ({
+        scopeId: "scope-1",
+        members: mockStudioMembers.filter(
+          (member) =>
+            member.teamId === teamId && member.memberId !== "projection-lag-worker",
+        ),
+        nextPageToken: null,
+      }),
+    );
+    (studioApi.createMember as jest.Mock).mockImplementationOnce(
+      async (input: {
+        scopeId: string;
+        displayName: string;
+        implementationKind: "workflow";
+        teamId?: string | null;
+      }) => ({
+        memberId: "projection-lag-worker",
+        scopeId: input.scopeId,
+        displayName: input.displayName,
+        description: "",
+        implementationKind: input.implementationKind,
+        lifecycleStage: "created",
+        publishedServiceId: "member-projection-lag-worker",
+        lastBoundRevisionId: null,
+        teamId: input.teamId ?? null,
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:10:00Z",
+      }),
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member");
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    fireEvent.change(within(createDialog).getByLabelText("Member name"), {
+      target: {
+        value: "projection-lag-worker",
+      },
+    });
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
+
+    const alphaRail = await screen.findByLabelText("Team members");
+    expect(
+      await within(alphaRail).findByRole("button", { name: "projection-lag-worker" }),
+    ).toBeTruthy();
+
+    await replaceStudioRoute("/studio?scopeId=scope-1&teamId=t-beta&tab=studio");
+    const betaRail = await screen.findByLabelText("Team members");
+    expect(await within(betaRail).findByRole("button", { name: "Beta member" })).toBeTruthy();
+    expect(
+      within(betaRail).queryByRole("button", { name: "projection-lag-worker" }),
+    ).toBeNull();
+
+    await replaceStudioRoute("/studio?scopeId=scope-1&teamId=t-alpha&tab=studio");
+    const restoredAlphaRail = await screen.findByLabelText("Team members");
+    expect(
+      await within(restoredAlphaRail).findByRole("button", {
+        name: "projection-lag-worker",
+      }),
+    ).toBeTruthy();
+  });
+
   it("loads only the current Team roster for the Studio member rail", async () => {
     mockStudioMembers = [
       {
@@ -4611,6 +4744,90 @@ describe("StudioPage", () => {
     });
   });
 
+  it("switches from a routed GAgent member to a workflow member from the rail", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "workflow-draft",
+      name: "draft",
+      fileName: "draft.yaml",
+      filePath: "/tmp/workflows/draft.yaml",
+      yaml: "name: draft\nsteps: []\n",
+      document: {
+        ...mockParsedDocument,
+        name: "draft",
+      },
+    };
+    mockStudioMembers = [
+      {
+        memberId: "orders-worker",
+        scopeId: "scope-1",
+        displayName: "gagent-1",
+        description: "Team entry GAgent member",
+        implementationKind: "gagent",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "member-orders-worker",
+        lastBoundRevisionId: "rev-gagent-1",
+        teamId: "t-alpha",
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:15:00Z",
+      },
+      {
+        memberId: "draft-member",
+        scopeId: "scope-1",
+        displayName: "draft",
+        description: "Workflow member draft",
+        implementationKind: "workflow",
+        lifecycleStage: "created",
+        publishedServiceId: "member-draft",
+        lastBoundRevisionId: null,
+        teamId: "t-alpha",
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:15:00Z",
+      },
+    ];
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-draft",
+        name: "draft",
+        description: "Workflow member draft",
+        fileName: "draft.yaml",
+        filePath: "/tmp/workflows/draft.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aorders-worker&step=build&tab=gagents",
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    fireEvent.click(await within(rail).findByRole("button", { name: "draft" }));
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    expect(screen.queryByTestId("studio-gagent-build-panel")).toBeNull();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft");
+    expect(screen.getByRole("button", { name: /^Workflow/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("workflow:workflow-draft");
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("focus")).toBeNull();
+    });
+  });
+
   it("binds an unbound GAgent member from Build and keeps the member route", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -4872,9 +5089,9 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Open Invoke" })).not.toBeDisabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:default")).toBeTruthy();
@@ -4891,7 +5108,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     expect(screen.getByText("Select a Team member before using Invoke.")).toBeTruthy();
 
-    const continueButton = screen.getByRole("button", { name: "Continue to Invoke" });
+    const continueButton = screen.getByRole("button", { name: "Open Invoke" });
     expect(continueButton).toBeDisabled();
     fireEvent.click(continueButton);
 
@@ -7256,9 +7473,9 @@ describe("StudioPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Open Invoke" })).not.toBeDisabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     await waitFor(() => {
@@ -7417,9 +7634,9 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Open Invoke" })).not.toBeDisabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Invoke" }));
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Observe" }));

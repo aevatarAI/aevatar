@@ -16,6 +16,7 @@ import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
 import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
+import { translate } from '@/shared/i18n/localization';
 import {
   createNyxIdChatBindingInput,
   extractRuntimeInvokeReceipt,
@@ -117,26 +118,30 @@ function formatElapsedTime(
 function getRunStatusLabel(status: InvokeResultState['status']): string {
   switch (status) {
     case 'running':
-      return 'Running';
+      return translate('studio.run.status.running');
     case 'success':
-      return 'Succeeded';
+      return translate('studio.run.status.succeeded');
     case 'error':
-      return 'Failed';
+      return translate('studio.run.status.failed');
     case 'cancelled':
-      return 'Cancelled';
+      return translate('studio.run.status.cancelled');
     default:
-      return 'Ready';
+      return translate('studio.invoke.status.ready');
   }
 }
 
 function getLifecycleLabel(
   revision: StudioMemberBindingRevision | null | undefined,
 ): string {
-  return (
-    trimOptional(revision?.servingState) ||
-    trimOptional(revision?.status) ||
-    'Unknown'
-  );
+  const normalized =
+    trimOptional(revision?.servingState) || trimOptional(revision?.status);
+  if (!normalized) {
+    return translate('studio.invoke.status.unknown');
+  }
+
+  const translationKey = `status.${normalized.toLowerCase().replace(/\s+/g, '_')}`;
+  const translated = translate(translationKey);
+  return translated === translationKey ? normalized : translated;
 }
 
 function getHistoryOutputText(entry: InvokeHistoryEntry): string {
@@ -196,7 +201,7 @@ function createPendingHistoryEntry(input: {
     serviceId: input.serviceId,
     startedAt: input.startedAt,
     status: 'running',
-    summary: trimPreview(input.prompt, 72) || 'Running run',
+    summary: trimPreview(input.prompt, 72) || translate('studio.run.marker.running'),
     snapshot: {
       chatMessages: cloneChatMessages(input.chatMessages),
       result: cloneInvokeResult(input.result),
@@ -207,12 +212,14 @@ function createPendingHistoryEntry(input: {
 function writeClipboardText(value: string, label: string): boolean {
   const normalized = trimOptional(value);
   if (!normalized) {
-    void message.warning(`No ${label} available to copy.`);
+    void message.warning(
+      translate('studio.invoke.copy.unavailable', { label }),
+    );
     return false;
   }
 
   void globalThis.navigator?.clipboard?.writeText(normalized);
-  void message.success(`${label} copied.`);
+  void message.success(translate('studio.invoke.copy.copied', { label }));
   return true;
 }
 
@@ -808,7 +815,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const restorePromptForNewRun = useCallback((nextPrompt: string) => {
     const normalizedPrompt = trimOptional(nextPrompt);
     if (!normalizedPrompt) {
-      void message.warning('No input available to retry.');
+      void message.warning(translate('studio.invoke.retry.noInput'));
       return;
     }
 
@@ -822,7 +829,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ?.querySelector<HTMLTextAreaElement>('textarea')
         ?.focus();
     }, 0);
-    void message.info('Prompt restored. Click Invoke to create a new Run.');
+    void message.info(translate('studio.invoke.retry.promptRestored'));
   }, []);
 
   const handleAbort = useCallback(() => {
@@ -832,14 +839,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setConsoleTab('output');
     setInvokeResult((current) => ({
       ...current,
-      error: '调用已中止。',
+      error: translate('studio.invoke.aborted'),
       status: 'cancelled',
     }));
     setActiveRunCompletedAt(completedAt);
     updateRequestHistoryEntry(activeHistoryEntryIdRef.current, (entry) => {
       const cancelledResult: InvokeResultState = {
         ...entry.snapshot.result,
-        error: entry.snapshot.result.error || '调用已中止。',
+        error: entry.snapshot.result.error || translate('studio.invoke.aborted'),
         status: 'cancelled',
       };
 
@@ -850,7 +857,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         eventCount:
           cancelledResult.eventCount || cancelledResult.events.length,
         status: 'cancelled',
-        summary: '该 Run 已停止，当前可能只显示部分输出。',
+        summary: translate('studio.invoke.runStoppedPartial'),
         snapshot: {
           chatMessages: cloneChatMessages(entry.snapshot.chatMessages),
           result: cloneInvokeResult(cancelledResult),
@@ -881,7 +888,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       : 'invoke';
 
     if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
-      setFormError('请输入 Prompt 后再发起 Invoke。');
+      setFormError(translate('studio.invoke.promptRequired'));
       return;
     }
 
@@ -890,7 +897,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       !trimmedPayloadBase64
     ) {
-      setFormError('请输入 Prompt 后再发起 Invoke。');
+      setFormError(translate('studio.invoke.promptRequired'));
       return;
     }
 
@@ -1089,7 +1096,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               accumulator.errorText ||
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
-              '该 Run 没有返回额外文本。',
+              translate('studio.invoke.noExtraText'),
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
@@ -1346,8 +1353,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ) : services.length === 0 ? (
         <Alert
           showIcon
-          message="当前作用域里还没有可调用的已发布成员服务。"
-          description="请先为成员完成绑定并发布版本，然后再回到这里调用。"
+          message={translate('studio.invoke.noServices.title')}
+          description={translate('studio.invoke.noServices.description')}
           type="warning"
         />
       ) : (
@@ -1361,11 +1368,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 {currentMemberLabel}
               </div>
               <div style={targetMetaStyle}>
-                <span>Endpoint: {endpointSummaryLabel}</span>
+                <span>
+                  {translate('studio.invoke.endpointLabel')}: {endpointSummaryLabel}
+                </span>
                 <span>·</span>
                 <span>{currentImplementationKind}</span>
                 <span>·</span>
-                <span>Lifecycle: {lifecycleLabel}</span>
+                <span>
+                  {translate('studio.invoke.lifecycleLabel')}: {lifecycleLabel}
+                </span>
               </div>
             </div>
             <div style={targetPillStyle}>
@@ -1413,7 +1424,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               style={invokeRunOutputSectionStyle}
             >
               <div style={{ flex: '0 0 auto', padding: '12px 14px 0' }}>
-                <span style={invokeSectionTitleStyle}>Run output</span>
+                <span style={invokeSectionTitleStyle}>
+                  {translate('studio.run.outputTitle')}
+                </span>
               </div>
               <div
                 data-testid="studio-invoke-run-output-body"
@@ -1440,7 +1453,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                       runViewMode={runViewMode}
                       transcriptViewportRef={transcriptViewportRef}
                       onCopyError={() =>
-                        writeClipboardText(invokeResult.error, 'Error')
+                        writeClipboardText(
+                          invokeResult.error,
+                          translate('studio.invoke.copy.label.error'),
+                        )
                       }
                       onRetryAsNewRun={() => {
                         restorePromptForNewRun(currentRunRequest?.prompt || '');
@@ -1462,20 +1478,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               style={invokeHistoryPanelStyle}
               onCopyInput={(entryId) => {
                 const entry = requestHistory.find((item) => item.id === entryId);
-                writeClipboardText(entry?.prompt || '', 'Input');
+                writeClipboardText(
+                  entry?.prompt || '',
+                  translate('studio.invoke.copy.label.input'),
+                );
               }}
               onCopyOutput={(entryId) => {
                 const entry = requestHistory.find((item) => item.id === entryId);
                 writeClipboardText(
                   entry ? getHistoryOutputText(entry) : '',
-                  'Output',
+                  translate('studio.invoke.copy.label.output'),
                 );
               }}
               onCopyRunId={(entryId) => {
                 const entry = requestHistory.find((item) => item.id === entryId);
                 writeClipboardText(
                   entry?.runId || entry?.snapshot.result.runId || '',
-                  'Run id',
+                  translate('studio.invoke.copy.label.runId'),
                 );
               }}
               onRetryAsNewRun={(entryId) => {
