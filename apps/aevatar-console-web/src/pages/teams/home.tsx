@@ -598,10 +598,10 @@ function buildTeamRosterPreview(input: {
 
   let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
-  let attentionDetail = "这个 Team 已经存在后端事实，但还没有分配成员。";
+  let attentionDetail = "这个团队已经存在后端事实，但还没有分配成员。";
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
-    attentionDetail = "这个 Team 已归档，列表中仅保留它的后端 roster 事实。";
+    attentionDetail = "这个团队已归档，列表中仅保留它的后端成员清单事实。";
   } else if (mostImportantMemberPreview) {
     attentionDetail = mostImportantMemberPreview.attentionDetail;
   }
@@ -620,7 +620,7 @@ function buildTeamRosterPreview(input: {
     serviceTooltip,
     team: input.team,
     teamId: input.team.teamId,
-    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || "未命名 Team",
+    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || "未命名团队",
     updatedAt:
       latestRun?.lastUpdatedAt ||
       mostImportantMemberPreview?.updatedAt ||
@@ -697,7 +697,7 @@ const TeamRosterCard: React.FC<{
           fontSize: 13,
         }}
       >
-        Team 标识：{preview.teamId}
+        团队标识：{preview.teamId}
       </Typography.Text>
 
       <div
@@ -826,7 +826,7 @@ const TeamRosterRow: React.FC<{
               marginTop: 4,
             }}
           >
-            Team 标识：{preview.teamId}
+            团队标识：{preview.teamId}
           </Typography.Text>
         </div>
 
@@ -1054,7 +1054,7 @@ const TeamsHomePage: React.FC = () => {
   const useCompactRoster = resolvedRosterView === "list";
   const emptyRosterHint =
     canLoadRoster
-      ? "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。"
+      ? "当前账号还没有创建任何团队。创建后，这里会展示你的 AI 团队列表。"
       : "当前登录状态还没有解析出可用的团队范围，请刷新后重试。";
   const partialIssues = [
     membersQuery.isError ? "当前工作空间的成员清单暂时不可见。" : null,
@@ -1069,7 +1069,7 @@ const TeamsHomePage: React.FC = () => {
           fontSize: 14,
         }}
       >
-        Aevatar / Teams
+        Aevatar / 团队
       </Typography.Text>
       <Typography.Title
         level={1}
@@ -1151,8 +1151,8 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="AI Team 总数" value={visibleTeamCount} />
-              <SummaryStatCard label="待处理 Team" value={actionableTeamCount} />
+              <SummaryStatCard accent label="AI 团队总数" value={visibleTeamCount} />
+              <SummaryStatCard label="待处理团队" value={actionableTeamCount} />
               <SummaryStatCard label="运行稳定" value={healthyTeamCount} />
             </div>
 
@@ -1191,7 +1191,7 @@ const TeamsHomePage: React.FC = () => {
                       团队列表
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。
+                      按团队聚合成员与最近运行信号，优先处理异常或待关注项。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (

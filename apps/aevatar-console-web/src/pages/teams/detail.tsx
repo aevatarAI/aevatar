@@ -793,7 +793,7 @@ const TeamDetailPage: React.FC = () => {
     activeWorkflowSummary?.updatedAt ||
     "";
   const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
-    ? "来自 Team 更新时间"
+    ? "来自团队更新时间"
     : lens.currentRun?.lastUpdatedAt
       ? trimText(lens.currentRun?.runId)
       ? `来自 run ${compactId(lens.currentRun?.runId)}`
@@ -1508,6 +1508,7 @@ const TeamDetailPage: React.FC = () => {
         <div data-testid="team-test-modal-body">{teamTestPanel}</div>
       </Modal>
       <Modal
+        cancelText="取消"
         confirmLoading={teamEditorSaving}
         okButtonProps={{ disabled: !teamEditorName.trim() }}
         okText="保存团队"
@@ -1537,7 +1538,7 @@ const TeamDetailPage: React.FC = () => {
             />
           </div>
           <Typography.Text type="secondary">
-            这里更新的是 Team summary。即使团队已归档，仍然可以继续编辑和维护。
+            这里更新的是团队摘要。即使团队已归档，仍然可以继续编辑和维护。
           </Typography.Text>
         </div>
       </Modal>

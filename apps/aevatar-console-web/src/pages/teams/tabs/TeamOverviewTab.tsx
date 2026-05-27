@@ -151,7 +151,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             value={entryMemberLabel || entryMemberId || "未配置"}
             caption={
               hasEntryMember
-                ? "调用这支 Team 时会先路由到这个成员。"
+                ? "调用这支团队时会先路由到这个成员。"
                 : "测试或调用前，请先设置一个入口成员。"
             }
           />

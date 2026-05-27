@@ -158,21 +158,21 @@ describe("TeamsHomePage", () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     expect(await screen.findByRole("button", { name: "查看团队" })).toBeTruthy();
-    expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
+    expect(screen.getByText("Aevatar / 团队")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.queryByText("当前工作空间")).toBeNull();
-    expect(screen.getByText("AI Team 总数")).toBeTruthy();
-    expect(screen.getByText("待处理 Team")).toBeTruthy();
+    expect(screen.getByText("AI 团队总数")).toBeTruthy();
+    expect(screen.getByText("待处理团队")).toBeTruthy();
     expect(screen.getByText("运行稳定")).toBeTruthy();
     expect(screen.getByText("团队列表")).toBeTruthy();
     expect(
-      screen.getByText("按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。"),
+      screen.getByText("按团队聚合成员与最近运行信号，优先处理异常或待关注项。"),
     ).toBeTruthy();
     expect(screen.queryByText("运行正常")).toBeNull();
     expect(screen.queryByText("需要处理")).toBeNull();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
-    expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
+    expect(screen.getByText("团队标识：t-support")).toBeTruthy();
     expect(screen.getByText("客服运行时")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
@@ -324,7 +324,7 @@ describe("TeamsHomePage", () => {
       "title",
       expect.stringContaining("另一个非常长的服务名用于验证 hover 全量展示"),
     );
-    expect(screen.getByText("Team 标识：t-long").closest("[title]")).toHaveAttribute(
+    expect(screen.getByText("团队标识：t-long").closest("[title]")).toHaveAttribute(
       "title",
       "t-long",
     );
@@ -471,7 +471,7 @@ describe("TeamsHomePage", () => {
     expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
     expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
     expect(screen.queryByText("团队列表暂时无法加载。")).toBeNull();
-    expect(screen.queryByText("AI Team 总数")).toBeNull();
+    expect(screen.queryByText("AI 团队总数")).toBeNull();
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
@@ -540,7 +540,7 @@ describe("TeamsHomePage", () => {
 
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
-    expect(screen.getByText("Team 标识：t-joker")).toBeTruthy();
+    expect(screen.getByText("团队标识：t-joker")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
   });
 
@@ -569,7 +569,7 @@ describe("TeamsHomePage", () => {
 
     expect(await screen.findByText("团队列表")).toBeTruthy();
     expect(screen.queryByText("存在未归队成员")).toBeNull();
-    expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
+    expect(screen.getByText("团队标识：t-support")).toBeTruthy();
     expect(screen.queryByRole("heading", { level: 3, name: "未归队成员" })).toBeNull();
   });
 
@@ -589,7 +589,7 @@ describe("TeamsHomePage", () => {
 
     expect(
       await screen.findByText(
-        "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。",
+        "当前账号还没有创建任何团队。创建后，这里会展示你的 AI 团队列表。",
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -622,7 +622,7 @@ describe("TeamsHomePage", () => {
     expect(
       await screen.findByRole("heading", { level: 3, name: "刚创建的团队" }),
     ).toBeTruthy();
-    expect(screen.getByText("Team 标识：t-new")).toBeTruthy();
+    expect(screen.getByText("团队标识：t-new")).toBeTruthy();
     expect(
       screen.queryByText(
         "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",

@@ -1161,7 +1161,7 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("调用这支 Team 时会先路由到这个成员。")).toBeTruthy();
+    expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
@@ -1600,7 +1600,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已启用")).toBeTruthy();
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自 Team 更新时间").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("来自团队更新时间").length).toBeGreaterThan(0);
     expect(screen.getByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("配置明细")).toBeTruthy();
@@ -1628,6 +1628,13 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑团队" }));
 
     const nameInput = await screen.findByLabelText("编辑团队名称");
+    expect(screen.getByRole("button", { name: "取 消" })).toBeTruthy();
+    expect(
+      screen.getByText("这里更新的是团队摘要。即使团队已归档，仍然可以继续编辑和维护。"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("这里更新的是 Team summary。即使团队已归档，仍然可以继续编辑和维护。"),
+    ).toBeNull();
     expect(nameInput).toHaveValue("Alpha Support Team");
     fireEvent.change(nameInput, {
       target: { value: " Alpha Ops Team " },
