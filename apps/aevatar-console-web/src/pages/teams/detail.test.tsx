@@ -1294,7 +1294,7 @@ describe("TeamDetailPage", () => {
         name: "设为入口并测试",
       }),
     ).toBeNull();
-    expect(within(dialog).getByRole("link", { name: "先 Build / Bind" }))
+    expect(within(dialog).getByRole("link", { name: "先构建和绑定" }))
       .toHaveAttribute("href", expect.stringContaining("member-unpublished"));
   });
 
@@ -1398,10 +1398,10 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
 
-    expect(await screen.findByText("Team entry 正在同步")).toBeTruthy();
+    expect(await screen.findByText("团队入口正在同步")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
+        "团队入口已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
       ).length,
     ).toBeGreaterThan(0);
     expect(runtimeRunsApi.streamTeamChat).not.toHaveBeenCalled();
@@ -1422,10 +1422,37 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
 
-    expect(await screen.findByText("后端暂不支持 Team Test")).toBeTruthy();
+    expect(await screen.findByText("后端暂不支持团队测试")).toBeTruthy();
     expect(
-      screen.getAllByText(/当前后端还没有部署 Team entry-member/).length,
+      screen.getAllByText(/当前后端还没有部署团队入口成员/).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("does not expose raw backend artifact details for invalid Team Test entry responses", async () => {
+    const invalidEntryError = new Error(
+      "Prepared artifact for 'scope-1:default:member-team-alpha' revision 'rev-platform-bind-123' is missing.",
+    ) as Error & { status: number };
+    invalidEntryError.status = 400;
+    (runtimeRunsApi.streamTeamChat as jest.Mock).mockRejectedValueOnce(
+      invalidEntryError,
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+      target: { value: "Try invalid entry" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
+
+    expect(await screen.findByText("入口成员无效")).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        "当前入口成员的绑定产物不可用。请回到工作室重新构建和绑定该成员，然后再测试团队。",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/Prepared artifact/)).toBeNull();
+    expect(screen.queryByText(/rev-platform-bind-123/)).toBeNull();
   });
 
   it("shows Team entry configuration errors from the router backend", async () => {
@@ -1446,10 +1473,10 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("未设置入口成员")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "这支 Team 还没有入口成员，请先选择一个已绑定的成员作为入口。",
+        "这支团队还没有入口成员，请先选择一个已绑定的成员作为入口。",
       ).length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByText("后端暂不支持 Team Test")).toBeNull();
+    expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
   it("does not treat router Team not found as an undeployed backend", async () => {
@@ -1469,13 +1496,13 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
 
-    expect(await screen.findByText("Team 不存在")).toBeTruthy();
+    expect(await screen.findByText("团队不存在")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+        "这支团队在当前工作区中不可见，请返回团队列表重新选择。",
       ).length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByText("后端暂不支持 Team Test")).toBeNull();
+    expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
   it("routes member build actions into Studio with Team context", async () => {

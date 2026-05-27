@@ -207,7 +207,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <AevatarInspectorEmpty
           compact
           title="成员清单暂不可见"
-          description="当前无法读取 Team 成员，暂时不能选择入口成员。"
+          description="当前无法读取团队成员，暂时不能选择入口成员。"
         />
       );
     }
@@ -217,8 +217,8 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <AevatarInspectorEmpty
             compact
-            title="这支 Team 还没有成员"
-            description="先创建一个成员，完成 Build / Bind 后再测试 Team。"
+            title="这支团队还没有成员"
+            description="先创建一个成员，完成构建和绑定后再测试团队。"
           />
           {createMemberHref ? (
             <Button
@@ -240,7 +240,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             showIcon
             type="warning"
             message="还没有可作为入口的成员"
-            description="成员需要完成 Build / Bind，并进入可调用状态后才能测试 Team。"
+            description="成员需要完成构建和绑定，并进入可调用状态后才能测试团队。"
           />
         ) : null}
         {rosterRows.map((row) => (
@@ -313,7 +313,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
                   onClick={handleNavigate(row.buildStudioHref)}
                   size="small"
                 >
-                  先 Build / Bind
+                  先构建和绑定
                 </Button>
               )}
             </Space>
@@ -341,7 +341,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Space align="center" size={8} wrap>
             <WarningOutlined style={{ color: token.colorWarning }} />
-            <Typography.Text strong>入口成员不在当前 Team 成员清单中</Typography.Text>
+            <Typography.Text strong>入口成员不在当前团队成员清单中</Typography.Text>
             <CompactFactValue value={normalizedEntryMemberId} />
           </Space>
           {renderEntrySelection()}
@@ -416,7 +416,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               onClick={handleNavigate(entryMember.editStudioHref)}
               size="small"
             >
-              在 Studio 编辑
+              在工作室编辑
             </Button>
           ) : null}
           {onClearEntry ? (
@@ -473,7 +473,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             />
           </Space>
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
-            通过入口成员发起一次真实 Team 调用。
+            通过入口成员发起一次真实团队调用。
           </Typography.Text>
         </div>
         {lastResult ? (
@@ -545,7 +545,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           autoSize={{ minRows: 3, maxRows: 8 }}
           disabled={disabled || isRunning || isSettingEntry}
           onChange={(event) => onPromptChange(event.target.value)}
-          placeholder="输入这支 Team 要处理的问题..."
+          placeholder="输入这支团队要处理的问题..."
           style={{ flex: "1 1 280px" }}
           value={prompt}
         />
@@ -572,7 +572,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
               开始测试
             </Button>
           )}
-          {error?.actionLabel === "Retry" && !isRunning ? (
+          {error?.actionLabel === "重试" && !isRunning ? (
             <Button block disabled={!canTest} onClick={onTest}>
               重试
             </Button>
@@ -626,7 +626,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
         >
           {resultText ||
             (isRunning
-              ? "等待 Team 返回..."
+              ? "等待团队返回..."
               : "测试结果会显示在这里。")}
         </Typography.Paragraph>
       </div>

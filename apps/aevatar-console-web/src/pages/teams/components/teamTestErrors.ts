@@ -59,7 +59,7 @@ export function isAbortLikeError(error: unknown): boolean {
 
 export function describeTeamTestError(
   error: unknown,
-  fallback = "Team Test failed."
+  fallback = "团队测试失败。"
 ): TeamTestErrorDescription {
   if (isAbortLikeError(error)) {
     return {
@@ -76,23 +76,23 @@ export function describeTeamTestError(
 
   if (normalized.includes("TEAM_NOT_FOUND")) {
     return {
-      description: "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+      description: "这支团队在当前工作区中不可见，请返回团队列表重新选择。",
       kind: "team_not_found",
-      title: "Team 不存在",
+      title: "团队不存在",
     };
   }
 
   if (normalized.includes("STUDIO_TEAM_NOT_FOUND")) {
     return {
-      description: "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+      description: "这支团队在当前工作区中不可见，请返回团队列表重新选择。",
       kind: "team_not_found",
-      title: "Team 不存在",
+      title: "团队不存在",
     };
   }
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_NOT_CONFIGURED")) {
     return {
-      description: "这支 Team 还没有入口成员，请先选择一个已绑定的成员作为入口。",
+      description: "这支团队还没有入口成员，请先选择一个已绑定的成员作为入口。",
       kind: "entry_missing",
       title: "未设置入口成员",
     };
@@ -100,7 +100,7 @@ export function describeTeamTestError(
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_NOT_READY")) {
     return {
-      description: "入口成员还没有完成 Build / Bind，暂时不能作为 Team Test 的运行入口。",
+      description: "入口成员还没有完成构建和绑定，暂时不能作为团队测试的运行入口。",
       kind: "entry_not_ready",
       title: "入口成员尚未就绪",
     };
@@ -111,7 +111,7 @@ export function describeTeamTestError(
     normalized.includes("STUDIO_MEMBER_NOT_FOUND")
   ) {
     return {
-      description: "当前入口成员不在这支 Team 的成员清单中，请重新选择入口成员。",
+      description: "当前入口成员不在这支团队的成员清单中，请重新选择入口成员。",
       kind: "entry_not_found",
       title: "入口成员不可见",
     };
@@ -119,7 +119,7 @@ export function describeTeamTestError(
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_MISMATCH")) {
     return {
-      description: "入口成员不属于当前 Team，请从当前 Team 成员中重新选择。",
+      description: "入口成员不属于当前团队，请从当前团队成员中重新选择。",
       kind: "entry_mismatch",
       title: "入口成员不匹配",
     };
@@ -127,25 +127,25 @@ export function describeTeamTestError(
 
   if (normalized.includes("TEAM_ARCHIVED")) {
     return {
-      description: "归档后的 Team 不能继续发起测试。",
+      description: "归档后的团队不能继续发起测试。",
       kind: "team_archived",
-      title: "Team 已归档",
+      title: "团队已归档",
     };
   }
 
   if (status === 404 || status === 405) {
     return {
-      actionLabel: "Retry",
+      actionLabel: "重试",
       description:
-        "当前后端还没有部署 Team entry-member 或 Team invoke 接口。前端会保留入口配置和测试草稿，等后端支持后可直接重试。",
+        "当前后端还没有部署团队入口成员或团队调用接口。前端会保留入口配置和测试草稿，等后端支持后可直接重试。",
       kind: "backend_unsupported",
-      title: "后端暂不支持 Team Test",
+      title: "后端暂不支持团队测试",
     };
   }
 
   if (status === 403) {
     return {
-      description: "当前账号没有修改或测试这支 Team 的权限。",
+      description: "当前账号没有修改或测试这支团队的权限。",
       kind: "permission_denied",
       title: "权限不足",
     };
@@ -153,7 +153,8 @@ export function describeTeamTestError(
 
   if (status === 400) {
     return {
-      description: message,
+      description:
+        "当前入口成员的绑定产物不可用。请回到工作室重新构建和绑定该成员，然后再测试团队。",
       kind: "invalid_entry",
       title: "入口成员无效",
     };
@@ -161,10 +162,10 @@ export function describeTeamTestError(
 
   if (status === 409) {
     return {
-      actionLabel: "Retry",
+      actionLabel: "重试",
       description: message,
       kind: "conflict",
-      title: "Team 状态已变化",
+      title: "团队状态已变化",
     };
   }
 
@@ -173,7 +174,7 @@ export function describeTeamTestError(
     message.toLowerCase().includes("network")
   ) {
     return {
-      actionLabel: "Retry",
+      actionLabel: "重试",
       description: "网络请求中断，请检查登录状态或稍后重试。",
       kind: "network",
       title: "网络请求失败",
@@ -181,7 +182,7 @@ export function describeTeamTestError(
   }
 
   return {
-    actionLabel: "Retry",
+    actionLabel: "重试",
     description: message,
     kind: "unknown",
     title: fallback,

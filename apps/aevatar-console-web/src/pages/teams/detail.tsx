@@ -1267,11 +1267,11 @@ const TeamDetailPage: React.FC = () => {
           const entryVisible = await waitForTeamEntryVisibility(normalizedMemberId);
           if (!entryVisible) {
             const errorDescription: TeamTestErrorDescription = {
-              actionLabel: "Retry",
+              actionLabel: "重试",
               description:
-                "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
+                "团队入口已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
               kind: "entry_syncing",
-              title: "Team entry 正在同步",
+              title: "团队入口正在同步",
             };
             setTeamTestStatus("error");
             setTeamTestError(errorDescription);
@@ -1290,7 +1290,7 @@ const TeamDetailPage: React.FC = () => {
       } catch (error) {
         const errorDescription = describeTeamTestError(
           error,
-          "Team entry update failed.",
+          "团队入口更新失败。",
         );
         setTeamTestStatus("error");
         setTeamTestError(errorDescription);
@@ -1331,7 +1331,7 @@ const TeamDetailPage: React.FC = () => {
     } catch (error) {
       const errorDescription = describeTeamTestError(
         error,
-        "Team entry update failed.",
+        "团队入口更新失败。",
       );
       setTeamTestStatus("error");
       setTeamTestError(errorDescription);
