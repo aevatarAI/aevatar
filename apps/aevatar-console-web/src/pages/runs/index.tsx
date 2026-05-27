@@ -34,6 +34,7 @@ import {
 import {
   Button,
   Drawer,
+  Grid,
   Input,
   message,
   Popover,
@@ -265,6 +266,13 @@ const runsChatLayoutStyle: React.CSSProperties = {
   gridTemplateColumns: "minmax(272px, 320px) minmax(0, 1fr)",
   minHeight: 0,
   overflow: "hidden",
+};
+
+const runsChatCompactLayoutStyle: React.CSSProperties = {
+  ...runsChatLayoutStyle,
+  gridTemplateColumns: "minmax(0, 1fr)",
+  overflowX: "hidden",
+  overflowY: "auto",
 };
 
 const runsChatSidebarStyle: React.CSSProperties = {
@@ -502,6 +510,9 @@ function resolveConsoleViewForEndpoint(
 }
 
 const RunsPage: React.FC = () => {
+  const screens = Grid.useBreakpoint();
+  const hasResolvedBreakpoint = Object.values(screens).some(Boolean);
+  const useCompactChatLayout = hasResolvedBreakpoint && screens.md === false;
   const [messageApi, messageContextHolder] = message.useMessage();
   const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
   const draftRunKey = useMemo(() => {
@@ -1961,12 +1972,12 @@ const RunsPage: React.FC = () => {
     <RunsMessagesView
       emptyDescription={
         isChatConsole
-          ? "No conversation yet. Send a prompt to start the run."
-          : "No message output yet."
+          ? "还没有对话。发送提示词即可开始运行。"
+          : "还没有消息输出。"
       }
       messages={displayedMessages}
       topAccessory={isChatConsole ? chatActionRequiredCard : undefined}
-      title={isChatConsole ? "Conversation" : "Message stream"}
+      title={isChatConsole ? "对话" : "消息流"}
     />
   );
 
@@ -1984,7 +1995,7 @@ const RunsPage: React.FC = () => {
   const handleSubmitComposer = useCallback(async () => {
     const prompt = composerPrompt.trim();
     if (!prompt) {
-      messageApi.warning("Prompt is required.");
+      messageApi.warning("请输入提示词。");
       return;
     }
 
@@ -2104,6 +2115,9 @@ const RunsPage: React.FC = () => {
       }}
     />
   );
+  const chatLayoutStyle = useCompactChatLayout
+    ? runsChatCompactLayoutStyle
+    : runsChatLayoutStyle;
 
   return (
     <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
@@ -2112,7 +2126,7 @@ const RunsPage: React.FC = () => {
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Run Console
+              运行控制台
             </Typography.Title>
             <Popover
               content={
@@ -2120,19 +2134,18 @@ const RunsPage: React.FC = () => {
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  Start a scoped run over{" "}
+                  基于{" "}
                   <Typography.Text code>
                     {submitPathLabel}
                   </Typography.Text>{" "}
-                  and stay in one place for conversation, events, trace, and
-                  operator actions.
+                  发起作用域运行，并在同一处查看对话、事件、Trace 和人工操作。
                 </Typography.Paragraph>
               }
               placement="bottomLeft"
               trigger={["hover", "click"]}
             >
               <Button
-                aria-label="Open runtime console guide"
+                aria-label="打开运行控制台说明"
                 icon={<InfoCircleOutlined />}
                 shape="circle"
                 type="text"
@@ -2158,7 +2171,7 @@ const RunsPage: React.FC = () => {
               icon={<AppstoreOutlined />}
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              Workflow catalog
+              Workflow 目录
             </Button>
             <Button
               className={runsWorkbenchHeaderButtonClassName}
@@ -2175,7 +2188,7 @@ const RunsPage: React.FC = () => {
                 )
               }
             >
-              Actor explorer
+              Actor 浏览器
             </Button>
             <Button
               className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
@@ -2188,7 +2201,7 @@ const RunsPage: React.FC = () => {
           </div>
         </div>
         {isChatConsole ? (
-          <div style={runsChatLayoutStyle}>
+          <div data-testid="runs-chat-layout" style={chatLayoutStyle}>
             <div style={runsChatSidebarStyle}>{launchRailContent}</div>
             <div style={runsChatMainStyle}>
               {hasRunActivity ? (
@@ -2220,7 +2233,7 @@ const RunsPage: React.FC = () => {
                   hasPendingInteraction={hasPendingInteraction}
                   messageConsoleView={messageConsoleView}
                   messageCount={displayedMessages.length}
-                  messagesLabel="Conversation"
+                  messagesLabel="对话"
                   onConsoleViewChange={setConsoleView}
                   timelineView={
                     <RunsTimelineView
@@ -2232,7 +2245,7 @@ const RunsPage: React.FC = () => {
                       selectedItemKey={selectedTraceItemKey}
                     />
                   }
-                  title="Conversation"
+                  title="对话"
                 />
               </div>
               <div
@@ -2241,9 +2254,9 @@ const RunsPage: React.FC = () => {
               >
                 <style>{runsChatComposerCss}</style>
                 <div style={runsChatComposerHeaderStyle}>
-                  <div style={runsChatComposerLabelStyle}>Prompt</div>
+                  <div style={runsChatComposerLabelStyle}>提示词</div>
                   <Typography.Text style={runsChatComposerHintStyle}>
-                    Enter to send
+                    按 Enter 发送
                   </Typography.Text>
                 </div>
                 <div className={runsChatComposerBodyClassName}>
@@ -2252,7 +2265,7 @@ const RunsPage: React.FC = () => {
                       className={runsChatComposerInputShellClassName}
                     >
                       <Input.TextArea
-                        aria-label="Prompt"
+                        aria-label="提示词"
                         autoSize={{ minRows: 2, maxRows: 6 }}
                         className={runsChatComposerInputClassName}
                         onChange={(event) =>
@@ -2268,7 +2281,7 @@ const RunsPage: React.FC = () => {
                             void handleSubmitComposer();
                           }
                         }}
-                        placeholder="Describe the task to run."
+                        placeholder="描述要运行的任务。"
                         style={runsChatComposerTextareaStyle}
                         value={composerPrompt}
                       />
@@ -2285,7 +2298,7 @@ const RunsPage: React.FC = () => {
                       style={runsChatComposerSendButtonStyle}
                       type="primary"
                     >
-                      Send
+                      发送
                     </Button>
                   </div>
                 </div>

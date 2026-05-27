@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { Grid } from "antd";
 import React from "react";
 import {
   loadDraftRunPayload,
@@ -241,7 +242,7 @@ jest.mock("./components/RunsLaunchRail", () => {
                 ...current,
                 prompt: event.target.value,
               })),
-            placeholder: "Describe the task to run.",
+            placeholder: "描述要运行的任务。",
             value: values.prompt,
           })
         : null,
@@ -299,6 +300,7 @@ describe("RunsPage", () => {
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -332,18 +334,18 @@ describe("RunsPage", () => {
   it("renders the run console header and setup-first state before any run starts", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Run Console");
+    expect(container.textContent).toContain("运行控制台");
     expect(
-      screen.getByRole("button", { name: "Open runtime console guide" })
+      screen.getByRole("button", { name: "打开运行控制台说明" })
     );
     expect(
-      screen.getByRole("button", { name: "Workflow catalog" })
+      screen.getByRole("button", { name: "Workflow 目录" })
     ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "返回团队高级编辑" })
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Actor explorer" })
+      screen.getByRole("button", { name: "Actor 浏览器" })
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Mission Control" })
@@ -352,11 +354,30 @@ describe("RunsPage", () => {
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(
-      screen.getByPlaceholderText("Describe the task to run.")
+      screen.getByPlaceholderText("描述要运行的任务。")
     ).toBeTruthy();
     expect(container.textContent).toContain("Run setup");
-    expect(container.textContent).toContain("Conversation");
+    expect(container.textContent).toContain("对话");
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("stacks the chat setup and conversation panes on compact screens", async () => {
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: true,
+      sm: true,
+      md: false,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("runs-chat-layout")).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr)",
+      overflowY: "auto",
+    });
+    expect(screen.getByPlaceholderText("描述要运行的任务。")).toBeTruthy();
   });
 
   it("navigates back to the team advanced tab from the runs console", async () => {
@@ -439,10 +460,10 @@ describe("RunsPage", () => {
 
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Conversation");
+    expect(container.textContent).toContain("对话");
     expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "对话" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Mission Control" }));
 
@@ -551,7 +572,7 @@ describe("RunsPage", () => {
         expect.any(AbortSignal)
       );
     });
-    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("对话").length).toBeGreaterThan(0);
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
@@ -578,7 +599,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -640,7 +661,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("scope-1");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
@@ -711,7 +732,7 @@ describe("RunsPage", () => {
       expect(mockReset).toHaveBeenCalled();
       expect(mockDispatch).toHaveBeenCalledTimes(2);
     });
-    expect(screen.getAllByText("Conversation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("对话").length).toBeGreaterThan(0);
 
     expect(mockDispatch).toHaveBeenNthCalledWith(
       1,
@@ -823,7 +844,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     await screen.findByDisplayValue("Run it");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(

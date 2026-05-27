@@ -218,20 +218,20 @@ function formatProviderHealth(
   if (readyCount === 0) {
     return {
       tone: "error",
-      value: options.length > 0 ? "No ready routes" : "No routes connected",
+      value: options.length > 0 ? "没有可用路由" : "尚未连接路由",
     };
   }
 
   if (unavailableCount > 0) {
     return {
       tone: "warning",
-      value: `${readyCount} ready / ${unavailableCount} unavailable`,
+      value: `${readyCount} 可用 / ${unavailableCount} 不可用`,
     };
   }
 
   return {
     tone: "success",
-    value: `${readyCount} routes ready`,
+    value: `${readyCount} 条路由可用`,
   };
 }
 
@@ -318,7 +318,7 @@ const ConnectedProviderChip: React.FC<{
 }> = ({ option, selected }) => {
   const { token } = theme.useToken();
   const ready = option.ready && option.allowed;
-  const sourceLabel = option.source === "user_service" ? "User service" : "Gateway provider";
+  const sourceLabel = option.source === "user_service" ? "用户服务" : "网关 Provider";
   const label = option.label;
   const background = selected
     ? ready
@@ -341,7 +341,7 @@ const ConnectedProviderChip: React.FC<{
     <Tooltip
       mouseEnterDelay={0.15}
       placement="top"
-      title={`${label} · ${ready ? "Ready" : "Unavailable"} · ${sourceLabel}`}
+      title={`${label} · ${ready ? "可用" : "不可用"} · ${sourceLabel}`}
     >
       <div
         style={{
@@ -448,7 +448,7 @@ const SettingsPage: React.FC = () => {
       ]);
     },
     onError: (error) => {
-      setSaveError(describeError(error, "Failed to save settings."));
+      setSaveError(describeError(error, "保存设置失败。"));
     },
   });
 
@@ -554,12 +554,12 @@ const SettingsPage: React.FC = () => {
   const catalogUnavailable = userLlmSettingsQuery.data?.catalogStatus === "unavailable";
   const defaultModelPlaceholder = React.useMemo(() => {
     if (modelOptions && modelOptions.length > 0) {
-      return `Search models for ${preferredRouteLabel || "the selected route"}`;
+      return `搜索 ${preferredRouteLabel || "所选路由"} 的模型`;
     }
 
     return preferredRouteLabel
-      ? `Type a model ID for ${preferredRouteLabel}`
-      : "Type a model ID";
+      ? `输入 ${preferredRouteLabel} 的模型 ID`
+      : "输入模型 ID";
   }, [modelOptions, preferredRouteLabel]);
   const summaryGridStyle = React.useMemo<React.CSSProperties>(
     () => ({
@@ -606,7 +606,7 @@ const SettingsPage: React.FC = () => {
               label: "Current saved route",
               options: [
                 {
-                  label: `${preferredRouteLabel} (unavailable)`,
+                  label: `${preferredRouteLabel}（不可用）`,
                   value: encodeConversationRouteSelectValue(draft.preferredLlmRoute),
                 },
               ],
@@ -620,17 +620,17 @@ const SettingsPage: React.FC = () => {
     () => [
       {
         key: "advanced-runtime",
-        label: "Advanced runtime",
+        label: "高级运行时",
         children: (
           <div style={panelStackStyle}>
             <div style={formSectionStyle}>
               <div style={readOnlyFieldHeaderStyle}>
                 <Typography.Text strong>Runtime base URL</Typography.Text>
                 <FieldMetaPill label={runtimeModeLabel} tone="info" />
-                <FieldMetaPill label="Read only" />
+                <FieldMetaPill label="只读" />
               </div>
               <Typography.Text type="secondary">
-                Console default runtime endpoint resolved from the active mode.
+                控制台默认运行时端点由当前模式解析。
               </Typography.Text>
               <Input
                 prefix={
@@ -736,7 +736,7 @@ const SettingsPage: React.FC = () => {
     userLlmSettingsQuery.isError || userRuntimeQuery.isError
       ? describeError(
           userLlmSettingsQuery.error || userRuntimeQuery.error,
-          "Failed to load LLM defaults.",
+          "加载 LLM 默认配置失败。",
         )
       : null;
 
@@ -748,7 +748,7 @@ const SettingsPage: React.FC = () => {
           icon={<ReloadOutlined />}
           onClick={handleReset}
         >
-          Reset
+          重置
         </Button>
         <Button
           disabled={!draftDirty || !canSaveLlmSettings}
@@ -756,7 +756,7 @@ const SettingsPage: React.FC = () => {
           onClick={handleSave}
           type="primary"
         >
-          Save config
+          保存配置
         </Button>
       </Space>
     ) : null;
@@ -809,17 +809,17 @@ const SettingsPage: React.FC = () => {
       <div style={tabBodyStyle}>
             <div style={summaryGridStyle}>
               <SummaryMetric
-                label="Effective route"
+                label="当前生效路由"
                 tone={routeFallbackActive ? "warning" : "success"}
                 value={routeSummaryLabel || "NyxID Gateway"}
               />
               <SummaryMetric
-                label="Default model"
+                label="默认模型"
                 tone={trimConversationValue(draft.defaultModel) ? "info" : "default"}
-                value={trimConversationValue(draft.defaultModel) || "Not set"}
+                value={trimConversationValue(draft.defaultModel) || "未设置"}
               />
               <SummaryMetric
-                label="Provider health"
+                label="Provider 状态"
                 tone={providerHealth.tone}
                 value={providerHealth.value}
               />
@@ -827,7 +827,7 @@ const SettingsPage: React.FC = () => {
 
             {llmLoadError ? (
               <Alert
-                message="Failed to load defaults"
+                message="默认配置加载失败"
                 description={llmLoadError}
                 showIcon
                 type="error"
@@ -836,7 +836,7 @@ const SettingsPage: React.FC = () => {
 
             {saveError ? (
               <Alert
-                message="Save failed"
+                message="保存失败"
                 description={saveError}
                 showIcon
                 type="error"
@@ -852,12 +852,12 @@ const SettingsPage: React.FC = () => {
                       onClick={() => userLlmSettingsQuery.refetch()}
                       size="small"
                     >
-                      Retry
+                      重试
                     </Button>
                   ) : undefined
                 }
-                message="LLM catalog is unavailable"
-                description="Saved route and model are shown from your stored settings. Route and model editing are temporarily disabled until the catalog responds."
+                message="LLM 目录暂不可用"
+                description="已保存的路由和模型会继续显示。目录恢复响应前，路由和模型编辑会暂时禁用。"
                 showIcon
                 type="warning"
               />
@@ -865,11 +865,11 @@ const SettingsPage: React.FC = () => {
 
             {routeFallbackActive ? (
               <Alert
-                message={`Effective route is currently ${routeSummaryLabel}.`}
+                message={`当前生效路由为 ${routeSummaryLabel}。`}
                 description={
                   preferredRouteAvailable
-                    ? "The selected route is available and will be used for new requests."
-                    : `${preferredRouteLabel} is unavailable right now, so new requests fall back to ${routeSummaryLabel}.`
+                    ? "所选路由可用，新请求会继续使用它。"
+                    : `${preferredRouteLabel} 当前不可用，新请求会回退到 ${routeSummaryLabel}。`
                 }
                 showIcon
                 type={preferredRouteAvailable ? "info" : "warning"}
@@ -879,33 +879,33 @@ const SettingsPage: React.FC = () => {
             <div style={bodyGridStyle}>
               <div style={panelStackStyle}>
                 <AevatarPanel
-                  description="Choose the route and model used for new chats, Studio sessions, and global tools that do not set their own overrides."
+                  description="选择新建 Chat、Studio 会话和未指定覆盖项的全局工具默认使用的路由与模型。"
                   style={settingsPanelStyle}
-                  title="Edit defaults"
+                  title="编辑默认配置"
                 >
                   {userLlmSettingsQuery.isLoading || userRuntimeQuery.isLoading ? (
                     <div style={{ padding: 20 }}>
                       <Typography.Text type="secondary">
-                        Loading your current defaults...
+                        正在加载当前默认配置...
                       </Typography.Text>
                     </div>
                   ) : (
                     <div style={{ ...panelStackStyle, padding: 20 }}>
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Preferred route</Typography.Text>
+                          <Typography.Text strong>首选路由</Typography.Text>
                           <FieldMetaPill
                             label={
-                              routeFallbackActive ? "Fallback active" : "In sync"
+                              routeFallbackActive ? "正在回退" : "已同步"
                             }
                             tone={routeFallbackActive ? "warning" : "success"}
                           />
                         </div>
                         <Typography.Text type="secondary">
-                          Choose the primary route used for requests.
+                          选择请求默认使用的主路由。
                         </Typography.Text>
                         <Select
-                          aria-label="Preferred route"
+                          aria-label="首选路由"
                           disabled={!canEditRoute}
                           onChange={handlePreferredRouteChange}
                           optionFilterProp="label"
@@ -917,34 +917,34 @@ const SettingsPage: React.FC = () => {
                         />
                         {!preferredRouteAvailable && draft.preferredLlmRoute ? (
                           <Typography.Text type="warning">
-                            Saved route unavailable. New requests will use{" "}
+                            已保存路由不可用。新请求将使用{" "}
                             {routeSummaryLabel}.
                           </Typography.Text>
                         ) : (
                           <Typography.Text type="secondary">
-                            Effective now: {routeSummaryLabel || preferredRouteLabel}
+                            当前生效：{routeSummaryLabel || preferredRouteLabel}
                           </Typography.Text>
                         )}
                       </div>
 
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Connected providers</Typography.Text>
+                          <Typography.Text strong>已连接 Provider</Typography.Text>
                           <Space size={6} wrap>
                             <FieldMetaPill
-                              label={`${readyProviderCount} ready`}
+                              label={`${readyProviderCount} 可用`}
                               tone={readyProviderCount > 0 ? "success" : "default"}
                             />
                             {unavailableProviderCount > 0 ? (
                               <FieldMetaPill
-                                label={`${unavailableProviderCount} unavailable`}
+                                label={`${unavailableProviderCount} 不可用`}
                                 tone="warning"
                               />
                             ) : null}
                           </Space>
                         </div>
                         <Typography.Text type="secondary">
-                          Current route resolves through{" "}
+                          当前路由解析到{" "}
                           {routeSummaryLabel || "NyxID Gateway"}.
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
@@ -959,29 +959,29 @@ const SettingsPage: React.FC = () => {
                           </div>
                         ) : (
                           <Typography.Text type="secondary">
-                            No connected providers discovered yet.
+                            尚未发现已连接 Provider。
                           </Typography.Text>
                         )}
                       </div>
 
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Default model</Typography.Text>
+                          <Typography.Text strong>默认模型</Typography.Text>
                           <FieldMetaPill
                             label={
                               modelOptions && modelOptions.length > 0
                                 ? `${liveModelGroups.reduce(
                                     (count, group) => count + group.models.length,
                                     0,
-                                  )} live`
-                                : "Manual entry"
+                                  )} 个可用`
+                                : "手动输入"
                             }
                             tone={modelOptions && modelOptions.length > 0 ? "info" : "default"}
                           />
                         </div>
                         {modelOptions && modelOptions.length > 0 ? (
                           <Select
-                            aria-label="Default model"
+                            aria-label="默认模型"
                             allowClear
                             disabled={!canEditModel}
                             onChange={(nextValue) =>
@@ -998,7 +998,7 @@ const SettingsPage: React.FC = () => {
                           />
                         ) : (
                           <Input
-                            aria-label="Default model"
+                            aria-label="默认模型"
                             disabled={!canEditModel}
                             onChange={(event) =>
                               setDraft((currentDraft) => ({
@@ -1029,7 +1029,7 @@ const SettingsPage: React.FC = () => {
               </div>
 
               <div style={panelStackStyle}>
-                <AevatarPanel style={settingsPanelStyle} title="How defaults work">
+                <AevatarPanel style={settingsPanelStyle} title="默认配置如何生效">
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <div
                       style={{
@@ -1038,14 +1038,14 @@ const SettingsPage: React.FC = () => {
                         gridTemplateColumns: "repeat(1, minmax(0, 1fr))",
                       }}
                     >
-                      <SummaryField label="Saved route" value={preferredRouteLabel} />
+                      <SummaryField label="已保存路由" value={preferredRouteLabel} />
                       <SummaryField
-                        label="Effective route"
+                        label="当前生效路由"
                         value={routeSummaryLabel || "NyxID Gateway"}
                       />
-                      <SummaryField label="Runtime mode" value={runtimeModeLabel} />
+                      <SummaryField label="运行模式" value={runtimeModeLabel} />
                       <SummaryField
-                        label="Runtime URL"
+                        label="运行时 URL"
                         value={
                           <Tooltip
                             mouseEnterDelay={0.15}
@@ -1060,35 +1060,32 @@ const SettingsPage: React.FC = () => {
                       />
                     </div>
                     <p style={statusCopyStyle}>
-                      These defaults apply when creating new chats, Studio
-                      sessions, and global tools that do not specify their own
-                      route or model.
+                      这些默认配置会用于新建 Chat、Studio 会话，以及未指定
+                      专属路由或模型的全局工具。
                     </p>
                     <p style={statusCopyStyle}>
-                      If the saved route becomes unavailable, requests
-                      automatically use the effective route shown above.
+                      如果已保存路由不可用，请求会自动使用上方显示的当前生效路由。
                     </p>
                   </div>
                 </AevatarPanel>
 
-                <AevatarPanel style={settingsPanelStyle} title="Apply scope">
+                <AevatarPanel style={settingsPanelStyle} title="适用范围">
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <Typography.Text type="secondary">
-                      These defaults currently apply to:
+                      这些默认配置当前适用于：
                     </Typography.Text>
                     <Space size={[10, 10]} wrap>
                       <ScopeChip icon={<CommentOutlined />} label="Chat" />
                       <ScopeChip icon={<ExperimentOutlined />} label="Studio" />
-                      <ScopeChip icon={<ToolOutlined />} label="Global tools" />
+                      <ScopeChip icon={<ToolOutlined />} label="全局工具" />
                     </Space>
                   </div>
                 </AevatarPanel>
 
-                <AevatarPanel style={settingsPanelStyle} title="Technical preview">
+                <AevatarPanel style={settingsPanelStyle} title="技术预览">
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <Typography.Text type="secondary">
-                      These values reflect the effective route, the current model draft,
-                      and the stored runtime defaults.
+                      这些值反映当前生效路由、当前模型草稿和已保存的运行时默认配置。
                     </Typography.Text>
                     <div style={codePreviewStyle}>
                       {technicalPreviewRows.map((row, index) => (
@@ -1176,8 +1173,8 @@ const SettingsPage: React.FC = () => {
       <div style={tabBodyStyle}>
         {draftDirty ? (
           <Alert
-            message="LLM changes are still pending save."
-            description="You can return to the LLM tab and save whenever you are ready."
+            message="LLM 变更仍未保存"
+            description="你可以回到 LLM 页签，在准备好后保存。"
             showIcon
             type="info"
           />
@@ -1192,11 +1189,11 @@ const SettingsPage: React.FC = () => {
     <SettingsPageShell
       content={
         activeSection === llmTabKey
-          ? "Personal defaults for Chat and Studio."
-          : "Identity, session, and access details for this browser."
+          ? "Chat 与 Studio 的个人默认配置。"
+          : "此浏览器的身份、会话与访问详情。"
       }
       extra={headerExtra}
-      title="Settings"
+      title="设置"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div role="tablist" style={buildSettingsSwitchRailStyle(token)}>
