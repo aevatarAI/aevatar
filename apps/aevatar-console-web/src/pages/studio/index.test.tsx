@@ -4062,7 +4062,9 @@ describe("StudioPage", () => {
         "workspace-demo"
       );
     });
-    expect(message.success).toHaveBeenCalledWith("Team entry member updated.");
+    expect(message.info).toHaveBeenCalledWith(
+      "Team entry 变更已提交，正在等待同步确认。",
+    );
   });
 
   it("marks the selected Studio member when it is already the Team entry", async () => {
@@ -4562,6 +4564,53 @@ describe("StudioPage", () => {
     });
   });
 
+  it("opens a routed GAgent member on the GAgent Build surface without requiring a gagents tab hint", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockStudioMembers = [
+      {
+        memberId: "orders-worker",
+        scopeId: "scope-1",
+        displayName: "Orders Worker",
+        description: "Team entry GAgent member",
+        implementationKind: "gagent",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "member-orders-worker",
+        lastBoundRevisionId: "rev-gagent-1",
+        teamId: "t-alpha",
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:15:00Z",
+      },
+      ...mockStudioMembers,
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aorders-worker&step=build&tab=studio",
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+      "Orders Worker",
+    );
+    expect(screen.getByRole("button", { name: /^GAgent/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Continue to Bind" })).toBeEnabled();
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:orders-worker");
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("focus")).toBeNull();
+    });
+  });
+
   it("binds an unbound GAgent member from Build and keeps the member route", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -4730,11 +4779,9 @@ describe("StudioPage", () => {
     });
 
     const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
-    await expect(
-      act(async () => {
-        await confirmConfig.onOk();
-      }),
-    ).resolves.toBeUndefined();
+    await act(async () => {
+      await expect(confirmConfig.onOk()).resolves.toBeUndefined();
+    });
 
     expect(message.error).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -5127,8 +5174,8 @@ describe("StudioPage", () => {
       "workspace-demo",
     );
     expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
-    expect(message.success).toHaveBeenCalledWith(
-      "Team entry member update accepted.",
+    expect(message.info).toHaveBeenCalledWith(
+      "Team entry 变更已提交，正在等待同步确认。",
     );
     expect(message.warning).not.toHaveBeenCalled();
   });
