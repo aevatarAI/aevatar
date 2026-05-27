@@ -719,22 +719,59 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    getUserConfig: jest.fn(async () => ({
+    getUserLlmSettings: jest.fn(async () => ({
+      savedRoute: "",
+      savedRouteLabel: "NyxID Gateway",
+      effectiveRoute: "",
+      effectiveRouteLabel: "NyxID Gateway",
+      routeFallbackActive: false,
+      fallbackReason: null,
+      catalogStatus: "ready",
       defaultModel: "gpt-4.1-mini",
-      runtimeBaseUrl: "",
-    })),
-    saveUserConfig: jest.fn(async (input: { defaultModel: string; runtimeBaseUrl: string }) => input),
-    getUserConfigModels: jest.fn(async () => ({
-      providers: [
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: "openai",
-          providerName: "OpenAI",
+          routeValue: "",
+          label: "NyxID Gateway",
+          source: "gateway_provider",
           status: "ready",
-          proxyUrl: "https://nyx-api.example/openai",
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          label: "OpenAI",
+          source: "user_service",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: "svc-openai",
+          serviceSlug: "openai",
+          description: null,
         },
       ],
-      gatewayUrl: "https://nyx-api.example/gateway",
-      supportedModels: ["gpt-4.1-mini", "gpt-5.4-mini"],
+      modelGroupsByRoute: [
+        {
+          routeValue: "",
+          groupId: "openai-gateway",
+          label: "OpenAI Gateway",
+          models: ["gpt-4.1-mini", "gpt-5.4-mini"],
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          groupId: "openai",
+          label: "OpenAI",
+          models: ["gpt-4.1-mini", "gpt-5.4-mini"],
+        },
+      ],
     })),
     listMembers: jest.fn(async () => ({
       scopeId: "scope-1",
@@ -3322,27 +3359,54 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Workflow description")).toBeTruthy();
   });
 
-  it("falls back to a ready route when the preferred workflow dry-run route is stale", async () => {
-    (studioApi.getUserConfig as jest.Mock).mockResolvedValueOnce({
-      defaultModel: "gpt-4.1-mini",
-      preferredLlmRoute: "/api/v1/proxy/s/stale-openai",
-      runtimeBaseUrl: "",
-    });
-    (studioApi.getUserConfigModels as jest.Mock).mockResolvedValueOnce({
-      providers: [
+  it("uses the backend effective route when the saved workflow dry-run route is stale", async () => {
+    (studioApi.getUserLlmSettings as jest.Mock).mockResolvedValueOnce({
+      savedRoute: "/api/v1/proxy/s/stale-openai",
+      savedRouteLabel: "/api/v1/proxy/s/stale-openai",
+      effectiveRoute: "",
+      effectiveRouteLabel: "NyxID Gateway",
+      routeFallbackActive: true,
+      fallbackReason: "saved_route_unavailable",
+      catalogStatus: "ready",
+      defaultModel: "gpt-5.4-mini",
+      capabilities: {
+        canEditRoute: true,
+        canEditModel: true,
+        canSave: true,
+        canRetryCatalog: false,
+      },
+      routeOptions: [
         {
-          providerSlug: "openai",
-          providerName: "OpenAI",
-          status: "ready",
-          proxyUrl: "https://nyx-api.example/gateway/openai",
+          routeValue: "",
+          label: "NyxID Gateway",
           source: "gateway_provider",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: null,
+          serviceSlug: null,
+          description: null,
+        },
+        {
+          routeValue: "/api/v1/proxy/s/openai",
+          label: "OpenAI",
+          source: "user_service",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          serviceId: "svc-openai",
+          serviceSlug: "openai",
+          description: null,
         },
       ],
-      gatewayUrl: "https://nyx-api.example/gateway",
-      modelsByProvider: {
-        openai: ["gpt-5.4-mini"],
-      },
-      supportedModels: ["gpt-5.4-mini"],
+      modelGroupsByRoute: [
+        {
+          routeValue: "",
+          groupId: "openai-gateway",
+          label: "OpenAI Gateway",
+          models: ["gpt-5.4-mini"],
+        },
+      ],
     });
 
     renderStudioPage("/studio");
@@ -3998,7 +4062,9 @@ describe("StudioPage", () => {
         "workspace-demo"
       );
     });
-    expect(message.success).toHaveBeenCalledWith("Team entry member updated.");
+    expect(message.info).toHaveBeenCalledWith(
+      "Team entry 变更已提交，正在等待同步确认。",
+    );
   });
 
   it("marks the selected Studio member when it is already the Team entry", async () => {
@@ -4498,6 +4564,53 @@ describe("StudioPage", () => {
     });
   });
 
+  it("opens a routed GAgent member on the GAgent Build surface without requiring a gagents tab hint", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockStudioMembers = [
+      {
+        memberId: "orders-worker",
+        scopeId: "scope-1",
+        displayName: "Orders Worker",
+        description: "Team entry GAgent member",
+        implementationKind: "gagent",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "member-orders-worker",
+        lastBoundRevisionId: "rev-gagent-1",
+        teamId: "t-alpha",
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:15:00Z",
+      },
+      ...mockStudioMembers,
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aorders-worker&step=build&tab=studio",
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+      "Orders Worker",
+    );
+    expect(screen.getByRole("button", { name: /^GAgent/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Continue to Bind" })).toBeEnabled();
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:orders-worker");
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("focus")).toBeNull();
+    });
+  });
+
   it("binds an unbound GAgent member from Build and keeps the member route", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -4666,11 +4779,9 @@ describe("StudioPage", () => {
     });
 
     const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
-    await expect(
-      act(async () => {
-        await confirmConfig.onOk();
-      }),
-    ).resolves.toBeUndefined();
+    await act(async () => {
+      await expect(confirmConfig.onOk()).resolves.toBeUndefined();
+    });
 
     expect(message.error).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -5063,8 +5174,8 @@ describe("StudioPage", () => {
       "workspace-demo",
     );
     expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
-    expect(message.success).toHaveBeenCalledWith(
-      "Team entry member update accepted.",
+    expect(message.info).toHaveBeenCalledWith(
+      "Team entry 变更已提交，正在等待同步确认。",
     );
     expect(message.warning).not.toHaveBeenCalled();
   });

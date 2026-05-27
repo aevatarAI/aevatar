@@ -23,13 +23,7 @@ import {
 } from '@/shared/agui/runtimeEventSemantics';
 import {
   buildConversationHeaders,
-  formatConversationProviderLabel,
   normalizeUserLlmRoute,
-  resolveReadyConversationRoute,
-  routePathFromProviderSlug,
-  USER_CONFIG_PROVIDER_SOURCE_GATEWAY,
-  USER_CONFIG_PROVIDER_SOURCE_SERVICE,
-  USER_LLM_ROUTE_GATEWAY,
 } from '../chat/chatConversationConfig';
 import {
   Button,
@@ -3004,15 +2998,10 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady,
     queryFn: () => studioApi.getWorkspaceSettings(resolvedStudioScopeId),
   });
-  const userConfigQuery = useQuery({
-    queryKey: ['studio-user-config'],
+  const userLlmSettingsQuery = useQuery({
+    queryKey: ['studio-user-llm-settings'],
     enabled: studioHostReady,
-    queryFn: () => studioApi.getUserConfig(),
-  });
-  const userConfigModelsQuery = useQuery({
-    queryKey: ['studio-user-config-models'],
-    enabled: studioHostReady,
-    queryFn: () => studioApi.getUserConfigModels(),
+    queryFn: () => studioApi.getUserLlmSettings(),
   });
   const workflowsQuery = useQuery({
     queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
@@ -3449,79 +3438,37 @@ const StudioPage: React.FC = () => {
       resolvedStudioScopeId,
     ],
   );
-  const readyUserProviders = useMemo(
+  const readyUserRoutes = useMemo(
     () =>
-      (userConfigModelsQuery.data?.providers ?? []).filter(
-        (provider) => provider.status.trim().toLowerCase() === 'ready',
+      (userLlmSettingsQuery.data?.routeOptions ?? []).filter(
+        (option) => option.ready && option.allowed,
       ),
-    [userConfigModelsQuery.data?.providers],
+    [userLlmSettingsQuery.data?.routeOptions],
   );
-  const readyGatewayProvider = useMemo(
-    () =>
-      readyUserProviders.find(
-        (provider) =>
-          (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) ===
-          USER_CONFIG_PROVIDER_SOURCE_GATEWAY,
-      ) ?? null,
-    [readyUserProviders],
+  const effectiveWorkflowDryRunRoute = useMemo(
+    () => normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute),
+    [userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const readyServiceProviders = useMemo(
-    () =>
-      readyUserProviders.filter(
-        (provider) =>
-          (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) ===
-          USER_CONFIG_PROVIDER_SOURCE_SERVICE,
-      ),
-    [readyUserProviders],
-  );
-  const preferredDryRunRoute = useMemo(
-    () => normalizeUserLlmRoute(userConfigQuery.data?.preferredLlmRoute),
-    [userConfigQuery.data?.preferredLlmRoute],
-  );
-  const effectiveWorkflowDryRunRoute = useMemo(() => {
-    return resolveReadyConversationRoute(
-      preferredDryRunRoute,
-      readyGatewayProvider,
-      readyServiceProviders,
-    );
-  }, [preferredDryRunRoute, readyGatewayProvider, readyServiceProviders]);
-  const effectiveWorkflowDryRunProvider = useMemo(() => {
-    if (effectiveWorkflowDryRunRoute === USER_LLM_ROUTE_GATEWAY) {
-      return readyGatewayProvider;
-    }
-
-    return (
-      readyServiceProviders.find(
-        (provider) =>
-          routePathFromProviderSlug(provider.providerSlug) ===
-          effectiveWorkflowDryRunRoute,
-      ) ?? null
-    );
-  }, [
-    effectiveWorkflowDryRunRoute,
-    readyGatewayProvider,
-    readyServiceProviders,
-  ]);
   const effectiveWorkflowProviderModels = useMemo(
     () =>
-      effectiveWorkflowDryRunProvider?.providerSlug
-        ? (
-            userConfigModelsQuery.data?.modelsByProvider?.[
-              effectiveWorkflowDryRunProvider.providerSlug
-            ] ?? []
-          ).filter((model) => trimOptional(model))
-        : [],
+      (userLlmSettingsQuery.data?.modelGroupsByRoute ?? [])
+        .filter(
+          (group) =>
+            normalizeUserLlmRoute(group.routeValue) ===
+            effectiveWorkflowDryRunRoute,
+        )
+        .flatMap((group) => group.models)
+        .filter((model) => trimOptional(model)),
     [
-      effectiveWorkflowDryRunProvider?.providerSlug,
-      userConfigModelsQuery.data?.modelsByProvider,
+      effectiveWorkflowDryRunRoute,
+      userLlmSettingsQuery.data?.modelGroupsByRoute,
     ],
   );
   const effectiveWorkflowDryRunModel = useMemo(() => {
-    const preferredModel = trimOptional(userConfigQuery.data?.defaultModel);
+    const preferredModel = trimOptional(userLlmSettingsQuery.data?.defaultModel);
     const canReusePreferredModel =
       Boolean(preferredModel) &&
       (
-        effectiveWorkflowDryRunRoute === preferredDryRunRoute ||
         effectiveWorkflowProviderModels.length === 0 ||
         effectiveWorkflowProviderModels.includes(preferredModel)
       );
@@ -3532,18 +3479,12 @@ const StudioPage: React.FC = () => {
 
     return (
       effectiveWorkflowProviderModels[0] ||
-      userConfigModelsQuery.data?.supportedModels.find((model) =>
-        trimOptional(model),
-      ) ||
       preferredModel ||
       ''
     );
   }, [
-    effectiveWorkflowDryRunRoute,
     effectiveWorkflowProviderModels,
-    preferredDryRunRoute,
-    userConfigModelsQuery.data?.supportedModels,
-    userConfigQuery.data?.defaultModel,
+    userLlmSettingsQuery.data?.defaultModel,
   ]);
   const workflowDryRunHeaders = useMemo(
     () =>
@@ -3553,30 +3494,20 @@ const StudioPage: React.FC = () => {
       ),
     [effectiveWorkflowDryRunModel, effectiveWorkflowDryRunRoute],
   );
-  const workflowDryRunRouteLabel = useMemo(() => {
-    if (effectiveWorkflowDryRunRoute === USER_LLM_ROUTE_GATEWAY) {
-      return effectiveWorkflowDryRunProvider
-        ? `NyxID Gateway · ${formatConversationProviderLabel(
-            effectiveWorkflowDryRunProvider,
-          )}`
-        : 'NyxID Gateway';
-    }
-
-    return effectiveWorkflowDryRunProvider
-      ? formatConversationProviderLabel(effectiveWorkflowDryRunProvider)
-      : effectiveWorkflowDryRunRoute || 'Config default';
-  }, [effectiveWorkflowDryRunProvider, effectiveWorkflowDryRunRoute]);
+  const workflowDryRunRouteLabel = userLlmSettingsQuery.data?.effectiveRouteLabel ||
+    effectiveWorkflowDryRunRoute ||
+    'Config default';
   const workflowDryRunBlockedReason = useMemo(() => {
-    if (userConfigModelsQuery.isLoading) {
+    if (userLlmSettingsQuery.isLoading) {
       return 'Studio 正在检查可用 provider，请稍后再运行。';
     }
 
-    if (readyUserProviders.length === 0) {
+    if (readyUserRoutes.length === 0) {
       return '当前没有 ready 的 AI provider。先连接 provider，再回来运行这个 workflow draft。';
     }
 
     return '';
-  }, [readyUserProviders.length, userConfigModelsQuery.isLoading]);
+  }, [readyUserRoutes.length, userLlmSettingsQuery.isLoading]);
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       visibleWorkflowSummaries.find((item) => item.name === templateWorkflow) ??
@@ -7004,11 +6935,18 @@ const StudioPage: React.FC = () => {
       publishedScopeMembers,
       studioScopeMembers,
     );
-    if (
-      normalizeStudioMemberBindingImplementationKind(
-        memberSummary?.implementationKind,
-      ) !== 'script'
-    ) {
+    const implementationKind = normalizeStudioMemberBindingImplementationKind(
+      memberSummary?.implementationKind,
+    );
+    if (implementationKind === 'gagent') {
+      setSelectedWorkflowId('');
+      setSelectedScriptId('');
+      setTemplateWorkflow('');
+      setBuildSurface('gagent');
+      return;
+    }
+
+    if (implementationKind !== 'script') {
       return;
     }
 
@@ -7408,7 +7346,7 @@ const StudioPage: React.FC = () => {
           testTeam: options?.test && entryVisible,
           teamId: candidate.teamId,
         });
-        void message.success('Team entry member update accepted.');
+        void message.info('Team entry 变更已提交，正在等待同步确认。');
         if (options?.test) {
           if (!entryVisible) {
             void message.warning(
@@ -7434,7 +7372,7 @@ const StudioPage: React.FC = () => {
     ],
   );
   useEffect(() => {
-    if (studioSurface !== 'build' || buildSurface !== 'editor') {
+    if (studioSurface !== 'build') {
       return;
     }
 
@@ -7444,6 +7382,30 @@ const StudioPage: React.FC = () => {
         workbenchStudioMember?.implementationKind ||
         workbenchPublishedServiceRevision?.implementationKind,
     );
+    if (implementationKind === 'gagent') {
+      const actorTypeName =
+        trimOptional(
+          workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
+        ) ||
+        trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName);
+      if (actorTypeName) {
+        setSelectedGAgentTypeName((current) =>
+          trimOptional(current) === actorTypeName ? current : actorTypeName,
+        );
+      }
+      if (buildSurface !== 'gagent') {
+        setSelectedWorkflowId('');
+        setSelectedScriptId('');
+        setTemplateWorkflow('');
+        setBuildSurface('gagent');
+      }
+      return;
+    }
+
+    if (buildSurface !== 'editor') {
+      return;
+    }
+
     if (implementationKind !== 'script') {
       return;
     }
@@ -7473,9 +7435,11 @@ const StudioPage: React.FC = () => {
     studioSurface,
     workbenchPublishedServiceRevision?.implementationKind,
     workbenchPublishedServiceRevision?.scriptId,
+    workbenchPublishedServiceRevision?.staticActorTypeName,
     workbenchStudioMember?.displayName,
     workbenchStudioMember?.implementationKind,
     workbenchStudioMember?.publishedServiceId,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
   ]);
@@ -8365,7 +8329,7 @@ const StudioPage: React.FC = () => {
           queryKey: ['teams', 'roster', resolvedStudioScopeId],
         }),
       ]);
-      void message.success('Team entry member updated.');
+      void message.info('Team entry 变更已提交，正在等待同步确认。');
     } catch (error) {
       void message.error(
         error instanceof Error

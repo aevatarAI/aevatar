@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -113,6 +114,8 @@ public sealed class MessagesCommandFacadeTests
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
             dispatchPort ?? new RecordingActorDispatchPort(),
+            new StaticResponsesToolClassificationService(),
+            new StaticResponsesDirectToolPlanService(),
             NullLogger<MessagesCommandFacade>.Instance);
     }
 
@@ -135,7 +138,8 @@ public sealed class MessagesCommandFacadeTests
                 Messages = [ChatMessage.User("hello")],
             },
             new Dictionary<string, string>(StringComparer.Ordinal),
-            new ResponsesToolClassification([], [], [], []));
+            new ResponsesToolClassification([], [], [], []),
+            ResponsesToolChoiceHintPlan.Empty);
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
@@ -168,6 +172,22 @@ public sealed class MessagesCommandFacadeTests
                 Action = action.Clone(),
                 UsedFallback = false,
             });
+    }
+
+    private sealed class StaticResponsesToolClassificationService : IResponsesToolClassificationService
+    {
+        public ValueTask<ResponsesToolClassification> ClassifyAsync(
+            IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+            ResponsesToolProviderContext context,
+            IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
+    }
+
+    private sealed class StaticResponsesDirectToolPlanService : IResponsesDirectToolPlanService
+    {
+        public ResponsesDirectToolPlan Build(ChatRouteAction? routeAction) =>
+            ResponsesDirectToolPlan.Empty;
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort

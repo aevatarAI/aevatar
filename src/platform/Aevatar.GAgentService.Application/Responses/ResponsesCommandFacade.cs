@@ -777,6 +777,7 @@ public sealed class ResponsesCommandFacade(
             plan.Session.ResponseId,
             plan.LlmRequest,
             plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
             plan.CreatedAt);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
@@ -789,6 +790,7 @@ public sealed class ResponsesCommandFacade(
         string responseId,
         LLMRequest request,
         ResponsesToolClassification toolClassification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan,
         DateTimeOffset requestedAt)
     {
         var command = new LlmRunRequested
@@ -807,7 +809,7 @@ public sealed class ResponsesCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification);
+        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
         return command;
     }
 
@@ -833,13 +835,21 @@ public sealed class ResponsesCommandFacade(
             ArgumentsJson = call.ArgumentsJson,
         };
 
-    private static LlmSessionRuntimeToolSelection ToToolSelection(ResponsesToolClassification classification)
+    private static LlmSessionRuntimeToolSelection ToToolSelection(
+        ResponsesToolClassification classification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
     {
         var selection = new LlmSessionRuntimeToolSelection
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
         };
+        if (!toolChoiceHintPlan.IsEmpty)
+        {
+            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
+            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+        }
+
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
             new LlmSessionRuntimeToolDeclaration
             {

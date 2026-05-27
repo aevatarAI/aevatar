@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -183,7 +182,7 @@ public sealed record ResponsesCreateCommandPlan(
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Create response branches returned HTTP/SSE/JSON directly from orchestration code.
-//   New principle: Application returns one typed union for error, stream plan, completed result, or boundary forwarding.
+//   New principle: Application returns one typed union for error, stream plan, or completed result.
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
@@ -265,7 +264,8 @@ public sealed record MessagesCreateCommandPlan(
     LlmSessionRegistrationResult Session,
     LLMRequest LlmRequest,
     IReadOnlyDictionary<string, string> ToolContextMetadata,
-    ResponsesToolClassification ToolClassification);
+    ResponsesToolClassification ToolClassification,
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Messages create execution directly selected HTTP JSON versus SSE in the Host orchestration body.

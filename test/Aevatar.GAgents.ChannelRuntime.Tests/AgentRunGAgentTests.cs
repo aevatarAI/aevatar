@@ -520,11 +520,10 @@ public sealed class AgentRunGAgentTests
             TargetRef = GAgentToolHint("conversation:forwarded"),
         });
 
-        // Sync (PR #1106 r2): production now only applies typed ForwardToModel routing at this boundary.
-        originalHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
-            "GAgent tool hints no longer rewrite the run actor reply target");
-        forwardedHandled.Should().BeEmpty();
-        runtime.State.TargetActorId.Should().Be("conversation:original");
+        originalHandled.Should().BeEmpty();
+        forwardedHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
+            "GAgent tool hints rewrite the run actor reply target to the routed actor");
+        runtime.State.TargetActorId.Should().Be("conversation:forwarded");
     }
 
     [Fact]

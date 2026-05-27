@@ -313,12 +313,10 @@ public sealed class ConversationReplyGeneratorTests
             sink,
             CancellationToken.None);
 
-        reply.Text.Should().Be("开始执行 chrono-ai-daily，先查目录结构。\n\n最终日报");
+        reply.Text.Should().Be("最终日报");
         sink.Emissions.Should().Equal(
             "…",
-            "开始执行 chrono-ai-daily，先查目录结构。",
-            "开始执行 chrono-ai-daily，先查目录结构。\n\n",
-            "开始执行 chrono-ai-daily，先查目录结构。\n\n最终日报");
+            "最终日报");
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Any(message =>
             message.Role == "assistant" &&

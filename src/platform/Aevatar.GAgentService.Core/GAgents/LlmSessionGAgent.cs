@@ -8,6 +8,8 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
@@ -641,7 +643,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 }
             }
 
-            var builtToolCalls = toolCalls.BuildToolCalls();
+            var builtToolCalls = ApplyToolChoiceHint(toolCalls.BuildToolCalls(), command.ToolSelection);
             var forwardedToolCalls = SelectForwardedToolCalls(builtToolCalls, command.ToolSelection);
             foreach (var toolCall in forwardedToolCalls)
             {
@@ -889,6 +891,124 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .Where(call => forwardedToolNames.Contains(call.Name))
             .ToArray();
     }
+
+    private static IReadOnlyList<ToolCall> ApplyToolChoiceHint(
+        IReadOnlyList<ToolCall> toolCalls,
+        LlmSessionRuntimeToolSelection? selection)
+    {
+        if (toolCalls.Count == 0 ||
+            selection is null ||
+            string.IsNullOrWhiteSpace(selection.ToolChoiceHintName))
+        {
+            return toolCalls;
+        }
+
+        return toolCalls
+            .Select(call => ApplyToolChoiceHint(call, selection))
+            .ToArray();
+    }
+
+    private static ToolCall ApplyToolChoiceHint(
+        ToolCall call,
+        LlmSessionRuntimeToolSelection selection)
+    {
+        var toolName = selection.ToolChoiceHintName.Trim();
+        if (!string.Equals(call.Name, toolName, StringComparison.Ordinal))
+        {
+            return CloneWithArguments(
+                call,
+                BuildStructuredToolChoiceError(
+                    "tool_choice_hint_mismatch",
+                    $"Tool choice hint requires '{toolName}', but the model called '{call.Name}'.",
+                    "tool_name"));
+        }
+
+        JsonObject prefilled;
+        try
+        {
+            prefilled = ParseJsonObject(selection.ToolChoiceHintArgumentsJson);
+        }
+        catch (JsonException ex)
+        {
+            return CloneWithArguments(
+                call,
+                BuildStructuredToolChoiceError(
+                    "invalid_tool_choice_prefill",
+                    $"Tool choice prefilled arguments must be a JSON object: {ex.Message}",
+                    "tool_choice_hint_arguments_json"));
+        }
+
+        JsonObject modelArguments;
+        try
+        {
+            modelArguments = ParseJsonObject(call.ArgumentsJson);
+        }
+        catch (JsonException ex)
+        {
+            return CloneWithArguments(
+                call,
+                BuildStructuredToolChoiceError(
+                    "invalid_tool_arguments",
+                    $"Arguments must be a JSON object: {ex.Message}",
+                    "arguments"));
+        }
+
+        var merged = new JsonObject();
+        foreach (var (key, value) in prefilled)
+            merged[key] = value?.DeepClone();
+
+        foreach (var (key, value) in modelArguments)
+        {
+            if (prefilled.TryGetPropertyValue(key, out var prefilledValue) &&
+                !JsonNode.DeepEquals(prefilledValue, value))
+            {
+                return CloneWithArguments(
+                    call,
+                    BuildStructuredToolChoiceError(
+                        "tool_choice_prefill_conflict",
+                        $"Tool argument '{key}' conflicts with server-trusted prefilled_arguments.",
+                        key));
+            }
+
+            if (!prefilled.ContainsKey(key))
+                merged[key] = value?.DeepClone();
+        }
+
+        return CloneWithArguments(
+            call,
+            merged.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+    }
+
+    private static JsonObject ParseJsonObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new JsonObject();
+
+        return JsonNode.Parse(json) as JsonObject
+               ?? throw new JsonException("Root value must be an object.");
+    }
+
+    private static ToolCall CloneWithArguments(ToolCall call, string argumentsJson) =>
+        new()
+        {
+            Id = call.Id,
+            Name = call.Name,
+            ArgumentsJson = argumentsJson,
+        };
+
+    private static string BuildStructuredToolChoiceError(
+        string code,
+        string message,
+        string field) =>
+        JsonSerializer.Serialize(new
+        {
+            error = new
+            {
+                code,
+                message,
+                field,
+            },
+        });
 
     private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
         IReadOnlyList<ToolCall> toolCalls,

@@ -18,6 +18,7 @@ type OverviewCompositionRow = {
 type OverviewConfigurationRow = {
   readonly label: string;
   readonly note: string;
+  readonly noteTooltip?: string;
   readonly value: string;
 };
 
@@ -150,8 +151,8 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             value={entryMemberLabel || entryMemberId || "未配置"}
             caption={
               hasEntryMember
-                ? "Team invoke routes through this member."
-                : "Set an entry member before invoking this team."
+                ? "调用这支 Team 时会先路由到这个成员。"
+                : "测试或调用前，请先设置一个入口成员。"
             }
           />
         </div>
@@ -162,7 +163,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               onClick={onClearEntryMember}
               size="small"
             >
-              Clear entry
+              清除入口成员
             </Button>
           </div>
         ) : null}
@@ -234,7 +235,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   </Typography.Text>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
                     <Typography.Text strong>{row.value}</Typography.Text>
-                    <FactLine rows={2} secondary text={row.note} />
+                    <FactLine
+                      rows={2}
+                      secondary
+                      text={row.note}
+                      tooltipText={row.noteTooltip}
+                    />
                   </div>
                 </div>
               ))}
