@@ -26,7 +26,7 @@ from pathlib import Path
 # ===== config =====
 
 MAIN_REPO = Path(os.environ.get("REPO_ROOT", "/Users/auric/aevatar"))
-TICK = int(os.environ.get("TICK", "600"))
+TICK = int(os.environ.get("TICK", "120"))
 SOURCE = os.environ.get("SOURCE", "dev")
 TARGET = os.environ.get("TARGET", "auto-refact-dev")
 REPO_FULL = os.environ.get("REPO_FULL", "aevatarAI/aevatar")
