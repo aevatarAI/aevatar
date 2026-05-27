@@ -11,8 +11,6 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 {
-    private const string InternalCatalogToken = "channel-context";
-
     private readonly IUserLlmOptionsService _optionsService;
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
     private readonly INyxIdCapabilityBroker? _broker;
@@ -46,26 +44,31 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         if (option is null)
             throw new InvalidOperationException($"LLM service '{serviceId}' is not available for this user.");
 
-        await SavePreferenceAsync(
+        await SaveSelectedOptionAsync(
             context,
-            InternalCatalogToken,
-            new SaveUserLlmPreferenceCommand(
-                ServiceId: option.ServiceId,
-                Model: UserLlmPreferenceWriteCore.NormalizeOptional(modelOverride) ?? option.DefaultModel),
-            ct: ct).ConfigureAwait(false);
+            option,
+            UserLlmPreferenceWriteCore.NormalizeOptional(modelOverride) ?? option.DefaultModel,
+            preserveCurrentModelWhenMissing: false,
+            ct).ConfigureAwait(false);
     }
 
-    public Task SetModelOverrideAsync(
+    public async Task SetModelOverrideAsync(
         UserLlmSelectionContext context,
         string model,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        return SavePreferenceAsync(
+        var normalized = model.Trim();
+        var bearerToken = UserConfigLlmModel.TryParseRouteModel(normalized) is null
+            ? null
+            : await IssueRequiredAccessTokenAsync(context.Subject, AevatarOAuthClientScopes.Proxy, ct)
+                .ConfigureAwait(false);
+
+        await SavePreferenceAsync(
             context,
-            InternalCatalogToken,
-            new SaveUserLlmPreferenceCommand(Model: model.Trim()),
-            ct);
+            bearerToken,
+            new SaveUserLlmPreferenceCommand(Model: normalized),
+            ct).ConfigureAwait(false);
     }
 
     public async Task ApplyPresetAsync(
@@ -75,9 +78,11 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(presetId);
 
-        var statusToken = await IssueAccessTokenAsync(context.Subject, AevatarOAuthClientScopes.Proxy, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(statusToken))
-            statusToken = InternalCatalogToken;
+        var statusToken = await IssueRequiredAccessTokenAsync(
+                context.Subject,
+                AevatarOAuthClientScopes.Proxy,
+                ct)
+            .ConfigureAwait(false);
 
         await SavePreferenceAsync(
             context,
@@ -86,21 +91,24 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             ct).ConfigureAwait(false);
     }
 
-    private async Task<string> IssueAccessTokenAsync(ExternalSubjectRef subject, string scope, CancellationToken ct)
+    private async Task<string> IssueRequiredAccessTokenAsync(ExternalSubjectRef subject, string scope, CancellationToken ct)
     {
         if (_broker is null)
-            return string.Empty;
+            throw new InvalidOperationException("Channel LLM catalog writes require a NyxID capability broker.");
 
         var handle = await _broker
             .IssueShortLivedAsync(subject, new CapabilityScope { Value = scope }, ct)
             .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(handle.AccessToken))
+            throw new InvalidOperationException("NyxID capability broker returned an empty access token.");
+
         return handle.AccessToken;
     }
 
     public Task ResetAsync(UserLlmSelectionContext context, CancellationToken ct) =>
         SavePreferenceAsync(
             context,
-            InternalCatalogToken,
+            bearerToken: null,
             new SaveUserLlmPreferenceCommand(Reset: true),
             ct);
 
@@ -128,6 +136,52 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         {
             await writer
                 .SaveAsync(RequireBindingId(context), bearerToken, command, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to write LLM selection for binding {BindingId}",
+                context.BindingId.Value);
+            throw;
+        }
+    }
+
+    private async Task SaveSelectedOptionAsync(
+        UserLlmSelectionContext context,
+        UserLlmOption option,
+        string? model,
+        bool preserveCurrentModelWhenMissing,
+        CancellationToken ct)
+    {
+        if (_scopeFactory is null)
+            throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        using var scope = _scopeFactory.CreateScope();
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
+        if (queryPort is null || commandService is null)
+            throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        var writer = new UserLlmPreferenceWriter(
+            queryPort,
+            commandService,
+            new ChannelUserLlmCatalogPort(_catalogClient, ToQuery(context), context));
+
+        try
+        {
+            await writer
+                .SaveSelectedOptionAsync(
+                    RequireBindingId(context),
+                    option,
+                    model,
+                    preserveCurrentModelWhenMissing,
+                    ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)

@@ -44,6 +44,26 @@ public sealed class UserLlmPreferenceWriter
         return await _commandService.SaveAsync(scopeId.Trim(), next, ct).ConfigureAwait(false);
     }
 
+    public async Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
+        string scopeId,
+        UserLlmOption option,
+        string? model,
+        bool preserveCurrentModelWhenMissing,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(option);
+
+        var normalizedScopeId = scopeId.Trim();
+        var current = await _queryPort.GetAsync(normalizedScopeId, ct).ConfigureAwait(false);
+        var next = UserLlmPreferenceWriteCore.MergeSelectedOption(
+            current,
+            option,
+            model,
+            preserveCurrentModelWhenMissing);
+        return await _commandService.SaveAsync(normalizedScopeId, next, ct).ConfigureAwait(false);
+    }
+
     public async Task<UserConfig> MergeLegacyFieldsAsync(
         string? bearerToken,
         UserConfig current,

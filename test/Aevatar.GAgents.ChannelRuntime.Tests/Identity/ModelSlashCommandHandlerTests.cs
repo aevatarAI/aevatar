@@ -336,8 +336,12 @@ public sealed class ModelSlashCommandHandlerTests
             .AddSingleton<UserLlmPreferenceWriter>()
             .BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
-        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+        var broker = new RecordingCapabilityBroker(
+            "token-for-service-list",
+            "token-for-preset-write",
+            "token-for-prefixed-model-write");
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory, broker);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
         var context = BuildSelectionContext();
 
         await selection.SetByServiceAsync(context, "openai-work", null, default);
@@ -346,16 +350,30 @@ public sealed class ModelSlashCommandHandlerTests
 
         globalCatalog.GetServicesCount.Should().Be(0);
         globalCatalog.ProvisionCount.Should().Be(0);
+        catalog.GetServicesCalls.Should().NotContain(call => call.AccessToken == "channel-context");
+        catalog.ProvisionCalls.Should().NotContain(call => call.AccessToken == "channel-context");
         catalog.GetServicesCalls.Should().Contain(call =>
             call.Query.BindingId.Value == "bnd_sender" &&
             call.Query.RegistrationScopeId == "owner-scope" &&
-            call.AccessToken == "channel-context");
+            call.AccessToken == "token-for-service-list");
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "token-for-preset-write");
+        catalog.GetServicesCalls.Should().Contain(call =>
+            call.Query.BindingId.Value == "bnd_sender" &&
+            call.Query.RegistrationScopeId == "owner-scope" &&
+            call.AccessToken == "token-for-prefixed-model-write");
         catalog.ProvisionCalls.Should().ContainSingle()
             .Which.Should().Match<StubCatalogClient.ProvisionCall>(call =>
                 call.Context.BindingId.Value == "bnd_sender" &&
                 call.Context.RegistrationScopeId == "owner-scope" &&
-                call.AccessToken == "channel-context" &&
+                call.AccessToken == "token-for-preset-write" &&
                 call.ProvisionEndpointId == "chrono/shared");
+        broker.RequestedScopes.Should().Equal(
+            AevatarOAuthClientScopes.Proxy,
+            AevatarOAuthClientScopes.Proxy,
+            AevatarOAuthClientScopes.Proxy);
         commandService.SavedConfigs.Should().HaveCount(3);
         commandService.SavedConfigs[0].Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
         commandService.SavedConfigs[1].Config.PreferredLlmRoute.Should().Be(provisioned.RouteValue);
@@ -519,6 +537,7 @@ public sealed class ModelSlashCommandHandlerTests
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
+        broker ??= new RecordingCapabilityBroker();
         actorDispatchPort ??= new RecordingActorDispatchPort();
 
         var provider = new ServiceCollection()
@@ -647,7 +666,15 @@ public sealed class ModelSlashCommandHandlerTests
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
     {
+        private readonly Queue<string> _accessTokens;
+
         public List<string> RequestedScopes { get; } = new();
+
+        public RecordingCapabilityBroker(params string[] accessTokens)
+        {
+            _accessTokens = new Queue<string>(
+                accessTokens.Length == 0 ? ["token-for-model-list"] : accessTokens);
+        }
 
         public Task<BindingChallenge> StartExternalBindingAsync(
             ExternalSubjectRef externalSubject,
@@ -665,9 +692,10 @@ public sealed class ModelSlashCommandHandlerTests
             CancellationToken ct = default)
         {
             RequestedScopes.Add(scope.Value);
+            var accessToken = _accessTokens.Count == 0 ? "token-for-model-list" : _accessTokens.Dequeue();
             return Task.FromResult(new CapabilityHandle
             {
-                AccessToken = "token-for-model-list",
+                AccessToken = accessToken,
                 ExpiresAtUnix = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds(),
                 Scope = scope.Value,
             });
