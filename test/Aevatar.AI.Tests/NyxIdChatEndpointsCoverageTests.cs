@@ -229,7 +229,7 @@ public class NyxIdChatEndpointsCoverageTests
         var runtime = new StubActorRuntime();
         runtime.Actors["existing-agent-1"] = new StubActor("existing-agent-1");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "existing-agent-1" } },
+            GAgentToolHintAction("existing-agent-1"),
             []));
 
         var result = await InvokeResultAsync(
@@ -264,7 +264,7 @@ public class NyxIdChatEndpointsCoverageTests
         var actorStore = new StubGAgentActorStore();
         var runtime = new StubActorRuntime();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = " " } },
+            GAgentToolHintAction(" "),
             []));
 
         var result = await InvokeResultAsync(
@@ -481,7 +481,7 @@ public class NyxIdChatEndpointsCoverageTests
         var runtime = new StubActorRuntime();
         runtime.Actors["existing-agent-1"] = new StubActor("existing-agent-1");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "existing-agent-1" } },
+            GAgentToolHintAction("existing-agent-1"),
             []));
 
         var result = await InvokeResultAsync(
@@ -502,7 +502,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == "existing-agent-1");
         runtime.DestroyCalls.Should().BeEmpty(
-            "ForwardToGAgent reuses an existing actor; rollback in this request must not destroy it");
+            "GAgent tool hint reuses an existing actor; rollback in this request must not destroy it");
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -516,7 +516,7 @@ public class NyxIdChatEndpointsCoverageTests
         var runtime = new StubActorRuntime();
         runtime.Actors["existing-agent-2"] = new StubActor("existing-agent-2");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "existing-agent-2" } },
+            GAgentToolHintAction("existing-agent-2"),
             []));
 
         var result = await InvokeResultAsync(
@@ -537,7 +537,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
             entry.ActorId == "existing-agent-2");
         runtime.DestroyCalls.Should().BeEmpty(
-            "ForwardToGAgent reuses an existing actor; even a thrown-rollback path must not destroy it");
+            "GAgent tool hint reuses an existing actor; even a thrown-rollback path must not destroy it");
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -1686,12 +1686,14 @@ public class NyxIdChatEndpointsCoverageTests
         activity.Type.Should().Be(ActivityType.CardAction);
         var cardAction = activity.Content.CardAction;
         cardAction.Should().NotBeNull();
-        cardAction!.WorkflowResume.Should().NotBeNull();
-        cardAction.WorkflowResume!.ActorId.Should().Be("workflow-actor-1");
+        cardAction!.WorkflowResume.ActorId.Should().Be("workflow-actor-1");
         cardAction.WorkflowResume.RunId.Should().Be("run-1");
         cardAction.WorkflowResume.StepId.Should().Be("approval-1");
         cardAction.WorkflowResume.Approved.Should().BeFalse();
         cardAction.WorkflowResume.UserInput.Should().Be("Need stronger hook");
+        cardAction.Arguments.Should().NotContainKeys("actor_id", "run_id", "step_id", "approved");
+        // Sync (PR #1106 r2): workflow resume form values now move into the typed payload.
+        cardAction.FormFields.Should().NotContainKey("user_input");
     }
 
     [Fact]
@@ -2781,6 +2783,25 @@ public class NyxIdChatEndpointsCoverageTests
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Google.Protobuf.WellKnownTypes.Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
+                },
+            },
+        },
     };
 
     private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort

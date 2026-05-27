@@ -6,14 +6,11 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public class NyxIdRelayOptions
 {
     /// <summary>
-    /// Hard upper bound on a single LLM reply turn (LLM thinking + tool rounds + final
-    /// streaming dispatch). 300s gives margin for multi-step tool chains common in the
-    /// aevatar Lark bot flow — search a skill, hit a remote endpoint, summarize the result —
-    /// without letting a genuine hang pin the run actor turn forever. Set to <c>0</c> or
-    /// negative on a deployment that has its own watchdog and prefers no in-process cap;
-    /// see <c>AgentRunGAgent.ResolveFallbackTimeout</c>.
+    /// Deprecated compatibility setting. LLM reply generation no longer applies this value as
+    /// a hard timeout; long Ornn skill workflows must keep running until they finish or return
+    /// an explicit tool/skill failure. Kept so older configuration files still bind cleanly.
     /// </summary>
-    public int ResponseTimeoutSeconds { get; set; } = 300;
+    public int ResponseTimeoutSeconds { get; set; } = 0;
 
     public int MaxBufferedResponseChars { get; set; } = 16 * 1024;
 
@@ -74,15 +71,18 @@ public class NyxIdRelayOptions
     /// Routes streaming replies through Lark CardKit 2.0 streaming cards instead of editing a
     /// regular message in place. CardKit element-content updates are not subject to the per-
     /// message edit cap (Lark code 230072) so long replies never need to freeze on the last
-    /// interim chunk. Defaults to <c>true</c> so the modern card path is the standard
-    /// behaviour for the aevatar Lark bot (Feishu console grants the bot
-    /// <c>cardkit:card:read</c> + <c>cardkit:card:write</c>). Deployments that have not been
-    /// granted those scopes are not stuck: <see cref="ConversationGAgent"/> watches for the
-    /// scope-error / rate-limit / table-limit responses returned by <c>card.create</c> and
-    /// transitions the turn to the legacy edit-message sink for the rest of the chunks (see
+    /// interim chunk. Defaults to <c>true</c> so CardKit is the standard production path for
+    /// the aevatar Lark bot. Message edit is fallback only: pre-send/card-create failures,
+    /// deployments without CardKit scopes, or non-Lark/non-CardKit environments. Do not
+    /// disable CardKit as a production Lark rollback just because a turn stops replying; fix
+    /// the CardKit lifecycle/continuation failure instead. Deployments that have not been
+    /// granted <c>cardkit:card:read</c> + <c>cardkit:card:write</c> are not stuck:
+    /// <see cref="ConversationGAgent"/> watches for the scope-error / rate-limit /
+    /// table-limit responses returned by <c>card.create</c> and transitions the turn to the
+    /// legacy edit-message sink for the rest of the chunks (see
     /// <c>HandleLarkCardStreamingChunkCoreAsync</c>'s <c>CreationFailed</c> branch). Set this
-    /// to <c>false</c> on a deployment that wants to skip the create-card round-trip entirely
-    /// (e.g. environments that explicitly want the legacy path or do not run a Lark bot).
+    /// to <c>false</c> only on a deployment that intentionally skips the create-card
+    /// round-trip entirely.
     /// </summary>
     public bool StreamingCardKitEnabled { get; set; } = true;
 

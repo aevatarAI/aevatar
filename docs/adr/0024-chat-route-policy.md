@@ -6,6 +6,11 @@ owner: eanzhao
 
 # ADR-0024: Chat Route Policy — Config Actor + Boundary Resolver
 
+> Superseded for GAgent/team routing by ADR-0026. The current wire action set
+> no longer includes `ForwardToGAgent` or `ForwardToTeam`; policies express
+> those targets as `ForwardToModel.tool_set_ref + tool_choice_hint` with
+> `aevatar_invoke_gagent` or `aevatar_invoke_team`.
+
 ## Context
 
 Aevatar today has four ingress paths that each hard-route inbound traffic to a
@@ -72,14 +77,9 @@ sub-message. For routing this includes:
 - `ChatRouteInput.model` + `ChatRouteMatch.model` for stable model-based rules
 - `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
 - `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
-- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
-  `ForwardToTeam`, `ForwardToStudioMember` (oneof variants)
-- `ForwardToTeam.team_id` + `ForwardToTeam.endpoint_id` (typed strings) —
-  resolved at ingress to a Studio entry-member's `published_service_id` via
-  `ITeamEntryMemberResolver`, never persisted in the decision
-- `ForwardToStudioMember.member_id` + optional `endpoint_id` / `scope_id`
-  (typed strings) — resolved at LLM-facade ingress to a Studio member's
-  `published_service_id` via `IMemberPublishedServiceResolver`
+- `ForwardToModel` and `Reject` (current oneof variants). GAgent, team,
+  Studio member, and workflow targets are expressed as
+  `ForwardToModel.tool_set_ref + tool_choice_hint`.
 - `VoiceInput.voice_module_name` (typed string) — chooses among
   `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
   `voice_presence_minicpm_o` registered at bootstrap
@@ -105,7 +105,9 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
 
 - `Reject` is declared on the wire but unused by v1 rule semantics — it lets
   endpoints uniformly return HTTP 403 when policy lookup fails closed.
-- `ForwardToWorkflow` is reserved on the wire only — no implementation.
+- The old `ForwardToWorkflow` tag/name are reserved only for protobuf
+  compatibility; workflow invocation is tool-first through
+  `aevatar_start_workflow`.
 - `ForwardToGAgent` is supported only on GAgent-native ingress entries
   (NyxIdChat, Relay, Voice). It always means a raw Orleans grain key bound
   directly to the ingress (Voice binds `/ws/voice/{actorId}`; NyxIdChat
@@ -196,7 +198,8 @@ holds — and only as configuration, not as event-sourced fact. Existing
 ## Out of scope
 
 - Configuration UI (Studio / CLI surfaces for `Upsert*` commands).
-- `ForwardToWorkflow` implementation.
+- Workflow routing as a wire action. Workflow invocation is exposed through
+  the `aevatar_start_workflow` tool.
 - `ForwardToModel` over `/ws/voice` (would need a scratch voice-enabled
   actor — explicitly deferred per #674 review).
 - Telemetry pipeline for `matched_rule_id` (will arrive via existing run

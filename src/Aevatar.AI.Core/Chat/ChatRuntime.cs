@@ -45,6 +45,7 @@ public sealed class ChatRuntime
     private readonly string? _agentId;
     private readonly string? _agentName;
     private readonly ContextCompressionConfig _compressionConfig;
+    private readonly bool _suppressToolCallRoundText;
 
     public ChatRuntime(
         Func<ILLMProvider> providerFactory,
@@ -56,7 +57,8 @@ public sealed class ChatRuntime
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         string? agentId = null,
         string? agentName = null,
-        ContextCompressionConfig? compressionConfig = null)
+        ContextCompressionConfig? compressionConfig = null,
+        bool suppressToolCallRoundText = false)
     {
         _providerFactory = providerFactory;
         _history = history;
@@ -68,6 +70,7 @@ public sealed class ChatRuntime
         _agentId = string.IsNullOrWhiteSpace(agentId) ? null : agentId;
         _agentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName;
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
+        _suppressToolCallRoundText = suppressToolCallRoundText;
     }
 
     public ChatRuntimeStepExecutor CreateStepExecutor() =>
@@ -341,26 +344,70 @@ public sealed class ChatRuntime
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var roundScope = new StreamingRoundScope();
-            await foreach (var chunk in StreamLlmRoundAsync(
-                               provider,
-                               roundRequest,
-                               roundScope,
-                               runToken,
-                               toolCall =>
-                               {
-                                   if (deferredToolCalls != null)
-                                       deferredToolCalls.Add(toolCall);
-                                   else
-                                       streamingExecutor.AddTool(streamingToolState, toolCall);
-                               }))
+            TextToolCallParser.ParseResult? parsedTextToolCall = null;
+            StreamingRoundResult roundResult;
+            if (_suppressToolCallRoundText)
             {
-                wroteOutput = true;
-                yield return chunk;
-            }
+                var roundChunks = new List<LLMStreamChunk>();
+                await foreach (var chunk in StreamLlmRoundAsync(
+                                   provider,
+                                   roundRequest,
+                                   roundScope,
+                                   runToken,
+                                   toolCall =>
+                                   {
+                                       if (deferredToolCalls != null)
+                                           deferredToolCalls.Add(toolCall);
+                                       else
+                                           streamingExecutor.AddTool(streamingToolState, toolCall);
+                                   }))
+                {
+                    roundChunks.Add(chunk);
+                }
 
-            var roundResult = roundScope.RequireResult();
-            if (!string.IsNullOrEmpty(roundResult.Content))
-                hasStreamedTextContent = true;
+                roundResult = roundScope.RequireResult();
+                parsedTextToolCall = roundResult.ToolCalls is not { Count: > 0 } && roundResult.Content != null
+                    ? TextToolCallParser.Parse(roundResult.Content)
+                    : null;
+                var roundCallsTools = !roundResult.Terminated &&
+                                      (roundResult.ToolCalls is { Count: > 0 } ||
+                                       parsedTextToolCall?.ToolCalls.Count > 0);
+                foreach (var chunk in roundChunks)
+                {
+                    var visibleChunk = roundCallsTools ? SuppressVisibleToolCallRoundText(chunk) : chunk;
+                    if (visibleChunk is null)
+                        continue;
+
+                    wroteOutput = true;
+                    yield return visibleChunk;
+                }
+
+                if (!roundCallsTools && !string.IsNullOrEmpty(roundResult.Content))
+                    hasStreamedTextContent = true;
+            }
+            else
+            {
+                await foreach (var chunk in StreamLlmRoundAsync(
+                                   provider,
+                                   roundRequest,
+                                   roundScope,
+                                   runToken,
+                                   toolCall =>
+                                   {
+                                       if (deferredToolCalls != null)
+                                           deferredToolCalls.Add(toolCall);
+                                       else
+                                           streamingExecutor.AddTool(streamingToolState, toolCall);
+                                   }))
+                {
+                    wroteOutput = true;
+                    yield return chunk;
+                }
+
+                roundResult = roundScope.RequireResult();
+                if (!string.IsNullOrEmpty(roundResult.Content))
+                    hasStreamedTextContent = true;
+            }
 
             if (roundResult.Terminated)
             {
@@ -374,7 +421,7 @@ public sealed class ChatRuntime
             {
                 if (roundResult.Content != null)
                 {
-                    var parsed = TextToolCallParser.Parse(roundResult.Content);
+                    var parsed = parsedTextToolCall ?? TextToolCallParser.Parse(roundResult.Content);
                     if (parsed.ToolCalls.Count > 0)
                     {
                         var fallbackBlocked = false;
@@ -953,6 +1000,32 @@ public sealed class ChatRuntime
             // it. ChatRuntime itself remains transitional per aevatar#596 Phase A;
             // the cross-round aggregation and stream-local terminal contract live
             // at the actor edge, not here.
+            FinishReason = chunk.FinishReason,
+        };
+    }
+
+    private static LLMStreamChunk? SuppressVisibleToolCallRoundText(LLMStreamChunk chunk)
+    {
+        if (string.IsNullOrEmpty(chunk.DeltaContent) &&
+            string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
+            chunk.DeltaContentPart == null)
+        {
+            return chunk;
+        }
+
+        if (chunk.DeltaToolCall == null &&
+            !chunk.IsLast &&
+            chunk.Usage == null &&
+            string.IsNullOrEmpty(chunk.FinishReason))
+        {
+            return null;
+        }
+
+        return new LLMStreamChunk
+        {
+            DeltaToolCall = chunk.DeltaToolCall,
+            Usage = chunk.Usage,
+            IsLast = chunk.IsLast,
             FinishReason = chunk.FinishReason,
         };
     }

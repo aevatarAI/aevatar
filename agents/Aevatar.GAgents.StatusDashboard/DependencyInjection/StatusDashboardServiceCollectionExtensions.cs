@@ -38,6 +38,7 @@ public static class StatusDashboardServiceCollectionExtensions
         // this extension.
         services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient();
+        services.TryAddSingleton<StatusProbeAuthorizationResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, ReadmodelFreshnessProbeExecutor>());
         services.TryAddSingleton<IHealthProbeExecutorRegistry, HealthProbeExecutorRegistry>();

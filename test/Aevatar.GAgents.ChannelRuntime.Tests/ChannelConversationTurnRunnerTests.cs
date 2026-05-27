@@ -878,13 +878,12 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData("/foobar")]
-    public async Task RunInboundAsync_ShouldSendRelayUsage_ForUnknownSlashCommand(string command)
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteGoalSlashCommandToOrnnSkillDiscovery()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
-        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unknown"}""");
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unexpected"}""");
         var runner = CreateRunner(
             registrationQueryPort,
             adapter,
@@ -892,31 +891,36 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
-                command,
-                "msg-unknown-relay-1",
+                "/goal ship daily command fix",
+                "msg-goal-relay-1",
                 ConversationScope.DirectMessage,
                 "oc_p2p_chat_1",
                 new OutboundDeliveryContext
                 {
-                    ReplyMessageId = "relay-msg-unknown-1",
-                    CorrelationId = "corr-unknown-relay-1",
+                    ReplyMessageId = "relay-msg-goal-1",
+                    CorrelationId = "corr-goal-relay-1",
                 },
                 new TransportExtras
                 {
                     NyxPlatform = "lark",
                 }),
             RelayRuntimeContext(
-                "corr-unknown-relay-1",
-                "relay-token-unknown-1",
-                "relay-msg-unknown-1"),
+                "corr-goal-relay-1",
+                "relay-token-goal-1",
+                "relay-msg-goal-1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-goal-1");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("goal");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship daily command fix");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/goal ship daily command fix");
         adapter.Replies.Should().BeEmpty();
-        relayHandler.Requests.Should().ContainSingle();
-        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-unknown-1");
-        relayHandler.Requests[0].Body.Should().Contain($"Unknown command: {command}");
-        relayHandler.Requests[0].Body.Should().Contain("Supported commands:");
+        relayHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1199,23 +1203,22 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData("/foobar")]
-    [InlineData("/")]
-    public async Task RunInboundAsync_ShouldShortCircuitUnknownSlashCommand_WithUsage(string command)
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteUnknownSlashCommandToOrnnSkillDiscovery()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter);
 
         var result = await runner.RunInboundAsync(
-            BuildInboundActivity(command, "msg-unknown", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            BuildInboundActivity("/foobar", "msg-unknown", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain($"Unknown command: {command}");
-        adapter.Replies[0].ReplyText.Should().Contain("Supported commands:");
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("ornn_search_skills");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("foobar");
+        adapter.Replies.Should().BeEmpty();
     }
 
     [Fact]
@@ -1709,7 +1712,7 @@ public sealed class ChannelConversationTurnRunnerTests
     [Fact]
     public async Task RunInboundAsync_ShouldAwaitTypingReactionBeforeClear_ForDirectAgentBuilderReply()
     {
-        // Direct-reply paths (e.g. /daily) can return faster than the typing POST takes to land
+        // Direct-reply paths can return faster than the typing POST takes to land
         // in Lark. Without this guard the GET-list step of the clear would fire before the typing
         // reaction is persisted, find nothing to delete, and then the typing reaction would land
         // orphaned. This test pins the ordering by blocking the typing POST until after the clear
@@ -1725,12 +1728,12 @@ public sealed class ChannelConversationTurnRunnerTests
             """{"code":0,"data":{}}""");
         var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
 
-        // /foobar is an unknown slash command — NyxRelayAgentBuilderFlow returns a DirectReply
-        // decision (no tool execution, no external NyxID calls), so the only nyx traffic on this
-        // turn is the typing POST + the two clear calls. That keeps the SequencedJsonHandler
-        // bodies aligned with the actual call order.
+        // /delete-agent without confirm is a local DirectReply decision (no tool execution, no
+        // external NyxID calls), so the only nyx traffic on this turn is the typing POST + the
+        // two clear calls. That keeps the SequencedJsonHandler bodies aligned with the actual
+        // call order.
         var activity = BuildInboundActivity(
-            "/foobar",
+            "/delete-agent agent-1",
             "msg-direct-typing-1",
             ConversationScope.DirectMessage,
             "oc_p2p_chat_1",

@@ -200,11 +200,17 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
+        var actorSuffix = Guid.NewGuid().ToString("N")[..8];
+        var definitionActorId = $"wf-{actorSuffix}";
+        var runActorId = $"wf-{actorSuffix}-run";
+        var researcherActorId = $"{runActorId}:researcher";
+        var reviewerActorId = $"{runActorId}:reviewer";
+        var writerActorId = $"{runActorId}:writer";
 
         // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>(definitionActorId);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
         await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -230,7 +236,7 @@ public class WorkflowIntegrationTests
                 DefinitionActorId = definitionActor.Id,
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
-                RunId = "wf-1-run",
+                RunId = runActorId,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -257,18 +263,18 @@ public class WorkflowIntegrationTests
         });
 
         // Then
-        (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
+        (await runtime.ExistsAsync(definitionActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(runActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(researcherActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(reviewerActorId)).Should().BeTrue();
+        (await runtime.ExistsAsync(writerActorId)).Should().BeTrue();
 
         // 验证层级
         var children = await runActor.GetChildrenIdsAsync();
         children.Should().HaveCount(3);
-        children.Should().Contain("wf-1-run:researcher");
-        children.Should().Contain("wf-1-run:reviewer");
-        children.Should().Contain("wf-1-run:writer");
+        children.Should().Contain(researcherActorId);
+        children.Should().Contain(reviewerActorId);
+        children.Should().Contain(writerActorId);
 
         // 验证 workflow run 已建立角色 actor；角色业务配置由 AI adapter 边界处理。
         var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
@@ -286,7 +292,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("role-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -319,7 +325,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, mockLlm) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -375,7 +381,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         // 创建层级
         var root = await runtime.CreateAsync<WorkflowGAgent>("root");
@@ -476,12 +482,12 @@ public class WorkflowIntegrationTests
 
     [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
-    public void Scenario7_AllCoreModules()
+    public async Task Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddAevatarWorkflow();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───

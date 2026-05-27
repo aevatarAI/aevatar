@@ -130,6 +130,12 @@ public sealed class HybridServiceUpgradeContinuityTests
             runtimeActorId,
             definition.Snapshot,
             ct);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            "rev-1",
+            ct);
     }
 
     private static EventEnvelope CreateEnvelope(IMessage payload) =>
@@ -242,12 +248,36 @@ public sealed class HybridServiceUpgradeContinuityTests
 
             return actor.Agent switch
             {
-                TextNormalizationWorkflowProtocolGAgent workflow => workflow.State.Clone(),
-                TextNormalizationScriptingProtocolGAgent scripting => scripting.State.Clone(),
+                TextNormalizationWorkflowProtocolGAgent workflow => await WaitForProtocolStateAsync(workflow, commandId, ct),
+                TextNormalizationScriptingProtocolGAgent scripting => await WaitForProtocolStateAsync(scripting, commandId, ct),
                 _ => throw new InvalidOperationException(
                     $"Hybrid normalization actor `{actorId}` does not expose a supported protocol state."),
             };
         }
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            TextNormalizationWorkflowProtocolGAgent actor,
+            string commandId,
+            CancellationToken ct) =>
+            WaitForProtocolStateAsync(() => actor.State.Clone(), actor.Id, commandId, ct);
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            TextNormalizationScriptingProtocolGAgent actor,
+            string commandId,
+            CancellationToken ct) =>
+            WaitForProtocolStateAsync(() => actor.State.Clone(), actor.Id, commandId, ct);
+
+        private static Task<TextNormalizationReadModel> WaitForProtocolStateAsync(
+            Func<TextNormalizationReadModel> snapshot,
+            string actorId,
+            string commandId,
+            CancellationToken ct) =>
+            ScriptEvolutionIntegrationTestKit.WaitForAsync(
+                _ => Task.FromResult(snapshot()),
+                current => string.Equals(current.LastCommandId, commandId, StringComparison.Ordinal) &&
+                           !string.IsNullOrWhiteSpace(current.NormalizedText),
+                $"Hybrid normalization state not ready. actor_id={actorId}",
+                ct);
 
         private static void EnsureConfigured(HybridServiceSnapshot state)
         {

@@ -43,8 +43,10 @@
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.AevatarInvocation/Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChannelAdmin/Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.ToolSetRegistry/Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Telegram/Aevatar.AI.ToolProviders.Telegram.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
@@ -152,8 +154,10 @@
     <Project Path="test/Aevatar.ChatRouting.Voice.Integration.Tests/Aevatar.ChatRouting.Voice.Integration.Tests.csproj" />
     <Project Path="test/Aevatar.Foundation.ExternalLinks.WebSocket.Tests/Aevatar.Foundation.ExternalLinks.WebSocket.Tests.csproj" />
     <Project Path="test/Aevatar.GAgents.ChatRouting.Tests/Aevatar.GAgents.ChatRouting.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.ToolSetRegistry.Tests/Aevatar.AI.ToolProviders.ToolSetRegistry.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/Aevatar.AI.ToolProviders.AevatarInvocation.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />

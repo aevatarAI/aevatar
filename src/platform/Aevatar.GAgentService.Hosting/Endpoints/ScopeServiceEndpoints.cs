@@ -2939,14 +2939,20 @@ const response = await fetch("{{invokePath}}", {
             try
             {
                 var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                    ? control.ModelOverride
+                    : userConfig.DefaultModel.Trim();
+                var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                    ? control.NyxIdRoutePreference
+                    : userConfig.PreferredLlmRoute.Trim();
+                (model, route) = await UserLlmRouteModelResolver
+                    .ResolveAsync(http, model, route, cancellationToken)
+                    .ConfigureAwait(false);
+
                 control = control with
                 {
-                    ModelOverride = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
-                        ? control.ModelOverride
-                        : userConfig.DefaultModel.Trim(),
-                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
-                        ? control.NyxIdRoutePreference
-                        : userConfig.PreferredLlmRoute.Trim(),
+                    ModelOverride = model,
+                    NyxIdRoutePreference = route,
                 };
             }
             catch

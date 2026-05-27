@@ -146,10 +146,9 @@ public sealed class OrnnSkillClientTests
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
-        // `/api/v1/skills/chrono-ai-daily/json` hung for 113 s, holding the Orleans grain turn
-        // captive until the outer 120 s LLM reply budget tripped. Once OrnnSkillClient enforces
-        // its own per-call timeout, the call must surface a fast null instead of letting the
-        // upstream slowness propagate to the caller.
+        // `/api/v1/skills/chrono-ai-daily/json` hung for 113 s, holding the Orleans grain turn.
+        // OrnnSkillClient must surface a fast null instead of letting one upstream request
+        // stall the whole skill workflow.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
         var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
 
@@ -185,10 +184,9 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task GetSkillJsonAsync_DoesNotMaskCallerCancellationAsTimeoutError()
     {
-        // If the caller cancels (e.g. the outer LLM reply budget tripped), we must NOT log the
-        // failure as "exceeded per-call budget" — that misroutes the diagnosis. Letting the
-        // OperationCanceledException propagate keeps caller cancellation semantically distinct
-        // from our own per-call timeout fallback.
+        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget" —
+        // that misroutes the diagnosis. Letting the OperationCanceledException propagate keeps
+        // caller cancellation semantically distinct from our own per-call timeout fallback.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
         var client = CreateClient(handler, perCallTimeout: TimeSpan.FromSeconds(10));
 

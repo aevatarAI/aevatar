@@ -2424,6 +2424,22 @@ Bash(
 8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
 9. **gh pr merge 前必须 CI 全 required check 绿**(per Auric 2026-05-25 "改一下分支保护，必须ci 绿了才能合并"). auto-refact-dev 已设 branch protection(8 required:`fast-gates` / `console-web` / `coverage-quality` / `projection-provider-e2e` / `kafka-transport-integration` / `event-sourcing-regression` / `host-composition-smoke` / `slow-test-guards`,`strict: true`,`enforce_admins: true`)。**禁止**用 `--admin` / `--bypass` flag 绕过(已不可能;enforce_admins=true)。每次 `gh pr merge` 前 controller **必须** verify:`gh pr checks <PR> --required --json bucket --jq 'all(.[]; .bucket == "pass")'` 返回 `true`,否则**等 CI 完成**(arm Monitor watch + ScheduleWakeup,不要立即重试 merge)。事故记录:2026-05-25 session 11 个 cluster PR 全在 reviewer 3/3 approve 后 squash merge,**没等 GitHub Actions CI** → trunk auto-refact-dev 5 个 integration test 挂(hotfix `ef7962d` 修)。今后此情形不可能发生(branch protection 拦)。
 
+10. **本地必须跑 full slnx test verify 后才出 DONE marker**(强制,per Auric 2026-05-27 "一次次反复修不好的原因是什么?为什么不本地一次修好?非要让 ci 发现问题?"). **CI 是 fault detector,不是 fix-loop driver**。所有 `sync` / `fix` / `implement` / `test-add` codex 在打 DONE marker 之前**必须**跑 full slnx test:
+    ```bash
+    cd <worktree>
+    dotnet build aevatar.slnx --nologo 2>&1 | tail -3   # build 必绿
+    dotnet test aevatar.slnx --nologo --no-build 2>&1 | tail -30  # full test 必通过
+    ```
+    **不允许**用 `--filter "FullyQualifiedName~..."` 跑窄范围 verify。filter 只能用于 **iterative fix loop 内部快速反馈**,**最后 marker DONE 之前必须 full slnx test**。
+    
+    **失败处理**:full test 仍 fail → codex **不出** `IMPLEMENT_DONE:ok` / `FIX_DONE:applied-N:tests-pass`,改用 `IMPLEMENT_DONE:partial:<fail-count>` / `FIX_DONE:partial:<fail-count>:<top-failing-modules>` 让 controller 决策(派 r+1 / re-cluster / drop)。
+    
+    **事故**:2026-05-27 PR1106 sync codex 只跑 `dotnet build` 不跑 `dotnet test` → 50-commit dev sync push 后 CI 暴露 30+ test fail。Fix r1 用 narrow filter 跑 hosting tests 68 pass 就 marker tests-pass → push 后 CI 仍暴露 74 fail in channel/runtime/AI module。3-round push-test-fix loop 浪费 ~2h CI + 多轮 force-push。本规则强制本地 full test verify 防再犯。
+    
+    **例外**:`audit` codex 不跑 test(它只 inspect 不改 code)。`verify` codex 跑 full test 是 verify 职责本身。
+
+11. **controller commit 前 self-verify**(强制,per Auric 2026-05-27 与规则 10 同源). 即使 codex marker `tests-pass`,controller 在 `git commit --amend` / `git push --force-with-lease` 前**必须**自己跑一次 `dotnet test aevatar.slnx --nologo --no-build` 兜底。fail → 拒绝 push,派 r+1 fix。双保险防 codex marker 不诚实 / filter 窄漏 module。
+
 ## 工作语言规则(默认中文)
 
 Per Auric (2026-05-19) "默认工作语言中文吧, 不双语了": **所有 user-facing artifact 默认 中文**。

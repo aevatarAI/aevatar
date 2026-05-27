@@ -1481,10 +1481,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     ///
     /// Action semantics on the relay run-actor path:
     /// <list type="bullet">
-    ///   <item><c>ForwardToGAgent.actor_id</c> → overrides
-    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
-    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
-    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
     ///   <item><c>ForwardToModel.model_name</c> → the generation executor maps
     ///     this typed route decision into LLM metadata before invoking the
     ///     provider.</item>
@@ -1502,19 +1498,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         switch (targetRef.ActionCase)
         {
-            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
-                var forwardedActorId = NormalizeOptional(targetRef.ForwardToGagent?.ActorId);
-                if (forwardedActorId is not null &&
-                    !string.Equals(forwardedActorId, request.TargetActorId, StringComparison.Ordinal))
-                {
-                    _logger.LogInformation(
-                        "Chat-route override: redirecting run target actor {Original} → {Override} (correlation={CorrelationId})",
-                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
-                        forwardedActorId,
-                        request.CorrelationId);
-                    request.TargetActorId = forwardedActorId;
-                }
-                break;
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
                 var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
                 if (routedModel is not null)
