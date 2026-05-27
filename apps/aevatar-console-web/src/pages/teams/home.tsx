@@ -878,6 +878,10 @@ const TeamsHomePage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
     [authSessionQuery.data, locallyResolvedScope],
   );
+  const serverResolvedScope = React.useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
+  );
   const authSessionIssue = React.useMemo(() => {
     if (!authSessionQuery.isError) {
       return "";
@@ -900,6 +904,8 @@ const TeamsHomePage: React.FC = () => {
   }, [resolvedScope?.scopeId]);
 
   const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || "";
+  const queryScopeId =
+    serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : "";
 
   React.useEffect(() => {
     if (!scopeId) {
@@ -917,22 +923,22 @@ const TeamsHomePage: React.FC = () => {
   }, [scopeId]);
 
   const membersQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "members", scopeId],
-    queryFn: () => studioApi.listMembers(scopeId),
+    enabled: queryScopeId.length > 0,
+    queryKey: ["teams", "members", queryScopeId],
+    queryFn: () => studioApi.listMembers(queryScopeId),
     retry: false,
   });
   const teamsQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "roster", scopeId],
-    queryFn: () => studioApi.listTeams(scopeId),
+    enabled: queryScopeId.length > 0,
+    queryKey: ["teams", "roster", queryScopeId],
+    queryFn: () => studioApi.listTeams(queryScopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "services", scopeId],
+    enabled: queryScopeId.length > 0,
+    queryKey: ["teams", "services", queryScopeId],
     queryFn: () =>
-      scopeRuntimeApi.listServices(scopeId, {
+      scopeRuntimeApi.listServices(queryScopeId, {
         appId: scopeServiceAppId,
       }),
     retry: false,
@@ -975,10 +981,10 @@ const TeamsHomePage: React.FC = () => {
   );
   const memberRunQueries = useQueries({
     queries: runtimeTrackableMembers.map((member) => ({
-      enabled: scopeId.length > 0 && membersQuery.isSuccess,
-      queryKey: ["teams", "member-runs", scopeId, member.memberId],
+      enabled: queryScopeId.length > 0 && membersQuery.isSuccess,
+      queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
       queryFn: () =>
-        scopeRuntimeApi.listMemberRuns(scopeId, member.memberId, {
+        scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
           take: 12,
         }),
       retry: false,
@@ -1008,6 +1014,7 @@ const TeamsHomePage: React.FC = () => {
     [
       membersByTeamId,
       runsByMemberId,
+      queryScopeId,
       scopeId,
       servicesQuery.data,
       studioTeams,
