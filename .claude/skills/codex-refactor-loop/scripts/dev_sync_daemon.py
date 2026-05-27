@@ -294,7 +294,8 @@ def sync_direction(source: str, target: str, wt: Path, branch_prefix: str, label
             log(f"{label}: PR #{pr_num} CI fail + codex in-flight,等")
         return
 
-    log(f"{label}: PR #{pr_num} clean(mss={mss or 'UNKNOWN'}),等 GitHub auto-merge")
+    wait_what = "GitHub auto-merge" if label == "forward" else "maintainer review + merge"
+    log(f"{label}: PR #{pr_num} clean(mss={mss or 'UNKNOWN'}),等 {wait_what}")
 
 
 def tick() -> None:
