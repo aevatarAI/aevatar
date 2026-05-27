@@ -50,14 +50,12 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const memberTableMinWidth = 1380;
-
 const memberTableColumns = [
-  { key: "member", width: 260 },
-  { key: "role", width: 320 },
-  { key: "implementation", width: 170 },
-  { key: "service", width: 190 },
-  { key: "actions", width: 440 },
+  { key: "member", width: "22%" },
+  { key: "role", width: "16%" },
+  { key: "implementation", width: "14%" },
+  { key: "service", width: "14%" },
+  { key: "actions", width: "34%" },
 ] as const;
 
 const memberTableHeaderCellStyle: React.CSSProperties = {
@@ -167,12 +165,11 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
               overflow: "hidden",
             }}
           >
-            <div style={{ overflowX: "auto" }}>
+            <div style={{ width: "100%" }}>
               <table
                 style={{
                   borderCollapse: "separate",
                   borderSpacing: 0,
-                  minWidth: memberTableMinWidth,
                   tableLayout: "fixed",
                   width: "100%",
                 }}
@@ -274,13 +271,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       <td style={memberTableCellStyle}>
                         <div style={memberTableGridCellStyle}>
                           <FactLine
+                            monospace={false}
                             rows={1}
-                            text={
-                              row.description ||
-                              t("team.members.descriptionFallback", {
-                                teamId: rosterTeamId || "--",
-                              })
-                            }
+                            text={row.description || t("team.members.descriptionFallback")}
                           />
                         </div>
                       </td>
@@ -324,11 +317,12 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           size={8}
                           style={{
                             display: "flex",
+                            flexWrap: "wrap",
                             justifyContent: "flex-end",
                             minWidth: 0,
                             width: "100%",
                           }}
-                          wrap={false}
+                          wrap
                         >
                           {row.isEntryMember ? (
                             <Button
