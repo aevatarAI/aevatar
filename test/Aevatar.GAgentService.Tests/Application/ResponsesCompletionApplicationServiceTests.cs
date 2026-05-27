@@ -83,6 +83,70 @@ public sealed class ResponsesCompletionApplicationServiceTests
     }
 
     [Fact]
+    public async Task CollectAsync_ShouldPreserveLlmControlAcrossToolRounds()
+    {
+        var tool = new RecordingTool("local_tool", """{"type":"object"}""", """{"ok":true}""");
+        var provider = new RecordingLlmProvider((round, _) => round == 1
+            ? [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "local_tool",
+                        ArgumentsJson = """{"query":"skill"}""",
+                    },
+                    IsLast = true,
+                },
+            ]
+            : [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ]);
+        var control = new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+        var routing = new LLMRequestRoutingContext(
+            ModelOverride: null,
+            NyxIdRoutePreference: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hello")],
+            RequestId = "request-1",
+            Metadata = new Dictionary<string, string> { ["request"] = "metadata" },
+            CallerContext = new LLMRequestCallerContext("scope-1", "owner-1", "resp_1"),
+            Tools = [tool],
+            Model = "test-model",
+            Temperature = 0.25,
+            MaxTokens = 128,
+            LlmControl = control,
+            RoutingContext = routing,
+        };
+
+        var result = await new ResponsesCompletionApplicationService().CollectAsync(
+            provider,
+            request,
+            ToolContext,
+            new ResponsesToolClassification([], [tool], [], []));
+
+        result.Text.Should().Be("done");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[0].LlmControl.Should().BeSameAs(request.LlmControl);
+        provider.Requests[1].LlmControl.Should().BeSameAs(request.LlmControl);
+        provider.Requests[1].RoutingContext.Should().BeSameAs(request.RoutingContext);
+    }
+
+    [Fact]
     public async Task CollectAsync_ShouldReturnForwardedToolCall_WithPromotedStreamingId()
     {
         var forwarded = new ResponsesApplicationToolDeclaration(

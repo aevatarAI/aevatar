@@ -49,6 +49,41 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
+        var facade = CreateFacade(
+            completionService: completion,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini"),
+                usedFallback: true));
+
+        var result = await facade.CreateAsync(BuildRequest("chrono-llm/gpt-5.4-mini"), "token");
+
+        result.Error.Should().BeNull();
+        completion.LastRequest.Should().NotBeNull();
+        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
+        completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
+        var facade = CreateFacade(
+            completionService: completion,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini")));
+
+        var result = await facade.CreateAsync(BuildRequest("chrono-llm/gpt-5.4-mini"), "token");
+
+        result.Error.Should().BeNull();
+        completion.LastRequest.Should().NotBeNull();
+        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
+        completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenRouteCarriesToolSet_ShouldAddRouteTools()
     {
         var completion = new RecordingCompletionService(new ResponsesCompletionResult("ok", null, []));
@@ -230,7 +265,10 @@ public sealed class MessagesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -242,7 +280,8 @@ public sealed class MessagesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

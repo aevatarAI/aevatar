@@ -55,6 +55,61 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("done", null, []));
+        var facade = CreateFacade(
+            completionService: completion,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini"),
+                usedFallback: true));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), "token");
+
+        result.Error.Should().BeNull();
+        completion.LastRequest.Should().NotBeNull();
+        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
+        completion.LastRequest.LlmControl!.NyxIdRoutePreference
+            .Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var completion = new RecordingCompletionService(new ResponsesCompletionResult("done", null, []));
+        var facade = CreateFacade(
+            completionService: completion,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), "token");
+
+        result.Error.Should().BeNull();
+        completion.LastRequest.Should().NotBeNull();
+        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
+        completion.LastRequest.LlmControl!.NyxIdRoutePreference
+            .Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenRoutePinsGAgentTool_ShouldRegisterSessionAndExecuteThroughLlm()
     {
         var completion = new RecordingCompletionService(
@@ -426,7 +481,10 @@ public sealed class ResponsesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -438,7 +496,8 @@ public sealed class ResponsesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

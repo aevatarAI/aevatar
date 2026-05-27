@@ -184,7 +184,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
             ? action.ForwardToModel.ModelName.Trim()
             : normalized.Model;
         if (action.ForwardToModel is null)
@@ -194,6 +194,21 @@ public sealed class MessagesCommandFacade(
 
         action.ForwardToModel.ModelName = routedModel;
         return RouteTargetResult.FromModel(routedModel, action);
+    }
+
+    private static bool ShouldUseRouteModel(ChatRouteDecision routeDecision, string requestModel)
+    {
+        var routeModel = routeDecision.Action.ForwardToModel?.ModelName;
+        if (string.IsNullOrWhiteSpace(routeModel))
+            return false;
+
+        if (!routeDecision.UsedFallback)
+        {
+            return !string.IsNullOrWhiteSpace(routeDecision.MatchedRuleId) ||
+                   ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
+        }
+
+        return ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -501,8 +516,11 @@ public sealed class MessagesCommandFacade(
                 "Failed to record response completion."));
         }
 
-        var snapshot = await sessionQueryPort.GetByResponseIdAsync(session.ResponseId, ct);
-        if (snapshot?.Completion is null)
+        var observedCompletion = await LlmSessionCompletionObserver.WaitForCompletionAsync(
+            sessionQueryPort,
+            session.ResponseId,
+            ct);
+        if (observedCompletion is null)
         {
             return CompletionRecordResult.FromError(new ResponsesCommandError(
                 503,
@@ -510,7 +528,7 @@ public sealed class MessagesCommandFacade(
                 "Response completion was committed but is not yet visible in the read model."));
         }
 
-        return CompletionRecordResult.FromCompletion(snapshot.Completion);
+        return CompletionRecordResult.FromCompletion(observedCompletion);
     }
 
     private static LlmSessionCompletion BuildSessionCompletion(

@@ -58,6 +58,21 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgentSchema_ShouldAvoidTopLevelCompositionKeywords()
+    {
+        var tool = await DiscoverSingleAsync(new InvokeGAgentToolSource(new Harness().CreateDispatcher()));
+        using var doc = JsonDocument.Parse(tool.ParametersSchema);
+
+        doc.RootElement.TryGetProperty("oneOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("anyOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("allOf", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("not", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("enum", out _).Should().BeFalse();
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_name", out _).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task QueryReadModelSchema_ShouldExposeClosedReadModelSet()
     {
         var tool = await DiscoverSingleAsync(new QueryReadModelToolSource(new Harness().CreateDispatcher()));

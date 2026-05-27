@@ -129,6 +129,47 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WhenCompletionReadModelLags_ShouldWaitAndReturnCompletedResponse()
+    {
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "eventually visible",
+                    IsLast = true,
+                },
+            ],
+        };
+        var sessions = new RecordingResponseSessionStore
+        {
+            CompletionObservationLagReads = 1,
+        };
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        doc.RootElement.GetProperty("output")[0]
+            .GetProperty("content")[0]
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("eventually visible");
+    }
+
+    [Fact]
     public async Task PostResponses_WithStreamTrue_ShouldReturnResponsesSseFrames()
     {
         var provider = new RecordingLLMProvider
@@ -2842,6 +2883,7 @@ public sealed class MainnetResponsesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
 
@@ -2854,6 +2896,8 @@ public sealed class MainnetResponsesEndpointsTests
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
+
+        public int CompletionObservationLagReads { get; init; }
 
         public void Seed(LlmSessionSnapshot snapshot)
         {
@@ -2979,6 +3023,10 @@ public sealed class MainnetResponsesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
+            if (CompletionObservationLagReads > 0)
+            {
+                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
+            }
 
             return Task.CompletedTask;
         }
@@ -3049,6 +3097,14 @@ public sealed class MainnetResponsesEndpointsTests
             CancellationToken ct = default)
         {
             _snapshots.TryGetValue(responseId, out var snapshot);
+            if (snapshot?.Completion is not null &&
+                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
+                remaining > 0)
+            {
+                _completionObservationLagReads[responseId] = remaining - 1;
+                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
+            }
+
             return Task.FromResult(snapshot);
         }
 
