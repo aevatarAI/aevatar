@@ -160,11 +160,16 @@ def create_sync_pr(source: str, target: str, branch_prefix: str, ahead: int, lab
     pr_num = pr_url.rsplit("/", 1)[-1]
     log(f"{label}: opened PR {pr_url}")
     run(["gh", "pr", "edit", pr_num, "--add-label", "auto-loop"], cwd=MAIN_REPO)
-    r = run(["gh", "pr", "merge", pr_num, "--merge", "--delete-branch", "--auto"], cwd=MAIN_REPO)
-    if r.returncode == 0:
-        log(f"{label}: enabled auto-merge PR #{pr_num}")
+    # forward(dev→trunk): enable auto-merge,CI 绿即合
+    # reverse(trunk→dev): 不 enable auto-merge,等 maintainer review(per loning 2026-05-27)
+    if label == "forward":
+        r = run(["gh", "pr", "merge", pr_num, "--merge", "--delete-branch", "--auto"], cwd=MAIN_REPO)
+        if r.returncode == 0:
+            log(f"{label}: enabled auto-merge PR #{pr_num}")
+        else:
+            log(f"{label}: WARN enable auto-merge fail: {r.stderr.strip()[:120]}")
     else:
-        log(f"{label}: WARN enable auto-merge fail: {r.stderr.strip()[:120]}")
+        log(f"{label}: PR #{pr_num} 不 enable auto-merge,等 maintainer review")
 
 
 def dispatch_codex(wt: Path, pr_num: int, sync_branch: str, source: str, target: str,
