@@ -15,6 +15,7 @@ daemon 不参与 admin bypass / direct push;一切走 PR。
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -39,6 +40,7 @@ REVERSE_WT = Path(os.environ.get("REVERSE_WT", "/Users/auric/aevatar-wt-sync-rev
 SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
 LOGS_DIR = MAIN_REPO / ".refactor-loop" / "logs"
 PROMPTS_DIR = MAIN_REPO / ".refactor-loop" / "prompts"
+LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
 
 # ===== utils =====
 
@@ -303,9 +305,24 @@ def tick() -> None:
         log(f"reverse: gate — trunk 落后 dev {trunk_behind_dev} commits,reverse 暂停直到 forward 完")
 
 
+def acquire_singleton_lock():
+    """fcntl exclusive lock — 第二实例启动时获取失败 → 立即 exit。"""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fp = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log(f"dev_sync_daemon already running (lock held on {LOCK_FILE}), exit")
+        sys.exit(0)
+    fp.write(f"{os.getpid()}\n")
+    fp.flush()
+    return fp  # keep ref alive — lock 随 fp close 释放
+
+
 def main() -> None:
+    lock_fp = acquire_singleton_lock()  # noqa: F841 — keep ref to hold lock
     log(f"dev_sync_daemon started: TICK={TICK}s SOURCE={SOURCE} TARGET={TARGET} "
-        f"forward_wt={FORWARD_WT} reverse_wt={REVERSE_WT}")
+        f"forward_wt={FORWARD_WT} reverse_wt={REVERSE_WT} lock={LOCK_FILE}")
     while True:
         try:
             tick()
