@@ -24,6 +24,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
@@ -131,7 +132,7 @@ public static class ScopeServiceEndpoints
                 WorkflowYamls: request.WorkflowYamls,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                LlmControl: await BuildScopedLlmControlAsync(http, ct));
+                LlmIntent: ToWorkflowLlmIntent(await BuildScopedLlmControlAsync(http, ct)));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -2894,13 +2895,25 @@ const response = await fetch("{{invokePath}}", {
 
         return new ChatLlmControlInput
         {
-            NyxIdAccessToken = control.NyxIdAccessToken,
-            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
-            NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
             UserMemoryPrompt = control.UserMemoryPrompt,
         };
+    }
+
+    private static WorkflowLlmExecutionIntent? ToWorkflowLlmIntent(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        var intent = new WorkflowLlmExecutionIntent
+        {
+            ModelOverride = string.IsNullOrWhiteSpace(control.ModelOverride) ? string.Empty : control.ModelOverride.Trim(),
+            UserMemoryPrompt = string.IsNullOrWhiteSpace(control.UserMemoryPrompt) ? string.Empty : control.UserMemoryPrompt.Trim(),
+        };
+        if (control.MaxToolRoundsOverride is > 0)
+            intent.MaxToolRoundsOverride = control.MaxToolRoundsOverride.Value;
+        return intent;
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(

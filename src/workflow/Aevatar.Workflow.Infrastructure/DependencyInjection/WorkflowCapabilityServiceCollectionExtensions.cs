@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -23,6 +24,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddAevatarWorkflow();
+        services.AddWorkflowAiIntegration();
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();

@@ -1,7 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.AI.Abstractions.LLMProviders;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -111,7 +110,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAndLlmControl()
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAndWorkflowLlmIntent()
     {
         var input = new ChatInput
         {
@@ -124,9 +123,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             },
             LlmControl = new ChatLlmControlInput
             {
-                NyxIdAccessToken = " token ",
                 ModelOverride = " model ",
-                NyxIdRoutePreference = " route ",
                 MaxToolRoundsOverride = 3,
             },
         };
@@ -136,14 +133,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
-        result.Request.LlmControl.Should().Be(new LLMControlContext(
-            "token",
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
-            "model",
-            "route",
-            3,
-            UserMemoryPrompt: null));
+        result.Request.LlmIntent.Should().NotBeNull();
+        result.Request.LlmIntent!.ModelOverride.Should().Be("model");
+        result.Request.LlmIntent.MaxToolRoundsOverride.Should().Be(3);
         result.Request.Metadata.Should().BeEmpty();
     }
 

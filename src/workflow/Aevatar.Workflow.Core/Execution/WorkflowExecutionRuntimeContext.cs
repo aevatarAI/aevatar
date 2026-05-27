@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 
 namespace Aevatar.Workflow.Core.Execution;
@@ -56,9 +55,9 @@ internal sealed class WorkflowRequestPassthroughMetadata
     private static readonly HashSet<string> BlockedKeys =
     [
         ConnectorRequest.HttpAuthorizationMetadataKey,
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-        LLMRequestMetadataKeys.NyxIdRoutePreference,
+        "aevatar.model_override",
+        "aevatar.max_tool_rounds_override",
+        "aevatar.user_memory",
     ];
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

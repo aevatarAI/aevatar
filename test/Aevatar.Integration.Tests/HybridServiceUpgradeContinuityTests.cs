@@ -10,6 +10,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -26,7 +27,7 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddScriptCapability();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddSingleton<IWorkflowRoleActorTypeResolver, TestWorkflowRoleActorTypeResolver>();
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

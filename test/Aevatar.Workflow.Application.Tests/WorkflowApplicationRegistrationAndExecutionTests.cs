@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -6,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
@@ -293,7 +293,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             ScopeId: "u-1001");
 
         var envelope = factory.CreateEnvelope(command, context);
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1");
@@ -342,13 +342,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>()));
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.ScopeId.Should().Be("scope-7");
         request.InputParts.Should().HaveCount(2);
-        request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
+        request.InputParts[0].Kind.Should().Be(WorkflowChatContentPartKind.Text);
         request.InputParts[0].Text.Should().Be("describe this");
-        request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Image);
+        request.InputParts[1].Kind.Should().Be(WorkflowChatContentPartKind.Image);
         request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
         request.InputParts[1].MediaType.Should().Be("image/png");
         request.InputParts[1].Name.Should().Be("cat");
@@ -368,13 +368,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "cmd-2",
             "corr-2",
             new Dictionary<string, string>()));
-        noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
+        noMetadata.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-2");
 
         var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
             new Dictionary<string, string>()));
-        whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
+        whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 }

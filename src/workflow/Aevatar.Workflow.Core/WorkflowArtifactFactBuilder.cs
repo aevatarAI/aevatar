@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
@@ -76,13 +75,13 @@ internal static class WorkflowArtifactFactBuilder
 
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
         if (published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            !published.StateEvent.EventData.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
             return false;
         }
 
-        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
-        var roleId = completed.RoleId?.Trim() ?? string.Empty;
+        var completed = published.StateEvent.EventData.Unpack<WorkflowLlmInvocationCompletedEvent>();
+        var roleId = completed.WorkerId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(roleId))
             return false;
 
@@ -98,7 +97,7 @@ internal static class WorkflowArtifactFactBuilder
             SessionId = completed.SessionId ?? string.Empty,
             Content = completed.Content ?? string.Empty,
             ReasoningContent = completed.ReasoningContent ?? string.Empty,
-            Prompt = completed.Prompt ?? string.Empty,
+            Prompt = string.Empty,
             ContentEmitted = completed.ContentEmitted,
         };
 

@@ -1,4 +1,4 @@
-using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -63,7 +63,7 @@ public sealed record WorkflowChatRunRequest(
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
     WorkflowChatSource? Source = null,
-    LLMControlContext? LlmControl = null);
+    WorkflowLlmExecutionIntent? LlmIntent = null);
 
 public enum WorkflowChatRunStartError
 {

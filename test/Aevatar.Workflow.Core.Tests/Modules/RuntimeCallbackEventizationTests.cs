@@ -1,4 +1,4 @@
-using Aevatar.AI.Abstractions;
+
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -757,11 +757,14 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
+        var chatRequest = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
         ctx.Published.Clear();
-        var responseEnvelope = Wrap(new ChatResponseEvent
+        var responseEnvelope = Wrap(new WorkflowLlmInvocationCompletedEvent
         {
+            RunId = "run-llm-replay",
+            StepId = "step-1",
             SessionId = chatRequest.SessionId,
+            Success = true,
             Content = "ok",
         });
 
@@ -802,9 +805,10 @@ public class RuntimeCallbackEventizationTests
         await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
 
         var firstDispatch = ctx.Outbound
-            .Single(x => x.Event is ChatRequestEvent);
-        var firstChatRequest = (ChatRequestEvent)firstDispatch.Event;
-        firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
+            .Single(x => x.Event is WorkflowLlmExecutionIntent);
+        var firstChatRequest = (WorkflowLlmExecutionIntent)firstDispatch.Event;
+        firstDispatch.Direction.Should().Be(TopologyAudience.Self);
+        firstDispatch.TargetActorId.Should().BeNull();
         firstDispatch.Options.Should().NotBeNull();
         firstDispatch.Options!.Delivery.Should().NotBeNull();
         var dedupOriginId = firstDispatch.Options.Delivery!.DeduplicationOperationId;
@@ -821,10 +825,11 @@ public class RuntimeCallbackEventizationTests
         await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
 
         var replayDispatch = ctx.Outbound
-            .Single(x => x.Event is ChatRequestEvent);
-        var replayChatRequest = (ChatRequestEvent)replayDispatch.Event;
+            .Single(x => x.Event is WorkflowLlmExecutionIntent);
+        var replayChatRequest = (WorkflowLlmExecutionIntent)replayDispatch.Event;
         replayChatRequest.SessionId.Should().Be(firstChatRequest.SessionId);
-        replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
+        replayDispatch.Direction.Should().Be(firstDispatch.Direction);
+        replayDispatch.TargetActorId.Should().BeNull();
         replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
@@ -1483,10 +1488,11 @@ public class RuntimeCallbackEventizationTests
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
-                NyxidAccessToken = delta.Llm.NyxidAccessToken,
                 ModelOverride = delta.Llm.ModelOverride,
-                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
             };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
         if (delta.Connector != null)

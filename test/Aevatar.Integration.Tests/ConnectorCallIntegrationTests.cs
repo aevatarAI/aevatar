@@ -4,6 +4,7 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -173,7 +174,7 @@ public class ConnectorCallIntegrationTests
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddSingleton<IWorkflowRoleActorTypeResolver, TestWorkflowRoleActorTypeResolver>();
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
@@ -248,7 +249,7 @@ public class ConnectorCallIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "test-session" }),
+            Payload = Any.Pack(new WorkflowChatRequestEvent { Prompt = input, SessionId = "test-session" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 

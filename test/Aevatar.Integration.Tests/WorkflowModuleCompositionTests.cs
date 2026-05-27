@@ -145,6 +145,6 @@ public class WorkflowModuleCompositionTests
         moduleFactory.Should().BeOfType<WorkflowModuleFactory>();
         corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowStepTypeModuleDependencyExpander));
         corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowImplicitModuleDependencyExpander));
-        corePack.Configurators.Should().BeEmpty();
+        corePack.Configurators.Should().ContainSingle(x => x.GetType().Name == "LLMCallModuleConfigurator");
     }
 }

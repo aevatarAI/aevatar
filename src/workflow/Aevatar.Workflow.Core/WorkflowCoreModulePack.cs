@@ -44,7 +44,10 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         new WorkflowImplicitModuleDependencyExpander(),
     ];
 
-    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations = [];
+    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations =
+    [
+        new LLMCallModuleConfigurator(),
+    ];
 
     public string Name => "workflow.core";
 

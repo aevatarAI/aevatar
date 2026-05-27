@@ -33,8 +33,13 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         var p = envelope.Payload;
         return p != null &&
                (p.Is(StepRequestEvent.Descriptor) ||
-                p.Is(TextMessageEndEvent.Descriptor) ||
-                p.Is(ChatResponseEvent.Descriptor));
+                p.Is(WorkflowLlmTextDeltaEvent.Descriptor) ||
+                p.Is(WorkflowLlmReasoningDeltaEvent.Descriptor) ||
+                p.Is(WorkflowLlmToolCallDeltaEvent.Descriptor) ||
+                p.Is(WorkflowLlmToolResultEvent.Descriptor) ||
+                p.Is(WorkflowLlmInvocationCompletedEvent.Descriptor) ||
+                p.Is(WorkflowTextMessageEndEvent.Descriptor) ||
+                p.Is(WorkflowChatResponseEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -109,28 +114,24 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             };
             await SaveStateAsync(state, ctx, ct);
 
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = prompt,
-                SessionId = sessionId,
-                Telegram = new TelegramBridgeRequest(),
-            };
-            CopyParametersToChatRequest(request.Parameters, chatRequest);
+            var intent = WorkflowLlmIntentBuilder.Build(
+                prompt,
+                sessionId,
+                runId,
+                stepId,
+                target.RoleId,
+                role: null,
+                timeoutMs: 0,
+                ctx);
+            CopyParametersToIntent(request.Parameters, intent);
             try
             {
-                if (!target.UseSelf)
-                {
-                    ctx.Logger.LogInformation(
-                        "EvaluateModule: step={StepId} → SendTo mode={Mode} actor={ActorId}",
-                        stepId,
-                        target.Mode,
-                        target.ActorId);
-                    await ctx.SendToAsync(target.ActorId, chatRequest, ct);
-                }
-                else
-                {
-                    await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
-                }
+                ctx.Logger.LogInformation(
+                    "EvaluateModule: step={StepId} dispatch workflow-owned LLM intent mode={Mode} target_role={TargetRole}",
+                    stepId,
+                    target.Mode,
+                    string.IsNullOrWhiteSpace(target.RoleId) ? "(none)" : target.RoleId);
+                await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
             }
             catch (Exception ex)
             {
@@ -149,17 +150,31 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (payload.Is(WorkflowLlmTextDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmReasoningDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmToolCallDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmToolResultEvent.Descriptor))
+        {
+            return;
+        }
+
         string? content = null;
         string? sid = null;
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
-            var evt = payload.Unpack<TextMessageEndEvent>();
+            var evt = payload.Unpack<WorkflowLlmInvocationCompletedEvent>();
+            content = evt.Success ? evt.Content : "0";
+            sid = evt.SessionId;
+        }
+        else if (payload.Is(WorkflowTextMessageEndEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowTextMessageEndEvent>();
             content = evt.Content; sid = evt.SessionId;
         }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
+        else if (payload.Is(WorkflowChatResponseEvent.Descriptor))
         {
-            var evt = payload.Unpack<ChatResponseEvent>();
+            var evt = payload.Unpack<WorkflowChatResponseEvent>();
             content = evt.Content; sid = evt.SessionId;
         }
 
@@ -219,9 +234,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static void CopyParametersToChatRequest(
+    private static void CopyParametersToIntent(
         MapField<string, string> parameters,
-        ChatRequestEvent chatRequest)
+        WorkflowLlmExecutionIntent intent)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
@@ -233,11 +248,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 
             var normalizedKey = key.Trim();
             var normalizedValue = value.Trim();
-            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
-                continue;
-
-            chatRequest.Metadata[normalizedKey] = normalizedValue;
+            intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
 
@@ -258,6 +269,6 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreateSessionId(string scopeId, string runId, string stepId, int attempt) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
 }

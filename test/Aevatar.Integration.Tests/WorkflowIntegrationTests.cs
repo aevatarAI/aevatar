@@ -77,7 +77,7 @@ public class WorkflowIntegrationTests
 
         // 注册 Workflow 核心模块 pack 与统一模块工厂
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddSingleton<IWorkflowRoleActorTypeResolver, TestWorkflowRoleActorTypeResolver>();
 
         var sp = services.BuildServiceProvider();
         var runtime = sp.GetRequiredService<IActorRuntime>();
@@ -244,7 +244,7 @@ public class WorkflowIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ChatRequestEvent
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new WorkflowChatRequestEvent
             {
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
@@ -270,11 +270,10 @@ public class WorkflowIntegrationTests
         children.Should().Contain("wf-1-run:reviewer");
         children.Should().Contain("wf-1-run:writer");
 
-        // 验证每个 RoleGAgent 的配置
+        // 验证 workflow run 已建立角色 actor；角色业务配置由 AI adapter 边界处理。
         var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
         researcherActor.Should().NotBeNull();
-        var researcher = (RoleGAgent)researcherActor!.Agent;
-        researcher.RoleName.Should().Be("Researcher");
+        researcherActor!.Agent.Should().BeOfType<RoleGAgent>();
     }
 
     // ═══════════════════════════════════════════════════════════

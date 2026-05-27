@@ -16,6 +16,22 @@ public sealed class WorkflowRunGAgentSourceRegressionTests
     }
 
     [Fact]
+    public async Task WorkflowCoreNoAIDependencyTest()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var projectPath = Path.Combine(
+            repoRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Core",
+            "Aevatar.Workflow.Core.csproj");
+
+        var project = await File.ReadAllTextAsync(projectPath);
+
+        project.Should().NotContain("Aevatar.AI.Abstractions.csproj");
+    }
+
+    [Fact]
     public async Task WorkflowStepTargetAgentResolver_Source_ShouldNotContainRawLifecycleImplementation()
     {
         var repoRoot = FindRepositoryRoot();

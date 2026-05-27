@@ -5,7 +5,6 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
-using Aevatar.AI.Abstractions.Agents;
 using System.Collections;
 using System.Globalization;
 using System.Text.Json;
@@ -78,38 +77,20 @@ public sealed class WorkflowParser
         var eventModules = PreferTopLevelText(role.EventModules, role.Extensions?.EventModules);
         var eventRoutes = PreferTopLevelText(role.EventRoutes, role.Extensions?.EventRoutes);
 
-        var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
-        {
-            Id = role.Id,
-            Name = role.Name,
-            SystemPrompt = role.SystemPrompt,
-            Provider = role.Provider,
-            Model = role.Model,
-            Temperature = role.Temperature,
-            MaxTokens = role.MaxTokens,
-            MaxToolRounds = role.MaxToolRounds,
-            MaxHistoryMessages = role.MaxHistoryMessages,
-            EventModules = eventModules,
-            EventRoutes = eventRoutes,
-            Connectors = role.Connectors,
-        });
-
-        return new RoleDefinition
-        {
-            Id = normalized.Id,
-            Name = normalized.Name,
-            AgentKind = NormalizeText(role.AgentKind),
-            SystemPrompt = normalized.SystemPrompt,
-            Provider = normalized.Provider,
-            Model = normalized.Model,
-            Temperature = normalized.Temperature,
-            MaxTokens = normalized.MaxTokens,
-            MaxToolRounds = normalized.MaxToolRounds,
-            MaxHistoryMessages = normalized.MaxHistoryMessages,
-            EventModules = normalized.EventModules,
-            EventRoutes = normalized.EventRoutes,
-            Connectors = normalized.Connectors.ToList(),
-        };
+        return WorkflowRoleConfigurationNormalizer.Normalize(
+            role.Id,
+            role.Name,
+            role.AgentKind,
+            role.SystemPrompt,
+            role.Provider,
+            role.Model,
+            role.Temperature,
+            role.MaxTokens,
+            role.MaxToolRounds,
+            role.MaxHistoryMessages,
+            eventModules,
+            eventRoutes,
+            role.Connectors);
     }
 
     private static string? PreferTopLevelText(string? topLevel, string? fallback)

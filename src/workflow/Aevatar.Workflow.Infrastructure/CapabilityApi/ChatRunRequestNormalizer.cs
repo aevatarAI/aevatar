@@ -1,7 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
-using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -70,22 +70,22 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 Source: source,
-                LlmControl: NormalizeLlmControl(input.LlmControl)));
+                LlmIntent: NormalizeLlmIntent(input.LlmControl)));
     }
 
-    private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
+    private static WorkflowLlmExecutionIntent? NormalizeLlmIntent(ChatLlmControlInput? source)
     {
         if (source == null)
             return null;
 
-        return new LLMControlContext(
-            NormalizeOptional(source.NyxIdAccessToken),
-            NormalizeOptional(source.NyxIdOrgToken),
-            NormalizeOptional(source.SenderNyxIdAccessToken),
-            NormalizeOptional(source.ModelOverride),
-            NormalizeOptional(source.NyxIdRoutePreference),
-            source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
-            NormalizeOptional(source.UserMemoryPrompt));
+        var intent = new WorkflowLlmExecutionIntent
+        {
+            ModelOverride = NormalizeOptional(source.ModelOverride) ?? string.Empty,
+            UserMemoryPrompt = NormalizeOptional(source.UserMemoryPrompt) ?? string.Empty,
+        };
+        if (source.MaxToolRoundsOverride is > 0)
+            intent.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
+        return intent;
     }
 
     private static string? NormalizeOptional(string? value) =>

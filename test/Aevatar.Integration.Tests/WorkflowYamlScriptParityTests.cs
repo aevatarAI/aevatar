@@ -11,6 +11,7 @@ using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -51,7 +52,7 @@ public class WorkflowYamlScriptParityTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddSingleton<IWorkflowRoleActorTypeResolver, TestWorkflowRoleActorTypeResolver>();
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
 
@@ -106,7 +107,7 @@ public class WorkflowYamlScriptParityTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent
+            Payload = Any.Pack(new WorkflowChatRequestEvent
             {
                 Prompt = prompt,
                 SessionId = "parity-session",

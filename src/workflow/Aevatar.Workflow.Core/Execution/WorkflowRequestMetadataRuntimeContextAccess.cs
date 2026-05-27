@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Abstractions.Execution;
-using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -23,15 +22,6 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
         ArgumentNullException.ThrowIfNull(stateHost);
         await WorkflowRunExecutionContextStateAccess.ApplyRequestMetadataAsync(stateHost, metadata, ct);
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
-    }
-
-    public static Task SetToolContextAsync(
-        IWorkflowExecutionStateHost stateHost,
-        AgentToolExecutionContext? toolContext,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(stateHost);
-        return WorkflowRunExecutionContextStateAccess.ApplyToolContextAsync(stateHost, toolContext, ct);
     }
 
     // Refactor (iter16/cluster-031):

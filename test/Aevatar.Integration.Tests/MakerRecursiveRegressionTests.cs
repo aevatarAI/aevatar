@@ -5,13 +5,16 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Extensions.Maker;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
@@ -77,9 +80,11 @@ public class MakerRecursiveRegressionTests
     private static TestEnvironment BuildEnvironment(DeterministicMakerProvider provider)
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddWorkflowAiIntegration();
+        services.AddSingleton<IWorkflowRoleActorTypeResolver, TestWorkflowRoleActorTypeResolver>();
         services.AddWorkflowMakerExtensions();
         services.AddSingleton<ILLMProvider>(provider);
         services.AddSingleton<ILLMProviderFactory>(provider);
@@ -153,7 +158,7 @@ public class MakerRecursiveRegressionTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
+            Payload = Any.Pack(new WorkflowChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 

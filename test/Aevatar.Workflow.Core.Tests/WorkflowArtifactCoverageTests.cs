@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Abstractions;
@@ -25,17 +24,16 @@ public sealed class WorkflowArtifactCoverageTests
                 StateEvent = new StateEvent
                 {
                     EventId = "evt-role-reply",
-                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    EventData = Any.Pack(new WorkflowLlmInvocationCompletedEvent
                     {
-                        RoleId = "typed-role",
+                        WorkerId = "typed-role",
                         SessionId = "session-1",
                         Content = "reply",
                         ReasoningContent = "reasoning",
-                        Prompt = "prompt",
                         ContentEmitted = true,
                         ToolCalls =
                         {
-                            new ToolCallEvent
+                            new WorkflowLlmToolCall
                             {
                                 ToolName = "search",
                                 CallId = "call-1",
@@ -43,7 +41,7 @@ public sealed class WorkflowArtifactCoverageTests
                         },
                     }),
                 },
-                StateRoot = Any.Pack(new RoleGAgentState()),
+                StateRoot = Any.Pack(new WorkflowRunState()),
             }),
         };
 
@@ -61,7 +59,7 @@ public sealed class WorkflowArtifactCoverageTests
         fact.SessionId.Should().Be("session-1");
         fact.Content.Should().Be("reply");
         fact.ReasoningContent.Should().Be("reasoning");
-        fact.Prompt.Should().Be("prompt");
+        fact.Prompt.Should().BeEmpty();
         fact.ContentEmitted.Should().BeTrue();
         fact.ToolCalls.Should().ContainSingle(x => x.ToolName == "search" && x.CallId == "call-1");
     }
@@ -117,7 +115,7 @@ public sealed class WorkflowArtifactCoverageTests
                     {
                         StateEvent = new StateEvent
                         {
-                            EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                            EventData = Any.Pack(new WorkflowLlmInvocationCompletedEvent
                             {
                                 SessionId = "ignored",
                             }),
@@ -222,22 +220,14 @@ public sealed class WorkflowArtifactCoverageTests
             },
             "workflow-run");
 
-        var withTemperaturePayload = withTemperature.Payload!.Unpack<InitializeRoleAgentEvent>();
-        var withoutTemperaturePayload = withoutTemperature.Payload!.Unpack<InitializeRoleAgentEvent>();
+        var withTemperaturePayload = withTemperature.Payload!.Unpack<WorkflowRoleActorInitializedEvent>();
+        var withoutTemperaturePayload = withoutTemperature.Payload!.Unpack<WorkflowRoleActorInitializedEvent>();
 
-        withTemperaturePayload.RoleId.Should().Be("planner");
-        withTemperaturePayload.RoleName.Should().Be("Planner");
-        withTemperaturePayload.ProviderName.Should().Be("openai");
-        withTemperaturePayload.Model.Should().Be("gpt-5.4");
-        withTemperaturePayload.SystemPrompt.Should().Be("You are helpful.");
-        withTemperaturePayload.HasTemperature.Should().BeTrue();
-        withTemperaturePayload.Temperature.Should().BeApproximately(0.25f, 0.0001f);
+        withTemperaturePayload.TargetRole.Should().Be("planner");
         withTemperature.Route!.PublisherActorId.Should().Be("workflow-run");
         withTemperature.Propagation!.CorrelationId.Should().NotBeNullOrWhiteSpace();
 
-        withoutTemperaturePayload.RoleId.Should().Be("reviewer");
-        withoutTemperaturePayload.RoleName.Should().Be("Reviewer");
-        withoutTemperaturePayload.HasTemperature.Should().BeFalse();
+        withoutTemperaturePayload.TargetRole.Should().Be("reviewer");
     }
 
     private sealed class RecordingModuleFactory(params string[] creatableNames)

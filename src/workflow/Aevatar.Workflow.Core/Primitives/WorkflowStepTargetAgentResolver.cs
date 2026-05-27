@@ -21,7 +21,7 @@ public sealed class WorkflowStepTargetAgentResolver
         if (!string.IsNullOrWhiteSpace(targetRole))
         {
             var roleActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
-            return Task.FromResult(WorkflowStepTargetAgentResolution.Actor(roleActorId, $"target_role:{targetRole}"));
+            return Task.FromResult(WorkflowStepTargetAgentResolution.Actor(roleActorId, $"target_role:{targetRole}", targetRole));
         }
 
         var implicitTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
@@ -31,7 +31,7 @@ public sealed class WorkflowStepTargetAgentResolver
         if (!string.IsNullOrWhiteSpace(implicitTargetRole))
         {
             var roleActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, implicitTargetRole);
-            return Task.FromResult(WorkflowStepTargetAgentResolution.Actor(roleActorId, $"implicit_target_role:{implicitTargetRole}"));
+            return Task.FromResult(WorkflowStepTargetAgentResolution.Actor(roleActorId, $"implicit_target_role:{implicitTargetRole}", implicitTargetRole));
         }
 
         return Task.FromResult(WorkflowStepTargetAgentResolution.Self(ctx.AgentId));
@@ -42,11 +42,12 @@ public readonly record struct WorkflowStepTargetAgentResolution(
     bool UseSelf,
     string ActorId,
     string Mode,
-    string WorkerId)
+    string WorkerId,
+    string RoleId)
 {
     public static WorkflowStepTargetAgentResolution Self(string workerId) =>
-        new(true, string.Empty, "self", workerId);
+        new(true, string.Empty, "self", workerId, string.Empty);
 
-    public static WorkflowStepTargetAgentResolution Actor(string actorId, string mode) =>
-        new(false, actorId, mode, actorId);
+    public static WorkflowStepTargetAgentResolution Actor(string actorId, string mode, string roleId = "") =>
+        new(false, actorId, mode, actorId, roleId?.Trim() ?? string.Empty);
 }

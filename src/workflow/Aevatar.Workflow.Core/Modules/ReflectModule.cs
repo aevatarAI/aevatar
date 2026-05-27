@@ -32,8 +32,13 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowLlmTextDeltaEvent.Descriptor) ||
+                payload.Is(WorkflowLlmReasoningDeltaEvent.Descriptor) ||
+                payload.Is(WorkflowLlmToolCallDeltaEvent.Descriptor) ||
+                payload.Is(WorkflowLlmToolResultEvent.Descriptor) ||
+                payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor) ||
+                payload.Is(WorkflowTextMessageEndEvent.Descriptor) ||
+                payload.Is(WorkflowChatResponseEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -75,8 +80,8 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
-                TargetRole = request.TargetRole ?? string.Empty,
-                TargetActorId = target.UseSelf ? string.Empty : target.ActorId,
+                TargetRole = target.RoleId,
+                TargetActorId = string.Empty,
                 CurrentDraft = request.Input ?? string.Empty,
                 Criteria = criteria,
                 MaxRounds = Math.Clamp(maxRounds, 1, 10),
@@ -98,17 +103,31 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (payload.Is(WorkflowLlmTextDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmReasoningDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmToolCallDeltaEvent.Descriptor) ||
+            payload.Is(WorkflowLlmToolResultEvent.Descriptor))
+        {
+            return;
+        }
+
         string? content = null;
         string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
-            var evt = payload.Unpack<TextMessageEndEvent>();
+            var evt = payload.Unpack<WorkflowLlmInvocationCompletedEvent>();
+            content = evt.Success ? evt.Content : string.Empty;
+            sessionId = evt.SessionId;
+        }
+        else if (payload.Is(WorkflowTextMessageEndEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowTextMessageEndEvent>();
             content = evt.Content;
             sessionId = evt.SessionId;
         }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
+        else if (payload.Is(WorkflowChatResponseEvent.Descriptor))
         {
-            var evt = payload.Unpack<ChatResponseEvent>();
+            var evt = payload.Unpack<WorkflowChatResponseEvent>();
             content = evt.Content;
             sessionId = evt.SessionId;
         }
@@ -204,18 +223,18 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = prompt,
-            SessionId = sessionId,
-            Telegram = new TelegramBridgeRequest(),
-        };
-        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
+        var intent = WorkflowLlmIntentBuilder.Build(
+            prompt,
+            sessionId,
+            state.RunId,
+            state.StepId,
+            state.TargetRole,
+            role: null,
+            timeoutMs: 0,
+            ctx);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
-        if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
-        else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private async Task SendImproveAsync(
@@ -239,18 +258,18 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = prompt,
-            SessionId = sessionId,
-            Telegram = new TelegramBridgeRequest(),
-        };
-        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
+        var intent = WorkflowLlmIntentBuilder.Build(
+            prompt,
+            sessionId,
+            state.RunId,
+            state.StepId,
+            state.TargetRole,
+            role: null,
+            timeoutMs: 0,
+            ctx);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
-        if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
-        else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private static Task SaveStateAsync(
@@ -282,9 +301,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
-    private static void CopyParametersToChatRequest(
+    private static void CopyParametersToIntent(
         MapField<string, string> source,
-        ChatRequestEvent chatRequest)
+        WorkflowLlmExecutionIntent intent)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
@@ -296,11 +315,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 
             var normalizedKey = key.Trim();
             var normalizedValue = value.Trim();
-            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
-                continue;
-
-            chatRequest.Metadata[normalizedKey] = normalizedValue;
+            intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
 
@@ -331,6 +346,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreatePhaseSessionId(string scopeId, string runId, string stepToken) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
 }

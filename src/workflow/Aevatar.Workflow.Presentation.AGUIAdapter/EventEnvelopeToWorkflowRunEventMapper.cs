@@ -407,6 +407,119 @@ public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEve
     }
 }
 
+public sealed class WorkflowLlmStreamRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => 32;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        events = [];
+        if (envelope.Payload == null)
+            return false;
+
+        var payload = envelope.Payload;
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+
+        if (payload.Is(WorkflowLlmTextDeltaEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowLlmTextDeltaEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id),
+                        Delta = evt.Delta,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(WorkflowLlmReasoningDeltaEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowLlmReasoningDeltaEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "aevatar.llm.reasoning",
+                        Payload = Any.Pack(new WorkflowReasoningCustomPayload
+                        {
+                            SessionId = evt.SessionId,
+                            Delta = evt.Delta,
+                            Role = string.IsNullOrWhiteSpace(evt.WorkerId)
+                                ? AGUIEventEnvelopeMappingHelpers.ResolveRoleFromEnvelope(envelope)
+                                : evt.WorkerId.Trim(),
+                        }),
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(WorkflowLlmToolCallDeltaEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowLlmToolCallDeltaEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    ToolCallStart = new WorkflowToolCallStartEventPayload
+                    {
+                        ToolCallId = evt.CallId,
+                        ToolName = evt.ToolName,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(WorkflowLlmToolResultEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowLlmToolResultEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    ToolCallEnd = new WorkflowToolCallEndEventPayload
+                    {
+                        ToolCallId = evt.CallId,
+                        Result = string.IsNullOrWhiteSpace(evt.Error) ? evt.ResultJson : evt.Error,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowLlmInvocationCompletedEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    TextMessageEnd = new WorkflowTextMessageEndEventPayload
+                    {
+                        MessageId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id),
+                    },
+                },
+            ];
+            return true;
+        }
+
+        return false;
+    }
+}
+
 public sealed class AIReasoningRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 35;

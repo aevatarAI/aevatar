@@ -1,7 +1,6 @@
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
@@ -15,7 +14,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             ? command.SessionId
             : context.CorrelationId;
 
-        var chatRequest = new ChatRequestEvent
+        var chatRequest = new WorkflowChatRequestEvent
         {
             Prompt = command.Prompt,
             SessionId = sessionId,
@@ -26,10 +25,9 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Headers, context.Headers);
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
-        if (command.LlmControl != null)
-            chatRequest.LlmControl = command.LlmControl.ToPayload();
+        if (command.LlmIntent != null)
+            chatRequest.LlmIntent = command.LlmIntent.Clone();
 
         var envelope = new EventEnvelope
         {
@@ -45,19 +43,19 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         return envelope;
     }
 
-    private static ChatContentPart ToProto(WorkflowChatInputPart source)
+    private static WorkflowChatContentPart ToProto(WorkflowChatInputPart source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return new ChatContentPart
+        return new WorkflowChatContentPart
         {
             Kind = source.Kind switch
             {
-                WorkflowChatInputPartKind.Text => ChatContentPartKind.Text,
-                WorkflowChatInputPartKind.Image => ChatContentPartKind.Image,
-                WorkflowChatInputPartKind.Audio => ChatContentPartKind.Audio,
-                WorkflowChatInputPartKind.Video => ChatContentPartKind.Video,
-                _ => ChatContentPartKind.Unspecified,
+                WorkflowChatInputPartKind.Text => WorkflowChatContentPartKind.Text,
+                WorkflowChatInputPartKind.Image => WorkflowChatContentPartKind.Image,
+                WorkflowChatInputPartKind.Audio => WorkflowChatContentPartKind.Audio,
+                WorkflowChatInputPartKind.Video => WorkflowChatContentPartKind.Video,
+                _ => WorkflowChatContentPartKind.Unspecified,
             },
             Text = source.Text ?? string.Empty,
             DataBase64 = source.DataBase64 ?? string.Empty,

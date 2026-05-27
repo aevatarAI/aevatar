@@ -4,6 +4,145 @@ option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
 
+enum WorkflowChatContentPartKind {
+  WORKFLOW_CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
+  WORKFLOW_CHAT_CONTENT_PART_KIND_TEXT = 1;
+  WORKFLOW_CHAT_CONTENT_PART_KIND_IMAGE = 2;
+  WORKFLOW_CHAT_CONTENT_PART_KIND_AUDIO = 3;
+  WORKFLOW_CHAT_CONTENT_PART_KIND_VIDEO = 4;
+}
+
+message WorkflowChatContentPart {
+  WorkflowChatContentPartKind kind = 1;
+  string text = 2;
+  string data_base64 = 3;
+  string media_type = 4;
+  string uri = 5;
+  string name = 6;
+}
+
+message WorkflowChatRequestEvent {
+  string prompt = 1;
+  string session_id = 2;
+  map<string, string> headers = 3;
+  string scope_id = 4;
+  repeated WorkflowChatContentPart input_parts = 5;
+  map<string, string> metadata = 6;
+  WorkflowLlmExecutionIntent llm_intent = 7;
+}
+
+message WorkflowChatResponseEvent {
+  string content = 1;
+  string session_id = 2;
+}
+
+message WorkflowTextMessageEndEvent {
+  string content = 1;
+  string session_id = 2;
+}
+
+message WorkflowLlmExecutionIntent {
+  string prompt = 1;
+  string session_id = 2;
+  string run_id = 3;
+  string step_id = 4;
+  string target_role = 5;
+  string provider_name = 6;
+  string model = 7;
+  string system_prompt = 8;
+  optional double temperature = 9;
+  int32 max_tokens = 10;
+  int32 max_tool_rounds = 11;
+  int32 max_history_messages = 12;
+  string model_override = 13;
+  optional int32 max_tool_rounds_override = 14;
+  string user_memory_prompt = 15;
+  int32 timeout_ms = 16;
+  repeated WorkflowChatContentPart input_parts = 17;
+  map<string, string> headers = 18;
+  map<string, string> annotations = 19;
+}
+
+message WorkflowLlmToolCall {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+}
+
+message WorkflowLlmInvocationStartedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string target_role = 4;
+}
+
+message WorkflowRoleActorInitializedEvent {
+  string target_role = 1;
+}
+
+message WorkflowLlmTextDeltaEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string delta = 4;
+  string worker_id = 5;
+}
+
+message WorkflowLlmReasoningDeltaEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string delta = 4;
+  string worker_id = 5;
+}
+
+message WorkflowLlmToolCallDeltaEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string tool_name = 4;
+  string arguments_json = 5;
+  string call_id = 6;
+  string worker_id = 7;
+}
+
+message WorkflowLlmToolResultEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string call_id = 4;
+  string result_json = 5;
+  bool success = 6;
+  string error = 7;
+  string worker_id = 8;
+}
+
+message WorkflowLlmInvocationCompletedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  bool success = 4;
+  string content = 5;
+  string reasoning_content = 6;
+  string error = 7;
+  string worker_id = 8;
+  repeated WorkflowLlmToolCall tool_calls = 9;
+  bool content_emitted = 10;
+}
+
+message WorkflowToolCallEvent {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+}
+
+message WorkflowToolResultEvent {
+  string call_id = 1;
+  string result_json = 2;
+  bool success = 3;
+  string error = 4;
+}
+
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
 message BindWorkflowRunDefinitionEvent
 {
@@ -40,9 +179,11 @@ message WorkflowRunExecutionContextDelta
 }
 message WorkflowRunLlmExecutionContextDelta
 {
-  string nyxid_access_token = 1;
+  reserved 1, 3;
+  reserved "nyxid_access_token", "nyxid_route_preference";
   string model_override = 2;
-  string nyxid_route_preference = 3;
+  optional int32 max_tool_rounds_override = 4;
+  string user_memory_prompt = 5;
 }
 message WorkflowRunConnectorExecutionContextDelta
 {

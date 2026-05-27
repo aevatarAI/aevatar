@@ -13,6 +13,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -174,7 +175,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
                 return Task.CompletedTask;
             });
 
-        await runAgent.HandleChatRequest(new ChatRequestEvent
+        await runAgent.HandleChatRequest(new WorkflowChatRequestEvent
         {
             Prompt = evt.InputText,
             SessionId = evt.CommandId,
