@@ -161,8 +161,8 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.queryByText("当前工作空间")).toBeNull();
-    expect(screen.getByText("AI Team 总数")).toBeTruthy();
-    expect(screen.getByText("待处理 Team")).toBeTruthy();
+    expect(screen.getByText("AI 团队总数")).toBeTruthy();
+    expect(screen.getByText("待处理团队")).toBeTruthy();
     expect(screen.getByText("运行稳定")).toBeTruthy();
     expect(screen.getByText("团队列表")).toBeTruthy();
     expect(
@@ -471,7 +471,7 @@ describe("TeamsHomePage", () => {
     expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
     expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
     expect(screen.queryByText("团队列表暂时无法加载。")).toBeNull();
-    expect(screen.queryByText("AI Team 总数")).toBeNull();
+    expect(screen.queryByText("AI 团队总数")).toBeNull();
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");

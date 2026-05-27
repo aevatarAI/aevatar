@@ -1645,7 +1645,7 @@ describe("TeamDetailPage", () => {
         description: null,
       });
     });
-    expect(message.success).toHaveBeenCalledWith("Team updated.");
+    expect(message.success).toHaveBeenCalledWith("团队已更新。");
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
     });
@@ -1665,11 +1665,16 @@ describe("TeamDetailPage", () => {
       name: "Alpha Support Team",
     });
     fireEvent.click(screen.getByRole("button", { name: "编辑团队" }));
-    fireEvent.change(await screen.findByLabelText("编辑团队名称"), {
+    const nameInput = await screen.findByLabelText("编辑团队名称");
+    expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
+    fireEvent.change(nameInput, {
       target: { value: "   " },
     });
 
     expect(screen.getByRole("button", { name: "保存团队" })).toBeDisabled();
+    expect(screen.getByText("填写团队名称后即可保存。")).toBeTruthy();
     expect(studioApi.updateTeam).not.toHaveBeenCalled();
   });
 

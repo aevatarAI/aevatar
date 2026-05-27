@@ -1151,8 +1151,8 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="AI Team 总数" value={visibleTeamCount} />
-              <SummaryStatCard label="待处理 Team" value={actionableTeamCount} />
+              <SummaryStatCard accent label="AI 团队总数" value={visibleTeamCount} />
+              <SummaryStatCard label="待处理团队" value={actionableTeamCount} />
               <SummaryStatCard label="运行稳定" value={healthyTeamCount} />
             </div>
 

@@ -1029,7 +1029,7 @@ const TeamDetailPage: React.FC = () => {
 
     const displayName = teamEditorName.trim();
     if (!displayName) {
-      void message.error("Team name is required.");
+      void message.error("请填写团队名称。");
       return;
     }
 
@@ -1041,11 +1041,11 @@ const TeamDetailPage: React.FC = () => {
         displayName,
         description: teamEditorDescription.trim() || null,
       });
-      void message.success("Team updated.");
+      void message.success("团队已更新。");
       setTeamEditorOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
-      void message.error(describeError(error, "Team update failed."));
+      void message.error(describeError(error, "团队更新失败。"));
     } finally {
       setTeamEditorSaving(false);
     }
@@ -1508,6 +1508,9 @@ const TeamDetailPage: React.FC = () => {
         <div data-testid="team-test-modal-body">{teamTestPanel}</div>
       </Modal>
       <Modal
+        cancelText="取消"
+        cancelButtonProps={{ "aria-label": "取消" }}
+        closable={{ "aria-label": "关闭" }}
         confirmLoading={teamEditorSaving}
         okButtonProps={{ disabled: !teamEditorName.trim() }}
         okText="保存团队"
@@ -1539,6 +1542,11 @@ const TeamDetailPage: React.FC = () => {
           <Typography.Text type="secondary">
             这里更新的是 Team summary。即使团队已归档，仍然可以继续编辑和维护。
           </Typography.Text>
+          {!teamEditorName.trim() ? (
+            <Typography.Text type="secondary">
+              填写团队名称后即可保存。
+            </Typography.Text>
+          ) : null}
         </div>
       </Modal>
       <Modal

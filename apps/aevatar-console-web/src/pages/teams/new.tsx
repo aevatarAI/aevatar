@@ -121,6 +121,11 @@ const TeamCreatePage: React.FC = () => {
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
   const canCreateTeam = Boolean(scopeId && teamName.trim());
+  const createTeamDisabledHint = !scopeId
+    ? '当前登录范围还不可用，暂时不能创建团队。'
+    : !teamName.trim()
+      ? '填写团队名称后即可创建。'
+      : '';
   const handleCreateTeam = async () => {
     if (!canCreateTeam || isCreatingTeam) {
       return;
@@ -169,11 +174,11 @@ const TeamCreatePage: React.FC = () => {
             onClick={() => void handleCreateTeam()}
             style={primaryActionButtonStyle}
           >
-            Create Team
+            创建团队
           </Button>
         </Space>
       }
-      title="Create Team"
+      title="创建团队"
     >
       {authSessionIssue ? (
         <Alert
@@ -216,23 +221,28 @@ const TeamCreatePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Team name</Typography.Text>
+            <Typography.Text strong>团队名称</Typography.Text>
             <Input
-              aria-label="Team name"
+              aria-label="团队名称"
               placeholder="例如：订单助手团队"
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Description</Typography.Text>
+            <Typography.Text strong>团队说明</Typography.Text>
             <Input
-              aria-label="Team description"
+              aria-label="团队说明"
               placeholder="这个 Team 负责什么"
               value={teamDescription}
               onChange={(event) => setTeamDescription(event.target.value)}
             />
           </div>
+          {createTeamDisabledHint ? (
+            <Typography.Text style={{ fontSize: 13 }} type="secondary">
+              {createTeamDisabledHint}
+            </Typography.Text>
+          ) : null}
           <Space wrap size={[8, 8]}>
             <Button
               icon={<TeamOutlined />}
@@ -241,10 +251,10 @@ const TeamCreatePage: React.FC = () => {
               onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
             >
-              Create Team
+              创建团队
             </Button>
             <Button onClick={() => history.push(buildTeamsHref())}>
-              Back to My Teams
+              返回团队列表
             </Button>
           </Space>
         </div>
