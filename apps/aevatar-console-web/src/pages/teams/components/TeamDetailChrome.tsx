@@ -248,7 +248,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
                 fontWeight: "inherit",
               }}
             >
-              Teams
+              团队
             </Typography.Link>
             {` / 团队详情 / ${activeTabLabel}`}
           </Typography.Text>

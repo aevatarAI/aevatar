@@ -219,6 +219,21 @@ function formatTeamLifecycleLabel(value: string | null | undefined): string {
   }
 }
 
+function formatTeamMemberLifecycleLabel(value: string | null | undefined): string {
+  switch (normalizeStatus(value)) {
+    case "created":
+      return "已创建";
+    case "build_ready":
+    case "buildready":
+      return "可构建";
+    case "bind_ready":
+    case "bindready":
+      return "可调用";
+    default:
+      return formatStudioMemberLifecycleStage(value);
+  }
+}
+
 function formatCompositionKind(kind: string | null | undefined): string {
   switch (normalizeStatus(kind)) {
     case "":
@@ -684,7 +699,7 @@ const TeamDetailPage: React.FC = () => {
       <Space size={[10, 6]} wrap>
         {selectedTeamId ? (
           <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>teamId</span>
+            <span style={{ textTransform: "none" }}>团队 ID</span>
             <AevatarCompactText
               color="inherit"
               head={8}
@@ -697,7 +712,7 @@ const TeamDetailPage: React.FC = () => {
         ) : null}
         {teamMetaScopeId ? (
           <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>scopeId</span>
+            <span style={{ textTransform: "none" }}>工作区 ID</span>
             <AevatarCompactText
               color="inherit"
               head={8}
@@ -761,7 +776,7 @@ const TeamDetailPage: React.FC = () => {
         }),
         implementationKind: formatCompositionKind(member.implementationKind),
         key: member.memberId,
-        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+        lifecycleLabel: formatTeamMemberLifecycleLabel(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
         isEntryMember: trimText(member.memberId) === entryMemberId,
         memberId: member.memberId,
@@ -1041,11 +1056,11 @@ const TeamDetailPage: React.FC = () => {
         displayName,
         description: teamEditorDescription.trim() || null,
       });
-      void message.success("Team updated.");
+      void message.success("团队已更新。");
       setTeamEditorOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
-      void message.error(describeError(error, "Team update failed."));
+      void message.error(describeError(error, "团队更新失败。"));
     } finally {
       setTeamEditorSaving(false);
     }
@@ -1059,10 +1074,10 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQuery.data,
   ]);
   const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
-  const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "Archive Team" : "";
+  const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "归档团队" : "";
   const archiveTeamHint = selectedTeamId
-    ? "Team summary 读取完成后才能归档。"
-    : "当前路由还没有选中真实 Team。";
+    ? "团队摘要读取完成后才能归档。"
+    : "当前路由还没有选中真实团队。";
   const openTeamArchive = React.useCallback(() => {
     if (!teamSummaryQuery.data || isTeamArchived) {
       return;
@@ -1085,11 +1100,11 @@ const TeamDetailPage: React.FC = () => {
     setTeamArchiving(true);
     try {
       await studioApi.archiveTeam(scopeId, selectedTeamId);
-      void message.success("Team archived.");
+      void message.success("团队已归档。");
       setTeamArchiveOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
-      void message.error(describeError(error, "Team archive failed."));
+      void message.error(describeError(error, "团队归档失败。"));
     } finally {
       setTeamArchiving(false);
     }
@@ -1463,7 +1478,7 @@ const TeamDetailPage: React.FC = () => {
         onOpenTeamEditor={openTeamEditor}
         onOpenTeamTest={openTeamTestModal}
         testTeamDisabled={isTeamArchived}
-        testTeamHint="归档后的 Team 不能继续发起测试。"
+        testTeamHint="归档后的团队不能继续发起测试。"
         testTeamLabel="测试团队"
       />
       }
@@ -1537,7 +1552,7 @@ const TeamDetailPage: React.FC = () => {
             />
           </div>
           <Typography.Text type="secondary">
-            这里更新的是 Team summary。即使团队已归档，仍然可以继续编辑和维护。
+            这里更新的是团队摘要。即使团队已归档，仍然可以继续编辑和维护。
           </Typography.Text>
         </div>
       </Modal>
@@ -1551,7 +1566,7 @@ const TeamDetailPage: React.FC = () => {
         title="归档这支团队？"
       >
         <Typography.Text>
-          归档后，这支 Team 会从活跃 roster 中降权显示，但你仍然可以继续编辑配置并查看历史。
+          归档后，这支团队会从活跃成员清单中降权显示，但你仍然可以继续编辑配置并查看历史。
         </Typography.Text>
       </Modal>
     </TeamDetailShell>

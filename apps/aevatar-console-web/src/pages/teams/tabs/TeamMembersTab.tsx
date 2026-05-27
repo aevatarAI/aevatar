@@ -111,19 +111,19 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           <AevatarInspectorEmpty
             compact
             title="成员清单正在同步"
-            description="Team 已创建，成员清单正在同步。这里会自动刷新。"
+            description="团队已创建，成员清单正在同步。这里会自动刷新。"
           />
         ) : rosterLoading ? (
           <AevatarInspectorEmpty
             compact
             title="正在读取成员清单"
-            description="正在读取这支 Team 的成员。"
+            description="正在读取这支团队的成员。"
           />
         ) : rosterError ? (
           <AevatarInspectorEmpty
             compact
             title="成员清单暂不可见"
-            description="当前无法读取这支 Team 的成员清单。"
+            description="当前无法读取这支团队的成员清单。"
           />
         ) : rosterRows.length > 0 ? (
           <div
@@ -208,7 +208,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       </EllipsisText>
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <FactLine rows={1} text={row.description || `归属 Team ${rosterTeamId || "--"}`} />
+                      <FactLine rows={1} text={row.description || `归属团队 ${rosterTeamId || "--"}`} />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                       <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
@@ -243,7 +243,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           onClick={() => onSetEntry(row.memberId)}
                           size="small"
                         >
-                          Set entry
+                          设为入口成员
                         </Button>
                       ) : null}
                       <Button
@@ -252,7 +252,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         onClick={handleNavigate(row.editStudioHref)}
                         size="small"
                       >
-                        Edit in Studio
+                        在工作室编辑
                       </Button>
                       <Button
                         href={row.buildStudioHref}
@@ -261,7 +261,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         size="small"
                         type="primary"
                       >
-                        Build
+                        构建
                       </Button>
                     </Space>
                   </div>
@@ -273,8 +273,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <AevatarInspectorEmpty
               compact
-              title="这支 Team 还没有成员"
-              description="Team 已经是后端事实，但当前 roster 为空。新增 member 后会出现在这里。"
+              title="这支团队还没有成员"
+              description="团队已经是后端事实，但当前成员清单为空。新增成员后会出现在这里。"
             />
             {createMemberHref ? (
               <div style={{ display: "flex", justifyContent: "center" }}>
@@ -291,8 +291,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
         ) : (
           <AevatarInspectorEmpty
             compact
-            title="尚未选中真实 Team"
-            description="当前路由还没有 teamId，所以只能展示运行时观察到的成员身份。"
+            title="尚未选中真实团队"
+            description="当前路由还没有团队 ID，所以只能展示运行时观察到的成员身份。"
           />
         )}
       </AevatarPanel>
