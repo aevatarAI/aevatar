@@ -381,6 +381,48 @@ describe("TeamsHomePage", () => {
     );
   });
 
+  it("keeps the list view primary action near the Team summary instead of after every fact block", async () => {
+    const teams = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultTeams[0],
+      teamId: `t-list-${index + 1}`,
+      displayName: `列表团队 ${index + 1}`,
+      memberCount: 1,
+      updatedAt: `2026-05-0${Math.min(index + 1, 9)}T10:02:00Z`,
+    }));
+    const members = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultMembers[0],
+      memberId: `member-list-${index + 1}`,
+      displayName: `列表成员 ${index + 1}`,
+      publishedServiceId: `service-list-${index + 1}`,
+      teamId: `t-list-${index + 1}`,
+    }));
+    const services = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultServices[0],
+      serviceId: `service-list-${index + 1}`,
+      displayName: `列表服务 ${index + 1}`,
+    }));
+
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams,
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members,
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(services);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("list", { name: "团队紧凑视图" })).toBeTruthy();
+    const article = screen
+      .getByRole("heading", { level: 4, name: "列表团队 1" })
+      .closest("article");
+    expect(article?.firstElementChild?.textContent).toContain("查看团队");
+  });
+
   it("opens the bound member detail handoff from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 

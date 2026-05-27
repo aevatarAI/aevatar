@@ -765,86 +765,106 @@ const TeamRosterRow: React.FC<{
     <article
       className="teams-home-roster-row"
       style={{
-        alignItems: "center",
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 20,
         boxShadow: token.boxShadowTertiary,
-        display: "grid",
-        gap: 16,
-        gridTemplateColumns: "minmax(0, 1.8fr) repeat(4, minmax(88px, 120px)) auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
         minWidth: 0,
         padding: 16,
       }}
     >
-      <div style={{ minWidth: 0 }}>
-        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
-          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-            <TeamTitle level={4} title={preview.title} />
-          </div>
-          <span
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 12,
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+          <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+              <TeamTitle level={4} title={preview.title} />
+            </div>
+            <span
+              style={{
+                ...resolveAttentionPillStyle(token, preview.attention),
+                borderRadius: 999,
+                display: "inline-flex",
+                fontSize: 12,
+                fontWeight: 600,
+                lineHeight: 1,
+                padding: "7px 10px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {formatAttentionLabel(preview.attention)}
+            </span>
+          </Space>
+          <Typography.Paragraph
+            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
             style={{
-              ...resolveAttentionPillStyle(token, preview.attention),
-              borderRadius: 999,
-              display: "inline-flex",
-              fontSize: 12,
-              fontWeight: 600,
-              lineHeight: 1,
-              padding: "7px 10px",
-              whiteSpace: "nowrap",
+              color: token.colorTextSecondary,
+              fontSize: 13,
+              marginBottom: 0,
+              marginTop: 0,
             }}
           >
-            {formatAttentionLabel(preview.attention)}
-          </span>
+            {preview.attentionDetail}
+          </Typography.Paragraph>
+          <Typography.Text
+            title={preview.teamId}
+            ellipsis={{ tooltip: preview.teamId }}
+            style={{
+              color: token.colorTextSecondary,
+              display: "block",
+              fontSize: 13,
+              marginTop: 4,
+            }}
+          >
+            Team 标识：{preview.teamId}
+          </Typography.Text>
+        </div>
+
+        <Space className="teams-home-roster-row-actions" wrap>
+          <Button onClick={() => history.push(preview.detailHref)} type="primary">
+            查看团队
+          </Button>
         </Space>
-        <Typography.Paragraph
-          ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-          style={{
-            color: token.colorTextSecondary,
-            fontSize: 13,
-            marginBottom: 0,
-            marginTop: 0,
-          }}
-        >
-          {preview.attentionDetail}
-        </Typography.Paragraph>
-        <Typography.Text
-          title={preview.teamId}
-          ellipsis={{ tooltip: preview.teamId }}
-          style={{
-            color: token.colorTextSecondary,
-            display: "block",
-            fontSize: 13,
-          }}
-        >
-          Team 标识：{preview.teamId}
-        </Typography.Text>
       </div>
 
-      <TeamFact
-        label="状态"
-        value={formatOperationalStatusLabel(
-          preview.latestRun?.completionStatus,
-          preview.attention,
-        )}
-      />
-      <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
-      <TeamFact
-        label="成员"
-        tooltip={preview.memberPreviewTooltip}
-        value={preview.memberPreviewLabel}
-      />
-      <TeamFact
-        label="服务"
-        tooltip={preview.serviceTooltip}
-        value={preview.serviceLabel}
-      />
-
-      <Space className="teams-home-roster-row-actions" wrap>
-        <Button onClick={() => history.push(preview.detailHref)} type="primary">
-          查看团队
-        </Button>
-      </Space>
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <TeamFact
+          label="状态"
+          value={formatOperationalStatusLabel(
+            preview.latestRun?.completionStatus,
+            preview.attention,
+          )}
+        />
+        <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
+        <TeamFact
+          label="成员"
+          tooltip={preview.memberPreviewTooltip}
+          value={preview.memberPreviewLabel}
+        />
+        <TeamFact
+          label="服务"
+          tooltip={preview.serviceTooltip}
+          value={preview.serviceLabel}
+        />
+      </div>
     </article>
   );
 };
