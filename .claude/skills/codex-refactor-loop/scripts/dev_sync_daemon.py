@@ -100,9 +100,10 @@ def has_failing_check(state: dict) -> bool:
 
 
 def codex_in_flight(label: str) -> bool:
-    """label = 'forward' / 'reverse'. 看 .refactor-loop/logs/ 里最近 in-flight sync log."""
+    """label = 'forward' / 'reverse'. ps grep worktree path(codex -C <wt> 在命令行可见)."""
+    wt = FORWARD_WT if label == "forward" else REVERSE_WT
     r = run(["bash", "-c",
-             f"ps -ef | grep 'codex exec' | grep 'sync-{label}-codex' | grep -v grep | wc -l"])
+             f"ps -ef | grep 'codex exec' | grep -- '-C {wt}' | grep -v grep | wc -l"])
     try:
         return int(r.stdout.strip()) > 0
     except ValueError:
