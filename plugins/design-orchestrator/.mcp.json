@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "chatgpt-product": {
+      "command": "node",
+      "args": [
+        "./scripts/chatgpt-product-server.mjs"
+      ],
+      "cwd": "."
+    },
+    "stitch-design": {
+      "command": "node",
+      "args": [
+        "./scripts/stitch-design-server.mjs"
+      ],
+      "cwd": "."
+    }
+  }
+}

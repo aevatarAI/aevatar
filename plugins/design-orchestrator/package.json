@@ -1,0 +1,18 @@
+{
+  "name": "design-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local MCP bridge for ChatGPT product reasoning and Stitch design support.",
+  "scripts": {
+    "check": "node ./scripts/check-connectivity.mjs",
+    "chatgpt": "node ./scripts/chatgpt-product-server.mjs",
+    "stitch": "node ./scripts/stitch-design-server.mjs"
+  },
+  "dependencies": {
+    "@_davideast/stitch-mcp": "^0.8.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^16.6.1",
+    "openai": "^6.39.0"
+  }
+}

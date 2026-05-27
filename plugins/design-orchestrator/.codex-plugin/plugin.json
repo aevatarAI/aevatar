@@ -1,0 +1,43 @@
+{
+  "name": "design-orchestrator",
+  "version": "0.1.0",
+  "description": "Orchestrate external product-design and visual-design collaborators for repository iteration workflows.",
+  "author": {
+    "name": "Abigail Deng",
+    "email": "abigaildeng@users.noreply.github.com",
+    "url": "https://github.com/aevatarAI/aevatar"
+  },
+  "homepage": "https://github.com/aevatarAI/aevatar/tree/dev/plugins/design-orchestrator",
+  "repository": "https://github.com/aevatarAI/aevatar",
+  "license": "MIT",
+  "keywords": [
+    "design",
+    "product",
+    "stitch",
+    "chatgpt",
+    "orchestration"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Design Orchestrator",
+    "shortDescription": "Bridge Codex with product and visual design copilots",
+    "longDescription": "Design Orchestrator is a local plugin shell for connecting Codex to external product-design and visual-design collaborators such as ChatGPT and Stitch, so repository iteration workflows can use real connected outputs instead of fallback prompts.",
+    "developerName": "Abigail Deng",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/aevatarAI/aevatar/tree/dev/plugins/design-orchestrator",
+    "privacyPolicyURL": "https://github.com/aevatarAI/aevatar",
+    "termsOfServiceURL": "https://github.com/aevatarAI/aevatar",
+    "defaultPrompt": [
+      "Connect ChatGPT and Stitch for repo product iteration",
+      "Check whether design integrations are actually reachable",
+      "Route product and style briefs through connected tools"
+    ],
+    "brandColor": "#1F6FEB",
+    "screenshots": []
+  }
+}

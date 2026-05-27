@@ -1,0 +1,20 @@
+{
+  "name": "aevatar-local-plugins",
+  "interface": {
+    "displayName": "Aevatar Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "design-orchestrator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/design-orchestrator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
