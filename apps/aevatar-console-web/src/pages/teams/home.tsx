@@ -906,6 +906,7 @@ const TeamsHomePage: React.FC = () => {
   const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || "";
   const queryScopeId =
     serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : "";
+  const canLoadRoster = queryScopeId.length > 0;
 
   React.useEffect(() => {
     if (!scopeId) {
@@ -923,19 +924,19 @@ const TeamsHomePage: React.FC = () => {
   }, [scopeId]);
 
   const membersQuery = useQuery({
-    enabled: queryScopeId.length > 0,
+    enabled: canLoadRoster,
     queryKey: ["teams", "members", queryScopeId],
     queryFn: () => studioApi.listMembers(queryScopeId),
     retry: false,
   });
   const teamsQuery = useQuery({
-    enabled: queryScopeId.length > 0,
+    enabled: canLoadRoster,
     queryKey: ["teams", "roster", queryScopeId],
     queryFn: () => studioApi.listTeams(queryScopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: queryScopeId.length > 0,
+    enabled: canLoadRoster,
     queryKey: ["teams", "services", queryScopeId],
     queryFn: () =>
       scopeRuntimeApi.listServices(queryScopeId, {
@@ -981,7 +982,7 @@ const TeamsHomePage: React.FC = () => {
   );
   const memberRunQueries = useQueries({
     queries: runtimeTrackableMembers.map((member) => ({
-      enabled: queryScopeId.length > 0 && membersQuery.isSuccess,
+      enabled: canLoadRoster && membersQuery.isSuccess,
       queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
       queryFn: () =>
         scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
@@ -1032,7 +1033,7 @@ const TeamsHomePage: React.FC = () => {
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
   const emptyRosterHint =
-    scopeId.length > 0
+    canLoadRoster
       ? "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。"
       : "当前登录状态还没有解析出可用的团队范围，请刷新后重试。";
   const partialIssues = [
@@ -1095,7 +1096,7 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
-        {partialIssues.length > 0 ? (
+        {canLoadRoster && partialIssues.length > 0 ? (
           <Alert
             description={partialIssues.join(" ")}
             showIcon
@@ -1121,7 +1122,7 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
-        {scopeId ? (
+        {canLoadRoster ? (
           <>
             <div
               style={{

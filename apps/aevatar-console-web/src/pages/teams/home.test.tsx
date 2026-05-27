@@ -397,7 +397,7 @@ describe("TeamsHomePage", () => {
     expect(params.get("runId")).toBe("run-latest");
   });
 
-  it("falls back to the locally stored auth scope when the live session lookup fails", async () => {
+  it("does not load roster data from a locally restored scope when server auth fails", async () => {
     window.history.replaceState({}, "", "/teams");
     persistAuthSession({
       tokens: {
@@ -424,6 +424,12 @@ describe("TeamsHomePage", () => {
         "登录状态暂时不可用，请刷新后重试。 已使用本地登录信息继续加载团队。",
       ),
     ).toBeTruthy();
+    expect(studioApi.listTeams).not.toHaveBeenCalled();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
+    expect(screen.queryByText("团队列表暂时无法加载。")).toBeNull();
+    expect(screen.queryByText("AI Team 总数")).toBeNull();
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
