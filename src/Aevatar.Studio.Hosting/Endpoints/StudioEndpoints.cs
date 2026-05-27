@@ -11,6 +11,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Storage;
 using System.Security.Cryptography;
+using System.Security.Claims;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -216,10 +217,89 @@ internal static class StudioEndpoints
             LogoutUrl: logoutUrl,
             Name: user?.Identity?.Name,
             Email: user?.FindFirst("email")?.Value,
+            Profile: BuildAuthProfile(user, isAuthenticated),
+            Session: new AppAuthSessionResponse(
+                Authenticated: isAuthenticated,
+                ProviderDisplayName: providerDisplayName,
+                ScopeId: scope?.ScopeId,
+                ScopeSource: scope?.Source,
+                ExpiresAtUtc: ResolveAuthSessionExpiry(user)),
             InvokeAuthMode: invokeAuthMode,
             ExternalCallerHint: externalCallerHint,
             ScopeId: scope?.ScopeId,
             ScopeSource: scope?.Source);
+    }
+
+    private static AppAuthProfileResponse? BuildAuthProfile(ClaimsPrincipal? user, bool isAuthenticated)
+    {
+        if (!isAuthenticated || user is null)
+            return null;
+
+        return new AppAuthProfileResponse(
+            Subject: ReadFirstClaim(user, ClaimTypes.NameIdentifier, "sub"),
+            Name: user.Identity?.Name ?? ReadFirstClaim(user, "name", "preferred_username"),
+            Email: ReadFirstClaim(user, ClaimTypes.Email, "email"),
+            EmailVerified: ReadBooleanClaim(user, "email_verified"),
+            Picture: ReadFirstClaim(user, "picture"),
+            Roles: ReadClaimValues(user, ClaimTypes.Role, "role", "roles"),
+            Groups: ReadClaimValues(user, "group", "groups"));
+    }
+
+    private static string? ResolveAuthSessionExpiry(ClaimsPrincipal? user)
+    {
+        var exp = ReadFirstClaim(user, "exp");
+        if (!long.TryParse(exp, out var seconds))
+            return null;
+
+        try
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.ToString("O");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadFirstClaim(ClaimsPrincipal? user, params string[] claimTypes)
+    {
+        if (user is null)
+            return null;
+
+        foreach (var claimType in claimTypes)
+        {
+            var value = user.FindFirst(claimType)?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static bool? ReadBooleanClaim(ClaimsPrincipal? user, params string[] claimTypes)
+    {
+        var value = ReadFirstClaim(user, claimTypes);
+        if (value is null)
+            return null;
+
+        if (bool.TryParse(value, out var parsed))
+            return parsed;
+
+        return value == "1" ? true : value == "0" ? false : null;
+    }
+
+    private static IReadOnlyList<string> ReadClaimValues(ClaimsPrincipal? user, params string[] claimTypes)
+    {
+        if (user is null)
+            return [];
+
+        return claimTypes
+            .SelectMany(claimType => user.FindAll(claimType))
+            .SelectMany(claim => claim.Value.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string? ResolveAuthProviderDisplayName(
@@ -1253,10 +1333,28 @@ public sealed record AppAuthMeResponse(
     string? LogoutUrl,
     string? Name,
     string? Email,
+    AppAuthProfileResponse? Profile,
+    AppAuthSessionResponse Session,
     string? InvokeAuthMode,
     string? ExternalCallerHint,
     string? ScopeId,
     string? ScopeSource);
+
+public sealed record AppAuthProfileResponse(
+    string? Subject,
+    string? Name,
+    string? Email,
+    bool? EmailVerified,
+    string? Picture,
+    IReadOnlyList<string> Roles,
+    IReadOnlyList<string> Groups);
+
+public sealed record AppAuthSessionResponse(
+    bool Authenticated,
+    string? ProviderDisplayName,
+    string? ScopeId,
+    string? ScopeSource,
+    string? ExpiresAtUtc);
 
 public sealed record AppContextResponse(
     string Mode,
