@@ -5543,15 +5543,38 @@ const StudioPage: React.FC = () => {
       }
 
       try {
-        await studioApi.createMember({
+        const createdWorkflowMember = await studioApi.createMember({
           scopeId: resolvedStudioScopeId,
           displayName: workflowName,
           implementationKind: 'workflow',
           ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
         });
-        await queryClient.invalidateQueries({
+        setOptimisticStudioMembers((current) =>
+          upsertStudioMemberSummary(current, createdWorkflowMember),
+        );
+        void queryClient.invalidateQueries({
           queryKey: studioMembersQueryKey,
         });
+        const createdWorkflowMemberId = trimOptional(
+          createdWorkflowMember.memberId,
+        );
+        if (createdWorkflowMemberId) {
+          pinnedRouteBackendMemberIdRef.current = createdWorkflowMemberId;
+          setPinnedRouteBackendMemberId(createdWorkflowMemberId);
+        }
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId,
+            teamId: createMemberTeamId || undefined,
+            returnTo: routeState.returnTo || undefined,
+            memberKey: createdWorkflowMemberId
+              ? `member:${createdWorkflowMemberId}`
+              : undefined,
+            focus: `workflow:${savedWorkflow.workflowId}`,
+            step: 'build',
+            tab: 'studio',
+          }),
+        );
         void message.success(
           `Created member ${workflowName} and opened its workflow draft.`,
         );
@@ -8587,6 +8610,13 @@ const StudioPage: React.FC = () => {
                     (workflow) => trimOptional(workflow.workflowId) === workflowId,
                   ),
                 ) || normalizedMemberKey;
+              pinnedRouteBackendMemberIdRef.current = '';
+              setPinnedRouteBackendMemberId('');
+              setSelectedWorkflowId(workflowId);
+              setSelectedScriptId('');
+              setTemplateWorkflow('');
+              setBuildSurface('editor');
+              setStudioSurface('build');
               history.push(
                 buildStudioRoute({
                   scopeId: resolvedStudioScopeId || undefined,
@@ -9916,16 +9946,8 @@ const StudioPage: React.FC = () => {
     ) : isBindSurface ? (
       <StudioMemberBindPanel
         authSession={authSessionQuery.data}
-        buildWorkflowYamls={
-          activeBuildMode === 'workflow' &&
-          selectedBuildRepresentsPublishedMember &&
-          trimOptional(draftYaml)
-            ? buildWorkflowYamlBundle
-            : null
-        }
         initialEndpointId={bindInitialEndpointId}
         memberId={workbenchStudioMemberId || undefined}
-        teamId={routeState.teamId || undefined}
         initialServiceId={bindPendingCandidate ? '' : bindSelectedMemberServiceId}
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}

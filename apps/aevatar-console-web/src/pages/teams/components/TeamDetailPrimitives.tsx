@@ -10,6 +10,7 @@ export const factValueFontFamily = aevatarMonoFontFamily;
 export const SignalCard: React.FC<{
   readonly caption?: React.ReactNode;
   readonly captionMonospace?: boolean;
+  readonly captionRows?: number;
   readonly captionTooltip?: React.ReactNode;
   readonly icon?: React.ReactNode;
   readonly label: React.ReactNode;
@@ -17,6 +18,7 @@ export const SignalCard: React.FC<{
 }> = ({
   caption,
   captionMonospace = false,
+  captionRows = 1,
   captionTooltip,
   icon,
   label,
@@ -53,10 +55,16 @@ export const SignalCard: React.FC<{
             <Typography.Text
               ellipsis
               style={{
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: captionRows,
                 display: "block",
                 fontFamily: captionMonospace ? factValueFontFamily : undefined,
                 fontSize: 13,
                 maxWidth: "100%",
+                overflow: "hidden",
+                overflowWrap: captionRows === 1 ? "normal" : "anywhere",
+                whiteSpace: captionRows === 1 ? "nowrap" : "normal",
+                wordBreak: captionRows === 1 ? "normal" : "break-word",
               }}
               type="secondary"
             >
@@ -66,13 +74,17 @@ export const SignalCard: React.FC<{
         ) : (
           <Typography.Text
             style={{
-              display: "block",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: captionRows,
+              display: "-webkit-box",
               fontFamily: captionMonospace ? factValueFontFamily : undefined,
               fontSize: 13,
               maxWidth: "100%",
               overflow: "hidden",
+              overflowWrap: captionRows === 1 ? "normal" : "anywhere",
               textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              whiteSpace: captionRows === 1 ? "nowrap" : "normal",
+              wordBreak: captionRows === 1 ? "normal" : "break-word",
             }}
             type="secondary"
           >

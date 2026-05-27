@@ -1165,6 +1165,12 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
     const membersTable = await screen.findByRole("table");
+    expect(membersTable.style.minWidth).toBe("980px");
+    const membersTableRegion = screen.getByRole("region", {
+      name: "团队成员表格，可横向滚动查看职责、服务与操作",
+    });
+    expect(membersTableRegion.style.overflowX).toBe("auto");
+    expect(screen.getByTestId("team-members-scroll-affordance")).toBeTruthy();
     expect(
       within(membersTable).getByRole("columnheader", { name: "成员" }),
     ).toBeTruthy();
@@ -1203,6 +1209,10 @@ describe("TeamDetailPage", () => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
     expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
+    const entryCaption = screen.getByText("调用这支团队时会先路由到这个成员。");
+    expect(entryCaption.style.display).toBe("-webkit-box");
+    expect(entryCaption.style.whiteSpace).toBe("normal");
+    expect(entryCaption.style.overflowWrap).toBe("anywhere");
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));

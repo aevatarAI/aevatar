@@ -1,4 +1,9 @@
-import { CheckCircleOutlined, EditOutlined, ToolOutlined } from "@ant-design/icons";
+import {
+  ArrowRightOutlined,
+  CheckCircleOutlined,
+  EditOutlined,
+  ToolOutlined,
+} from "@ant-design/icons";
 import { Button, Space, Tooltip, Typography, theme } from "antd";
 import React from "react";
 import {
@@ -50,12 +55,14 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const memberTableMinWidth = 980;
+
 const memberTableColumns = [
-  { key: "member", width: "22%" },
-  { key: "role", width: "16%" },
-  { key: "implementation", width: "14%" },
-  { key: "service", width: "14%" },
-  { key: "actions", width: "34%" },
+  { key: "member", width: 240 },
+  { key: "role", width: 160 },
+  { key: "implementation", width: 150 },
+  { key: "service", width: 150 },
+  { key: "actions", width: 280 },
 ] as const;
 
 const memberTableHeaderCellStyle: React.CSSProperties = {
@@ -163,13 +170,23 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
               border: "1px solid var(--ant-colorBorderSecondary)",
               borderRadius: 18,
               overflow: "hidden",
+              position: "relative",
             }}
           >
-            <div style={{ width: "100%" }}>
+            <div
+              aria-label={t("team.members.tableScrollLabel")}
+              role="region"
+              style={{
+                overflowX: "auto",
+                WebkitOverflowScrolling: "touch",
+                width: "100%",
+              }}
+            >
               <table
                 style={{
                   borderCollapse: "separate",
                   borderSpacing: 0,
+                  minWidth: memberTableMinWidth,
                   tableLayout: "fixed",
                   width: "100%",
                 }}
@@ -371,6 +388,26 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div
+              aria-hidden="true"
+              data-testid="team-members-scroll-affordance"
+              style={{
+                alignItems: "center",
+                background: `linear-gradient(90deg, transparent 0%, ${token.colorBgContainer} 74%)`,
+                bottom: 0,
+                color: token.colorTextTertiary,
+                display: "flex",
+                justifyContent: "flex-end",
+                paddingRight: 10,
+                pointerEvents: "none",
+                position: "absolute",
+                right: 0,
+                top: 0,
+                width: 42,
+              }}
+            >
+              <ArrowRightOutlined />
             </div>
           </div>
         ) : rosterTeamId ? (

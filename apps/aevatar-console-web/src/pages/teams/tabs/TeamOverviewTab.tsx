@@ -151,6 +151,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <SignalCard
             label={t("team.overview.entryMember")}
             value={entryMemberLabel || entryMemberId || t("common.notConfigured")}
+            captionRows={2}
             caption={
               hasEntryMember
                 ? t("team.overview.entryCaption.configured")
