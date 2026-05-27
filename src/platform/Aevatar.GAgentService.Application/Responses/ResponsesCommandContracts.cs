@@ -178,6 +178,7 @@ public sealed record ResponsesCreateCommandPlan(
     LLMRequest LlmRequest,
     IReadOnlyDictionary<string, string> ToolContextMetadata,
     ResponsesToolClassification ToolClassification,
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -187,48 +188,19 @@ public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
     ResponsesCreateCompletedCommandResult? Completed,
-    ResponsesCreateAcceptedCommandResult? Accepted,
-    ResponsesForwardCommandResult? Forward)
+    ResponsesCreateAcceptedCommandResult? Accepted)
 {
     public static ResponsesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null, null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
 
     public static ResponsesCreateCommandResult FromStreamPlan(ResponsesCreateCommandPlan plan) =>
-        new(null, plan, null, null, null);
+        new(null, plan, null, null);
 
     public static ResponsesCreateCommandResult FromCompleted(ResponsesCreateCompletedCommandResult completed) =>
-        new(null, null, completed, null, null);
+        new(null, null, completed, null);
 
     public static ResponsesCreateCommandResult FromAccepted(ResponsesCreateAcceptedCommandResult accepted) =>
-        new(null, null, null, accepted, null);
-
-    public static ResponsesCreateCommandResult FromForward(ResponsesForwardCommandResult forward) =>
-        new(null, null, null, null, forward);
-}
-
-// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
-//   Old pattern: Forward-to-team/GAgent decisions were endpoint locals interleaved with provider-session setup.
-//   New principle: Forwarding is a typed command result so Host can invoke boundary AGUI rendering without owning route policy.
-// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
-//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-public sealed record ResponsesForwardCommandResult(
-    NormalizedResponsesRequest Normalized,
-    ResponsesCallerScope CallerScope,
-    ChatRouteAction Action,
-    LlmSessionRegistrationResult Session,
-    LlmSessionSnapshot? PreviousSnapshot,
-    DateTimeOffset CreatedAt);
-
-public sealed record ResponsesForwardingResult(
-    ResponsesCommandError? Error,
-    LlmSessionSnapshot? Snapshot)
-{
-    public static ResponsesForwardingResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null);
-
-    public static ResponsesForwardingResult FromSnapshot(LlmSessionSnapshot snapshot) =>
-        new(null, snapshot);
+        new(null, null, null, accepted);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -347,21 +319,6 @@ public interface IResponsesCommandFacade
     Task<ResponsesStreamCommandResult> StreamAsync(
         ResponsesCreateCommandPlan plan,
         Func<string, CancellationToken, ValueTask> onTextDelta,
-        CancellationToken ct = default);
-}
-
-public interface IResponsesForwardingApplicationService
-{
-    Task<ResponsesForwardingResult> ForwardAsync(
-        ResponsesForwardCommandResult plan,
-        string bearerToken,
-        Func<AGUIEvent, CancellationToken, ValueTask>? onEventAsync = null,
-        CancellationToken ct = default);
-
-    Task<ResponsesForwardingResult> RecordForwardedFailureAsync(
-        ResponsesForwardCommandResult plan,
-        string code,
-        string message,
         CancellationToken ct = default);
 }
 

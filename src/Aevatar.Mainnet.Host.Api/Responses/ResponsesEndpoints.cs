@@ -1,20 +1,21 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.Presentation.AGUI;
+using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 // Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
 //   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
@@ -45,15 +46,11 @@ internal static partial class ResponsesApiEndpoints
         HttpContext http,
         ResponsesCreateRequest request,
         [FromServices] IResponsesCommandFacade commandFacade,
-        [FromServices] IResponsesForwardingApplicationService forwardingService,
-        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(commandFacade);
-        ArgumentNullException.ThrowIfNull(forwardingService);
-        ArgumentNullException.ThrowIfNull(loggerFactory);
 
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
@@ -74,20 +71,6 @@ internal static partial class ResponsesApiEndpoints
         var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
-
-        var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.Responses");
-        if (result.Forward?.Action.ForwardToTeam is not null ||
-            result.Forward?.Action.ForwardToStudioMember is not null)
-        {
-            return await HandleForwardedAguiAsync(
-                http,
-                result.Forward.Normalized,
-                result.Forward,
-                forwardingService,
-                bearerToken,
-                logger,
-                ct);
-        }
 
         if (result.StreamPlan is not null)
         {
@@ -328,197 +311,6 @@ internal static partial class ResponsesApiEndpoints
                 sequence_number = ++sequenceNumber,
             },
             ct);
-    }
-
-    private static async Task<IResult> HandleForwardedAguiAsync(
-        HttpContext http,
-        NormalizedResponsesRequest normalized,
-        ResponsesForwardCommandResult forwardPlan,
-        IResponsesForwardingApplicationService forwardingService,
-        string bearerToken,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var createdAt = forwardPlan.CreatedAt.ToUnixTimeSeconds();
-
-        if (normalized.Stream)
-        {
-            await WriteAGuiBackedResponseStreamAsync(
-                http.Response,
-                normalized,
-                createdAt,
-                forwardPlan,
-                forwardingService,
-                bearerToken,
-                logger,
-                ct);
-            return Results.Empty;
-        }
-
-        return await CollectAGuiBackedResponseAsync(
-            normalized,
-            createdAt,
-            forwardPlan,
-            forwardingService,
-            bearerToken,
-            logger,
-            ct);
-    }
-
-    private static async Task WriteAGuiBackedResponseStreamAsync(
-        HttpResponse response,
-        NormalizedResponsesRequest normalized,
-        long createdAt,
-        ResponsesForwardCommandResult forwardPlan,
-        IResponsesForwardingApplicationService forwardingService,
-        string bearerToken,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        response.StatusCode = StatusCodes.Status200OK;
-        response.ContentType = "text/event-stream; charset=utf-8";
-        response.Headers.CacheControl = "no-store";
-        response.Headers.Pragma = "no-cache";
-        response.Headers["X-Accel-Buffering"] = "no";
-
-        // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-        //   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
-        //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-        var adapter = new AGUIEventToResponsesSseAdapter(
-            response,
-            normalized.ResponseId,
-            normalized.MessageItemId,
-            JsonOptions);
-
-        try
-        {
-            await response.StartAsync(ct);
-            await adapter.WriteCreatedAsync(
-                BuildCreatedResponse(normalized, createdAt),
-                BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
-                ct);
-
-            var result = await forwardingService.ForwardAsync(
-                forwardPlan,
-                bearerToken,
-                async (evt, token) => await adapter.WriteAsync(evt, token),
-                ct);
-            if (result.Error is not null)
-            {
-                if (!adapter.HasFailed)
-                {
-                    await adapter.WriteFailureAsync(result.Error.Code, result.Error.Message, ct);
-                }
-                return;
-            }
-
-            var completion = result.Snapshot!.Completion!;
-            if (!string.IsNullOrWhiteSpace(completion.FailureCode))
-            {
-                if (!adapter.HasFailed)
-                {
-                    await adapter.WriteFailureAsync(
-                        completion.FailureCode!,
-                        completion.FailureMessage ?? "GAgent invocation failed.",
-                        ct);
-                }
-                return;
-            }
-
-            await adapter.WriteCompletedAsync(
-                completion,
-                buildCompletedMessageItem: text => BuildOutputMessage(normalized.MessageItemId, "completed", text),
-                buildFunctionCallItem: tool => BuildFunctionCallOutputItem(new ToolCall
-                {
-                    Id = tool.CallId,
-                    Name = tool.ToolName,
-                    ArgumentsJson = tool.ResultJson ?? "{}",
-                }),
-                buildCompletedResponse: snapshot => BuildCompletedResponse(
-                    normalized,
-                    createdAt,
-                    snapshot.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    snapshot.OutputText,
-                    ToToolCalls(snapshot.ToolCalls),
-                    snapshot.Usage is null ? null : MapUsage(snapshot.Usage)),
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            await forwardingService.RecordForwardedFailureAsync(
-                forwardPlan,
-                "request_timeout",
-                "Request timed out.",
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "AGUI-backed stream rendering failed for response {ResponseId}", normalized.ResponseId);
-            await forwardingService.RecordForwardedFailureAsync(
-                forwardPlan,
-                "gagent_invocation_failed",
-                "GAgent invocation failed mid-stream.",
-                CancellationToken.None);
-            try
-            {
-                await adapter.WriteFailureAsync(
-                    "gagent_invocation_failed",
-                    "GAgent invocation failed mid-stream.",
-                    ct);
-            }
-            catch (Exception writeEx)
-            {
-                logger.LogWarning(
-                    writeEx,
-                    "Failed to write AGUI-backed stream failure frame for response {ResponseId}",
-                    normalized.ResponseId);
-            }
-        }
-    }
-
-    private static async Task<IResult> CollectAGuiBackedResponseAsync(
-        NormalizedResponsesRequest normalized,
-        long createdAt,
-        ResponsesForwardCommandResult forwardPlan,
-        IResponsesForwardingApplicationService forwardingService,
-        string bearerToken,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        try
-        {
-            var result = await forwardingService.ForwardAsync(forwardPlan, bearerToken, onEventAsync: null, ct);
-            if (result.Error is not null)
-                return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
-
-            var completion = result.Snapshot!.Completion!;
-            if (!string.IsNullOrWhiteSpace(completion.FailureCode))
-                return ToErrorResult(
-                    StatusCodes.Status500InternalServerError,
-                    completion.FailureCode!,
-                    completion.FailureMessage ?? "GAgent invocation failed.");
-
-            var completed = BuildCompletedResponse(
-                normalized,
-                createdAt,
-                completion.CompletedAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                completion.OutputText,
-                ToToolCalls(completion.ToolCalls),
-                completion.Usage is null ? null : MapUsage(completion.Usage));
-            return Results.Json(completed, statusCode: StatusCodes.Status200OK);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "AGUI-backed response rendering failed for response {ResponseId}", normalized.ResponseId);
-            return ToErrorResult(
-                StatusCodes.Status500InternalServerError,
-                "gagent_invocation_failed",
-                "GAgent invocation failed.");
-        }
     }
 
     private static ResponsesResponseSnapshot BuildCreatedResponse(
@@ -775,6 +567,108 @@ internal static partial class ResponsesApiEndpoints
             Usage = null,
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
         };
+    }
+
+    internal static ResponsesToolProviderContext BuildToolProviderContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken)
+    {
+        ArgumentNullException.ThrowIfNull(callerScope);
+
+        return new ResponsesToolProviderContext(
+            new ResponsesToolProviderCallerScope(
+                callerScope.ScopeId,
+                callerScope.OwnerSubject,
+                callerScope.OriginKind.ToString()),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = responseId,
+                [LLMRequestMetadataKeys.ResponseId] = responseId,
+                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
+                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+            });
+    }
+
+    internal static async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
+        IChatRoutePolicyQueryPort queryPort,
+        ChatRouteResolver resolver,
+        ResponsesCallerScope callerScope,
+        string model,
+        ToolMode toolMode,
+        string contentHint,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(queryPort);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(callerScope);
+
+        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
+        var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
+        return resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxResponses,
+            CallerScope = new OwnerScope
+            {
+                NyxUserId = ownerScope.NyxUserId,
+                Platform = ownerScope.Platform,
+                RegistrationScopeId = ownerScope.RegistrationScopeId,
+                SenderId = ownerScope.SenderId,
+            },
+            Channel = string.Empty,
+            CommandName = string.Empty,
+            ContentHint = contentHint,
+            ToolMode = toolMode,
+            Model = model,
+        });
+    }
+
+    internal static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
+    {
+        if (inlineToolResultCount > 0)
+            return ToolMode.Inline;
+        return declaredToolCount > 0 ? ToolMode.Declared : ToolMode.None;
+    }
+
+    internal static void ApplyChatRouteDeprecationHeaders(HttpResponse response, ChatRouteDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(decision);
+        if (decision.Deprecations.Count == 0)
+            return;
+
+        response.Headers["Deprecation"] = "true";
+        foreach (var deprecation in decision.Deprecations)
+        {
+            response.Headers.Append(
+                "Warning",
+                $"299 - \"chat_route_legacy_action_used: {EscapeWarningText(BuildWarningDetail(deprecation))}\"");
+        }
+    }
+
+    private static string BuildWarningDetail(ChatRouteDeprecation deprecation)
+    {
+        var matchedRuleId = string.IsNullOrWhiteSpace(deprecation.MatchedRuleId)
+            ? "default_target"
+            : deprecation.MatchedRuleId;
+        return $"{deprecation.Code}; matched_rule_id={matchedRuleId}; action_kind={deprecation.ActionKind}; translated_target={deprecation.TranslatedTarget}; use_tool_first_route_policy=true";
+    }
+
+    private static string EscapeWarningText(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    internal static string BuildContentHint(string? content)
+    {
+        var normalized = content?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+        const int maxContentHintLength = 160;
+        return normalized.Length <= maxContentHintLength
+            ? normalized
+            : normalized[..maxContentHintLength];
     }
 
     private static IResult ToErrorResult(int statusCode, string code, string message) =>

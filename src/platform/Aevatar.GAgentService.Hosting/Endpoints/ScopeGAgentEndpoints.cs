@@ -261,9 +261,16 @@ public static class ScopeGAgentEndpoints
         try
         {
             var userConfig = await userConfigStore.GetAsync(ct);
-            return (
-                string.IsNullOrWhiteSpace(userConfig.DefaultModel) ? null : userConfig.DefaultModel.Trim(),
-                string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute) ? null : userConfig.PreferredLlmRoute.Trim());
+            var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
+                ? null
+                : userConfig.PreferredLlmRoute.Trim();
+            var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
+                ? null
+                : userConfig.DefaultModel.Trim();
+
+            return await UserLlmRouteModelResolver
+                .ResolveAsync(http, model, route, ct)
+                .ConfigureAwait(false);
         }
         catch
         {

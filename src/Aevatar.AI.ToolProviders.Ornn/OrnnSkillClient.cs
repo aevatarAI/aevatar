@@ -27,12 +27,10 @@ public sealed class OrnnSkillClient
 
     /// <summary>
     /// Default per-call timeout for Ornn HTTP fetches through the NyxID proxy. Without this, a
-    /// stuck upstream call can hold an Orleans grain turn captive for the full outer 120s LLM
-    /// reply budget — observed in production on 2026-05-13 as a 113s hang on
-    /// `chrono-ai-daily/json` that caused the lark bot's /daily to reply after ~2 minutes with a
-    /// fallback error card (see feature/lark-bot incident notes). Successful calls complete in
-    /// ~1s, so 30s leaves generous headroom while surfacing the failure quickly enough that the
-    /// LLM can fall back to a plain reply path instead of blocking the grain.
+    /// stuck upstream call can hold an Orleans grain turn captive for minutes. Successful calls
+    /// complete in ~1s, so 30s leaves generous headroom while surfacing the upstream failure
+    /// quickly enough that the LLM can recover through skill-search/fallback instructions
+    /// instead of silently waiting on one blocked HTTP request.
     /// </summary>
     public static readonly TimeSpan DefaultPerCallTimeout = TimeSpan.FromSeconds(30);
 

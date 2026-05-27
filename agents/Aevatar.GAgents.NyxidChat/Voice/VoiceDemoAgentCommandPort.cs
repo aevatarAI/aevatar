@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
@@ -30,6 +31,7 @@ public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     private const string RouteRuleId = "voice-demo";
     private const string ChatRoutePolicyActorIdPrefix = "chat-route-policy:";
     private const string PublisherActorId = "voice-demo-bootstrap";
+    private const string InvokeGAgentToolName = "aevatar_invoke_gagent";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -139,10 +141,21 @@ public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     private static ChatRouteAction ForwardToDemoActor(string actorId) =>
         new()
         {
-            ForwardToGagent = new ForwardToGAgent
+            ForwardToModel = new ForwardToModel
             {
-                ActorId = actorId,
-                VoiceModuleName = VoiceModuleName,
+                ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = InvokeGAgentToolName,
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["actor_id"] = Value.ForString(actorId),
+                            ["voice_module_name"] = Value.ForString(VoiceModuleName),
+                        },
+                    },
+                },
             },
         };
 

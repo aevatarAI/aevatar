@@ -20,6 +20,15 @@ namespace Aevatar.GAgents.StatusDashboard.Executors;
 ///   Body              optional — raw request body
 ///   Header.{name}     optional — request header; supports ${configuration:Key}
 ///                                 placeholders resolved at probe time
+///   Auth.Mode         optional — auto (default executor behavior), none, static_bearer, or
+///                                 client_credentials
+///   Auth.ClientIdConfigurationKey optional — configuration key containing an
+///                                 OAuth client_id for client_credentials.
+///   Auth.ClientSecretConfigurationKey optional — configuration key containing
+///                                 an OAuth client_secret for client_credentials.
+///   Auth.ClientCredentialsScope optional — OAuth scope requested when minting
+///                                 a client_credentials access_token.
+///   Auth.TokenEndpoint optional — OAuth token endpoint for dynamic auth
 ///   ExpectedBodyContains optional — required literal marker in a successful response body
 ///   ExpectedBodyRegex    optional — required regex marker in a successful response body
 ///   ForbiddenBodyContains optional — literal marker that must not appear in response body
@@ -30,22 +39,24 @@ namespace Aevatar.GAgents.StatusDashboard.Executors;
 public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
 {
     private const string ConfigPlaceholderPrefix = "${configuration:";
-    private const string ConfigPlaceholderSuffix = "}";
     private static readonly Regex ConfigPlaceholderRegex = new(
         @"\$\{configuration:(?<key>[^\}]+)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly StatusProbeAuthorizationResolver _authorizationResolver;
     private readonly TimeProvider _timeProvider;
 
     public HttpStatusProbeExecutor(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
+        StatusProbeAuthorizationResolver authorizationResolver,
         TimeProvider timeProvider)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _authorizationResolver = authorizationResolver
+            ?? throw new ArgumentNullException(nameof(authorizationResolver));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
@@ -72,11 +83,28 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
 
         using var request = new HttpRequestMessage(new HttpMethod(method), uri);
 
+        string? dynamicAuthorization;
+        try
+        {
+            dynamicAuthorization = await _authorizationResolver.ResolveAuthorizationHeaderAsync(descriptor, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Failure("oauth_token_failed", ex.Message);
+        }
+
         foreach (var (key, raw) in descriptor.Parameters)
         {
             if (!key.StartsWith("Header.", StringComparison.OrdinalIgnoreCase)) continue;
             var headerName = key.Substring("Header.".Length);
-            var headerValue = ResolvePlaceholders(raw);
+            var headerValue = string.Equals(headerName, "Authorization", StringComparison.OrdinalIgnoreCase) &&
+                              !string.IsNullOrWhiteSpace(dynamicAuthorization)
+                ? dynamicAuthorization
+                : ResolvePlaceholders(raw);
             if (string.IsNullOrWhiteSpace(headerValue)) continue;
             if (!request.Headers.TryAddWithoutValidation(headerName, headerValue))
                 request.Content?.Headers.TryAddWithoutValidation(headerName, headerValue);

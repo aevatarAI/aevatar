@@ -69,6 +69,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeTenantId { get; set; }
     public string? ServiceInvokeAppId { get; set; }
     public string? ServiceInvokeNamespace { get; set; }
+    public bool BypassServiceInvokeApproval { get; set; }
     public bool EnableWebTools { get; set; }
     public string? WebSearchNyxIdSlug { get; set; }
     public string? WebSearchApiBaseUrl { get; set; }
@@ -936,6 +937,7 @@ public static class ServiceCollectionExtensions
             o.TenantId = options.ServiceInvokeTenantId;
             o.AppId = options.ServiceInvokeAppId;
             o.Namespace = options.ServiceInvokeNamespace;
+            o.BypassInvokeApproval = options.BypassServiceInvokeApproval;
             o.EnableDynamicScopeResolution = true;
         });
     }

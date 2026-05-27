@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 
@@ -16,12 +15,10 @@ public static class NyxRelayAgentBuilderFlow
     private const string DisableAgentCommand = "/disable-agent";
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
-    private const string DailySkillCommand = "/daily";
 
     public static bool TryResolve(
         ChannelInboundEvent evt,
-        out AgentBuilderFlowDecision? decision,
-        ChannelSlashCommandRegistry? slashCommandRegistry = null)
+        out AgentBuilderFlowDecision? decision)
     {
         ArgumentNullException.ThrowIfNull(evt);
         decision = null;
@@ -38,14 +35,8 @@ public static class NyxRelayAgentBuilderFlow
             return false;
 
         var command = tokens[0];
-        if (IsOrnnSkillShortcut(command))
-            return false;
-
         if (!IsKnownCommand(command))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(BuildUnknownCommandReply(command, slashCommandRegistry));
-            return true;
-        }
+            return false;
 
         if (!IsPrivateChat(evt.ChatType))
         {
@@ -89,9 +80,6 @@ public static class NyxRelayAgentBuilderFlow
             or DisableAgentCommand
             or EnableAgentCommand
             or DeleteAgentCommand;
-
-    private static bool IsOrnnSkillShortcut(string command) =>
-        string.Equals(command, DailySkillCommand, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPrivateChat(string? chatType) =>
         string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);
@@ -311,35 +299,6 @@ public static class NyxRelayAgentBuilderFlow
 
     private static string? ReadString(JsonElement element, string propertyName) =>
         AgentBuilderJson.TryReadString(element, propertyName);
-
-    private static string BuildUnknownCommandReply(
-        string command,
-        ChannelSlashCommandRegistry? slashCommandRegistry) =>
-        BuildTextBlock(
-            new[]
-            {
-                $"Unknown command: {command}",
-                "Supported commands:",
-                "/agents",
-                "/agent-status <agent_id>",
-                "/run-agent <agent_id>",
-                "/disable-agent <agent_id>",
-                "/enable-agent <agent_id>",
-                "/delete-agent <agent_id> confirm",
-            }.Concat(BuildSlashUsageLines(slashCommandRegistry)).ToArray());
-
-    private static IEnumerable<string> BuildSlashUsageLines(ChannelSlashCommandRegistry? slashCommandRegistry)
-    {
-        if (slashCommandRegistry is null)
-            yield break;
-
-        foreach (var descriptor in slashCommandRegistry.ListDescriptors())
-        {
-            var command = "/" + descriptor.Name;
-            var syntax = NormalizeOptional(descriptor.ArgumentSyntax);
-            yield return syntax is null ? command : $"{command} {syntax}";
-        }
-    }
 
     private static string BuildPrivateChatRestrictionReply(string command) =>
         $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";

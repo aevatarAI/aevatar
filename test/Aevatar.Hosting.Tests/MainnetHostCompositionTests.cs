@@ -1,6 +1,18 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
+using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.ChannelAdmin;
+using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -11,6 +23,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -21,6 +34,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -77,6 +91,10 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetServices<IHealthProbeExecutor>()
+            .Select(static executor => executor.Kind)
+            .Should()
+            .Contain("aevatar_core_loop");
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -90,6 +108,8 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/v1/responses");
+        routePatterns.Should().Contain("/v1/chat/completions");
+        routePatterns.Should().NotContain("/v1/chat/completion");
 
         // Both Lark and Telegram tool providers must register with IAgentToolSource so the
         // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup
@@ -100,6 +120,81 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
 
         await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldRegisterDefaultToolSets()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var documentProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
+        using var documentElasticsearch = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
+        using var graphProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+        using var graphNeo4j = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
+        using var projectionEnvironment = new EnvironmentVariableScope(
+            "Projection__Policies__Environment", "Development");
+        using var denyInMemoryDocument = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
+        using var denyInMemoryGraph = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryGraphFactStore", "false");
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var registry = app.Services.GetRequiredService<IToolSetRegistry>();
+        app.Services.GetRequiredService<IOptions<ChatRoutingOptions>>()
+            .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be(ToolSetNames.WorkspaceDefault);
+
+        registry.GetRegisteredNames().Should().Equal(
+            ToolSetNames.LarkSelfNotify,
+            ToolSetNames.VoiceRealtime,
+            ToolSetNames.WorkspaceDefault);
+
+        var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
+        workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
+        workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
+        workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
+        workspace.Sources.Should().Contain(source => source is QueryReadModelToolSource);
+        workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
+        workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
+        workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
+        workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
+        workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is ChronoStorageAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
+        workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+
+        var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
+        larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
+        larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
+            .Equal(workspace.Sources.Select(static source => source.GetType()));
+        larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
+        larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
+
+        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime });
+        voice.IsSuccess.Should().BeTrue(voice.Error?.Message);
+        voice.Sources.Select(static source => source.GetType()).Should()
+            .Equal(workspace.Sources.Select(static source => source.GetType()));
+
+        var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
+        unknown.IsSuccess.Should().BeFalse();
+        unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
 
     [Fact]
@@ -157,6 +252,7 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
         });
         return builder;
     }

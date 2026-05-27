@@ -148,23 +148,17 @@ public sealed class MessagesCommandFacade(
                     : routeDecision.Action.Reject.Reason);
         }
 
-        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
-            return RouteTargetResult.FromModel(routeDecision.Action.ForwardToModel.ModelName.Trim());
-
-        if (routeDecision.Action.ForwardToGagent is not null ||
-            routeDecision.Action.ForwardToStudioMember is not null ||
-            routeDecision.Action.ForwardToTeam is not null)
+        var action = routeDecision.Action.Clone();
+        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+            ? action.ForwardToModel.ModelName.Trim()
+            : normalized.Model;
+        if (action.ForwardToModel is null)
         {
-            var actionName = routeDecision.Action.ActionCase == ChatRouteAction.ActionOneofCase.ForwardToGagent
-                ? "ForwardToGAgent"
-                : routeDecision.Action.ActionCase.ToString();
-            return RouteTargetResult.FromError(
-                501,
-                "chat_route_action_not_supported",
-                $"{actionName} is not supported by /v1/messages in v1.");
+            action.ForwardToModel = new ForwardToModel();
         }
 
-        return RouteTargetResult.FromModel(normalized.Model);
+        action.ForwardToModel.ModelName = routedModel;
+        return RouteTargetResult.FromModel(routedModel);
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(

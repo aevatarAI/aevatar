@@ -209,9 +209,9 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                 NyxIdChatLifecycleCommandStartError.RouteRejected);
 
-        var forwardedActorId = decision.Action.ForwardToGagent?.ActorId;
-        if (!string.IsNullOrWhiteSpace(forwardedActorId))
+        if (ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out var forwardedTarget))
         {
+            var forwardedActorId = forwardedTarget.ActorId.Trim();
             var forwardedActor = await _actorRuntime.GetAsync(forwardedActorId.Trim());
             if (forwardedActor is null)
                 return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(

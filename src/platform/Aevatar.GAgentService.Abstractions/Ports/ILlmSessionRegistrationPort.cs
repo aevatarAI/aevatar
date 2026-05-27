@@ -3,7 +3,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: ForwardToTeam/ForwardToGAgent skipped session lifecycle; Host new'd StringBuilder/Dictionary/List<ToolCall> to synthesize response.completed
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public interface ILlmSessionRegistrationPort
 {

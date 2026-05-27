@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
@@ -626,13 +627,33 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenChatRouteForwardsToGAgent_ReturnsNotImplementedWithoutLlmCall()
+    public async Task PostMessages_WhenChatRouteHasToolChoiceHint_AppliesHintToLlmCall()
     {
-        var provider = new MessagesRecordingLLMProvider();
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "routed",
+                    FinishReason = "stop",
+                },
+            ],
+        };
         var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("target-agent"),
+            ForwardToGAgentToolHint("target-agent"),
             []));
-        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        await using var app = await CreateAppAsync(
+            provider,
+            responsesToolProvider: new MessagesRecordingResponsesToolProvider(
+                substituteTools: [],
+                additiveTools:
+                [
+                    new MessagesStubAgentTool(
+                        "aevatar_invoke_gagent",
+                        """Invoke a GAgent with target-agent"""),
+                ]),
+            chatRoutePolicyQueryPort: queryPort);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
@@ -650,11 +671,10 @@ public sealed class MainnetMessagesEndpointsTests
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
-        using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("error").GetProperty("type").GetString()
-            .Should().Be("chat_route_action_not_supported");
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().BeEmpty(
+            "/v1/messages intentionally does not inject Responses workspace tool providers");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -680,9 +700,21 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<IActorDispatchPort>(sp => new MessagesRecordingLlmRunDispatchPort(
             provider,
             sessions,
-            sp.GetServices<IResponsesToolProvider>()));
+            sp.GetServices<IResponsesToolProvider>(),
+            sp.GetRequiredService<IToolSetRegistry>()));
         builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    _ => new MessagesStubAgentToolSource(
+                    [
+                        new MessagesStubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
+                    ]),
+                ]);
+        });
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
@@ -790,10 +822,24 @@ public sealed class MainnetMessagesEndpointsTests
         Reject = new Reject { Reason = message },
     };
 
-    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    private static ChatRouteAction ForwardToGAgentToolHint(string actorId)
     {
-        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
-    };
+        var arguments = new Struct();
+        arguments.Fields["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId);
+
+        return new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = "aevatar_invoke_gagent",
+                    PrefilledArguments = arguments,
+                },
+            },
+        };
+    }
 
     private sealed class MessagesRecordingSessionStore :
         ILlmSessionRegistrationPort,
@@ -931,7 +977,8 @@ public sealed class MainnetMessagesEndpointsTests
     private sealed class MessagesRecordingLlmRunDispatchPort(
         MessagesRecordingLLMProvider provider,
         MessagesRecordingSessionStore sessions,
-        IEnumerable<IResponsesToolProvider> toolProviders) : IActorDispatchPort
+        IEnumerable<IResponsesToolProvider> toolProviders,
+        IToolSetRegistry toolSetRegistry) : IActorDispatchPort
     {
         public async Task<DispatchAdmission> DispatchAsync(
             string actorId,
@@ -1005,6 +1052,12 @@ public sealed class MainnetMessagesEndpointsTests
             {
                 substituteTools.AddRange(await toolProvider.GetSubstituteToolsAsync(context, ct));
                 additiveTools.AddRange(await toolProvider.GetAdditiveToolsAsync(context, ct));
+            }
+            var toolSet = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
+            if (toolSet.IsSuccess)
+            {
+                foreach (var source in toolSet.Sources)
+                    additiveTools.AddRange(await source.DiscoverToolsAsync(ct));
             }
 
             var substitutedNames = command.ToolSelection?.SubstitutedToolNames.ToHashSet(StringComparer.Ordinal)
@@ -1171,5 +1224,11 @@ public sealed class MainnetMessagesEndpointsTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
+    }
+
+    private sealed class MessagesStubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
     }
 }

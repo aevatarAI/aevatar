@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -18,6 +19,353 @@ public sealed record ResponsesToolClassification(
     IReadOnlyList<IAgentTool> EffectiveTools,
     IReadOnlyList<string> SubstitutedToolNames,
     IReadOnlyList<string> AdditiveToolNames);
+
+public interface IResponsesToolClassificationService
+{
+    ValueTask<ResponsesToolClassification> ClassifyAsync(
+        IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        ResponsesToolProviderContext context,
+        IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+        CancellationToken ct = default);
+}
+
+public sealed class ResponsesToolClassificationService(
+    IEnumerable<IResponsesToolProvider> toolProviders,
+    ILogger<ResponsesToolClassificationService> logger) : IResponsesToolClassificationService
+{
+    public ValueTask<ResponsesToolClassification> ClassifyAsync(
+        IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        ResponsesToolProviderContext context,
+        IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(declaredTools);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var effectiveProviders = additionalProviders is null
+            ? toolProviders
+            : toolProviders.Concat(additionalProviders);
+        return ResponsesToolClassifier.ClassifyAsync(
+            declaredTools,
+            effectiveProviders,
+            context,
+            logger,
+            ct);
+    }
+}
+
+public sealed record ResponsesCompletionResult(
+    string Text,
+    TokenUsage? Usage,
+    IReadOnlyList<ToolCall> ForwardedToolCalls);
+
+public interface IResponsesCompletionApplicationService
+{
+    Task<ResponsesCompletionResult> CollectAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        ResponsesToolClassification toolClassification,
+        CancellationToken ct = default);
+
+    Task<ResponsesCompletionResult> StreamAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        ResponsesToolClassification toolClassification,
+        Func<string, CancellationToken, ValueTask> onTextDelta,
+        CancellationToken ct = default);
+}
+
+public sealed class ResponsesCompletionApplicationService : IResponsesCompletionApplicationService
+{
+    // Bounded tool-loop. The cap stops a runaway model from looping forever between
+    // local tool calls; eight rounds matches the bound observed in similar
+    // multi-round agent loops in this repo (e.g. SkillRunnerGAgent).
+    private const int MaxToolRounds = 8;
+    private readonly ChatRunToolCompletionCoordinator? _chatRunToolCompletionCoordinator;
+
+    public ResponsesCompletionApplicationService(
+        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator = null)
+    {
+        _chatRunToolCompletionCoordinator = chatRunToolCompletionCoordinator;
+    }
+
+    public async Task<ResponsesCompletionResult> CollectAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        ResponsesToolClassification toolClassification,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(toolContextMetadata);
+        ArgumentNullException.ThrowIfNull(toolClassification);
+
+        var messages = request.Messages.ToList();
+        var outputText = new StringBuilder();
+        TokenUsage? usage = null;
+
+        for (var round = 0; round < MaxToolRounds; round++)
+        {
+            var roundRequest = CloneRequestWithMessages(request, messages);
+            var (roundText, roundUsage, toolCalls) = await CollectStreamCompletionAsync(
+                provider, roundRequest, toolContextMetadata, ct);
+            outputText.Append(roundText);
+            usage = roundUsage ?? usage;
+
+            var forwardedToolCalls = SelectForwardedToolCalls(toolCalls, toolClassification);
+            if (forwardedToolCalls.Count > 0)
+                return new ResponsesCompletionResult(outputText.ToString(), usage, forwardedToolCalls);
+
+            var localToolCalls = SelectLocalToolCalls(toolCalls, toolClassification);
+            if (localToolCalls.Count == 0)
+                return new ResponsesCompletionResult(outputText.ToString(), usage, []);
+
+            messages.Add(new ChatMessage
+            {
+                Role = "assistant",
+                ToolCalls = localToolCalls,
+            });
+            await ExecuteLocalToolCallsAsync(
+                request,
+                toolContextMetadata,
+                localToolCalls,
+                messages,
+                round + 1,
+                _chatRunToolCompletionCoordinator,
+                ct);
+        }
+
+        return new ResponsesCompletionResult(outputText.ToString(), usage, []);
+    }
+
+    public async Task<ResponsesCompletionResult> StreamAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        ResponsesToolClassification toolClassification,
+        Func<string, CancellationToken, ValueTask> onTextDelta,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(toolContextMetadata);
+        ArgumentNullException.ThrowIfNull(toolClassification);
+        ArgumentNullException.ThrowIfNull(onTextDelta);
+
+        var messages = request.Messages.ToList();
+        var outputText = new StringBuilder();
+        TokenUsage? usage = null;
+
+        for (var round = 0; round < MaxToolRounds; round++)
+        {
+            var roundRequest = CloneRequestWithMessages(request, messages);
+            var toolCalls = new ResponsesToolCallAccumulator();
+            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+            {
+                await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
+                {
+                    var delta = ExtractChunkText(chunk);
+                    if (!string.IsNullOrEmpty(delta))
+                    {
+                        outputText.Append(delta);
+                        await onTextDelta(delta, ct);
+                    }
+
+                    if (chunk.DeltaToolCall != null)
+                        toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+                    if (chunk.Usage != null)
+                        usage = chunk.Usage;
+
+                    if (chunk.IsLast)
+                        break;
+                }
+            }
+
+            var builtToolCalls = toolCalls.BuildToolCalls()
+                .Select(ResponsesToolContext.ApplyToolChoiceHint)
+                .ToArray();
+            var forwardedToolCalls = SelectForwardedToolCalls(builtToolCalls, toolClassification);
+            if (forwardedToolCalls.Count > 0)
+                return new ResponsesCompletionResult(outputText.ToString(), usage, forwardedToolCalls);
+
+            var localToolCalls = SelectLocalToolCalls(builtToolCalls, toolClassification);
+            if (localToolCalls.Count == 0)
+                return new ResponsesCompletionResult(outputText.ToString(), usage, []);
+
+            messages.Add(new ChatMessage
+            {
+                Role = "assistant",
+                ToolCalls = localToolCalls,
+            });
+            await ExecuteLocalToolCallsAsync(
+                request,
+                toolContextMetadata,
+                localToolCalls,
+                messages,
+                round + 1,
+                _chatRunToolCompletionCoordinator,
+                ct);
+        }
+
+        return new ResponsesCompletionResult(outputText.ToString(), usage, []);
+    }
+
+    private static LLMRequest CloneRequestWithMessages(
+        LLMRequest request,
+        List<ChatMessage> messages) =>
+        new()
+        {
+            Messages = [.. messages],
+            RequestId = request.RequestId,
+            Metadata = request.Metadata,
+            CallerContext = request.CallerContext,
+            Tools = request.Tools,
+            Model = request.Model,
+            Temperature = request.Temperature,
+            MaxTokens = request.MaxTokens,
+            ResponseFormat = request.ResponseFormat,
+        };
+
+    private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(
+        IReadOnlyList<ToolCall> toolCalls,
+        ResponsesToolClassification toolClassification)
+    {
+        if (toolCalls.Count == 0 || toolClassification.ForwardedTools.Count == 0)
+            return [];
+
+        var forwardedToolNames = toolClassification.ForwardedTools
+            .Select(static tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        return toolCalls
+            .Where(call => forwardedToolNames.Contains(call.Name))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
+        IReadOnlyList<ToolCall> toolCalls,
+        ResponsesToolClassification toolClassification)
+    {
+        if (toolCalls.Count == 0 || toolClassification.EffectiveTools.Count == 0)
+            return [];
+
+        var forwardedToolNames = toolClassification.ForwardedTools
+            .Select(static tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var localToolNames = toolClassification.EffectiveTools
+            .Select(static tool => tool.Name)
+            .Where(name => !forwardedToolNames.Contains(name))
+            .ToHashSet(StringComparer.Ordinal);
+        return toolCalls
+            .Where(call => localToolNames.Contains(call.Name))
+            .ToArray();
+    }
+
+    private static async Task ExecuteLocalToolCallsAsync(
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        IReadOnlyList<ToolCall> toolCalls,
+        List<ChatMessage> messages,
+        int llmRound,
+        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator,
+        CancellationToken ct)
+    {
+        if (request.Tools is not { Count: > 0 })
+            return;
+
+        var toolsByName = request.Tools
+            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+        {
+            foreach (var toolCall in toolCalls)
+            {
+                var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
+                string result;
+                if (ResponsesToolChoiceHintPlan.IsStructuredErrorArguments(argumentsJson))
+                {
+                    result = argumentsJson;
+                }
+                else if (toolsByName.TryGetValue(toolCall.Name, out var tool))
+                {
+                    var mapped = AgentToolExecutionContextMapper.FromRequestWithCallId(request, toolCall.Id);
+                    var toolContext = mapped with { ExternalMetadata = toolContextMetadata };
+                    using (AgentToolContextScope.Push(toolContext))
+                    {
+                        result = ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(toolCall) &&
+                             chatRunToolCompletionCoordinator != null
+                            ? await chatRunToolCompletionCoordinator.ExecuteAsync(
+                                request,
+                                toolCall,
+                                argumentsJson,
+                                tool.ExecuteAsync,
+                                llmRound,
+                                ct)
+                            : await tool.ExecuteAsync(argumentsJson, ct);
+                    }
+                }
+                else
+                {
+                    result = JsonSerializer.Serialize(new
+                    {
+                        error = "aevatar_substitute_tool_not_registered",
+                        tool_name = toolCall.Name,
+                    });
+                }
+
+                messages.Add(ChatMessage.Tool(toolCall.Id, result));
+            }
+        }
+    }
+
+    private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
+        CancellationToken ct)
+    {
+        var outputText = new StringBuilder();
+        var toolCalls = new ResponsesToolCallAccumulator();
+        TokenUsage? usage = null;
+
+        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+        {
+            await foreach (var chunk in provider.ChatStreamAsync(request, ct))
+            {
+                var delta = ExtractChunkText(chunk);
+                if (!string.IsNullOrEmpty(delta))
+                    outputText.Append(delta);
+
+                if (chunk.DeltaToolCall != null)
+                    toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+                if (chunk.Usage != null)
+                    usage = chunk.Usage;
+
+                if (chunk.IsLast)
+                    break;
+            }
+        }
+
+        return (outputText.ToString(), usage, toolCalls.BuildToolCalls()
+            .Select(ResponsesToolContext.ApplyToolChoiceHint)
+            .ToArray());
+    }
+
+    private static string? ExtractChunkText(LLMStreamChunk chunk)
+    {
+        if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
+            return chunk.DeltaContent;
+
+        if (chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part && !string.IsNullOrWhiteSpace(part.Text))
+            return part.Text;
+
+        return null;
+    }
+}
 
 public static class ResponsesToolClassifier
 {

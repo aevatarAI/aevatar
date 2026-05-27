@@ -60,6 +60,8 @@ public sealed class InvokeServiceTool : IAgentTool
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
+    public bool? RequiresApproval(string argumentsJson) => !_options.BypassInvokeApproval;
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         try

@@ -93,6 +93,8 @@ public sealed class LocalSkillCatalogTests
         var result = await tool.ExecuteAsync("""{"skill":"local"}""");
 
         result.Should().Contain("local-body");
+        result.Should().Contain("Skill Continuation");
+        result.Should().Contain("ornn_search_skills");
         fetcher.Requests.Should().BeEmpty();
     }
 

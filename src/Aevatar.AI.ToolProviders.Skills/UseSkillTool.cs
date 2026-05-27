@@ -119,6 +119,11 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine("## Instructions");
         sb.AppendLine();
         sb.AppendLine(instructions);
+        sb.AppendLine();
+        sb.AppendLine("## Skill Continuation");
+        sb.AppendLine();
+        sb.AppendLine(
+            "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })

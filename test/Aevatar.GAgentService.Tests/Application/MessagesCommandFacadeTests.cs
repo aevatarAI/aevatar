@@ -65,38 +65,6 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectForwardToGAgentRoute()
-    {
-        var facade = CreateFacade(chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
-        {
-            ForwardToGagent = new ForwardToGAgent { ActorId = "direct-actor-1" },
-        }));
-
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            501,
-            "chat_route_action_not_supported",
-            "ForwardToGAgent is not supported by /v1/messages in v1."));
-    }
-
-    [Fact]
-    public async Task CreateAsync_ShouldRejectForwardToStudioMemberRoute()
-    {
-        var facade = CreateFacade(chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
-        {
-            ForwardToStudioMember = new ForwardToStudioMember { MemberId = "member-1" },
-        }));
-
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            501,
-            "chat_route_action_not_supported",
-            "ForwardToStudioMember is not supported by /v1/messages in v1."));
-    }
-
-    [Fact]
     public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();

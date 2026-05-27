@@ -11,6 +11,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
@@ -260,15 +261,7 @@ public sealed class ConversationGAgentDedupTests
                 callCount++;
                 if (callCount == 1)
                     return ConversationTurnResult.TransientFailure("rate_limited", "retry later");
-                return ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                    {
-                        CorrelationId = activity.Id,
-                        TargetActorId = "conversation:actor",
-                        RegistrationId = "reg-1",
-                        Activity = activity.Clone(),
-                        RequestedAtUnixMs = 7,
-                    }));
+                return ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity, requestedAtUnixMs: 7));
             },
         };
         var (agent, store) = CreateAgent(runner, "conv-llm-supersedes-retry");
@@ -354,14 +347,7 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = 42,
-                })),
+                CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
         };
         var (agent, store) = CreateAgent(runner, "conv-llm-request");
 
@@ -373,77 +359,8 @@ public sealed class ConversationGAgentDedupTests
         events[0].EventType.ShouldContain(nameof(NeedsLlmReplyEvent));
         var parsed = NeedsLlmReplyEvent.Parser.ParseFrom(events[0].EventData.Value);
         parsed.CorrelationId.ShouldBe("act-llm");
-        parsed.RunId.ShouldBe("run-act-llm");
+        parsed.RunId.ShouldBe("act-llm");
         parsed.Activity.Id.ShouldBe("act-llm");
-    }
-
-    [Fact]
-    public async Task HandleInboundActivityAsync_WhenDeferredReplyMissingRunId_RejectsBeforePersistenceOrDispatch()
-    {
-        var dispatcher = new RecordingRunDispatcher();
-        var runner = new RecordingTurnRunner
-        {
-            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = 42,
-                }),
-        };
-        var (agent, store) = CreateAgent(runner, "conv-llm-missing-run", dispatcher);
-
-        await agent.HandleInboundActivityAsync(CreateActivity("act-missing-run", "conv:slack:C1"));
-
-        dispatcher.Dispatched.ShouldBeEmpty();
-        agent.State.PendingLlmReplyRequests.ShouldBeEmpty();
-        var events = await store.GetEventsAsync(agent.Id);
-        events.ShouldHaveSingleItem();
-        events[0].EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
-        var failed = ConversationContinueFailedEvent.Parser.ParseFrom(events[0].EventData.Value);
-        failed.CorrelationId.ShouldBe("act-missing-run");
-        failed.ErrorCode.ShouldBe("deferred_llm_reply_missing_run_id_rejected");
-        failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
-    }
-
-    [Fact]
-    public async Task HandleDeferredLlmReplyDispatchRequestedAsync_LegacyPendingRequestMissingRunId_DropsWithoutDispatch()
-    {
-        var dispatcher = new RecordingRunDispatcher();
-        var runner = new RecordingTurnRunner();
-        var store = new InMemoryEventStore();
-        const string agentId = "conv-legacy-pending-missing-run";
-        await AppendStateEventAsync(
-            store,
-            agentId,
-            new NeedsLlmReplyEvent
-            {
-                CorrelationId = "legacy-corr-missing-run",
-                TargetActorId = "conversation:actor",
-                RegistrationId = "reg-1",
-                Activity = CreateActivity("legacy-corr-missing-run", "conv:slack:C1"),
-                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            },
-            version: 1);
-        var (agent, _) = CreateAgent(runner, agentId, dispatcher, store: store);
-
-        await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
-        {
-            CorrelationId = "legacy-corr-missing-run",
-            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        });
-
-        dispatcher.Dispatched.ShouldBeEmpty();
-        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "legacy-corr-missing-run");
-        var failed = (await store.GetEventsAsync(agent.Id))
-            .Where(e => e.EventType.Contains(nameof(ConversationContinueFailedEvent), StringComparison.Ordinal))
-            .Select(e => ConversationContinueFailedEvent.Parser.ParseFrom(e.EventData.Value))
-            .LastOrDefault();
-        failed.ShouldNotBeNull();
-        failed!.ErrorCode.ShouldBe("legacy_pending_llm_reply_missing_run_id_dropped");
-        failed.RetryPolicyCase.ShouldBe(ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable);
     }
 
     [Fact]
@@ -513,6 +430,33 @@ public sealed class ConversationGAgentDedupTests
             "OnlySelfHandling must stay false: it gates by envelope TopologyAudience.Self, " +
             "but SendToAsync(Id, ...) produces a Direct-route envelope whose audience is " +
             "Unspecified, so enabling this flag would re-drop the admitted event.");
+    }
+
+    [Theory]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredLlmReplyDispatchRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleDeferredInboundTurnRetryRequestedAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleNyxRelayTextOperationTimeoutFiredAsync), true)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationCompletedAsync), false)]
+    [InlineData(nameof(ConversationGAgent.HandleLarkCardOperationTimeoutFiredAsync), true)]
+    public void ConversationSelfContinuationHandlers_MustOptInToSelfHandling(
+        string handlerName,
+        bool selfAudience)
+    {
+        var method = typeof(ConversationGAgent).GetMethod(
+            handlerName,
+            BindingFlags.Instance | BindingFlags.Public);
+        method.ShouldNotBeNull();
+
+        var attr = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attr.ShouldNotBeNull($"{handlerName} must be decorated with [EventHandler].");
+        attr!.AllowSelfHandling.ShouldBeTrue(
+            $"{handlerName} handles an actor-owned continuation or timeout whose " +
+            "PublisherActorId is the conversation actor itself.");
+        attr.OnlySelfHandling.ShouldBeFalse(
+            selfAudience
+                ? $"{handlerName} must currently allow runtime callback envelopes whose route shape may vary by scheduler."
+                : $"{handlerName} receives Direct self-dispatch envelopes, so OnlySelfHandling would filter it.");
     }
 
     [Fact]
@@ -695,15 +639,7 @@ public sealed class ConversationGAgentDedupTests
 
         var llmRunner = new RecordingTurnRunner
         {
-            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-            {
-                CorrelationId = activity.Id,
-                TargetActorId = "conversation:actor",
-                RegistrationId = "reg-1",
-                Activity = activity.Clone(),
-                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                })),
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity)),
         };
         var (llmAgent, _) = CreateAgent(llmRunner, "conv-relay-llm-reap");
         var llmRelay = CreateRelayInbound("act-llm-reap", "conv:slack:C1", "api-key-1", "jti-llm");
@@ -716,7 +652,7 @@ public sealed class ConversationGAgentDedupTests
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
         llmAgent.State.PendingRelayAdmissions.ShouldBeEmpty();
-        llmAgent.State.PendingLlmReplyRequests.ShouldContain(request => request.CorrelationId == "act-llm-reap");
+        llmAgent.State.PendingLlmReplyRequests.ShouldContain(request => request.CorrelationId == "jti-llm");
     }
 
     [Fact]
@@ -757,15 +693,7 @@ public sealed class ConversationGAgentDedupTests
         var dispatcher = new RecordingRunDispatcher();
         var runner = new RecordingTurnRunner
         {
-            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                })),
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(CreateNeedsLlmReply(activity)),
         };
         var (agent, store) = CreateAgent(runner, "conv-accepted-not-committed", dispatcher);
 
@@ -793,12 +721,12 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-llm-ready",
             RegistrationId = "reg-1",
+            RunId = "act-llm-ready",
             SourceActorId = "llm-worker-1",
             Activity = CreateActivity("act-llm-ready", "conv:slack:C1"),
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
-            RunId = "run-act-llm-ready",
         };
 
         await agent.HandleLlmReplyReadyAsync(ready);
@@ -812,7 +740,7 @@ public sealed class ConversationGAgentDedupTests
         events.Count.ShouldBe(3);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
-        agent.State.LastReplyDelivery.RunId.ShouldBe("run-act-llm-ready");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("act-llm-ready");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
         agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe(string.Empty);
     }
@@ -838,15 +766,15 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "corr-delivered",
             RegistrationId = "reg-1",
+            RunId = "corr-delivered",
             SourceActorId = "agent-run",
             Activity = CreateActivity("corr-delivered", "conv:slack:C1"),
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
-            RunId = "run-corr-delivered",
         });
 
-        agent.State.LastReplyDelivery.RunId.ShouldBe("run-corr-delivered");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivered");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
         agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe("om_delivery_ok");
         agent.State.LastReplyDelivery.Delivered.AckedAtUnixMs.ShouldBeGreaterThan(0);
@@ -868,15 +796,15 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "corr-delivery-failed",
             RegistrationId = "reg-1",
+            RunId = "corr-delivery-failed",
             SourceActorId = "agent-run",
             Activity = CreateActivity("corr-delivery-failed", "conv:slack:C1"),
             Outbound = new MessageContent { Text = "reply-from-llm" },
             TerminalState = LlmReplyTerminalState.Completed,
             ReadyAtUnixMs = 43,
-            RunId = "run-corr-delivery-failed",
         });
 
-        agent.State.LastReplyDelivery.RunId.ShouldBe("run-corr-delivery-failed");
+        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivery-failed");
         agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
         agent.State.LastReplyDelivery.Failed.ErrorCode.ShouldBe("lark_send_failed");
         agent.State.LastReplyDelivery.Failed.ErrorMessage.ShouldBe("lark rejected send");
@@ -946,14 +874,7 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = 42,
-                })),
+                CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
         };
         var (agent, _) = CreateAgent(runner, "conv-direct-dispatch", dispatcher);
 
@@ -961,25 +882,18 @@ public sealed class ConversationGAgentDedupTests
 
         dispatcher.Dispatched.Count.ShouldBe(1);
         dispatcher.Dispatched[0].CorrelationId.ShouldBe("act-direct");
-        dispatcher.Dispatched[0].RunId.ShouldBe("run-act-direct");
+        dispatcher.Dispatched[0].RunId.ShouldBe("act-direct");
         dispatcher.Dispatched[0].TargetActorId.ShouldBe(agent.Id);
     }
 
     [Fact]
-    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteForwardsToGAgent_CarriesTargetRefToDispatcher()
+    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteUsesGAgentToolHint_CarriesTargetRefToDispatcher()
     {
         var dispatcher = new RecordingRunDispatcher();
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = 42,
-                })),
+                CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
         };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             ForwardToModelAction("fallback-model"),
@@ -994,10 +908,7 @@ public sealed class ConversationGAgentDedupTests
                         Channel = "lark",
                         CommandName = "/daily",
                     },
-                    Action = new ChatRouteAction
-                    {
-                        ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
-                    },
+                    Action = GAgentToolHint("target-gagent-1"),
                 },
             ]));
         var resolver = new ChatRouteResolver(new StaticChatRouteFallbackProvider("fallback-model"));
@@ -1033,8 +944,9 @@ public sealed class ConversationGAgentDedupTests
         });
 
         dispatcher.Dispatched.ShouldHaveSingleItem();
-        dispatcher.Dispatched[0].RunId.ShouldBe("run-corr-route");
-        dispatcher.Dispatched[0].TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        dispatcher.Dispatched[0].RunId.ShouldBe("corr-route");
+        dispatcher.Dispatched[0].TargetRef.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"]
+            .StringValue.ShouldBe("target-gagent-1");
         dispatcher.Dispatched[0].ReplyToken.ShouldBe("runtime-only-token");
 
         var events = await store.GetEventsAsync(agent.Id);
@@ -1056,14 +968,7 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = 42,
-                })),
+                CreateNeedsLlmReply(activity, requestedAtUnixMs: 42)),
             LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
                 "sent:" + reply.CorrelationId,
                 new MessageContent { Text = "ack" },
@@ -1095,6 +1000,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "corr-relay-leak",
             RegistrationId = "reg-1",
+            RunId = "corr-relay-leak",
             SourceActorId = "llm-worker-1",
             Activity = inboundActivity.Clone(),
             Outbound = new MessageContent { Text = "reply-from-llm" },
@@ -1142,14 +1048,7 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "stale-unscoped-actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                })),
+                CreateNeedsLlmReply(activity, targetActorId: "stale-unscoped-actor")),
         };
         var (agent, store) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner", dispatcher);
 
@@ -1175,12 +1074,12 @@ public sealed class ConversationGAgentDedupTests
 
         await agent.HandleDeferredLlmReplyDispatchRequestedAsync(new DeferredLlmReplyDispatchRequestedEvent
         {
-            CorrelationId = "nyx-msg-1",
+            CorrelationId = "callback-jti-1",
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
 
         dispatcher.Dispatched.ShouldBeEmpty();
-        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "nyx-msg-1");
+        agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "callback-jti-1");
         var failed = (await store.GetEventsAsync(agent.Id))
             .Where(e => e.EventType.Contains(nameof(ConversationContinueFailedEvent), StringComparison.Ordinal))
             .Select(e => ConversationContinueFailedEvent.Parser.ParseFrom(e.EventData.Value))
@@ -1196,14 +1095,7 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.Id,
-                    TargetActorId = "stale-unscoped-actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                })),
+                CreateNeedsLlmReply(activity, targetActorId: "stale-unscoped-actor")),
         };
         var (agent, _) = CreateAgent(runner, "channel-conversation:conv:slack:C1:scope:owner");
 
@@ -1226,6 +1118,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "nyx-msg-cleanup",
             RegistrationId = "reg-1",
+            RunId = "nyx-msg-cleanup",
             SourceActorId = "llm-worker-1",
             Activity = inboundActivity.Clone(),
             Outbound = new MessageContent { Text = "reply-from-llm" },
@@ -1250,16 +1143,10 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    ReplyToken = sentinelReplyToken,
-                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
-                })),
+                CreateNeedsLlmReply(
+                    activity,
+                    replyToken: sentinelReplyToken,
+                    replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds())),
         };
         var (agent, store) = CreateAgent(runner, "conv-strip-token", dispatcher);
 
@@ -1300,16 +1187,10 @@ public sealed class ConversationGAgentDedupTests
         {
             InboundResultFactory = activity =>
             {
-                var request = WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    ReplyToken = "relay-token-strip-cred",
-                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
-                });
+                var request = CreateNeedsLlmReply(
+                    activity,
+                    replyToken: "relay-token-strip-cred",
+                    replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds());
                 request.Metadata["nyxid.sender_access_token"] = sentinelSenderToken;
                 request.Metadata["nyxid.access_token"] = sentinelOwnerToken;
                 request.Metadata["nyxid.org_token"] = sentinelOrgToken;
@@ -1365,16 +1246,10 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    ReplyToken = sentinelReplyToken,
-                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
-                })),
+                CreateNeedsLlmReply(
+                    activity,
+                    replyToken: sentinelReplyToken,
+                    replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds())),
         };
         var (agent, store) = CreateAgent(runner, "conv-retry-enrich", dispatcher);
 
@@ -1445,6 +1320,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "nyx-msg-run-echo",
             RegistrationId = "reg-1",
+            RunId = "nyx-msg-run-echo",
             SourceActorId = "llm-worker-1",
             Activity = activity.Clone(),
             Outbound = new MessageContent { Text = "reply-from-llm" },
@@ -1474,16 +1350,10 @@ public sealed class ConversationGAgentDedupTests
         var runner = new RecordingTurnRunner
         {
             InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
-                WithRunId(new NeedsLlmReplyEvent
-                {
-                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
-                    TargetActorId = "conversation:actor",
-                    RegistrationId = "reg-1",
-                    Activity = activity.Clone(),
-                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    ReplyToken = "drop-test-token",
-                    ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
-                })),
+                CreateNeedsLlmReply(
+                    activity,
+                    replyToken: "drop-test-token",
+                    replyTokenExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds())),
         };
         var (agent, store) = CreateAgent(runner, "conv-drop-clears", dispatcher);
 
@@ -1644,6 +1514,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-sc",
             RegistrationId = "reg-1",
+            RunId = "act-stream-sc",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-sc", "relay-msg-1"),
             Outbound = new MessageContent { Text = "final text" },
@@ -1740,6 +1611,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-nyx-emit",
             RegistrationId = "reg-1",
+            RunId = "act-nyx-emit",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-nyx-emit", "relay-msg-1"),
             Outbound = new MessageContent { Text = "hello edited" },
@@ -1798,6 +1670,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-reactivate",
             RegistrationId = "reg-1",
+            RunId = "act-stream-reactivate",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-reactivate", "relay-msg-1"),
             Outbound = new MessageContent { Text = "final after activation" },
@@ -1914,6 +1787,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-fb",
             RegistrationId = "reg-1",
+            RunId = "act-stream-fb",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-fb", "relay-msg-1"),
             Outbound = new MessageContent { Text = "final text" },
@@ -2005,6 +1879,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-final-retry",
             RegistrationId = "reg-1",
+            RunId = "act-stream-final-retry",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-final-retry", "relay-msg-1"),
             Outbound = new MessageContent { Text = "hello world final" },
@@ -2057,6 +1932,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-final-degraded",
             RegistrationId = "reg-1",
+            RunId = "act-stream-final-degraded",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-final-degraded", "relay-msg-1"),
             Outbound = new MessageContent { Text = "hello partial more final" },
@@ -2114,6 +1990,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-failed",
             RegistrationId = "reg-1",
+            RunId = "act-stream-failed",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-failed", "relay-msg-1"),
             // Run actor classifies the LLM exception into a user-facing
@@ -2171,6 +2048,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-stream-failed-deny",
             RegistrationId = "reg-1",
+            RunId = "act-stream-failed-deny",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-stream-failed-deny", "relay-msg-1"),
             Outbound = new MessageContent { Text = "Sorry, the LLM call failed." },
@@ -2334,21 +2212,20 @@ public sealed class ConversationGAgentDedupTests
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         var sp = services.BuildServiceProvider();
+        var publisher = eventPublisher ?? new RecordingEventPublisher();
         var agent = new ConversationGAgent
         {
             Services = sp,
-            EventPublisher = eventPublisher ?? new RecordingEventPublisher(),
+            EventPublisher = publisher,
             EventSourcingBehaviorFactory =
                 sp.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, agentId);
+        if (publisher is RecordingEventPublisher recordingPublisher)
+            recordingPublisher.SelfTarget = agent;
         agent.ActivateAsync().GetAwaiter().GetResult();
         return (agent, store);
     }
-
-    private static Task<T> NextSentAsync<T>(ConversationGAgent agent)
-        where T : IMessage<T>, new() =>
-        ((RecordingEventPublisher)agent.EventPublisher).NextSentAsync<T>();
 
     private static void SetId(object agent, string id)
     {
@@ -2427,33 +2304,35 @@ public sealed class ConversationGAgentDedupTests
         DispatchedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
     };
 
-    private static NeedsLlmReplyEvent WithRunId(NeedsLlmReplyEvent request, string? runId = null)
+    // Sync (PR #1106 r2): production now requires the LLM reply producer to supply run_id before handoff.
+    private static NeedsLlmReplyEvent CreateNeedsLlmReply(
+        ChatActivity activity,
+        string? targetActorId = null,
+        long? requestedAtUnixMs = null,
+        string? replyToken = null,
+        long replyTokenExpiresAtUnixMs = 0)
     {
-        request.RunId = string.IsNullOrWhiteSpace(runId)
-            ? "run-" + (string.IsNullOrWhiteSpace(request.CorrelationId)
-                ? Guid.NewGuid().ToString("N")
-                : request.CorrelationId.Trim())
-            : runId.Trim();
-        return request;
+        var correlationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id;
+        return new NeedsLlmReplyEvent
+        {
+            CorrelationId = correlationId,
+            RunId = correlationId,
+            TargetActorId = targetActorId ?? "conversation:actor",
+            RegistrationId = "reg-1",
+            Activity = activity.Clone(),
+            RequestedAtUnixMs = requestedAtUnixMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ReplyToken = replyToken ?? string.Empty,
+            ReplyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs,
+        };
     }
 
     private static async Task<NyxRelayTextOperationCompletedEvent> CompleteNextNyxRelayTextOperationAsync(
         ConversationGAgent agent,
         RecordingActorDispatchPort dispatchPort)
     {
-        for (var i = 0; i < 8; i++)
-        {
-            var step = await NextSentAsync<ReplyOperationStepEvent>(agent);
-            await agent.HandleReplyOperationStepAsync(step);
-            if (step.PayloadCase != ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText)
-                continue;
-
-            var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
-            await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
-            return completed;
-        }
-
-        throw new TimeoutException("Timed out waiting for Nyx relay text operation step.");
+        var completed = await dispatchPort.WaitForPayloadAsync<NyxRelayTextOperationCompletedEvent>();
+        await agent.HandleNyxRelayTextOperationCompletedAsync(completed);
+        return completed;
     }
 
     private sealed class RecordingTurnRunner : IConversationTurnRunner
@@ -2575,12 +2454,29 @@ public sealed class ConversationGAgentDedupTests
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
+    private static ChatRouteAction GAgentToolHint(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Value.ForString(actorId),
+                    },
+                },
+            },
+        },
+    };
+
     private sealed class RecordingEventPublisher : IEventPublisher
     {
+        public ConversationGAgent? SelfTarget { get; set; }
         public List<IMessage> Published { get; } = [];
         public List<IMessage> Sent { get; } = [];
-        private readonly Queue<IMessage> _sentQueue = new();
-        private readonly SemaphoreSlim _sentAvailable = new(0);
 
         public Task PublishAsync<T>(
             T evt,
@@ -2603,35 +2499,13 @@ public sealed class ConversationGAgentDedupTests
             where T : IMessage
         {
             Sent.Add(evt);
-            lock (_sentQueue)
-            {
-                _sentQueue.Enqueue(evt);
-            }
-            _sentAvailable.Release();
+            // Sync (PR #1106 r2): reply operation execution now advances through an actor self-message.
+            if (evt is ReplyOperationStepEvent step &&
+                SelfTarget is not null &&
+                string.Equals(targetActorId, SelfTarget.Id, StringComparison.Ordinal))
+                return SelfTarget.HandleReplyOperationStepAsync(step);
+
             return Task.CompletedTask;
-        }
-
-        public async Task<T> NextSentAsync<T>()
-            where T : IMessage<T>, new()
-        {
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (DateTimeOffset.UtcNow < deadline)
-            {
-                var remaining = deadline - DateTimeOffset.UtcNow;
-                if (remaining <= TimeSpan.Zero || !await _sentAvailable.WaitAsync(remaining))
-                    break;
-
-                IMessage message;
-                lock (_sentQueue)
-                {
-                    message = _sentQueue.Dequeue();
-                }
-
-                if (message is T typed)
-                    return typed;
-            }
-
-            throw new TimeoutException($"Timed out waiting for sent {typeof(T).Name}.");
         }
     }
 
@@ -2820,6 +2694,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-card-emit",
             RegistrationId = "reg-1",
+            RunId = "act-card-emit",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-card-emit", "relay-msg-1"),
             Outbound = new MessageContent { Text = "hello final" },
@@ -3144,6 +3019,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-card-finalize",
             RegistrationId = "reg-1",
+            RunId = "act-card-finalize",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-card-finalize", "relay-msg-1"),
             Outbound = new MessageContent { Text = "complete answer" },
@@ -3213,6 +3089,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-card-reactivate",
             RegistrationId = "reg-1",
+            RunId = "act-card-reactivate",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-card-reactivate", "relay-msg-1"),
             Outbound = new MessageContent { Text = "third" },
@@ -3276,6 +3153,7 @@ public sealed class ConversationGAgentDedupTests
         {
             CorrelationId = "act-card-fb-final",
             RegistrationId = "reg-1",
+            RunId = "act-card-fb-final",
             SourceActorId = "agent-run",
             Activity = CreateRelayActivity("act-card-fb-final", "relay-msg-1"),
             Outbound = new MessageContent { Text = "complete answer" },
@@ -3471,5 +3349,4 @@ public sealed class ConversationGAgentDedupTests
             return Task.FromResult(result);
         }
     }
-
 }

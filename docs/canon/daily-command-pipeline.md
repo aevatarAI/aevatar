@@ -166,14 +166,15 @@ QA 关注点：
    - 文件：`agents/Aevatar.GAgents.Authoring.Lark/NyxRelayAgentBuilderFlow.cs`
    - 校验：`evt.Text` 必须以 `/` 开头；`chat_type == "p2p"`（私聊）；命令必须在已知列表里
    - 已知命令：`/agents /agent-status /run-agent /disable-agent /enable-agent /delete-agent`
-   - `/daily` 是 Ornn skill shortcut：本路由显式放行给 LLM reply path，不走 `agent_builder`
-   - 不在白名单 → 直接回 `BuildUnknownCommandReply()` 文案（不走 LLM）
+   - `/daily` 与其他未知 slash（如 `/goal`）是 Ornn skill shortcut：本路由放行给 LLM reply path，不走 `agent_builder`
+   - 不在白名单 → fall through；由 `BuildLlmRequestActivity(...)` 强制走 Ornn skill 搜索/加载，而不是本地 Unknown command 回复
    - 非私聊 → 回 `BuildPrivateChatRestrictionReply()`，不创建 agent、不执行 tool
 
 3. `ChannelConversationTurnRunner.BuildLlmRequestActivity(...)`
    - 文件：`agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs`
-   - `TryBuildDailySkillInvocationPrompt()` 识别 `/daily` 或 `/daily ...`
+   - `TryBuildSkillInvocationPrompt()` 识别 `/daily` 或 `/daily ...`
    - 输出 LLM prompt：要求先调用 `use_skill`，`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本
+   - 其他非本地 slash（如 `/goal`）输出 LLM prompt：要求先调用 `ornn_search_skills(query="<command>")`，再 `use_skill` 最匹配的 skill，并把 slash 后面的原始参数作为 `args`
    - 原始命令文本保留在 prompt 中，便于 skill 按自己的契约解析参数
 
 4. `NyxIdConversationReplyGenerator.GenerateReplyAsync(...)`
@@ -204,7 +205,7 @@ QA 关注点：
 - `UseSkillTool` 参数：`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本。
 - 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
 - `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问 Ornn API；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
-- 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径，而不是阻塞 actor turn 到外层超时。
+- 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径。外层 reply generation 不再用固定 120s 之类的硬超时截断长 skill workflow。
 - `../chrono-ornn` 不在本 worktree 同级目录时，本文只描述 aevatar 可验证的 skill bridge 契约，不复制 Ornn skill 内部实现。
 
 ### 阶段 ⑤ SkillRunner 执行 → NyxID → GitHub
@@ -470,8 +471,8 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - ✅ `/daily` 不带任何参数 → agent-builder router fall through，由 LLM reply path 处理 Ornn skill shortcut
 - ✅ `/daily alice` / `/DAILY alice schedule_time=09:00` → agent-builder router fall through
 - ✅ `ChannelConversationTurnRunner` 把 `/daily alice` 改写成包含 `use_skill`、`chrono-ai-daily`、`alice`、原始命令文本的 LLM request
+- ✅ 未知 slash 命令 `/goal ...` → agent-builder router fall through；`ChannelConversationTurnRunner` 改写成先 `ornn_search_skills` 再 `use_skill`
 - ✅ 非私聊（`chat_type != "p2p"`）→ `BuildPrivateChatRestrictionReply`，**不**产生 ToolCall
-- ✅ 未知 slash 命令 `/foo` → `BuildUnknownCommandReply`
 - ❌ 边界：Ornn skill load 失败 → 用户看到 skill loading / unavailable 说明，不创建本地 runner
 - ❌ 边界：`/daily` 参数非法 → 由 `chrono-ai-daily` skill 返回参数错误文案
 
