@@ -15,13 +15,11 @@ public sealed class WorkflowExecutionProjectionPort
 
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
-        IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<WorkflowRunEventEnvelope> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<WorkflowExecutionRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
-            activationService,
             releaseService,
             sessionEventHub)
     {
@@ -40,6 +38,7 @@ public sealed class WorkflowExecutionProjectionPort
         IEventSink<WorkflowRunEventEnvelope> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old lifecycle base exposed direct ensure/rebuild-like activation to request ports; workflow observation now attaches only to existing sessions.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

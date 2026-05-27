@@ -139,10 +139,10 @@ public class ClaimRoleIntegrationTests
                     CatalogActorId: "script-catalog",
                     ValidationReport: new ScriptEvolutionValidationReport(true, [])));
 
-        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
-            Task.FromResult(definitionActorId ?? "definition-1");
+        public Task<ScriptDefinitionUpsertResult> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(new ScriptDefinitionUpsertResult(definitionActorId ?? "definition-1", new ScriptDefinitionBindingSpec { ScriptId = scriptId, Revision = scriptRevision, SourceHash = sourceHash }));
 
-        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, ScriptDefinitionBindingSpec definitionSnapshot, CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? "runtime-1");
 
         public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>

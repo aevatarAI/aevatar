@@ -21,6 +21,8 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     private readonly IScopeBindingQueryAdapter? _queryAdapter;
     private readonly IScopeBindingUnbindAdapter? _unbindAdapter;
     private readonly IWorkflowDefinitionCommandAdapter? _definitionAdapter;
+    private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
+    private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger _logger;
 
     public BindingAgentToolSource(
@@ -29,6 +31,8 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         IScopeBindingQueryAdapter? queryAdapter = null,
         IScopeBindingUnbindAdapter? unbindAdapter = null,
         IWorkflowDefinitionCommandAdapter? definitionAdapter = null,
+        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         ILogger<BindingAgentToolSource>? logger = null)
     {
         _options = options;
@@ -36,12 +40,15 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         _queryAdapter = queryAdapter;
         _unbindAdapter = unbindAdapter;
         _definitionAdapter = definitionAdapter;
+        _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
+        _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<BindingAgentToolSource>.Instance;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (_commandPort == null && _queryAdapter == null)
+        if (_commandPort == null && _queryAdapter == null &&
+            _scopeWorkflowCommandPort == null && _scopeWorkflowQueryPort == null)
         {
             _logger.LogDebug("Binding adapter implementations not registered, skipping binding tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -63,6 +70,18 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         // Unbind (requires unbind adapter)
         if (_unbindAdapter != null)
             tools.Add(new BindingUnbindTool(_unbindAdapter));
+
+        // Refactor (iter97/cluster-598): Old/New
+        //   Old pattern: Ornn skill recipes could not reach typed scope workflow ports through LLM tools.
+        //   New principle: expose thin scope_workflows_* adapters without changing binding_* generic service tools.
+        if (_scopeWorkflowCommandPort != null)
+            tools.Add(new ScopeWorkflowsUpsertTool(_scopeWorkflowCommandPort));
+
+        if (_scopeWorkflowQueryPort != null)
+        {
+            tools.Add(new ScopeWorkflowsListTool(_scopeWorkflowQueryPort, _options));
+            tools.Add(new ScopeWorkflowsGetTool(_scopeWorkflowQueryPort));
+        }
 
         _logger.LogInformation("Binding tools registered ({Count} tools)", tools.Count);
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);

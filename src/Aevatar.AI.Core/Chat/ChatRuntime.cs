@@ -73,6 +73,15 @@ public sealed class ChatRuntime
         _suppressToolCallRoundText = suppressToolCallRoundText;
     }
 
+    public ChatRuntimeStepExecutor CreateStepExecutor() =>
+        new(
+            _providerFactory,
+            _toolLoop,
+            _hooks,
+            _requestBuilder,
+            _llmMiddlewares,
+            _history.Budget);
+
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
@@ -786,7 +795,53 @@ public sealed class ChatRuntime
         llmHookContext.LLMResponse = response;
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
 
-        roundScope.Result = new StreamingRoundResult(response.Content, response.ReasoningContent, response.ToolCalls, llmCallContext.Terminate, response.FinishReason ?? streamedFinishReason);
+        roundScope.Result = new StreamingRoundResult(
+            response.Content,
+            response.ReasoningContent,
+            response.ToolCalls,
+            llmCallContext.Terminate,
+            response.FinishReason ?? streamedFinishReason,
+            response.Usage);
+    }
+
+    internal async Task<StreamingRoundResult> ExecuteSingleLlmStepAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        CancellationToken ct,
+        Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync = null,
+        Action<ToolCall>? onToolCallCompleted = null)
+    {
+        var roundScope = new StreamingRoundScope();
+        await foreach (var _ in StreamLlmRoundAsync(provider, request, roundScope, ct, onToolCallCompleted))
+        {
+            if (onChunkAsync is not null)
+                await onChunkAsync(_, ct).ConfigureAwait(false);
+        }
+
+        return roundScope.RequireResult();
+    }
+
+    internal async Task<IReadOnlyList<ToolExecutionResult>> ExecuteSingleToolStepAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyDictionary<string, string>? requestMetadata,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
+    {
+        var executor = new StreamingToolExecutor(
+            _toolLoop.Tools,
+            _hooks,
+            _toolLoop.ToolMiddlewares,
+            requestMetadata: requestMetadata,
+            toolContext: toolContext);
+        using var toolState = executor.CreateExecutionState();
+        foreach (var toolCall in toolCalls)
+            executor.AddTool(toolState, toolCall);
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(toolState, ct))
+            results.Add(result);
+
+        return results;
     }
 
     private static void AppendAssistantMessage(
@@ -1054,12 +1109,13 @@ public sealed class ChatRuntime
         }
     }
 
-    private sealed record StreamingRoundResult(
+    internal sealed record StreamingRoundResult(
         string? Content,
         string? ReasoningContent,
         IReadOnlyList<ToolCall>? ToolCalls,
         bool Terminated,
-        string? FinishReason);
+        string? FinishReason,
+        TokenUsage? Usage);
 
     // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
     //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity

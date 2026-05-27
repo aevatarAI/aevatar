@@ -7,7 +7,6 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
@@ -114,6 +113,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         interaction.Commands.Should().ContainSingle();
         var command = interaction.Commands[0];
         command.ScopeId.Should().Be(identity.TenantId);
+        command.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+        command.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
         command.Prompt.Should().Be("hello static");
         command.PreferredActorId.Should().Be("preferred-actor");
         command.SessionId.Should().Be("session-1");
@@ -236,7 +237,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
     }
 
     [Fact]
-    public async Task InvokeAsync_ShouldThrow_WhenStaticPlanHasNoActorType()
+    public async Task InvokeAsync_ShouldUseAgentKind_WhenStaticPlanHasNoActorType()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var interaction = new RecordingGAgentDraftRunInteractionService();
@@ -249,12 +250,36 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             interaction,
             registration);
 
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        interaction.Commands.Should().ContainSingle()
+            .Which.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenStaticPlanHasNoAgentKindOrActorType()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var artifact = CreateArtifact(identity, ServiceImplementationKind.Static);
+        artifact.DeploymentPlan.StaticPlan!.AgentKind = " ";
+        artifact.DeploymentPlan.StaticPlan!.ActorTypeName = " ";
+        var service = await CreateServiceAsync(
+            identity,
+            artifact,
+            interaction,
+            registration);
+
         var act = () => service.InvokeAsync(
             NewRequest(identity),
             (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Static GAgent service has no actor type configured*");
+            .WithMessage("*Static GAgent service has no agent kind configured*");
         interaction.Commands.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
@@ -265,13 +290,13 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         RecordingGAgentDraftRunInteractionService interaction,
         RecordingServiceRunRegistrationPort registration)
     {
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
 
         var resolutionService = new ServiceInvocationResolutionService(
             new CatalogQueryReader(identity),
             new TrafficViewQueryReader(identity),
-            artifactStore);
+            revisionCatalog);
 
         return new StaticGAgentStreamInvocationApplicationService(
             resolutionService,

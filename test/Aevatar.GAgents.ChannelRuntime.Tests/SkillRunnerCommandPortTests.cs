@@ -179,7 +179,7 @@ public sealed class SkillRunnerCommandPortTests
     [Fact]
     public void Constructor_NullDependencies_Throws()
     {
-        var dispatch = Substitute.For<IActorDispatchPort>();
+        var dispatch = Substitute.For<IActorHandledDispatchPort>();
         var runtime = Substitute.For<IActorRuntime>();
         var projection = Fixture.CreateProjectionPort(out _, out _);
 
@@ -192,7 +192,7 @@ public sealed class SkillRunnerCommandPortTests
     private sealed class Fixture
     {
         public IActorRuntime Runtime { get; }
-        public IActorDispatchPort Dispatch { get; }
+        public IActorHandledDispatchPort Dispatch { get; }
         public UserAgentCatalogProjectionBootstrapActivator Projection { get; }
         public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public List<EventEnvelope> Captured { get; } = new();
@@ -201,11 +201,11 @@ public sealed class SkillRunnerCommandPortTests
         public Fixture()
         {
             Runtime = Substitute.For<IActorRuntime>();
-            Dispatch = Substitute.For<IActorDispatchPort>();
+            Dispatch = Substitute.For<IActorHandledDispatchPort>();
             Projection = CreateProjectionPort(out var activation, out _);
             Activation = activation;
-            Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+            Dispatch.DispatchAndWaitHandledAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
+                .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
             Port = new SkillRunnerCommandPort(Runtime, Dispatch);
         }
 

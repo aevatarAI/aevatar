@@ -14,11 +14,11 @@ public sealed class WorkflowClientSessionExtensionsTests
     public async Task StartRunStreamWithTrackingAsync_ShouldTrackSessionContext()
     {
         const string ssePayload = """
-data: {"type":"CUSTOM","name":"aevatar.run.context","value":{"actorId":"actor-1","workflowName":"auto","commandId":"cmd-1"}}
+data: {"custom":{"name":"aevatar.run.context","payload":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowRunContextPayload","actorId":"actor-1","workflowName":"auto","commandId":"cmd-1"}}}
 
-data: {"type":"CUSTOM","name":"aevatar.human_input.request","value":{"runId":"run-1","stepId":"approval-1","suspensionType":"human_approval"}}
+data: {"custom":{"name":"aevatar.human_input.request","payload":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowHumanInputRequestCustomPayload","runId":"run-1","stepId":"approval-1","suspensionType":"human_approval"}}}
 
-data: {"type":"RUN_FINISHED","result":{"output":"ok"}}
+data: {"runFinished":{"threadId":"actor-1","result":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowRunResultPayload","output":"ok"}}}
 
 """;
 

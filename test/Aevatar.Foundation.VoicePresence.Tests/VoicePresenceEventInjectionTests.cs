@@ -132,6 +132,28 @@ public class VoicePresenceEventInjectionTests
     }
 
     [Fact]
+    public async Task Duplicate_event_should_be_dropped_across_module_instances_from_actor_owned_dedupe_fence()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
+        var provider = new RecordingVoiceProvider();
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(roleAgent);
+        var firstModule = CreateModule(provider, timeProvider: timeProvider);
+        var secondModule = CreateModule(provider, timeProvider: timeProvider);
+        var envelope = CreateExternalEnvelope("sensor-1", "temp-high", timeProvider.GetUtcNow());
+
+        await firstModule.InitializeAsync(CancellationToken.None);
+        await secondModule.InitializeAsync(CancellationToken.None);
+
+        await firstModule.HandleAsync(envelope, ctx, CancellationToken.None);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(500));
+        await secondModule.HandleAsync(envelope, ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        roleAgent.VoicePresence["voice_presence"].EventDedupeFence.ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task Pending_buffer_should_drop_oldest_event_when_capacity_is_reached()
     {
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
@@ -239,51 +261,39 @@ public class VoicePresenceEventInjectionTests
     {
         public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
+        public Task<RealtimeVoiceProviderSession> ConnectAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            CancellationToken ct)
         {
+            _ = sessionKey;
             _ = config;
+            _ = eventSink;
             _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-        {
-            _ = callId;
-            _ = resultJson;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-        {
-            _ = ct;
-            InjectedEvents.Add(injection.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task CancelResponseAsync(CancellationToken ct)
-        {
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-        {
-            _ = session;
-            _ = ct;
-            return Task.CompletedTask;
+            return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingProviderSession(this));
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class RecordingProviderSession(RecordingVoiceProvider provider) : RealtimeVoiceProviderSession
+        {
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+            {
+                provider.InjectedEvents.Add(injection.Clone());
+                return Task.CompletedTask;
+            }
+            public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+            {
+                _ = session;
+                _ = ct;
+                return Task.CompletedTask;
+            }
+            public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class StubEventHandlerContext(IAgent? agent = null) : IEventHandlerContext

@@ -47,8 +47,6 @@ public class VoicePresenceSessionResolverTests
         resolution.ObservedStateVersion.ShouldBe(5);
         var session = resolution.Session;
         session.ShouldNotBeNull();
-        session.Module.ShouldBeNull();
-        session.SelfEventDispatcher.ShouldBeNull();
         session.PcmSampleRateHz.ShouldBe(16000);
         session.IsInitialized.ShouldBeTrue();
         session.IsTransportAttached.ShouldBeFalse();
@@ -158,6 +156,7 @@ public class VoicePresenceSessionResolverTests
             "voice_presence",
             initialized: true,
             activeSessionId: "session-1",
+            activeTransportLeaseId: "transport-1",
             transportAttached: true,
             remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
         var leasePort = new RecordingLeasePort();
@@ -183,6 +182,39 @@ public class VoicePresenceSessionResolverTests
         attachmentPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
         leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.SessionId.ShouldBe("session-1");
         leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Attached_detach_session_should_publish_lifetime_completed_without_direct_release()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "session-1",
+            activeTransportLeaseId: "transport-1",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var resolver = new ActorOwnedVoicePresenceSessionResolver(
+            new FakeCapabilityQueryPort(capability),
+            leasePort,
+            attachmentPort);
+
+        var resolution = await resolver.ResolveAsync(new VoicePresenceSessionRequest(
+            "agent-1",
+            "voice_presence",
+            VoicePresenceSessionRequestPurpose.Detach));
+
+        await resolution.Session!.CompleteTransportLifetimeAsync(new PassiveVoiceTransport());
+
+        attachmentPort.DetachedHandles.ShouldBeEmpty();
+        leasePort.ReleaseRequests.ShouldBeEmpty();
+        var completion = leasePort.LifetimeCompletions.ShouldHaveSingleItem();
+        completion.Handle.SessionId.ShouldBe("session-1");
+        completion.TransportLeaseId.ShouldBe("transport-1");
+        completion.Reason.ShouldBe("host_transport_completed");
     }
 
     [Fact]
@@ -270,6 +302,32 @@ public class VoicePresenceSessionResolverTests
     }
 
     [Fact]
+    public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lifetime_completed_signal()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var handle = new VoicePresenceSessionLeaseHandle(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            10,
+            expiresAt,
+            VoiceRemoteAudioSupport.LocalOnly,
+            "transport-1");
+
+        await leasePort.CompleteTransportLifetimeAsync(handle, "transport-1", "test-complete");
+
+        var signal = dispatchPort.Dispatches.ShouldHaveSingleItem().Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted);
+        signal.TransportLifetimeCompleted.SessionId.ShouldBe("lease-1");
+        signal.TransportLifetimeCompleted.TransportLeaseId.ShouldBe("transport-1");
+        signal.TransportLifetimeCompleted.Reason.ShouldBe("test-complete");
+        signal.TransportLifetimeCompleted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+    }
+
+    [Fact]
     public async Task VoicePresenceCapabilityQueryPort_should_read_actor_scoped_capability_readmodel()
     {
         var readModel = new VoicePresenceCapabilityReadModel
@@ -307,6 +365,7 @@ public class VoicePresenceSessionResolverTests
             {
                 Initialized = true,
                 LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(3)),
+                ActiveTransportLeaseId = "transport-1",
             },
             8,
             null!,
@@ -320,6 +379,7 @@ public class VoicePresenceSessionResolverTests
         readModel.UpdatedAt.ToDateTimeOffset().ShouldBe(updatedAt.ToUniversalTime());
         readModel.PcmSampleRateHz.ShouldBe(24000);
         readModel.ActiveSessionId.ShouldBeEmpty();
+        readModel.ActiveTransportLeaseId.ShouldBe("transport-1");
         readModel.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
     }
 
@@ -333,11 +393,13 @@ public class VoicePresenceSessionResolverTests
             StateVersion = 3,
             LastEventId = "event-3",
             ActiveSessionId = " ",
+            ActiveTransportLeaseId = "transport-1",
         });
 
         snapshot.UpdatedAt.ShouldBe(DateTimeOffset.MinValue);
         snapshot.PcmSampleRateHz.ShouldBe(24000);
         snapshot.ActiveSessionId.ShouldBeNull();
+        snapshot.ActiveTransportLeaseId.ShouldBe("transport-1");
         snapshot.LeaseExpiresAt.ShouldBeNull();
         snapshot.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
     }
@@ -359,6 +421,7 @@ public class VoicePresenceSessionResolverTests
                     Initialized = true,
                     PcmSampleRateHz = 16000,
                     ActiveSessionId = "lease-1",
+                    ActiveTransportLeaseId = "transport-1",
                     RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
                 },
             },
@@ -383,6 +446,7 @@ public class VoicePresenceSessionResolverTests
         document.Initialized.ShouldBeTrue();
         document.PcmSampleRateHz.ShouldBe(16000);
         document.ActiveSessionId.ShouldBe("lease-1");
+        document.ActiveTransportLeaseId.ShouldBe("transport-1");
         document.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.Supported);
     }
 
@@ -469,6 +533,7 @@ public class VoicePresenceSessionResolverTests
         string moduleName,
         bool initialized,
         string? activeSessionId = null,
+        string? activeTransportLeaseId = null,
         bool transportAttached = false,
         VoiceRemoteAudioSupport remoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly) =>
         new(
@@ -482,7 +547,8 @@ public class VoicePresenceSessionResolverTests
             16000,
             activeSessionId,
             DateTimeOffset.UtcNow.AddMinutes(5),
-            remoteAudioSupport);
+            remoteAudioSupport,
+            activeTransportLeaseId);
 
     private static string FindRepoRoot()
     {
@@ -521,6 +587,8 @@ public class VoicePresenceSessionResolverTests
 
         public List<(VoicePresenceSessionLeaseHandle Handle, string Reason)> ReleaseRequests { get; } = [];
 
+        public List<(VoicePresenceSessionLeaseHandle Handle, string TransportLeaseId, string Reason)> LifetimeCompletions { get; } = [];
+
         public Task<VoicePresenceSessionLeaseHandle> AcquireAsync(
             VoicePresenceSessionLeaseRequest request,
             CancellationToken ct = default)
@@ -542,6 +610,16 @@ public class VoicePresenceSessionResolverTests
             CancellationToken ct = default)
         {
             ReleaseRequests.Add((handle, reason));
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            string transportLeaseId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            LifetimeCompletions.Add((handle, transportLeaseId, reason));
             return Task.CompletedTask;
         }
     }

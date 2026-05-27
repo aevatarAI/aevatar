@@ -18,7 +18,7 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
 //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGenerator
+public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationReplyGenerator
 {
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
@@ -145,6 +145,43 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         }
     }
 
+    public async Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+        ArgumentNullException.ThrowIfNull(metadata);
+
+        var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
+        var tools = await BuildTurnToolsAsync(ct);
+        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
+            replyPlan.PrimaryToolContext ?? AgentToolExecutionContextMapper.FromMetadata(replyPlan.Primary));
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
+        var runtime = BuildRuntime(
+            activity,
+            replyPlan.PrimaryControl,
+            effectiveToolContext,
+            externalMetadata,
+            tools);
+
+        var initialMessages = new List<ChatMessage>
+        {
+            ChatMessage.System(BuildSystemPrompt()),
+            ChatMessage.User([ContentPart.TextPart(activity.Content.Text)], activity.Content.Text),
+        };
+
+        return new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(),
+            externalMetadata,
+            replyPlan.PrimaryControl,
+            effectiveToolContext,
+            initialMessages,
+            ResolveMaxToolRounds(replyPlan.PrimaryControl));
+    }
+
     /// <summary>
     /// Decide whether falling back from sender credentials to owner credentials is worth
     /// the retry. Programmer errors (Argument*, NullReference, InvalidCast) are not transient
@@ -210,36 +247,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
         //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
-        var history = new global::Aevatar.AI.Core.Chat.ChatHistory
-        {
-            MaxMessages = MaxHistoryMessages,
-        };
-        var runtime = new ChatRuntime(
-            providerFactory: ResolveProvider,
-            history: history,
-            toolLoop: new ToolCallLoop(
-                tools,
-                hooks: null,
-                toolMiddlewares: BuildToolMiddlewaresForTurn(),
-                llmMiddlewares: _llmMiddlewares),
-            hooks: null,
-            requestBuilder: () => new LLMRequest
-            {
-                Messages =
-                [
-                    ChatMessage.System(BuildSystemPrompt()),
-                ],
-                Metadata = externalMetadata,
-                ToolContext = toolContext,
-                LlmControl = llmControl,
-                RoutingContext = llmControl.ToRoutingContext(),
-                Tools = FilterValidTools(tools),
-            },
-            agentMiddlewares: _agentMiddlewares,
-            llmMiddlewares: _llmMiddlewares,
-            agentId: activity.Conversation?.CanonicalKey,
-            agentName: "NyxIdConversationReply",
-            suppressToolCallRoundText: true);
+        var runtime = BuildRuntime(activity, llmControl, toolContext, externalMetadata, tools);
 
         var output = new StringBuilder();
         // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last
@@ -276,14 +284,6 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             FinishReason: lastFinishReason);
     }
 
-    private static bool ShouldStreamVisibleReply(string accumulatedText)
-    {
-        if (string.IsNullOrWhiteSpace(accumulatedText))
-            return false;
-
-        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
-    }
-
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round
     // reports its own Usage; the actor-edge closeout carries the sum.
     private static ReplyTokenUsage? SumUsage(ReplyTokenUsage? acc, ReplyTokenUsage? add)
@@ -311,6 +311,58 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         effective.AddRange(_toolMiddlewares);
         return effective;
     }
+
+    private ChatRuntime BuildRuntime(
+        ChatActivity activity,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> externalMetadata,
+        ToolManager tools)
+    {
+        var history = new global::Aevatar.AI.Core.Chat.ChatHistory
+        {
+            MaxMessages = MaxHistoryMessages,
+        };
+        return new ChatRuntime(
+            providerFactory: ResolveProvider,
+            history: history,
+            toolLoop: new ToolCallLoop(
+                tools,
+                hooks: null,
+                toolMiddlewares: BuildToolMiddlewaresForTurn(),
+                llmMiddlewares: _llmMiddlewares),
+            hooks: null,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages =
+                [
+                    ChatMessage.System(BuildSystemPrompt()),
+                ],
+                Metadata = externalMetadata,
+                ToolContext = toolContext,
+                LlmControl = llmControl,
+                RoutingContext = llmControl.ToRoutingContext(),
+                Tools = FilterValidTools(tools),
+            },
+            agentMiddlewares: _agentMiddlewares,
+            llmMiddlewares: _llmMiddlewares,
+            agentId: activity.Conversation?.CanonicalKey,
+            agentName: "NyxIdConversationReply",
+            suppressToolCallRoundText: true);
+    }
+
+    private static bool ShouldStreamVisibleReply(string accumulatedText)
+    {
+        if (string.IsNullOrWhiteSpace(accumulatedText))
+            return false;
+
+        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
+    }
+
+    private static int ResolveMaxToolRounds(LLMControlContext llmControl) =>
+        llmControl.MaxToolRoundsOverride is > 0
+            ? llmControl.MaxToolRoundsOverride.Value
+            : MaxToolRounds;
 
     private async Task<EffectiveReplyPlan> BuildEffectiveReplyPlanAsync(
         IReadOnlyDictionary<string, string> metadata,

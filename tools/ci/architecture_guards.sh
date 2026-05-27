@@ -34,6 +34,9 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
+bash tools/ci/static_service_activation_guard.sh || exit $?
+
 if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   echo "Solution must not include legacy host projects."
   exit 1
@@ -361,6 +364,7 @@ dispatch_projection_boundary_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorHandledDispatchPort.cs"] = 1;
   allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
 }
 

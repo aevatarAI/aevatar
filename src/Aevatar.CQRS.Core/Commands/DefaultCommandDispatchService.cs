@@ -22,6 +22,8 @@ public sealed class DefaultCommandDispatchService<TCommand, TTarget, TReceipt, T
         if (!dispatch.Succeeded || dispatch.Target == null)
             return CommandDispatchResult<TReceipt, TError>.Failure(dispatch.Error);
 
-        return CommandDispatchResult<TReceipt, TError>.Success(dispatch.Target.Receipt);
+        return CommandDispatchResult<TReceipt, TError>.Success(
+            dispatch.Target.Receipt,
+            dispatch.Target.Admission);
     }
 }

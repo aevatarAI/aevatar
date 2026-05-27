@@ -351,7 +351,7 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
 
 | 消费者 | 通道 | 数据形式 |
 |--------|------|----------|
-| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowOutputFrame` envelope (Protobuf) |
+| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowRunEventEnvelope` proto（JSON 仅在 wire boundary） |
 | Inspector demo (live actor system viz) | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
 | 外部 trace stack (Jaeger / Tempo) | OTel exporter | OTel spans |
 

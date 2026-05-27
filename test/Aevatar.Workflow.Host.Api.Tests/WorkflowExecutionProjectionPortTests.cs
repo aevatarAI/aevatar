@@ -32,7 +32,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -67,7 +66,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         runtime.MarkExists("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -92,7 +90,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         var runtime = new RecordingActorRuntime();
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -114,7 +111,6 @@ public sealed class WorkflowExecutionProjectionPortTests
         var release = new RecordingReleaseService();
         var port = new WorkflowExecutionProjectionPort(
             new WorkflowExecutionProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             release,
             new RecordingRunEventHub(),
             CreateAttachExistingLookup(new RecordingActorRuntime()));
@@ -161,26 +157,6 @@ public sealed class WorkflowExecutionProjectionPortTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<WorkflowExecutionRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public WorkflowExecutionRuntimeLease LeaseToReturn { get; } = new(new WorkflowExecutionProjectionContext
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution-session",
-            SessionId = "cmd-1",
-        });
-
-        public Task<WorkflowExecutionRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
     }
 
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease>

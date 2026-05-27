@@ -10,9 +10,17 @@ namespace Aevatar.GAgents.Channel.Identity;
 public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvider
     : IProjectionActivationPlanProvider
 {
+    internal const string ExternalIdentityBindingProjectionKind = "external-identity-binding";
+    internal const string AevatarOAuthClientProjectionKind = "aevatar-oauth-client";
+
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
     //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
     //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
+    // Refactor (iter97/cluster-097): Old pattern: identity no-op command
+    // branches called a hidden committed-state activation service that
+    // side-read the event store and dispatched projection envelopes. New
+    // principle: only the committed-state publication hook requests these
+    // activation plans; drift repair is explicit maintenance/admin work.
     public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -27,14 +35,14 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
             [
                 DurablePlan<ExternalIdentityBindingMaterializationRuntimeLease>(
                     context.ActorId,
-                    ChannelIdentityCommittedStateActivationService.ExternalIdentityBindingProjectionKind),
+                    ExternalIdentityBindingProjectionKind),
             ],
             var type when type == typeof(AevatarOAuthClientGAgent) &&
                           IsAevatarOAuthClientEvent(payload) =>
             [
                 DurablePlan<AevatarOAuthClientMaterializationRuntimeLease>(
                     context.ActorId,
-                    ChannelIdentityCommittedStateActivationService.AevatarOAuthClientProjectionKind),
+                    AevatarOAuthClientProjectionKind),
             ],
             _ => [],
         };

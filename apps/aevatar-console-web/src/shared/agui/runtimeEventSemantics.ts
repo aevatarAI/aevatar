@@ -217,6 +217,7 @@ export function extractRunFinishedOutput(event: RuntimeEvent): string | null {
   }
 
   const record = asRecord(result);
+  // Refactor (iter98/cluster-790): Old: backend could synthesize missed-live text frames. New: consumer fallback reads typed GAgentDraftRunResultPayload.output from RunFinished.result.
   const candidate = readOptionalString(record, "output", "Output", "message", "text");
   return candidate || null;
 }
