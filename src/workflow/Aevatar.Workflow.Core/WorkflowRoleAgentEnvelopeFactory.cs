@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
@@ -9,7 +8,8 @@ internal static class WorkflowRoleAgentEnvelopeFactory
 {
     public static EventEnvelope CreateInitializeEnvelope(RoleDefinition role, string actorId)
     {
-        var initialize = new InitializeRoleAgentEvent
+        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow core packed AI InitializeRoleAgentEvent directly. New: workflow owns role initialization payload and role actors adapt it internally.
+        var initialize = new WorkflowRoleInitializeEvent
         {
             // Refactor (iter15/cluster-028):
             //   Old pattern: role actors received display/config data and downstream code recovered RoleId from actor id text.

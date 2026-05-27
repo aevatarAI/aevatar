@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
@@ -76,40 +75,27 @@ internal static class WorkflowArtifactFactBuilder
 
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
         if (published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            !published.StateEvent.EventData.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
             return false;
         }
 
-        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
-        var roleId = completed.RoleId?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(roleId))
-            return false;
-
+        var completed = published.StateEvent.EventData.Unpack<WorkflowLlmInvocationCompletedEvent>();
         var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
         // Refactor (iter15/cluster-028):
         //   Old pattern: parsed childActorId prefix to derive RoleId via string split.
         //   New principle: role id comes from typed event payload / readmodel; actor id is opaque address only.
+        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow artifact extraction unpacked AI RoleChatSessionCompletedEvent. New: role actor publishes workflow-owned LLM completion events.
         evt = new WorkflowRoleReplyRecordedEvent
         {
             RunId = runId,
             RoleActorId = publisherActorId,
-            RoleId = roleId,
+            RoleId = publisherActorId,
             SessionId = completed.SessionId ?? string.Empty,
             Content = completed.Content ?? string.Empty,
             ReasoningContent = completed.ReasoningContent ?? string.Empty,
-            Prompt = completed.Prompt ?? string.Empty,
-            ContentEmitted = completed.ContentEmitted,
+            ContentEmitted = completed.Success,
         };
-
-        foreach (var toolCall in completed.ToolCalls)
-        {
-            evt.ToolCalls.Add(new WorkflowRoleReplyToolCall
-            {
-                ToolName = toolCall.ToolName ?? string.Empty,
-                CallId = toolCall.CallId ?? string.Empty,
-            });
-        }
 
         return true;
     }

@@ -171,7 +171,8 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("[image]");
         service.LastCommand.InputParts.Should().ContainSingle();
-        service.LastCommand.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Image);
+        service.LastCommand.InputParts![0].Kind.Should()
+            .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
     }
 
     [Fact]

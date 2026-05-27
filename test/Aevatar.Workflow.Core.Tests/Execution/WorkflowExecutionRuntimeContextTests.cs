@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -26,9 +24,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new Dictionary<string, string>
             {
                 [" trace-id "] = "  abc  ",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = " token ",
-                [LLMRequestMetadataKeys.ModelOverride] = " model ",
-                [LLMRequestMetadataKeys.NyxIdRoutePreference] = " route ",
+                ["llm.model_override"] = " model ",
+                ["model_override"] = " model ",
+                ["llm.max_tool_rounds"] = "3",
+                ["llm.user_memory_prompt"] = " memory ",
                 ["connector.http.authorization"] = " Bearer secret ",
                 [" "] = "ignored",
                 ["empty"] = " ",
@@ -39,34 +38,29 @@ public sealed class WorkflowExecutionRuntimeContextTests
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("connector.http.authorization");
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("llm.model_override");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("model_override");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("llm.max_tool_rounds");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("llm.user_memory_prompt");
     }
 
     [Fact]
-    public async Task SetToolContext_ShouldPromoteOnlyDurableLlmValuesToTypedState()
+    public async Task SetLlmControl_ShouldPromoteOnlyDurableLlmValuesToTypedState()
     {
         var host = new RecordingStateHost();
 
-        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetLlmControlAsync(
             host,
-            AgentToolExecutionContext.Empty with
+            new WorkflowLlmControlContext
             {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = " token ",
-                },
-                Routing = LLMRequestRoutingContext.Empty with
-                {
-                    ModelOverride = " model ",
-                    NyxIdRoutePreference = " route ",
-                },
+                ModelOverride = " model ",
+                MaxToolRoundsOverride = 3,
+                UserMemoryPrompt = " memory ",
             });
 
-        host.ExecutionContextState.Llm!.NyxidAccessToken.Should().BeEmpty();
         host.ExecutionContextState.Llm.ModelOverride.Should().Be("model");
-        host.ExecutionContextState.Llm.NyxidRoutePreference.Should().Be("route");
+        host.ExecutionContextState.Llm.MaxToolRoundsOverride.Should().Be(3);
+        host.ExecutionContextState.Llm.UserMemoryPrompt.Should().Be("memory");
     }
 
     [Fact]
@@ -138,12 +132,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["trace-id"] = "abc",
                 ["connector.http.authorization"] = "Bearer secret",
             });
-        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetLlmControlAsync(
             host,
-            AgentToolExecutionContext.Empty with
+            new WorkflowLlmControlContext
             {
-                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token" },
-                Routing = LLMRequestRoutingContext.Empty with { ModelOverride = "model" },
+                ModelOverride = "model",
             });
 
         await WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(host);
@@ -246,7 +239,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
+                ["llm.model_override"] = "model",
                 ["connector.http.authorization"] = "Bearer secret",
                 ["empty"] = " ",
             });
@@ -257,7 +250,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         copied.Should().Be(1);
         target.Should().HaveCount(1);
         target["trace-id"].Should().Be("abc");
-        target.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        target.Should().NotContainKey("llm.model_override");
         target.Should().NotContainKey("connector.http.authorization");
     }
 
@@ -454,10 +447,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
-                NyxidAccessToken = delta.Llm.NyxidAccessToken,
                 ModelOverride = delta.Llm.ModelOverride,
-                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
             };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
         if (delta.Connector != null)
