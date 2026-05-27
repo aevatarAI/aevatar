@@ -63,7 +63,7 @@ gh issue view <N> --json comments --jq '
 - **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
 - **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
 
-### Wakeup 第一动作:`bash tools/refactor-loop/peek.sh`(强制)
+### Wakeup 第一动作:`bash .claude/skills/codex-refactor-loop/scripts/peek.sh`(强制)
 
 减少人工 grep / parse 错误。一眼看全:
 - 活跃 codex 数(harness-tracked 和 detached 都算)
@@ -125,13 +125,13 @@ Per Auric 2026-05-22 "大量标记 auto-loop-stuck 的实际并不需要人介�
 
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
-任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash tools/refactor-loop/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
+任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash .claude/skills/codex-refactor-loop/scripts/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
 
 理由:`task-notification` 触发的 turn 容易陷入"处理 marker → spawn 下一步 → end turn"线性思维,会跳过 peek 而错过 maintainer 与此 task 并行的新评论。Auric 2026-05-22 04:15 #779 "命名/架构也很差" 评论在 controller spawn #796 r3 judge 期间到达,因为没 peek 漏读 ~20 min,Auric 直接报错 "没监控到"。
 
 例外:turn 唯一动作是 ScheduleWakeup(纯休眠)可省 peek。
 
-### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
+### Concurrency monitor:`.claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py`(强制)
 
 **60s** 周期 daemon(per Auric 2026-05-21 "60s 就扫描一次"),监控 actual vs expected codex 并发数:
 - expected = active issue/PR 数(per phase 表)
@@ -148,7 +148,7 @@ Per Auric 2026-05-22 "大量标记 auto-loop-stuck 的实际并不需要人介�
 
 启动:
 ```bash
-nohup python3 tools/refactor-loop/concurrency_monitor.py \
+nohup python3 .claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py \
   >> .refactor-loop/logs/concurrency-monitor.log 2>&1 &
 disown
 ```
@@ -179,12 +179,12 @@ fi
 
 事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。每次 wakeup sweep 见 `🚀 phase:pr-open` label 但关联 PR 已 merged → 必须立即补 close。
 
-### Controller helper 库:`tools/refactor-loop/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
+### Controller helper 库:`.claude/skills/codex-refactor-loop/scripts/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
 
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
 
 ```bash
-source tools/refactor-loop/controller_lib.sh
+source .claude/skills/codex-refactor-loop/scripts/controller_lib.sh
 
 safe_worktree iter25 cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
 open_pr_with_label "iter25 cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
@@ -268,7 +268,7 @@ Bash(
 
 1. **先 post banner**(blocking Bash,几秒):
    ```bash
-   python3 tools/refactor-loop/post_banner.py \
+   python3 .claude/skills/codex-refactor-loop/scripts/post_banner.py \
      --banner-target <num> --banner-kind <issue|pr> \
      --banner-role <role> --banner-detail "..." \
      --log <log-path> --cd <worktree> --timeout <s>
@@ -902,10 +902,10 @@ Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and
 
 ### Phase 6 现在由独立 daemon 自主完成(per Auric 2026-05-20 "写一个独立脚本, 自动 merge dev 到 auto-refact-dev 分支. 如果有冲突让脚本调用 codex 解决冲突合并. daemon 运行")
 
-**`tools/refactor-loop/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
+**`.claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
 
 ```bash
-nohup python3 tools/refactor-loop/dev_sync_daemon.py \
+nohup python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py \
   >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
 disown
 ```
@@ -1043,13 +1043,13 @@ maintainer 只加 1 label:`auto-loop-triage`
 
 **Daemon 自包含**(per Auric 2026-05-23 "不用单独一个脚本吧,复用现有脚本就好"):
 
-`tools/refactor-loop/triage-monitor.sh` 60s 周期:
+`.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` 60s 周期:
 - 扫 `gh issue list --label "auto-loop-triage" --state open`
 - 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
 - triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
 - daemon 不依赖 controller 中转,无中间 event log
 - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
-- 启动:`nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
+- 启动:`nohup bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
 - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
 - Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
 - Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
@@ -1142,7 +1142,7 @@ Update `state.design_pending[i].last_comment_count` and `last_checked` after eve
 
 设计:**daemon 脚本 → 写持续 log → controller sweep 读 log → 处理**。三段解耦:
 
-1. **Daemon 脚本**(`tools/refactor-loop/comment-monitor.sh`)forever 跑,30s 轮询 GitHub:
+1. **Daemon 脚本**(`.claude/skills/codex-refactor-loop/scripts/comment-monitor.sh`)forever 跑,30s 轮询 GitHub:
    - 自己 `gh api .../reactions content=eyes` 给 team-member 新评论加 👀(脚本内 side-effect,不需 controller)
    - emit `new-team-comment: <issue> <author> <comment-id> eyes-reacted-at=<ISO8601>` 到 **stdout**
    - emit `new-outsider-comment: <issue> <author> <id>` 同
@@ -1150,7 +1150,7 @@ Update `state.design_pending[i].last_comment_count` and `last_checked` after eve
 
 2. **持续 log 文件**(强制,per Auric 2026-05-20 修复 stdout 丢失 bug):
    ```bash
-   nohup bash tools/refactor-loop/comment-monitor.sh >> .refactor-loop/logs/comment-monitor.log 2>&1 &
+   nohup bash .claude/skills/codex-refactor-loop/scripts/comment-monitor.sh >> .refactor-loop/logs/comment-monitor.log 2>&1 &
    disown
    ```
    **禁止** `> /dev/null`(之前的 bug)— 否则 controller 看不到 event。所有 daemon(`comment-monitor.sh` / `codex-progress-reporter.sh`)都 append 写自己的 `.log` 文件。
@@ -1847,7 +1847,7 @@ controller **不派 fix codex 不 auto-merge**(此 phase 是 advisory,不接 fix
 | **Issue body 有最小描述** | body 长度 ≥ 100 chars(过短 issue triage 也判不出) |
 | **未在 ongoing 维护讨论** | 最近 24h 内**无** human comment(避免打断真人 maintainer 已在 reply 的 issue) |
 
-全部 yes → 加 `auto-loop-triage` label,由 `tools/refactor-loop/triage-monitor.sh` daemon 自动 spawn triage codex(已有现成 daemon,本 phase 复用)。
+全部 yes → 加 `auto-loop-triage` label,由 `.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` daemon 自动 spawn triage codex(已有现成 daemon,本 phase 复用)。
 
 ### Triage codex 行为(已 by Phase 7 Path B 定义)
 
@@ -1912,7 +1912,7 @@ Concretely, this means:
 1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
 2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
 3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
-4. **tools/refactor-loop self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
+4. **.claude/skills/codex-refactor-loop/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
 5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
 6. **CI guard completeness codex** — 检查 `tools/ci/*_guard.sh` 是否覆盖所有 CLAUDE 条款
 
@@ -2265,13 +2265,13 @@ done
 
 **问题**:codex 单 task 可能跑 30–120 分钟。期间人类打开 issue/PR 只看到"派出"banner,看不到中间进展(它在分析哪个文件 / 在写什么 / 跑到第几步)。等结果 banner 时已经 1–2 小时过去。
 
-**规则**:`tools/refactor-loop/codex-progress-reporter.sh` 作为**长跑 daemon**每 600s 扫所有 in-flight codex log,对每个 codex **edit-in-place** 一条 progress comment 到关联 issue/PR(不堆评论)。Comment body 包含:已跑时长 + log tail 25 行。完成时把 ⏳ 改 ✅。
+**规则**:`.claude/skills/codex-refactor-loop/scripts/codex-progress-reporter.sh` 作为**长跑 daemon**每 600s 扫所有 in-flight codex log,对每个 codex **edit-in-place** 一条 progress comment 到关联 issue/PR(不堆评论)。Comment body 包含:已跑时长 + log tail 25 行。完成时把 ⏳ 改 ✅。
 
 ### 启动 / 运维
 
 ```bash
 # 启动(放后台,长跑直到 loop 停)
-INTERVAL=600 bash tools/refactor-loop/codex-progress-reporter.sh &
+INTERVAL=600 bash .claude/skills/codex-refactor-loop/scripts/codex-progress-reporter.sh &
 # 停止
 pkill -f codex-progress-reporter.sh
 # 重置(误 post 后清理)
@@ -2423,6 +2423,22 @@ Bash(
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
 8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
 9. **gh pr merge 前必须 CI 全 required check 绿**(per Auric 2026-05-25 "改一下分支保护，必须ci 绿了才能合并"). auto-refact-dev 已设 branch protection(8 required:`fast-gates` / `console-web` / `coverage-quality` / `projection-provider-e2e` / `kafka-transport-integration` / `event-sourcing-regression` / `host-composition-smoke` / `slow-test-guards`,`strict: true`,`enforce_admins: true`)。**禁止**用 `--admin` / `--bypass` flag 绕过(已不可能;enforce_admins=true)。每次 `gh pr merge` 前 controller **必须** verify:`gh pr checks <PR> --required --json bucket --jq 'all(.[]; .bucket == "pass")'` 返回 `true`,否则**等 CI 完成**(arm Monitor watch + ScheduleWakeup,不要立即重试 merge)。事故记录:2026-05-25 session 11 个 cluster PR 全在 reviewer 3/3 approve 后 squash merge,**没等 GitHub Actions CI** → trunk auto-refact-dev 5 个 integration test 挂(hotfix `ef7962d` 修)。今后此情形不可能发生(branch protection 拦)。
+
+10. **本地必须跑 full slnx test verify 后才出 DONE marker**(强制,per Auric 2026-05-27 "一次次反复修不好的原因是什么?为什么不本地一次修好?非要让 ci 发现问题?"). **CI 是 fault detector,不是 fix-loop driver**。所有 `sync` / `fix` / `implement` / `test-add` codex 在打 DONE marker 之前**必须**跑 full slnx test:
+    ```bash
+    cd <worktree>
+    dotnet build aevatar.slnx --nologo 2>&1 | tail -3   # build 必绿
+    dotnet test aevatar.slnx --nologo --no-build 2>&1 | tail -30  # full test 必通过
+    ```
+    **不允许**用 `--filter "FullyQualifiedName~..."` 跑窄范围 verify。filter 只能用于 **iterative fix loop 内部快速反馈**,**最后 marker DONE 之前必须 full slnx test**。
+    
+    **失败处理**:full test 仍 fail → codex **不出** `IMPLEMENT_DONE:ok` / `FIX_DONE:applied-N:tests-pass`,改用 `IMPLEMENT_DONE:partial:<fail-count>` / `FIX_DONE:partial:<fail-count>:<top-failing-modules>` 让 controller 决策(派 r+1 / re-cluster / drop)。
+    
+    **事故**:2026-05-27 PR1106 sync codex 只跑 `dotnet build` 不跑 `dotnet test` → 50-commit dev sync push 后 CI 暴露 30+ test fail。Fix r1 用 narrow filter 跑 hosting tests 68 pass 就 marker tests-pass → push 后 CI 仍暴露 74 fail in channel/runtime/AI module。3-round push-test-fix loop 浪费 ~2h CI + 多轮 force-push。本规则强制本地 full test verify 防再犯。
+    
+    **例外**:`audit` codex 不跑 test(它只 inspect 不改 code)。`verify` codex 跑 full test 是 verify 职责本身。
+
+11. **controller commit 前 self-verify**(强制,per Auric 2026-05-27 与规则 10 同源). 即使 codex marker `tests-pass`,controller 在 `git commit --amend` / `git push --force-with-lease` 前**必须**自己跑一次 `dotnet test aevatar.slnx --nologo --no-build` 兜底。fail → 拒绝 push,派 r+1 fix。双保险防 codex marker 不诚实 / filter 窄漏 module。
 
 ## 工作语言规则(默认中文)
 
