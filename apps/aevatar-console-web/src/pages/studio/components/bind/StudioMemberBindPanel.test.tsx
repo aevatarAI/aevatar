@@ -805,8 +805,8 @@ describe('StudioMemberBindPanel', () => {
           kind: 'workflow',
           displayName: 'draft',
           description:
-            'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-          actionLabel: 'Bind current revision',
+            '先发布当前 workflow 版本，然后 Studio 会展示这个成员的调用 URL 和端点契约。',
+          actionLabel: '绑定当前版本',
         },
         onBindPendingCandidate: handleBindPendingCandidate,
         services: [],
@@ -815,12 +815,12 @@ describe('StudioMemberBindPanel', () => {
 
     expect(await screen.findByTestId('studio-bind-surface')).toBeTruthy();
     expect(
-      screen.getByText('No published contract exists for draft yet.'),
+      screen.getByText('draft 还没有已发布契约。'),
     ).toBeTruthy();
-    expect(screen.getByText('Publish current member')).toBeTruthy();
+    expect(screen.getByText('发布当前成员')).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
+      fireEvent.click(screen.getByRole('button', { name: '绑定当前版本' }));
     });
 
     expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
@@ -833,8 +833,8 @@ describe('StudioMemberBindPanel', () => {
         kind: 'workflow' as const,
         displayName: 'draft1',
         description:
-          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-        actionLabel: 'Bind current revision',
+          '先发布当前 workflow 版本，然后 Studio 会展示这个成员的调用 URL 和端点契约。',
+        actionLabel: '绑定当前版本',
       });
 
       return React.createElement(React.Fragment, null, [
@@ -848,8 +848,8 @@ describe('StudioMemberBindPanel', () => {
                 kind: 'workflow',
                 displayName: 'joker',
                 description:
-                  'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-                actionLabel: 'Bind current revision',
+                  '先发布当前 workflow 版本，然后 Studio 会展示这个成员的调用 URL 和端点契约。',
+                actionLabel: '绑定当前版本',
               }),
           },
           'Switch candidate',
@@ -874,26 +874,26 @@ describe('StudioMemberBindPanel', () => {
     renderWithQueryClient(React.createElement(CandidateHarness));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
+      fireEvent.click(screen.getByRole('button', { name: '绑定当前版本' }));
     });
 
     expect(
       await screen.findByText(
-        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+        'draft1 的绑定请求已接受。运行完成后，Studio 会显示已发布契约。',
       ),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch candidate' }));
 
-    expect(await screen.findByText('No published contract exists for joker yet.')).toBeTruthy();
+    expect(await screen.findByText('joker 还没有已发布契约。')).toBeTruthy();
     expect(
       screen.queryByText(
-        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+        'draft1 的绑定请求已接受。运行完成后，Studio 会显示已发布契约。',
       ),
     ).toBeNull();
     expect(
       screen.queryByText(
-        'joker binding request was accepted. Studio will show the published contract after the run completes.',
+        'joker 的绑定请求已接受。运行完成后，Studio 会显示已发布契约。',
       ),
     ).toBeNull();
   });

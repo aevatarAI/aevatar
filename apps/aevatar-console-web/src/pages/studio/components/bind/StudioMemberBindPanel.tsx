@@ -940,7 +940,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       setPendingBindNotice({
         message:
           resultNotice?.message ||
-          `${pendingBindingCandidate.displayName} binding request was accepted. Studio will show the published contract after the run completes.`,
+          `${pendingBindingCandidate.displayName} 的绑定请求已接受。运行完成后，Studio 会显示已发布契约。`,
         type: resultNotice?.type || 'info',
       });
     } catch (error) {
@@ -987,18 +987,18 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <div data-testid="studio-bind-surface" style={rootStyle}>
           <Alert
             showIcon
-            message={`No published contract exists for ${pendingBindingCandidate.displayName} yet.`}
+            message={`${pendingBindingCandidate.displayName} 还没有已发布契约。`}
             description={pendingBindingCandidate.description}
             type="info"
           />
           <AevatarPanel
-            title="Publish current member"
-            titleHelp="Bind publishes the current revision first, then Studio reveals the invoke URL, endpoint contract, and smoke-test entry for this member."
+            title="发布当前成员"
+            titleHelp="Bind 会先发布当前版本，然后 Studio 展示这个成员的调用 URL、端点契约和 smoke test 入口。"
           >
             <div style={{ display: 'grid', gap: 12 }}>
               <div style={parameterGridStyle}>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Implementation kind</Typography.Text>
+                  <Typography.Text type="secondary">实现类型</Typography.Text>
                   <Typography.Text strong>
                     {pendingBindingCandidate.kind === 'workflow'
                       ? 'Workflow'
@@ -1008,13 +1008,13 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Current member</Typography.Text>
+                  <Typography.Text type="secondary">当前成员</Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {pendingBindingCandidate.displayName}
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Workspace ID</Typography.Text>
+                  <Typography.Text type="secondary">工作区 ID</Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {scopeId}
                   </Typography.Text>

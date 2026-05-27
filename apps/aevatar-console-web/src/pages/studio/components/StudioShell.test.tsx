@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { Grid } from 'antd';
 import React from 'react';
 import StudioShell, {
   type StudioLifecycleStep,
@@ -55,6 +56,10 @@ describe('StudioShell', () => {
       status: 'available',
     },
   ];
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   it('renders the member rail and forwards member and lifecycle selection', async () => {
     const handleCreateMember = jest.fn();
@@ -245,6 +250,43 @@ describe('StudioShell', () => {
     expect(screen.getByTestId('studio-shell-content').parentElement).toHaveStyle({
       minWidth: '0',
       overflow: 'hidden',
+    });
+  });
+
+  it('stacks the member rail above the studio workbench on compact screens', () => {
+    jest.spyOn(Grid, 'useBreakpoint').mockReturnValue({
+      xs: true,
+      sm: true,
+      md: false,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+
+    const { container } = render(
+      <StudioShell
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+      >
+        <div>Studio content</div>
+      </StudioShell>,
+    );
+
+    expect(container.firstChild).toHaveStyle({
+      flexDirection: 'column',
+    });
+    expect(screen.getByLabelText('Team members')).toHaveStyle({
+      borderRight: '0',
+      maxHeight: '320px',
+      width: '100%',
+    });
+    expect(screen.getByTestId('studio-shell-main')).toHaveStyle({
+      width: '100%',
     });
   });
 });

@@ -141,7 +141,7 @@ const TeamCreatePage: React.FC = () => {
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });
-      void message.success('已创建 Team。');
+      void message.success('已创建团队。');
       history.push(
         buildTeamDetailHref({
           scopeId: team.scopeId,
@@ -152,7 +152,7 @@ const TeamCreatePage: React.FC = () => {
       const errorMessage =
         error instanceof Error && error.message.trim()
           ? error.message
-          : '创建 Team 失败。';
+          : '创建团队失败。';
       void message.error(errorMessage);
     } finally {
       setIsCreatingTeam(false);
@@ -160,7 +160,7 @@ const TeamCreatePage: React.FC = () => {
   };
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Teams"
+      breadcrumb="Aevatar / 团队"
       extra={
         <Space wrap>
           <Button
@@ -169,17 +169,17 @@ const TeamCreatePage: React.FC = () => {
             onClick={() => void handleCreateTeam()}
             style={primaryActionButtonStyle}
           >
-            Create Team
+            创建团队
           </Button>
         </Space>
       }
-      title="Create Team"
+      title="创建团队"
     >
       {authSessionIssue ? (
         <Alert
           description={
             resolvedScope?.scopeId
-              ? `${authSessionIssue} 已使用本地登录信息继续创建 Team。`
+              ? `${authSessionIssue} 已使用本地登录信息继续创建团队。`
               : authSessionIssue
           }
           showIcon
@@ -216,19 +216,19 @@ const TeamCreatePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Team name</Typography.Text>
+            <Typography.Text strong>团队名称</Typography.Text>
             <Input
-              aria-label="Team name"
+              aria-label="团队名称"
               placeholder="例如：订单助手团队"
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Description</Typography.Text>
+            <Typography.Text strong>团队描述</Typography.Text>
             <Input
-              aria-label="Team description"
-              placeholder="这个 Team 负责什么"
+              aria-label="团队描述"
+              placeholder="这个团队负责什么"
               value={teamDescription}
               onChange={(event) => setTeamDescription(event.target.value)}
             />
@@ -241,10 +241,10 @@ const TeamCreatePage: React.FC = () => {
               onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
             >
-              Create Team
+              创建团队
             </Button>
             <Button onClick={() => history.push(buildTeamsHref())}>
-              Back to My Teams
+              返回我的团队
             </Button>
           </Space>
         </div>

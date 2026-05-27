@@ -53,13 +53,13 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 2, name: 'Create Team' })).toBeTruthy();
+    expect(await screen.findByText('Aevatar / 团队')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
-    expect(screen.getByLabelText('Team name')).toBeTruthy();
-    expect(screen.getByLabelText('Team description')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Create Team' }).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();
+    expect(screen.getByLabelText('团队名称')).toBeTruthy();
+    expect(screen.getByLabelText('团队描述')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '创建团队' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '返回我的团队' })).toBeTruthy();
     expect(screen.queryByText('工作空间上下文')).toBeNull();
     expect(screen.queryByText('StudioTeam')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Continue in Studio' })).toBeNull();
@@ -87,13 +87,13 @@ describe('TeamCreatePage', () => {
 
     const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    fireEvent.change(await screen.findByLabelText('Team name'), {
+    fireEvent.change(await screen.findByLabelText('团队名称'), {
       target: { value: '订单助手团队' },
     });
-    fireEvent.change(screen.getByLabelText('Team description'), {
+    fireEvent.change(screen.getByLabelText('团队描述'), {
       target: { value: '处理订单异常' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: '创建团队' })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -117,7 +117,7 @@ describe('TeamCreatePage', () => {
     const params = new URLSearchParams(window.location.search);
     expect(params.get('scopeId')).toBeNull();
     expect(params.get('teamId')).toBeNull();
-    expect(message.success).toHaveBeenCalledWith('已创建 Team。');
+    expect(message.success).toHaveBeenCalledWith('已创建团队。');
   });
 
   it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
@@ -145,17 +145,17 @@ describe('TeamCreatePage', () => {
 
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByLabelText('Team name')).toHaveValue('test');
+    expect(await screen.findByLabelText('团队名称')).toHaveValue('test');
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
         'scope-a',
       );
     });
 
-    fireEvent.change(screen.getByLabelText('Team description'), {
+    fireEvent.change(screen.getByLabelText('团队描述'), {
       target: { value: 'test' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: '创建团队' })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

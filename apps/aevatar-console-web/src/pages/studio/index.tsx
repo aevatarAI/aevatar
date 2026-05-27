@@ -4381,8 +4381,8 @@ const StudioPage: React.FC = () => {
         kind: 'workflow' as const,
         displayName,
         description:
-          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-        actionLabel: 'Bind current revision',
+          '先发布当前 workflow 版本，然后 Studio 会展示这个成员的调用 URL 和端点契约。',
+        actionLabel: '绑定当前版本',
       };
     }
 
@@ -9435,7 +9435,7 @@ const StudioPage: React.FC = () => {
         : isObserveSurface
           ? '围绕当前 member 的最近运行、回放和基线继续观察'
           : isBindSurface
-            ? '确认当前 member 的 published contract，并继续去 Invoke'
+            ? '确认当前成员的已发布契约，并继续去 Invoke'
             : isInvokeSurface
               ? '调用当前成员并保留运行观察上下文'
               : '成员工作台';
@@ -9445,7 +9445,7 @@ const StudioPage: React.FC = () => {
         trimOptional(workbenchPublishedService?.serviceId) ||
         trimOptional(workbenchStudioMember?.publishedServiceId) ||
         trimOptional(workbenchStudioMemberSummary?.publishedServiceId) ||
-        'No bound service'
+        '暂无绑定服务'
       : '';
   const studioContextMetaParts = [
     studioContextDescriptor,

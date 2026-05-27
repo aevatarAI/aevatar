@@ -6,7 +6,7 @@ import {
   RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Popover, Typography } from 'antd';
+import { Grid, Popover, Typography } from 'antd';
 import React from 'react';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -84,6 +84,15 @@ const railStyle: React.CSSProperties = {
   flexShrink: 0,
   minHeight: 0,
   width: 276,
+};
+
+const compactRailStyle: React.CSSProperties = {
+  ...railStyle,
+  borderBottom: '1px solid #ebe2d4',
+  borderRight: 0,
+  maxHeight: 320,
+  overflow: 'hidden',
+  width: '100%',
 };
 
 const railHeaderStyle: React.CSSProperties = {
@@ -421,6 +430,9 @@ const StudioShell: React.FC<StudioShellProps> = ({
   const [memberFilter, setMemberFilter] = React.useState<
     'all' | StudioShellMemberKind
   >('all');
+  const screens = Grid.useBreakpoint();
+  const hasResolvedBreakpoint = Object.values(screens).some(Boolean);
+  const useCompactShell = hasResolvedBreakpoint && screens.md === false;
 
   const memberFilterOptions = React.useMemo(() => {
     const counts = members.reduce<Record<string, number>>((current, member) => {
@@ -498,10 +510,23 @@ const StudioShell: React.FC<StudioShellProps> = ({
         ...shellPageBodyStyle,
         overflowY: contentOverflow,
       } satisfies React.CSSProperties);
+  const rootStyle = useCompactShell
+    ? ({
+        ...shellRootStyle,
+        flexDirection: 'column',
+      } satisfies React.CSSProperties)
+    : shellRootStyle;
+  const resolvedRailStyle = useCompactShell ? compactRailStyle : railStyle;
+  const resolvedMainStyle = useCompactShell
+    ? ({
+        ...mainStyle,
+        width: '100%',
+      } satisfies React.CSSProperties)
+    : mainStyle;
 
   return (
-    <div style={shellRootStyle}>
-      <aside style={railStyle} aria-label="Team members">
+    <div style={rootStyle}>
+      <aside style={resolvedRailStyle} aria-label="Team members">
         <div style={railHeaderStyle}>
           <div
             style={{
@@ -761,7 +786,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
 
       </aside>
 
-      <div data-testid="studio-shell-main" style={mainStyle}>
+      <div data-testid="studio-shell-main" style={resolvedMainStyle}>
         {contextBar}
         {lifecycleSteps.length > 0 ? (
           <div data-testid="studio-lifecycle-section" style={lifecycleSectionStyle}>
