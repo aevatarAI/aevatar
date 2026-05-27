@@ -20,7 +20,7 @@ import { buildSettingsPanelStyle, SummaryField, SummaryMetric } from "./shared";
 
 function formatSessionExpiry(value?: number): string {
   if (!value) {
-    return "Unavailable";
+    return "不可用";
   }
 
   return new Intl.DateTimeFormat("zh-CN", {
@@ -31,12 +31,12 @@ function formatSessionExpiry(value?: number): string {
 
 function formatIsoSessionExpiry(value?: string | null): string {
   if (!value) {
-    return "Unavailable";
+    return "不可用";
   }
 
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) {
-    return "Unavailable";
+    return "不可用";
   }
 
   return formatSessionExpiry(parsed);
@@ -68,28 +68,28 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
       authSession?.user.name ||
       authSession?.user.email ||
       authSession?.user.sub ||
-      "No active session",
+      "没有活动会话",
     [authSession, backendProfile],
   );
   const accountSecondaryText = useMemo(() => {
     if (!authenticated) {
-      return "This browser does not have a restorable sign-in session.";
+      return "此浏览器没有可恢复的登录会话。";
     }
 
     if (backendProfile?.email || backendProfile?.subject) {
       return backendProfile.email || backendProfile.subject;
     }
 
-    return authSession?.user.email || authSession?.user.sub || "Unavailable";
+    return authSession?.user.email || authSession?.user.sub || "不可用";
   }, [authSession, authenticated, backendProfile]);
   const rolesLabel =
     (backendProfile?.roles && backendProfile.roles.length > 0
       ? backendProfile.roles.join(", ")
-      : authSession?.user.roles?.join(", ")) || "No roles";
+      : authSession?.user.roles?.join(", ")) || "无角色";
   const groupsLabel =
     (backendProfile?.groups && backendProfile.groups.length > 0
       ? backendProfile.groups.join(", ")
-      : authSession?.user.groups?.join(", ")) || "No groups";
+      : authSession?.user.groups?.join(", ")) || "无分组";
   const userId = backendProfile?.subject || authSession?.user.sub || "";
   const picture = backendProfile?.picture || authSession?.user.picture;
   const emailVerified =
@@ -106,12 +106,12 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
         extra={
           authenticated && showInlineSignOut ? (
             <Button danger icon={<LogoutOutlined />} onClick={handleSignOut}>
-              Sign out
+              退出登录
             </Button>
           ) : null
         }
         style={settingsPanelStyle}
-        title="Profile"
+        title="个人资料"
       >
         {authenticated ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -136,22 +136,22 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
 
             <div style={summaryMetricGridStyle}>
               <SummaryMetric
-                label="Session"
+                label="会话"
                 tone={backendSession?.authenticated || authSession ? "success" : "warning"}
-                value={backendSession?.authenticated || authSession ? "Active" : "Browser only"}
+                value={backendSession?.authenticated || authSession ? "已激活" : "仅浏览器"}
               />
               <SummaryMetric
-                label="Email"
+                label="邮箱"
                 tone={emailVerified ? "success" : "warning"}
                 value={
-                  emailVerified ? "Verified" : "Needs review"
+                  emailVerified ? "已验证" : "待确认"
                 }
               />
             </div>
 
             <div style={summaryFieldGridStyle}>
               <SummaryField
-                label="User ID"
+                label="用户 ID"
                 value={
                   <AevatarCompactText
                     copyable
@@ -163,29 +163,29 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
                   />
                 }
               />
-              <SummaryField label="Roles" value={rolesLabel} />
-              <SummaryField label="Groups" value={groupsLabel} />
+              <SummaryField label="角色" value={rolesLabel} />
+              <SummaryField label="分组" value={groupsLabel} />
             </div>
           </div>
         ) : (
           <Empty
-            description="This browser does not have a restorable sign-in session."
+            description="此浏览器没有可恢复的登录会话。"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           >
             <Button
               type="primary"
               onClick={() => window.location.replace("/login")}
             >
-              Sign in
+              登录
             </Button>
           </Empty>
         )}
       </AevatarPanel>
 
-      <AevatarPanel style={settingsPanelStyle} title="Authentication">
+      <AevatarPanel style={settingsPanelStyle} title="认证信息">
         <div style={summaryFieldGridStyle}>
           <SummaryField
-            label="Session expires"
+            label="会话过期时间"
             value={
               backendSession?.expiresAtUtc
                 ? formatIsoSessionExpiry(backendSession.expiresAtUtc)
@@ -194,15 +194,15 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
           />
           <SummaryField
             label="Provider"
-            value={authMeQuery.data?.providerDisplayName || "Unavailable"}
+            value={authMeQuery.data?.providerDisplayName || "不可用"}
           />
           <SummaryField
             label="Scope"
-            value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
+            value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "不可用"}
           />
           <SummaryField
-            label="Local refresh token"
-            value={authSession?.tokens.refreshToken ? "Available" : "Unavailable"}
+            label="本地 refresh token"
+            value={authSession?.tokens.refreshToken ? "可用" : "不可用"}
           />
         </div>
       </AevatarPanel>

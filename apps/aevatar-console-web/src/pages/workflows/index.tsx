@@ -103,8 +103,8 @@ function buildWorkflowSummary(workflow: WorkflowCatalogItem): string {
   }
 
   return workflow.requiresLlmProvider
-    ? "This workflow depends on an LLM provider before runtime handoff can start."
-    : "Closed-world definition ready for direct runtime invocation.";
+    ? "此 Workflow 需要 LLM provider 才能开始运行时移交。"
+    : "闭环定义已就绪，可直接运行。";
 }
 
 function formatListPreview(values: readonly string[], emptyLabel = "None"): string {
@@ -117,6 +117,16 @@ function formatListPreview(values: readonly string[], emptyLabel = "None"): stri
   }
 
   return `${values.slice(0, 3).join(", ")} +${values.length - 3}`;
+}
+
+function formatWorkflowLoadError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.includes("streamBufferCapacity")
+      ? "Workflow 详情使用了旧版运行时字段，当前前端已按空值处理；请刷新后重试。"
+      : error.message;
+  }
+
+  return "加载 Workflow 详情失败。";
 }
 
 function buildLibraryMetrics(rows: readonly WorkflowLibraryRow[]) {
@@ -194,7 +204,7 @@ const WorkflowCatalogStatusTags: React.FC<{
   <Space size={[8, 8]} wrap>
     <AevatarStatusTag
       domain="governance"
-      label={workflow.requiresLlmProvider ? "LLM required" : "Closed-world ready"}
+      label={workflow.requiresLlmProvider ? "需要 LLM" : "闭环就绪"}
       status={workflow.requiresLlmProvider ? "active" : "ready"}
     />
     <Tag
@@ -291,7 +301,7 @@ const WorkflowsPage: React.FC = () => {
         },
       },
       {
-        title: "Collection",
+        title: "集合",
         key: "collection",
         width: "18%",
         render: (_value, workflow) => (
@@ -302,7 +312,7 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Runtime fit",
+        title: "运行适配",
         key: "runtime-fit",
         width: "18%",
         render: (_value, workflow) => <WorkflowCatalogStatusTags workflow={workflow} />,
@@ -315,13 +325,13 @@ const WorkflowsPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Typography.Text strong>{workflow.primitives.length}</Typography.Text>
             <Typography.Text type="secondary">
-              {formatListPreview(workflow.primitives, "No primitive data")}
+              {formatListPreview(workflow.primitives, "暂无 primitive 数据")}
             </Typography.Text>
           </div>
         ),
       },
       {
-        title: "Actions",
+        title: "操作",
         key: "actions",
         width: 240,
         render: (_value, workflow) => (
@@ -333,7 +343,7 @@ const WorkflowsPage: React.FC = () => {
                 setSelectedWorkflow(workflow.name);
               }}
             >
-              Inspect
+              查看
             </Button>
             <Button
               icon={<PlayCircleOutlined />}
@@ -348,7 +358,7 @@ const WorkflowsPage: React.FC = () => {
               style={workflowRunTextButtonStyle}
               type="text"
             >
-              Run
+              运行
             </Button>
           </Space>
         ),
@@ -360,7 +370,7 @@ const WorkflowsPage: React.FC = () => {
   const roleColumns = useMemo<ColumnsType<WorkflowCatalogRole>>(
     () => [
       {
-        title: "Role",
+        title: "角色",
         dataIndex: "name",
         key: "role",
         width: "28%",
@@ -377,27 +387,27 @@ const WorkflowsPage: React.FC = () => {
         width: "24%",
         render: (_value, role) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <Typography.Text>{role.provider || "No provider"}</Typography.Text>
-            <Typography.Text type="secondary">{role.model || "No model"}</Typography.Text>
+            <Typography.Text>{role.provider || "无 provider"}</Typography.Text>
+            <Typography.Text type="secondary">{role.model || "无 model"}</Typography.Text>
           </div>
         ),
       },
       {
-        title: "Connectors",
+        title: "连接器",
         key: "connectors",
         width: "24%",
         render: (_value, role) => (
           <Typography.Text type="secondary">
-            {formatListPreview(role.connectors)}
+            {formatListPreview(role.connectors, "无连接器")}
           </Typography.Text>
         ),
       },
       {
-        title: "Runtime limits",
+        title: "运行限制",
         key: "limits",
         render: (_value, role) => (
           <Typography.Text type="secondary">
-            {`Tool rounds ${role.maxToolRounds ?? "n/a"} · History ${
+            {`工具轮次 ${role.maxToolRounds ?? "n/a"} · 历史消息 ${
               role.maxHistoryMessages ?? "n/a"
             }`}
           </Typography.Text>
@@ -410,7 +420,7 @@ const WorkflowsPage: React.FC = () => {
   const stepColumns = useMemo<ColumnsType<WorkflowStepRow>>(
     () => [
       {
-        title: "Step",
+        title: "步骤",
         dataIndex: "id",
         key: "step",
         width: "20%",
@@ -425,7 +435,7 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Type",
+        title: "类型",
         dataIndex: "type",
         key: "type",
         width: "16%",
@@ -436,7 +446,7 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Target role",
+        title: "目标角色",
         dataIndex: "targetRole",
         key: "targetRole",
         width: "16%",
@@ -445,25 +455,25 @@ const WorkflowsPage: React.FC = () => {
         ),
       },
       {
-        title: "Flow",
+        title: "流程",
         key: "flow",
         width: "24%",
         render: (_value, step) => (
           <Typography.Text type="secondary">
             {step.next
-              ? `Next: ${step.next}`
+              ? `下一步：${step.next}`
               : step.branchCount > 0
-                ? `${step.branchCount} branch routes`
-                : "No explicit next step"}
+                ? `${step.branchCount} 条分支路由`
+                : "没有显式下一步"}
           </Typography.Text>
         ),
       },
       {
-        title: "Parameters",
+        title: "参数",
         key: "parameters",
         render: (_value, step) => (
           <Typography.Text type="secondary">
-            {step.parameterCount} params · {step.childCount} child steps
+            {step.parameterCount} 个参数 · {step.childCount} 个子步骤
           </Typography.Text>
         ),
       },
@@ -474,8 +484,8 @@ const WorkflowsPage: React.FC = () => {
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Workflow Library"
-      titleHelp="Browse runtime-exposed workflow definitions, inspect how they are wired, then jump into run or editor from the same catalog."
+      title="Workflow 库"
+      titleHelp="浏览运行时暴露的 Workflow 定义，查看连接方式，再从同一个目录进入运行或编辑。"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {catalogQuery.error ? (
@@ -497,23 +507,23 @@ const WorkflowsPage: React.FC = () => {
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           }}
         >
-          <WorkflowSummaryMetric label="Workflows in library" value={metrics.workflows} />
-          <WorkflowSummaryMetric label="Groups" value={metrics.groups} />
-          <WorkflowSummaryMetric label="LLM required" value={metrics.llmRequired} />
-          <WorkflowSummaryMetric label="Your workflows" value={metrics.yourWorkflows} />
+          <WorkflowSummaryMetric label="库内 Workflow" value={metrics.workflows} />
+          <WorkflowSummaryMetric label="分组" value={metrics.groups} />
+          <WorkflowSummaryMetric label="需要 LLM" value={metrics.llmRequired} />
+          <WorkflowSummaryMetric label="你的 Workflow" value={metrics.yourWorkflows} />
         </div>
 
         <AevatarPanel
-          description="The runtime catalog is already loaded. Filters apply immediately so you can stay focused on selecting a runnable definition."
+          description="运行时目录已加载。筛选会立即生效，方便你专注选择可运行的定义。"
           extra={
             <Button
               onClick={() => setFilters(defaultWorkflowLibraryFilter)}
               type="default"
             >
-              Reset
+              清除筛选
             </Button>
           }
-          title="Find workflows"
+          title="查找 Workflow"
         >
           <div
             style={{
@@ -529,7 +539,7 @@ const WorkflowsPage: React.FC = () => {
                   keyword: event.target.value,
                 }))
               }
-              placeholder="Search workflow, description, group, or primitive"
+              placeholder="搜索 Workflow、描述、分组或 primitive"
               value={filters.keyword}
             />
             <Select
@@ -542,7 +552,7 @@ const WorkflowsPage: React.FC = () => {
                 }))
               }
               options={groupOptions}
-              placeholder="Groups"
+              placeholder="分组"
               value={filters.groups}
             />
             <Select
@@ -555,7 +565,7 @@ const WorkflowsPage: React.FC = () => {
                 }))
               }
               options={sourceOptions}
-              placeholder="Sources"
+              placeholder="来源"
               value={filters.sources}
             />
             <Select
@@ -566,9 +576,9 @@ const WorkflowsPage: React.FC = () => {
                 }))
               }
               options={[
-                { label: "All workflows", value: "all" },
-                { label: "LLM required", value: "required" },
-                { label: "Closed-world ready", value: "optional" },
+                { label: "全部 Workflow", value: "all" },
+                { label: "需要 LLM", value: "required" },
+                { label: "闭环就绪", value: "optional" },
               ]}
               value={filters.llmRequirement}
             />
@@ -576,14 +586,14 @@ const WorkflowsPage: React.FC = () => {
         </AevatarPanel>
 
         <AevatarPanel
-          description="This page is the runtime catalog, not the draft workspace. Stay here to choose a definition, then inspect, run, or open the editor."
-          title="Workflow catalog"
+          description="这是运行时目录，不是草稿工作区。先在这里选择定义，再查看、运行或打开编辑器。"
+          title="Workflow 目录"
         >
           {catalogQuery.isLoading ? (
-            <Typography.Text type="secondary">Loading workflow catalog…</Typography.Text>
+            <Typography.Text type="secondary">正在加载 Workflow 目录...</Typography.Text>
           ) : filteredRows.length === 0 ? (
             <Empty
-              description="No workflows matched the current filters."
+              description="没有 Workflow 匹配当前筛选。"
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           ) : (
@@ -620,7 +630,7 @@ const WorkflowsPage: React.FC = () => {
                   )
                 }
               >
-                Open workflow editor
+                打开 Workflow 编辑器
               </Button>
               <Button
                 icon={<PlayCircleOutlined />}
@@ -634,43 +644,43 @@ const WorkflowsPage: React.FC = () => {
                 style={workflowRunTextButtonStyle}
                 type="text"
               >
-                Run workflow
+                运行 Workflow
               </Button>
             </Space>
           ) : null
         }
         onClose={() => setSelectedWorkflow("")}
         open={Boolean(selectedWorkflow)}
-        subtitle="Runtime workflow detail"
+        subtitle="运行时 Workflow 详情"
         title={selectedWorkflowDetail?.catalog.name || selectedWorkflow || "Workflow"}
         width={920}
       >
         {!selectedWorkflow ? null : selectedWorkflowQuery.isLoading ? (
-          <Typography.Text type="secondary">Loading workflow detail…</Typography.Text>
+          <Typography.Text type="secondary">正在加载 Workflow 详情...</Typography.Text>
         ) : selectedWorkflowQuery.error ? (
           <Alert
             showIcon
             title={
               selectedWorkflowQuery.error instanceof Error
-                ? selectedWorkflowQuery.error.message
-                : "Failed to load workflow detail."
+                ? formatWorkflowLoadError(selectedWorkflowQuery.error)
+                : "加载 Workflow 详情失败。"
             }
             type="error"
           />
         ) : !selectedWorkflowDetail ? (
-          <AevatarInspectorEmpty description="Choose a workflow to inspect its runtime wiring, role model, and source YAML." />
+          <AevatarInspectorEmpty description="选择一个 Workflow 查看运行时连线、角色模型和源 YAML。" />
         ) : (
           <Tabs
             defaultActiveKey="overview"
             items={[
               {
                 key: "overview",
-                label: "Overview",
+                label: "概览",
                 children: (
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     <AevatarPanel
-                      description="Check the runtime fit, role count, step count, and linked connectors before you decide to run or edit this definition."
-                      title="Definition summary"
+                      description="运行或编辑定义前，先确认运行适配、角色数量、步骤数量和连接器。"
+                      title="定义摘要"
                     >
                       <div
                         style={{
@@ -680,44 +690,44 @@ const WorkflowsPage: React.FC = () => {
                         }}
                       >
                         <WorkflowField
-                          label="Collection"
+                          label="集合"
                           value={selectedWorkflowDetail.catalog.groupLabel}
                         />
                         <WorkflowField
-                          label="Source"
+                          label="来源"
                           value={selectedWorkflowDetail.catalog.sourceLabel}
                         />
                         <WorkflowField
-                          label="Closed-world mode"
+                          label="闭环模式"
                           value={
                             selectedWorkflowDetail.definition.closedWorldMode
-                              ? "Enabled"
-                              : "Disabled"
+                              ? "已启用"
+                              : "已禁用"
                           }
                         />
                         <WorkflowField
-                          label="Requires LLM provider"
+                          label="需要 LLM provider"
                           value={
                             selectedWorkflowDetail.catalog.requiresLlmProvider
-                              ? "Yes"
-                              : "No"
+                              ? "是"
+                              : "否"
                           }
                         />
                         <WorkflowField
-                          label="Roles"
+                          label="角色"
                           value={selectedWorkflowDetail.definition.roles.length}
                         />
                         <WorkflowField
-                          label="Steps"
+                          label="步骤"
                           value={selectedWorkflowDetail.definition.steps.length}
                         />
                         <WorkflowField
-                          label="Topology edges"
+                          label="拓扑边"
                           value={selectedWorkflowDetail.edges.length}
                         />
                         <WorkflowField
-                          label="Connectors"
-                          value={formatListPreview(connectorSummary)}
+                          label="连接器"
+                          value={formatListPreview(connectorSummary, "无连接器")}
                         />
                       </div>
                       <div
@@ -733,11 +743,11 @@ const WorkflowsPage: React.FC = () => {
                         }}
                       >
                         <Typography.Text style={summaryFieldLabelStyle}>
-                          Description
+                          描述
                         </Typography.Text>
                         <Typography.Text>
                           {selectedWorkflowDetail.catalog.description ||
-                            "No description provided."}
+                            "暂无描述。"}
                         </Typography.Text>
                       </div>
                       <div
@@ -768,11 +778,11 @@ const WorkflowsPage: React.FC = () => {
               },
               {
                 key: "roles",
-                label: `Roles (${selectedWorkflowDetail.definition.roles.length})`,
+                label: `角色 (${selectedWorkflowDetail.definition.roles.length})`,
                 children: (
                   <AevatarPanel
-                    description="These are the runtime roles the workflow definition declares, including provider/model hints and attached connectors."
-                    title="Role model"
+                    description="这些是 Workflow 定义声明的运行时角色，包括 provider/model 提示和已挂载连接器。"
+                    title="角色模型"
                   >
                     <Table<WorkflowCatalogRole>
                       columns={roleColumns}
@@ -786,11 +796,11 @@ const WorkflowsPage: React.FC = () => {
               },
               {
                 key: "steps",
-                label: `Steps (${stepRows.length})`,
+                label: `步骤 (${stepRows.length})`,
                 children: (
                   <AevatarPanel
-                    description="Use this view to understand the execution path before opening the full editor."
-                    title="Execution steps"
+                    description="打开完整编辑器前，可先在这里理解执行路径。"
+                    title="执行步骤"
                   >
                     <Table<WorkflowStepRow>
                       columns={stepColumns}
@@ -807,8 +817,8 @@ const WorkflowsPage: React.FC = () => {
                 label: "YAML",
                 children: (
                   <AevatarPanel
-                    description="Keep source close by for inspection, but off the main stage so the library stays scannable."
-                    title="Definition source"
+                    description="源码保留在独立视图里，方便检查，同时不打断目录浏览。"
+                    title="定义源码"
                   >
                     <pre
                       style={{

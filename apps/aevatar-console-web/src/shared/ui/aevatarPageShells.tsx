@@ -200,6 +200,29 @@ const titleRowStyle: React.CSSProperties = {
   maxWidth: '100%',
 };
 
+const contextDrawerHeaderStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  flexWrap: 'wrap',
+  gap: 12,
+};
+
+const contextDrawerTitleStyle: React.CSSProperties = {
+  maxWidth: 'min(100%, 420px)',
+  minWidth: 0,
+};
+
+const contextDrawerTitleTextStyle: React.CSSProperties = {
+  display: 'block',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const contextDrawerExtraStyle: React.CSSProperties = {
+  minWidth: 0,
+};
+
 export const AevatarHelpTooltip: React.FC<{
   content: React.ReactNode;
 }> = ({ content }) => {
@@ -485,18 +508,30 @@ export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
           ? 'large'
           : 'default'
       }
-      styles={{ body: aevatarDrawerBodyStyle }}
       title={
-        <Space orientation="vertical" size={2}>
-          <Typography.Text strong>{title}</Typography.Text>
+        <Space orientation="vertical" size={2} style={contextDrawerTitleStyle}>
+          <Typography.Text strong style={contextDrawerTitleTextStyle}>
+            {title}
+          </Typography.Text>
           {subtitle ? (
-            <Typography.Text style={{ color: token.colorTextSecondary }}>
+            <Typography.Text
+              style={{
+                ...contextDrawerTitleTextStyle,
+                color: token.colorTextSecondary,
+              }}
+            >
               {subtitle}
             </Typography.Text>
           ) : null}
         </Space>
       }
-      extra={extra}
+      extra={
+        extra ? <div style={contextDrawerExtraStyle}>{extra}</div> : undefined
+      }
+      styles={{
+        body: aevatarDrawerBodyStyle,
+        header: contextDrawerHeaderStyle,
+      }}
     >
       <div style={aevatarDrawerScrollStyle}>{children}</div>
     </Drawer>

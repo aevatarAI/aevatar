@@ -111,7 +111,7 @@ function decodeWorkflowCatalogRole(
       `${label}.maxHistoryMessages`
     ),
     streamBufferCapacity: expectNullableNumber(
-      record.streamBufferCapacity,
+      record.streamBufferCapacity ?? null,
       `${label}.streamBufferCapacity`
     ),
     eventModules: expectStringArray(
@@ -414,7 +414,7 @@ function decodeWorkflowAuthoringRole(
       `${label}.maxHistoryMessages`
     ),
     streamBufferCapacity: expectNullableNumber(
-      record.streamBufferCapacity,
+      record.streamBufferCapacity ?? null,
       `${label}.streamBufferCapacity`
     ),
     eventModules: expectStringArray(

@@ -193,9 +193,10 @@ describe("SettingsPage", () => {
       expect(window.location.search).toBe("?section=account");
     });
     expect(screen.queryByRole("button", { name: "Save config" })).toBeNull();
-    expect(await screen.findByText("Profile")).toBeTruthy();
+    expect(await screen.findByText("个人资料")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    expect(screen.getByText("Authentication")).toBeTruthy();
+    expect(screen.getByText("认证信息")).toBeTruthy();
+    expect(screen.getByText("已验证")).toBeTruthy();
   });
 
   it("shows gateway models from backend model groups", async () => {

@@ -53,7 +53,6 @@ jest.mock("@/shared/api/runtimeCatalogApi", () => ({
             maxTokens: 0,
             maxToolRounds: 0,
             maxHistoryMessages: 0,
-            streamBufferCapacity: 0,
             eventModules: [],
             eventRoutes: "",
             connectors: ["memory"],
@@ -92,7 +91,7 @@ describe("WorkflowsPage", () => {
       );
     });
 
-    expect(await screen.findByText("Definition summary")).toBeTruthy();
+    expect(await screen.findByText("定义摘要")).toBeTruthy();
     expect(window.location.search).toContain("workflow=demo_flow");
   });
 
@@ -111,36 +110,36 @@ describe("WorkflowsPage", () => {
 
     await waitFor(() => {
       expect(window.location.search).toBe("");
-      expect(screen.queryByText("Definition summary")).toBeNull();
+      expect(screen.queryByText("定义摘要")).toBeNull();
     });
   });
 
   it("renders a compact workflow filter bar with runtime-focused controls", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Find workflows")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Search workflow, description, group, or primitive")).toBeTruthy();
-    expect(screen.getByText("Workflow catalog")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reset" })).toBeTruthy();
+    expect(await screen.findByText("查找 Workflow")).toBeTruthy();
+    expect(screen.getByPlaceholderText("搜索 Workflow、描述、分组或 primitive")).toBeTruthy();
+    expect(screen.getByText("Workflow 目录")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "清除筛选" })).toBeTruthy();
   });
 
   it("renders the catalog as a table with inspect and run actions", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Closed-world ready")).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "Collection" })).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "Runtime fit" })).toBeTruthy();
+    expect(await screen.findByText("闭环就绪")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "集合" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "运行适配" })).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: "Primitives" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "运行" })).toBeTruthy();
   });
 
   it("opens the definition inspector when the inspect action is clicked", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Inspect" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看" }));
 
-    expect(await screen.findByText("Definition summary")).toBeTruthy();
+    expect(await screen.findByText("定义摘要")).toBeTruthy();
   });
 
   it("opens the Studio workflow editor from the definition inspector", async () => {
@@ -148,10 +147,10 @@ describe("WorkflowsPage", () => {
 
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    expect(await screen.findByText("Definition summary")).toBeTruthy();
+    expect(await screen.findByText("定义摘要")).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open workflow editor" }),
+      screen.getByRole("button", { name: "打开 Workflow 编辑器" }),
     );
 
     await waitFor(() => {
