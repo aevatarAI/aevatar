@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
@@ -228,6 +229,67 @@ public sealed class ConnectorCallModuleCoverageTests
             .OfType<StepCompletedEvent>()
             .Should()
             .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenConnectorCompletesAfterTimeout_ShouldIgnoreStaleCompletionAndClearActiveExecution()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        var connector = new ManualConnector("slow-stale-lease");
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-stale-timeout",
+            RunId = "run-stale-timeout",
+            StepType = "connector_call",
+            Input = "original",
+            ExecutionId = "exec-stale-timeout",
+            Parameters =
+            {
+                ["connector"] = "slow-stale-lease",
+                ["operation"] = "sync",
+                ["timeout_ms"] = "1",
+            },
+        };
+
+        var callTask = module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+
+        var timeout = ctx.Scheduled.Single(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(timeout), ctx, CancellationToken.None);
+
+        var timeoutCompletion = ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        timeoutCompletion.Success.Should().BeFalse();
+        timeoutCompletion.Error.Should().Be("connector call timed out after 100ms");
+        timeoutCompletion.Annotations["connector.timeout_fired"].Should().Be("true");
+
+        connector.Complete(new ConnectorResponse
+        {
+            Success = true,
+            Output = "late-success",
+        });
+        await callTask;
+        await DrainConnectorContinuationsAsync(module, ctx);
+
+        ctx.Published.ToArray()
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which
+            .Should()
+            .BeSameAs(timeoutCompletion);
+
+        var state = ctx.LoadState<ConnectorCallModuleState>("connector_call");
+        state.PendingByOperationId.Should().BeEmpty();
+        state.PendingOperationIdByStepId.Should().BeEmpty();
     }
 
     [Fact]
