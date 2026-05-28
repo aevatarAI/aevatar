@@ -342,11 +342,7 @@ public sealed class MainnetResponsesEndpointsTests
     public async Task AevatarSubstituteTools_ShouldPersistTodoWithoutRegisteringFakeTask()
     {
         var commandPort = new RecordingResponsesAgentToolStatePort();
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -392,11 +388,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebFetch",
             "https://example.com/docs",
             """{"url":"https://example.com/docs","content":"cached"}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -436,11 +428,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebSearch",
             "aevatar docs\n3",
             """{"results":[{"title":"cached docs"}]}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -2922,6 +2910,49 @@ public sealed class MainnetResponsesEndpointsTests
             });
     }
 
+    private static ResponsesAevatarToolProvider CreateResponsesAevatarToolProvider(
+        RecordingResponsesAgentToolStatePort port)
+    {
+        var service = new ResponsesWebSubstituteToolExecutionService(
+            port,
+            port,
+            new StubResponsesWebSubstituteBackend());
+        return new ResponsesAevatarToolProvider(port, service);
+    }
+
+    private sealed class StubResponsesWebSubstituteBackend : IResponsesWebSubstituteBackend
+    {
+        public int DefaultMaxSearchResults => 10;
+
+        public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
+            ResponsesWebFetchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebFetchBoundaryResult(
+                input.Url,
+                200,
+                "text/plain",
+                "body",
+                string.Empty));
+
+        public Task<ResponsesWebSearchBoundaryResult> ExecuteWebSearchAsync(
+            ResponsesWebSearchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebSearchBoundaryResult(
+                new Google.Protobuf.WellKnownTypes.Value
+                {
+                    StructValue = new Struct
+                    {
+                        Fields =
+                        {
+                            ["results"] = new Google.Protobuf.WellKnownTypes.Value
+                            {
+                                ListValue = new ListValue(),
+                            },
+                        },
+                    },
+                }));
+    }
+
     private sealed class StubAgentTool : IAgentTool
     {
         public StubAgentTool(string name, string description)
@@ -2959,7 +2990,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                resultJson,
+                ResponsesJsonValues.ParseBoundaryPayload(resultJson),
                 DateTimeOffset.UtcNow,
                 null,
                 0);
@@ -3001,7 +3032,7 @@ public sealed class MainnetResponsesEndpointsTests
                 trace.TraceId,
                 trace.CacheKey,
                 trace.CacheHit,
-                trace.ResultJson));
+                trace.Result.Clone()));
         }
 
         public Task<ResponsesAgentToolStateSnapshot?> GetAsync(

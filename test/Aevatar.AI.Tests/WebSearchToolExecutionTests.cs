@@ -1,0 +1,103 @@
+using System.Net;
+using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Web.Tools;
+using FluentAssertions;
+
+namespace Aevatar.AI.Tests;
+
+public sealed class WebSearchToolExecutionTests
+{
+    [Fact]
+    public async Task ExecuteAsync_ObjectPayload_ReturnsExpectedJson()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"results":[{"title":"Aevatar docs","url":"https://docs.example/aevatar"}],"count":1}"""),
+        });
+        using var http = new HttpClient(handler);
+        var sut = CreateTool(http);
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+
+        var result = await sut.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("count").GetInt32().Should().Be(1);
+        var item = root.GetProperty("results")[0];
+        item.GetProperty("title").GetString().Should().Be("Aevatar docs");
+        item.GetProperty("url").GetString().Should().Be("https://docs.example/aevatar");
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=3");
+        request.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonJsonStringPayload_FallbackReturnsExpectedJson()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("plain text result"),
+        });
+        using var http = new HttpClient(handler);
+        var sut = CreateTool(http);
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-2"));
+
+        var result = await sut.ExecuteAsync("""{"query":"aevatar docs"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.ValueKind.Should().Be(JsonValueKind.String);
+        document.RootElement.GetString().Should().Be("plain text result");
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=9");
+        request.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        request.Headers.Authorization!.Parameter.Should().Be("token-2");
+    }
+
+    private static WebSearchTool CreateTool(HttpClient http)
+    {
+        var options = new WebToolOptions
+        {
+            SearchApiBaseUrl = "https://search.test",
+            MaxSearchResults = 9,
+        };
+        return new WebSearchTool(new WebApiClient(options, http), options);
+    }
+
+    private static AgentToolExecutionContext WithNyxIdAccessToken(string accessToken) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = accessToken,
+            },
+        };
+
+    private sealed class RecordingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(CloneRequest(request));
+            return Task.FromResult(respond(request));
+        }
+
+        private static HttpRequestMessage CloneRequest(HttpRequestMessage request)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+            foreach (var header in request.Headers)
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            return clone;
+        }
+    }
+}

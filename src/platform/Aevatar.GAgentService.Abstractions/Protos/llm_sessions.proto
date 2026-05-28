@@ -522,6 +522,45 @@ message ResponsesWebCacheEntry {
   int64 hit_count = 8;
 }
 
+message ResponsesWebFetchToolInput {
+  string url = 1;
+  string extract_hint = 2;
+}
+
+message ResponsesWebSearchToolInput {
+  string query = 1;
+  int32 max_results = 2;
+}
+
+message ResponsesWebSubstituteToolExecutionRequest {
+  string tool_name = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  string response_id = 4;
+  string nyx_id_access_token = 5;
+  oneof input {
+    ResponsesWebFetchToolInput fetch = 6;
+    ResponsesWebSearchToolInput search = 7;
+  }
+}
+
+message ResponsesWebFetchToolOutput {
+  string url = 1;
+  int32 status_code = 2;
+  string content_type = 3;
+  string content = 4;
+  string redirect_url = 5;
+}
+
+message ResponsesWebSubstituteToolExecutionResult {
+  oneof result {
+    google.protobuf.Value cached = 1;
+    google.protobuf.Value error = 2;
+    ResponsesWebFetchToolOutput fetch = 3;
+    google.protobuf.Value search = 4;
+  }
+}
+
 message ResponsesAgentToolState {
   ResponsesAgentToolStateRecord record = 1;
   int64 last_applied_event_version = 2;
