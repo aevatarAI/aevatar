@@ -67,12 +67,13 @@ jest.mock("@/shared/ui/aevatarPageShells", () => ({
     const mockReact = require("react");
     return mockReact.createElement("div", null, description);
   },
-  AevatarPageShell: ({ children, title }: any) => {
+  AevatarPageShell: ({ children, extra, title }: any) => {
     const mockReact = require("react");
     return mockReact.createElement(
       "section",
       null,
       mockReact.createElement("h1", null, title),
+      extra ? mockReact.createElement("div", null, extra) : null,
       children
     );
   },
@@ -258,6 +259,23 @@ describe("GAgentsPage", () => {
     expect(
       (await screen.findAllByText("OrdersGAgent (Tests)")).length
     ).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "GAgent 类型" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "团队成员" })).toBeNull();
+    expect(screen.getByText("工作区 ID")).toBeInTheDocument();
+    expect(screen.getAllByText("scope-a").length).toBeGreaterThan(0);
+    expect(screen.getByText("选中类型")).toBeInTheDocument();
+    expect(
+      screen.getByText("当前类型选择会同时驱动草稿运行和发布绑定。")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "管理 Actor" })).toBeInTheDocument();
+    expect(screen.getByText("类型")).toBeInTheDocument();
+    expect(screen.getByText("程序集")).toBeInTheDocument();
+    expect(screen.getByText("已保存 Actor")).toBeInTheDocument();
+    expect(screen.getByText("发布目标")).toBeInTheDocument();
+    expect(screen.getByText("此类型尚未提供服务")).toBeInTheDocument();
+    expect(screen.queryByText("Selected Type")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage actors" })).toBeNull();
+    expect(screen.queryByText("Published target")).toBeNull();
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.listActors).toHaveBeenCalledWith("scope-a");
     });
@@ -286,9 +304,9 @@ describe("GAgentsPage", () => {
       (await screen.findAllByText("OrdersGAgent (Tests)")).length
     ).toBeGreaterThan(0);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Manage actors" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "管理 Actor" })).not.toBeDisabled();
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Manage actors" }));
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Actor" }));
     expect((await screen.findAllByText("Actor Registry")).length).toBeGreaterThan(0);
 
     expect(screen.queryByRole("button", { name: "Save actor" })).toBeNull();
@@ -421,7 +439,8 @@ describe("GAgentsPage", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: "Serving" }));
     expect((await screen.findAllByText("Orders Assistant")).length).toBeGreaterThan(0);
-    expect(await screen.findByText("Active binding")).toBeTruthy();
+    expect(await screen.findByText("活跃绑定")).toBeTruthy();
+    expect(screen.queryByText("Active binding")).toBeNull();
     expect((await screen.findAllByText("Tests.OrdersGAgent, Tests")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("rev-1")).length).toBeGreaterThan(0);
   });

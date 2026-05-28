@@ -1518,8 +1518,8 @@ const GAgentsPage: React.FC = () => {
 
   const selectedTypePanel = (
     <WorkbenchCard
-      description="Current type selection that drives both draft runs and published bindings."
-      eyebrow="Selected Type"
+      description="当前类型选择会同时驱动草稿运行和发布绑定。"
+      eyebrow="选中类型"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
@@ -1527,23 +1527,23 @@ const GAgentsPage: React.FC = () => {
             onClick={() => setIsActorRegistryDrawerOpen(true)}
             size="small"
           >
-            Manage actors
+            管理 Actor
           </Button>
           {selectedType ? (
             <>
               {currentBindingMatchesSelectedType ? (
-                <Tag color="success">Active binding</Tag>
+                <Tag color="success">活跃绑定</Tag>
               ) : null}
               {savedActorIds.length > 0 ? (
-                <Tag>{savedActorIds.length} actors</Tag>
+                <Tag>{savedActorIds.length} 个 Actor</Tag>
               ) : null}
             </>
           ) : (
-            <Tag>Choose a type</Tag>
+            <Tag>选择类型</Tag>
           )}
         </Space>
       }
-      title={selectedType ? selectedType.typeName : 'No type selected'}
+      title={selectedType ? selectedType.typeName : '未选择类型'}
     >
       {selectedType ? (
         <div
@@ -1554,36 +1554,36 @@ const GAgentsPage: React.FC = () => {
           }}
         >
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Type</Typography.Text>
+            <Typography.Text type="secondary">类型</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {selectedType.fullName}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Assembly</Typography.Text>
+            <Typography.Text type="secondary">程序集</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {selectedType.assemblyName}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Saved actors</Typography.Text>
+            <Typography.Text type="secondary">已保存 Actor</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {savedActorIds.length}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">Published target</Typography.Text>
+            <Typography.Text type="secondary">发布目标</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
               {currentBindingMatchesSelectedType
                 ? describeRuntimeGAgentBindingRevisionTarget(
                     currentBindingRevision,
                   )
-                : 'Not serving this type yet'}
+                : '此类型尚未提供服务'}
             </Typography.Paragraph>
           </div>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a discovered GAgent type from the left rail to prepare draft runs or published bindings." />
+        <AevatarInspectorEmpty description="从左侧列表选择已发现的 GAgent 类型，以准备草稿运行或发布绑定。" />
       )}
     </WorkbenchCard>
   );
@@ -2744,14 +2744,14 @@ const GAgentsPage: React.FC = () => {
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>
-          <Typography.Text type="secondary">Workspace ID</Typography.Text>
+          <Typography.Text type="secondary">工作区 ID</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
-            {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
+            {normalizedScopeId || resolvedScope?.scopeId || '未解析'}
           </Typography.Text>
         </Space>
       }
-      title="团队成员"
-      titleHelp="这里保留原有 GAgent runtime 能力，但统一对外表述为团队成员管理与绑定工作台。"
+      title="GAgent 类型"
+      titleHelp="查看 runtime 已发现的 GAgent 类型，并管理草稿运行、发布绑定和已保存 Actor。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
