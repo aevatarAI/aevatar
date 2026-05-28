@@ -15,13 +15,11 @@ public sealed class ScriptEvolutionProjectionPort
 
     public ScriptEvolutionProjectionPort(
         ScriptEvolutionProjectionOptions options,
-        IProjectionScopeActivationService<ScriptEvolutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptEvolutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<ScriptEvolutionRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options?.Enabled ?? false,
-            activationService,
             releaseService,
             sessionEventHub)
     {
@@ -38,6 +36,7 @@ public sealed class ScriptEvolutionProjectionPort
         IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old command observation path could reach activation through the lifecycle base; new path is attach-existing session/readmodel only.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

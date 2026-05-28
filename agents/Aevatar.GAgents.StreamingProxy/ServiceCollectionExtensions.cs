@@ -18,6 +18,7 @@ using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
@@ -31,8 +32,8 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.TryAddSingleton<StreamingProxyNyxParticipantCoordinator>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, StreamingProxyChatLifecycleContinuationRunner>());
         services.TryAddSingleton<IStreamingProxyRoomCommandService, StreamingProxyRoomCommandService>();
-        services.TryAddSingleton<StreamingProxyChatLifecycleFacade>();
         services.TryAddSingleton<IStreamingProxyRoomParticipantService, StreamingProxyRoomParticipantService>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();

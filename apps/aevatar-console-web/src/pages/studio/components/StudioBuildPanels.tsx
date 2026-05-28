@@ -537,6 +537,7 @@ function extractRunFinishedOutput(result: unknown): string {
   }
 
   const record = result as Record<string, unknown>;
+  // Refactor (iter98/cluster-790): Old: UI relied on generic/fallback result shapes after backend missed-live synthesis. New: typed GAgentDraftRunResultPayload exposes result.output.
   const candidate = record.output ?? record.Output ?? record.message ?? record.text;
   return typeof candidate === 'string' ? candidate : '';
 }

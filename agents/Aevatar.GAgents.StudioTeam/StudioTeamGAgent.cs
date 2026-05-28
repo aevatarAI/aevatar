@@ -16,12 +16,11 @@ namespace Aevatar.GAgents.StudioTeam;
 /// The actor handles three command-style events directly
 /// (<see cref="StudioTeamCreatedEvent"/>, <see cref="StudioTeamUpdatedEvent"/>,
 /// <see cref="StudioTeamArchivedEvent"/>) and one cross-actor signal
-/// (<see cref="StudioMemberReassignedEvent"/>) emitted by
-/// <see cref="StudioMemberGAgent"/>. The application command port is
-/// responsible for delivering reassign events to both source and destination
-/// TeamGAgents; this actor applies idempotent set operations on
-/// <c>member_ids</c> and persists a <see cref="StudioTeamMemberRosterChangedEvent"/>
-/// reflecting the resulting effect (ADDED / REMOVED / NOOP).
+/// <see cref="StudioMemberGAgent"/> and delivered by the durable committed
+/// state materialization path. This actor applies idempotent set operations
+/// on <c>member_ids</c> and persists a
+/// <see cref="StudioTeamMemberRosterChangedEvent"/> reflecting the resulting
+/// effect (ADDED / REMOVED / NOOP).
 ///
 /// Lifecycle is monotonic: <c>ACTIVE -> ARCHIVED</c>. Archive is irreversible
 /// and is a metadata signal only — it does <em>not</em> reject member

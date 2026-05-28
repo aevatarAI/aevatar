@@ -124,13 +124,13 @@ public sealed class StudioTeamServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldDelegateAndReRead()
+    public async Task UpdateAsync_ShouldReturnAcceptedReceiptWithoutPostDispatchRead()
     {
         var commandPort = new RecordingCommandPort();
-        var summary = NewSummary();
+        var queryPort = new InMemoryQueryPort(null);
         var service = new StudioTeamService(
             commandPort,
-            new InMemoryQueryPort(summary),
+            queryPort,
             new InMemoryMemberQueryPort(null));
 
         var result = await service.UpdateAsync(
@@ -138,23 +138,29 @@ public sealed class StudioTeamServiceTests
             new UpdateStudioTeamRequest(DisplayName: PatchValue<string>.Of("Beta")));
 
         commandPort.UpdateCalls.Should().Be(1);
-        result.Should().NotBeNull();
+        queryPort.GetCalls.Should().Be(0);
+        result.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        result.TeamId.Should().Be(TeamId);
+        result.CommandId.Should().Be("cmd-1");
     }
 
     [Fact]
-    public async Task ArchiveAsync_ShouldDelegateAndReRead()
+    public async Task ArchiveAsync_ShouldReturnAcceptedReceiptWithoutPostDispatchRead()
     {
         var commandPort = new RecordingCommandPort();
-        var summary = NewSummary();
+        var queryPort = new InMemoryQueryPort(null);
         var service = new StudioTeamService(
             commandPort,
-            new InMemoryQueryPort(summary),
+            queryPort,
             new InMemoryMemberQueryPort(null));
 
         var result = await service.ArchiveAsync(ScopeId, TeamId);
 
         commandPort.ArchiveCalls.Should().Be(1);
-        result.Should().NotBeNull();
+        queryPort.GetCalls.Should().Be(0);
+        result.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        result.TeamId.Should().Be(TeamId);
+        result.CommandId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -402,18 +408,18 @@ public sealed class StudioTeamServiceTests
                 UpdatedAt: DateTimeOffset.UtcNow));
         }
 
-        public Task UpdateAsync(
+        public Task<StudioTeamCommandResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default)
         {
             UpdateCalls++;
-            return Task.CompletedTask;
+            return Task.FromResult(NewAccepted(scopeId, teamId));
         }
 
-        public Task ArchiveAsync(
+        public Task<StudioTeamCommandResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default)
         {
             ArchiveCalls++;
-            return Task.CompletedTask;
+            return Task.FromResult(NewAccepted(scopeId, teamId));
         }
 
         public Task SetEntryMemberAsync(
@@ -435,6 +441,15 @@ public sealed class StudioTeamServiceTests
             ClearEntryCalls++;
             return Task.CompletedTask;
         }
+
+        private static StudioTeamCommandResponse NewAccepted(string scopeId, string teamId) =>
+            new(
+                StudioTeamCommandStatusNames.Accepted,
+                scopeId,
+                teamId,
+                "cmd-1",
+                "corr-1",
+                DateTimeOffset.UtcNow);
     }
 
     private sealed class InMemoryMemberQueryPort : IStudioMemberQueryPort

@@ -69,7 +69,7 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             UpdatedAt: createdAt);
     }
 
-    public async Task UpdateAsync(
+    public async Task<StudioTeamCommandResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
@@ -82,7 +82,12 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
 
         // No-op if the patch payload carries no field to change.
         if (!request.DisplayName.HasValue && !request.Description.HasValue)
-            return;
+        {
+            return new StudioTeamCommandResponse(
+                StudioTeamCommandStatusNames.NoChange,
+                normalizedScopeId,
+                normalizedTeamId);
+        }
 
         var evt = new StudioTeamUpdatedEvent
         {
@@ -104,10 +109,11 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             evt.Description = request.Description.Value ?? string.Empty;
         }
 
-        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        var receipt = await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        return ToAcceptedResponse(normalizedScopeId, normalizedTeamId, receipt);
     }
 
-    public async Task ArchiveAsync(
+    public async Task<StudioTeamCommandResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default)
@@ -122,7 +128,8 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             ArchivedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        var receipt = await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        return ToAcceptedResponse(normalizedScopeId, normalizedTeamId, receipt);
     }
 
     public async Task SetEntryMemberAsync(
@@ -164,7 +171,11 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
         await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
     }
 
-    private async Task DispatchAsync(string scopeId, string teamId, IMessage payload, CancellationToken ct)
+    private async Task<StudioProjectionActorCommandReceipt> DispatchAsync(
+        string scopeId,
+        string teamId,
+        IMessage payload,
+        CancellationToken ct)
     {
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
         // Refactor (iter56/cluster-910-projection-activation-cleanup):
@@ -172,8 +183,20 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
         //   new=committed-state plan provider
         //   team commands return after accepted dispatch, not readmodel materialization.
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
-        await _commandDispatch.DispatchAsync(actor, payload, PublisherId, ct);
+        return await _commandDispatch.DispatchAsync(actor, payload, PublisherId, ct: ct);
     }
+
+    private static StudioTeamCommandResponse ToAcceptedResponse(
+        string scopeId,
+        string teamId,
+        StudioProjectionActorCommandReceipt receipt) =>
+        new(
+            StudioTeamCommandStatusNames.Accepted,
+            scopeId,
+            teamId,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            receipt.AckedAt);
 
     private static string GenerateTeamId()
     {

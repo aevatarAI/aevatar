@@ -1,5 +1,4 @@
-using System.Reflection;
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.Ports;
 
@@ -7,31 +6,11 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
 public sealed class StaticServiceImplementationAdapter : IServiceImplementationAdapter
 {
-    /// <summary>
-    /// Resolves a type by name, searching all loaded assemblies if <see cref="Type.GetType"/> fails.
-    /// </summary>
-    private static Type? ResolveType(string typeName)
+    private readonly IAgentKindRegistry _agentKindRegistry;
+
+    public StaticServiceImplementationAdapter(IAgentKindRegistry agentKindRegistry)
     {
-        var type = Type.GetType(typeName, throwOnError: false);
-        if (type is not null)
-            return type;
-
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                type = assembly.GetType(typeName);
-                if (type is not null)
-                    return type;
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-
-        return null;
+        _agentKindRegistry = agentKindRegistry ?? throw new ArgumentNullException(nameof(agentKindRegistry));
     }
 
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Static;
@@ -44,16 +23,9 @@ public sealed class StaticServiceImplementationAdapter : IServiceImplementationA
         ArgumentNullException.ThrowIfNull(request);
         var spec = request.Spec?.StaticSpec
             ?? throw new InvalidOperationException("static implementation_spec is required.");
-        if (string.IsNullOrWhiteSpace(spec.ActorTypeName))
-            throw new InvalidOperationException("static actor_type_name is required.");
+        var agentKind = ResolveAgentKind(spec);
         if (spec.Endpoints.Count == 0)
             throw new InvalidOperationException("static endpoints are required.");
-
-        var actorType = ResolveType(spec.ActorTypeName);
-        if (actorType == null)
-            throw new InvalidOperationException($"Static actor type '{spec.ActorTypeName}' was not found.");
-        if (!typeof(IAgent).IsAssignableFrom(actorType))
-            throw new InvalidOperationException($"Static actor type '{spec.ActorTypeName}' does not implement IAgent.");
 
         return Task.FromResult(new PreparedServiceRevisionArtifact
         {
@@ -65,10 +37,43 @@ public sealed class StaticServiceImplementationAdapter : IServiceImplementationA
             {
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
+                    AgentKind = agentKind,
                     ActorTypeName = spec.ActorTypeName,
                     PreferredActorId = spec.PreferredActorId ?? string.Empty,
                 },
             },
         });
+    }
+
+    private string ResolveAgentKind(StaticServiceRevisionSpec spec)
+    {
+        var agentKind = spec.AgentKind?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(agentKind))
+        {
+            _agentKindRegistry.Resolve(agentKind);
+            return agentKind;
+        }
+
+        var actorTypeName = spec.ActorTypeName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(actorTypeName))
+            throw new InvalidOperationException("static agent_kind is required.");
+
+        var legacyClrTypeName = NormalizeLegacyClrTypeName(actorTypeName);
+        if (_agentKindRegistry.TryResolveKindByClrTypeName(legacyClrTypeName, out var translatedKind))
+            return translatedKind;
+
+        throw new InvalidOperationException(
+            $"Static legacy actor_type_name '{actorTypeName}' is not registered with IAgentKindRegistry.");
+    }
+
+    // Refactor (issue1044/static-service-agent-kind):
+    //   Old pattern: static service preparation resolved actor_type_name through CLR-name reflection.
+    //   New principle: static service activation persists agent_kind; actor_type_name only translates legacy boundary input.
+    private static string NormalizeLegacyClrTypeName(string actorTypeName)
+    {
+        var commaIndex = actorTypeName.IndexOf(',', StringComparison.Ordinal);
+        return commaIndex < 0
+            ? actorTypeName
+            : actorTypeName[..commaIndex].Trim();
     }
 }

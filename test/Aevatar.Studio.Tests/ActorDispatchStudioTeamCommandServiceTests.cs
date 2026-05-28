@@ -69,12 +69,18 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(DisplayName: PatchValue<string>.Of("New Name")),
             CancellationToken.None);
 
         dispatch.Dispatches.Should().ContainSingle();
+        receipt.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        receipt.ScopeId.Should().Be(ScopeId);
+        receipt.TeamId.Should().Be("t-1");
+        receipt.CommandId.Should().Be(dispatch.Dispatches[0].Envelope.Id);
+        receipt.CorrelationId.Should().Be(receipt.CommandId);
+        receipt.AckedAt.Should().NotBeNull();
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamUpdatedEvent>();
         evt.HasDisplayName.Should().BeTrue();
         evt.DisplayName.Should().Be("New Name");
@@ -105,12 +111,16 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), CreateCommandDispatch(dispatch));
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(),
             CancellationToken.None);
 
         dispatch.Dispatches.Should().BeEmpty();
+        receipt.Status.Should().Be(StudioTeamCommandStatusNames.NoChange);
+        receipt.ScopeId.Should().Be(ScopeId);
+        receipt.TeamId.Should().Be("t-1");
+        receipt.CommandId.Should().BeNull();
     }
 
     [Fact]
@@ -141,11 +151,14 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioTeamCommandService(bootstrap, CreateCommandDispatch(dispatch));
 
-        await service.ArchiveAsync(ScopeId, "t-1", CancellationToken.None);
+        var receipt = await service.ArchiveAsync(ScopeId, "t-1", CancellationToken.None);
 
         bootstrap.EnsuredActorIds.Should().ContainSingle()
             .Which.Should().Be("studio-team:scope-1:t-1");
         dispatch.Dispatches.Should().ContainSingle();
+        receipt.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        receipt.CommandId.Should().Be(dispatch.Dispatches[0].Envelope.Id);
+        receipt.AckedAt.Should().NotBeNull();
 
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamArchivedEvent>();
         evt.TeamId.Should().Be("t-1");

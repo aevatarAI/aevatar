@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -48,7 +50,7 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task StaticAdapter_ShouldPrepareRevisionArtifact()
     {
-        var adapter = new StaticServiceImplementationAdapter();
+        var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
         var request = new PrepareServiceRevisionRequest
         {
             ServiceKey = "tenant:app:default:svc",
@@ -59,44 +61,47 @@ public sealed class ServiceImplementationAdaptersTests
 
         artifact.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         artifact.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        artifact.DeploymentPlan.StaticPlan.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
         artifact.DeploymentPlan.StaticPlan.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
         artifact.DeploymentPlan.StaticPlan.PreferredActorId.Should().Be("static:r1");
     }
 
     [Fact]
-    public async Task StaticAdapter_ShouldRejectNonAgentType()
+    public async Task StaticAdapter_ShouldTranslateLegacyActorTypeNameToAgentKind()
     {
-        var adapter = new StaticServiceImplementationAdapter();
+        var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
         var request = new PrepareServiceRevisionRequest
         {
-            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(actorTypeName: typeof(string).AssemblyQualifiedName),
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(
+                actorTypeName: typeof(TestStaticServiceAgent).AssemblyQualifiedName,
+                agentKind: string.Empty),
         };
 
-        var act = () => adapter.PrepareRevisionAsync(request);
+        var artifact = await adapter.PrepareRevisionAsync(request);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*does not implement IAgent*");
+        artifact.DeploymentPlan.StaticPlan.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+        artifact.DeploymentPlan.StaticPlan.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
     }
 
     [Fact]
-    public async Task StaticAdapter_ShouldRejectMissingActorTypeName()
+    public async Task StaticAdapter_ShouldRejectMissingAgentKind()
     {
-        var adapter = new StaticServiceImplementationAdapter();
+        var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
         var request = new PrepareServiceRevisionRequest
         {
-            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(actorTypeName: string.Empty),
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(actorTypeName: string.Empty, agentKind: string.Empty),
         };
 
         var act = () => adapter.PrepareRevisionAsync(request);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("static actor_type_name is required.");
+            .WithMessage("static agent_kind is required.");
     }
 
     [Fact]
     public async Task StaticAdapter_ShouldRejectMissingEndpoints()
     {
-        var adapter = new StaticServiceImplementationAdapter();
+        var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
         var spec = GAgentServiceTestKit.CreateStaticRevisionSpec();
         spec.StaticSpec.Endpoints.Clear();
 
@@ -110,17 +115,17 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
-    public async Task StaticAdapter_ShouldRejectUnknownActorType()
+    public async Task StaticAdapter_ShouldRejectUnknownAgentKind()
     {
-        var adapter = new StaticServiceImplementationAdapter();
+        var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
-            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(actorTypeName: "Missing.Actor, Missing.Assembly"),
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(agentKind: "tests.missing-static-agent"),
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*was not found*");
+            .WithMessage("*tests.missing-static-agent*");
     }
 
     [Fact]
@@ -688,5 +693,12 @@ public sealed class ServiceImplementationAdaptersTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private static IAgentKindRegistry CreateStaticAgentKindRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestStaticServiceAgent>();
+        return new AgentKindRegistry(builder.Build());
     }
 }

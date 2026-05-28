@@ -114,6 +114,11 @@ start_node() {
   local version_tag="$7"
   local fail_event_type_urls="$8"
   local log_file="${log_dir}/node${node}.log"
+  local retry_max_attempts="${AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS:-}"
+
+  if [[ -n "${fail_event_type_urls}" && -z "${retry_max_attempts}" ]]; then
+    retry_max_attempts=3
+  fi
 
   (
     ASPNETCORE_ENVIRONMENT=Distributed \
@@ -144,6 +149,7 @@ start_node() {
     Projection__Graph__Providers__InMemory__Enabled=false \
     AEVATAR_TEST_NODE_VERSION_TAG="${version_tag}" \
     AEVATAR_TEST_FAIL_EVENT_TYPE_URLS="${fail_event_type_urls}" \
+    AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS="${retry_max_attempts}" \
     dotnet "${app_dll}" >"${log_file}" 2>&1
   ) &
 

@@ -720,8 +720,10 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
-        builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.AddSingleton<MessagesCommandFacade>();
+        builder.Services.AddSingleton<IMessagesCommandFacade, CompletingMessagesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
@@ -749,6 +751,128 @@ public sealed class MainnetMessagesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private sealed class AcceptedOnlyActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class CompletingMessagesCommandFacade(
+        MessagesCommandFacade inner,
+        ILLMProviderFactory providerFactory,
+        IResponsesCompletionApplicationService completionService,
+        ILlmSessionRegistrationPort sessionRegistrationPort) : IMessagesCommandFacade
+    {
+        public async Task<MessagesCreateCommandResult> CreateAsync(
+            MessagesCommandRequest request,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            if (request.Stream == true)
+                return await inner.CreateAsync(request, bearerToken, ct);
+
+            var planRequest = request with { Stream = true };
+            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            if (result.Error is not null || result.StreamPlan is null)
+                return result;
+
+            var plan = result.StreamPlan with
+            {
+                Normalized = result.StreamPlan.Normalized with { Stream = false },
+            };
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.CollectAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return MessagesCreateCommandResult.FromCompleted(
+                    new MessagesCreateCompletedCommandResult(plan.Normalized, snapshot));
+            }
+        }
+
+        public async Task<ResponsesStreamCommandResult> StreamAsync(
+            MessagesCreateCommandPlan plan,
+            Func<string, CancellationToken, ValueTask> onTextDelta,
+            CancellationToken ct = default)
+        {
+            _ = await inner.StreamAsync(plan, onTextDelta, ct);
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.StreamAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContextMetadata,
+                    plan.ToolClassification,
+                    onTextDelta,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesStreamCommandResult.FromCompleted(snapshot);
+            }
+        }
+
+        private async Task RecordCompletionAsync(
+            LlmSessionRegistrationResult session,
+            LlmSessionCompletionSnapshot snapshot,
+            CancellationToken ct)
+        {
+            await sessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                ToCompletion(snapshot),
+                ct);
+        }
+
+        private static LlmSessionCompletionSnapshot BuildCompletionSnapshot(ResponsesCompletionResult completion) =>
+            new(
+                completion.Text,
+                completion.ForwardedToolCalls
+                    .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                        call.Id,
+                        call.Name,
+                        string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson))
+                    .ToArray(),
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                completion.Usage);
+
+        private static LlmSessionCompletion ToCompletion(LlmSessionCompletionSnapshot snapshot)
+        {
+            var completion = new LlmSessionCompletion
+            {
+                OutputText = snapshot.OutputText,
+                CompletedAt = Timestamp.FromDateTimeOffset(snapshot.CompletedAt ?? DateTimeOffset.UtcNow),
+            };
+            if (snapshot.Usage is not null)
+            {
+                completion.Usage = new LlmSessionTokenUsage
+                {
+                    PromptTokens = snapshot.Usage.PromptTokens,
+                    CompletionTokens = snapshot.Usage.CompletionTokens,
+                    TotalTokens = snapshot.Usage.TotalTokens,
+                };
+            }
+
+            foreach (var call in snapshot.ToolCalls)
+            {
+                completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    Result = ResponsesJsonValues.ParseBoundaryPayload(call.ResultJson),
+                });
+            }
+
+            return completion;
+        }
+    }
 
     private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
         Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions

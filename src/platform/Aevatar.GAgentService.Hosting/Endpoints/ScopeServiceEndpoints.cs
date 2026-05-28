@@ -193,7 +193,7 @@ public static class ScopeServiceEndpoints
                     request.GAgent == null
                         ? null
                         : new ScopeBindingGAgentSpec(
-                            request.GAgent.ActorTypeName,
+                            request.GAgent.AgentKind ?? string.Empty,
                             (request.GAgent.Endpoints ?? [])
                             .Select(endpoint => new ScopeBindingGAgentEndpoint(
                                 endpoint.EndpointId,
@@ -202,7 +202,8 @@ public static class ScopeServiceEndpoints
                                 endpoint.RequestTypeUrl,
                                 endpoint.ResponseTypeUrl,
                                 endpoint.Description))
-                            .ToArray()),
+                            .ToArray(),
+                            request.GAgent.ActorTypeName),
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,
@@ -610,7 +611,7 @@ public static class ScopeServiceEndpoints
         InvokeScopeServiceHttpRequest request,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         HandleInvokeAsync(
@@ -622,7 +623,7 @@ public static class ScopeServiceEndpoints
             appId: null,
             invocationPort,
             catalogReader,
-            artifactStore,
+            revisionCatalogReader,
             options,
             ct);
 
@@ -689,7 +690,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -714,7 +715,7 @@ public static class ScopeServiceEndpoints
                 BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId),
                 invocationPort,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 options,
                 ct);
         }
@@ -791,7 +792,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -811,7 +812,7 @@ public static class ScopeServiceEndpoints
                 BuildScopeServiceRunBasePath(teamResolution.ScopeId, teamResolution.PublishedServiceId, teamResolution.EntryMemberId),
                 invocationPort,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 options,
                 ct);
         }
@@ -1828,7 +1829,7 @@ public static class ScopeServiceEndpoints
         string? appId,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
-        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         await HandleInvokeAsyncCore(
@@ -1841,7 +1842,7 @@ public static class ScopeServiceEndpoints
             acceptedResourcePath: null,
             invocationPort,
             catalogReader,
-            artifactStore,
+            revisionCatalogReader,
             options,
             ct);
 
@@ -1855,7 +1856,7 @@ public static class ScopeServiceEndpoints
         string? acceptedResourcePath,
         IServiceInvocationPort invocationPort,
         IServiceCatalogQueryReader catalogReader,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
         IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1873,7 +1874,7 @@ public static class ScopeServiceEndpoints
                 revisionId,
                 identity,
                 catalogReader,
-                artifactStore,
+                revisionCatalogReader,
                 ct);
 
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
@@ -1910,7 +1911,7 @@ public static class ScopeServiceEndpoints
         string requestedRevisionId,
         ServiceIdentity identity,
         IServiceCatalogQueryReader catalogReader,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct)
     {
         var hasJson = !string.IsNullOrWhiteSpace(request.PayloadJson);
@@ -1932,8 +1933,8 @@ public static class ScopeServiceEndpoints
             }
 
             var packed = await ServiceJsonPayloads.PackJsonAsync(
-                artifactStore,
-                ServiceKeys.Build(identity),
+                revisionCatalogReader,
+                identity,
                 revisionId,
                 typeUrl,
                 request.PayloadJson!,
@@ -3262,7 +3263,8 @@ const response = await fetch("{{invokePath}}", {
 
     public sealed record ScopeBindingGAgentHttpRequest(
         string ActorTypeName,
-        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
+        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints,
+        string? AgentKind = null);
 
     public sealed record StreamScopeServiceHttpRequest(
         string? Prompt,

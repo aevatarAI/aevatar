@@ -199,12 +199,16 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            var detail = await teamService.UpdateAsync(
+            var receipt = await teamService.UpdateAsync(
                 scopeId,
                 teamId,
                 new UpdateStudioTeamRequest(displayNamePatch, descriptionPatch),
                 ct);
-            return Results.Ok(detail);
+            // Refactor (iter96/cluster-547):
+            //   Old: dispatch then GetAsync readmodel returned 200 OK + snapshot (pretending completion).
+            //   New: no readmodel read; 202 Accepted + Location points to stable team query resource,
+            //        body only carries accepted/no_change receipt.
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -228,7 +232,12 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.ArchiveAsync(scopeId, teamId, ct));
+            var receipt = await teamService.ArchiveAsync(scopeId, teamId, ct);
+            // Refactor (iter96/cluster-547):
+            //   Old: dispatch then GetAsync readmodel returned 200 OK + snapshot (pretending completion).
+            //   New: no readmodel read; 202 Accepted + Location points to stable team query resource,
+            //        body only carries accepted/no_change receipt.
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {

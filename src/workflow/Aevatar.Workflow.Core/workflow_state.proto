@@ -140,6 +140,25 @@ message WorkflowRunState
   string scope_id = 18;
   repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
   map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
+  WorkflowRunExecutionContextState execution_context = 21;
+}
+
+message WorkflowRunExecutionContextState
+{
+  WorkflowLlmExecutionContextState llm = 1;
+  WorkflowConnectorExecutionContextState connector = 2;
+}
+
+message WorkflowLlmExecutionContextState
+{
+  string nyxid_access_token = 1;
+  string model_override = 2;
+  string nyxid_route_preference = 3;
+}
+
+message WorkflowConnectorExecutionContextState
+{
+  string http_authorization = 1;
 }
 
 enum WorkflowRuntimeCallbackBackendState

@@ -15,13 +15,11 @@ public sealed class GAgentDraftRunProjectionPort
 
     public GAgentDraftRunProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionScopeActivationService<GAgentDraftRunRuntimeLease> activationService,
         IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<GAgentDraftRunRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
-            activationService,
             releaseService,
             sessionEventHub)
     {
@@ -41,6 +39,7 @@ public sealed class GAgentDraftRunProjectionPort
         IEventSink<AGUIEvent> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old event-sink lifecycle base allowed derived request ports to ensure projection sessions; new request-facing API is attach-existing only.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

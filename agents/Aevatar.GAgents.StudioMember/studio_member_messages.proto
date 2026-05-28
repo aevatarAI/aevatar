@@ -327,16 +327,29 @@ message StudioMemberBindingTerminalAcknowledged {
   google.protobuf.Timestamp acknowledged_at_utc = 3;
 }
 
+// Actor-owned PATCH intent for a member's team assignment. The HTTP /
+// application layer dispatches this only when PATCH includes `teamId`.
+// target_team_id absent means explicit unassign; a present value means assign
+// or move to that team. No from_team_id is supplied by callers: the
+// StudioMember actor derives it from its own authoritative state.
+message StudioMemberTeamAssignmentPatchRequested {
+  string member_id = 1;
+  string scope_id = 2;
+  optional string target_team_id = 3;
+  google.protobuf.Timestamp requested_at_utc = 4;
+}
+
 // Single reassignment event covers assign / unassign / move (ADR-0017).
-// Both source and destination StudioTeamGAgents apply idempotent set
-// operations against this event.
+// A durable committed-state consumer dispatches this committed event to the
+// source and destination StudioTeamGAgents. Each TeamGAgent applies
+// idempotent set operations against this event.
 //
 // from_team_id and to_team_id are `optional` so absence carries the
 // "unassigned" intent; empty-string sentinels are not used.
 //   pure assign:   from_team_id absent,    to_team_id = "T2"
 //   pure unassign: from_team_id = "T1",    to_team_id absent
 //   move:          from_team_id = "T1",    to_team_id = "T2"
-// Constraints (enforced at the application layer):
+// Constraints (enforced by `StudioMemberGAgent` member actor + materializer fanout 自动到 team(s)):
 //   - At least one of from_team_id / to_team_id must be present.
 //   - from_team_id == to_team_id (both present and equal) is rejected.
 //   - The teams identified by from_team_id / to_team_id (when present) must be

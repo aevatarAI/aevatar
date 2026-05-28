@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -147,6 +148,7 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
+            builder.Services.AddSingleton<ITeamEntryMemberResolver, DraftRunActorQueryTeamEntryMemberResolver>();
             DraftRunProjectionActivationServiceCollectionExtensions.AddWorkflowRunProjectionActivatingInteractionService(
                 builder.Services);
             builder.Services.AddAuthentication("Test")
@@ -198,6 +200,19 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
 
             throw new InvalidOperationException("Unable to locate repository root from test base directory.");
         }
+    }
+
+    private sealed class DraftRunActorQueryTeamEntryMemberResolver : ITeamEntryMemberResolver
+    {
+        public Task<TeamEntryMemberResolution> ResolveAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default) =>
+            throw new TeamEntryMemberResolutionException(
+                TeamEntryMemberErrorCodes.TeamNotFound,
+                scopeId,
+                teamId,
+                $"team '{teamId}' is not configured for the draft-run actor query fixture.");
     }
 
     private static class DraftRunProjectionActivationServiceCollectionExtensions

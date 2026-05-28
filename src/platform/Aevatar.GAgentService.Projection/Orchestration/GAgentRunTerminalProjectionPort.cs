@@ -14,10 +14,9 @@ public sealed class GAgentRunTerminalProjectionPort
 
     public GAgentRunTerminalProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionScopeActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> activationService,
         IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> releaseService,
         IProjectionScopeAttachExistingLeaseLookup<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> attachExistingLeaseLookup)
-        : base(options, activationService, releaseService, ServiceProjectionKinds.GAgentRunTerminalDraftRun)
+        : base(options, releaseService, ServiceProjectionKinds.GAgentRunTerminalDraftRun)
     {
         _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
@@ -35,6 +34,7 @@ public sealed class GAgentRunTerminalProjectionPort
         GAgentRunTerminalInteractionKind interactionKind,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old request-facing materialization port could inherit EnsureProjectionAsync; new path only resolves an existing readmodel lease.
         ct.ThrowIfCancellationRequested();
 
         if (!ProjectionEnabled ||

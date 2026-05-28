@@ -28,14 +28,6 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public async Task GAgentRunTerminalProjectionPort_ShouldAttachExistingProjection_WhenScopeActorExists()
     {
-        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
-            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-                CorrelationId = "corr-1",
-                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
-            });
         var runtime = new RecordingActorRuntime();
         runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
             "actor-1",
@@ -44,7 +36,6 @@ public sealed class ServiceProjectionInfrastructureTests
             "corr-1")));
         IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
             CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
                 runtime,
@@ -65,26 +56,15 @@ public sealed class ServiceProjectionInfrastructureTests
         lease!.ActorId.Should().Be("actor-1");
         lease.CorrelationId.Should().Be("corr-1");
         lease.InteractionKind.Should().Be(GAgentRunTerminalInteractionKind.DraftRun);
-        activationService.Requests.Should().BeEmpty();
-        activationService.Calls.Should().BeEmpty();
     }
 
     [Fact]
     public async Task GAgentRunTerminalProjectionPort_ShouldReturnNullForAttachExisting_WhenScopeActorIsMissingOrInvalid()
     {
-        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
-            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-                CorrelationId = "corr-1",
-                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
-            });
         var runtime = new RecordingActorRuntime();
         runtime.KnownActorIds.Add("different-scope");
         IGAgentRunTerminalProjectionPort disabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
-            activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
             CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
                 runtime,
@@ -97,7 +77,6 @@ public sealed class ServiceProjectionInfrastructureTests
                 }));
         IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
             CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
                 runtime,
@@ -125,25 +104,13 @@ public sealed class ServiceProjectionInfrastructureTests
             "actor-1",
             " ",
             GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
-
-        activationService.Requests.Should().BeEmpty();
-        activationService.Calls.Should().BeEmpty();
     }
 
     [Fact]
     public async Task GAgentRunTerminalProjectionPort_ShouldGuardReleaseAndUnknownKinds()
     {
-        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
-            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-                CorrelationId = "corr-1",
-                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
-            });
         IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            activationService,
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
             CreateAttachExistingLookup<GAgentRunTerminalProjectionContext>(
                 new RecordingActorRuntime(),
@@ -174,14 +141,6 @@ public sealed class ServiceProjectionInfrastructureTests
     {
         var create = () => new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
-            new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
-                static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = projectionName,
-                    CorrelationId = "corr-1",
-                    InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
-                }),
             new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
             null!);
 
@@ -392,7 +351,7 @@ public sealed class ServiceProjectionInfrastructureTests
                         Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00")),
                         EventData = Any.Pack(new StringValue { Value = "payload" }),
                     },
-                }),
+            }),
             },
             new FixedProjectionClock(DateTimeOffset.Parse("2026-03-16T02:00:00+00:00")),
             null,
@@ -416,7 +375,7 @@ public sealed class ServiceProjectionInfrastructureTests
                         EventId = "evt-2",
                         Version = 0,
                     },
-                }),
+            }),
             },
             new FixedProjectionClock(DateTimeOffset.Parse("2026-03-16T03:00:00+00:00")),
             null,
