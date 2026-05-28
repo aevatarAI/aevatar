@@ -1731,6 +1731,201 @@ public class WorkflowGAgentCoverageTests
         Assert.Equal("""{"query":"aevatar"}""", toolCall.ArgumentsJson);
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWorkflowInitializationUsesSparsePayload_ShouldNormalizeDefaults()
+    {
+        var eventStore = new InMemoryEventStore();
+        await using var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(eventStore)
+            .AddSingleton(eventStore)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+        var agent = new WorkflowRoleGAgent(new RecordingWorkflowIntentLlmProvider())
+        {
+            Services = services,
+            EventPublisher = new RecordingEventPublisher(),
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        SetAgentId(agent, "workflow-role-agent-sparse-init");
+        await agent.ActivateAsync();
+
+        await agent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
+        {
+            RoleId = "",
+            RoleName = "",
+            ProviderName = " ",
+            Model = " ",
+            SystemPrompt = "",
+            MaxTokens = 0,
+            MaxToolRounds = 0,
+            MaxHistoryMessages = 0,
+            EventModules = " ",
+            EventRoutes = " ",
+        });
+
+        agent.State.RoleId.Should().BeEmpty();
+        agent.State.RoleName.Should().BeEmpty();
+        agent.State.ConfigOverrides.Should().NotBeNull();
+        agent.State.ConfigOverrides.ProviderName.Should().BeEmpty();
+        agent.State.ConfigOverrides.Model.Should().BeEmpty();
+        agent.State.ConfigOverrides.HasTemperature.Should().BeFalse();
+        agent.State.ConfigOverrides.HasMaxTokens.Should().BeFalse();
+        agent.State.ConfigOverrides.HasMaxToolRounds.Should().BeFalse();
+        agent.State.ConfigOverrides.HasMaxHistoryMessages.Should().BeFalse();
+        agent.EffectiveConfig.Temperature.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWorkflowIntentHasSparseFields_ShouldPublishDefaultFailureAndNoMetadataRequest()
+    {
+        var eventStore = new InMemoryEventStore();
+        var llm = new EmptyMessageThrowingWorkflowIntentLlmProvider();
+        var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+            eventStore,
+            llm,
+            "workflow-role-agent-sparse-intent");
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent());
+
+        llm.Requests.Should().ContainSingle();
+        var request = llm.Requests[0];
+        request.Messages.Last().Content.Should().Be("[content]");
+        request.LlmControl.Should().NotBeNull();
+        request.LlmControl!.ModelOverride.Should().BeNullOrEmpty();
+        request.LlmControl.UserMemoryPrompt.Should().BeNullOrEmpty();
+        request.LlmControl.MaxToolRoundsOverride.Should().BeNull();
+        request.Metadata.Should().NotBeNull();
+        request.Metadata.Should().BeEmpty();
+        publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationStartedEvent>()
+            .Should()
+            .ContainSingle(x => x.RunId == "" && x.StepId == "" && x.SessionId == "");
+        publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationCompletedEvent>()
+            .Should()
+            .ContainSingle(x =>
+                !x.Success &&
+                x.RunId == "" &&
+                x.StepId == "" &&
+                x.SessionId == "" &&
+                x.Error == "LLM request failed.");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWorkflowIntentStreamsContentPartsAndAnonymousTools_ShouldPersistOutputParts()
+    {
+        var eventStore = new InMemoryEventStore();
+        var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+            eventStore,
+            new ContentPartAndAnonymousToolWorkflowIntentLlmProvider(),
+            "workflow-role-agent-parts");
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-parts",
+            StepId = "step-parts",
+            SessionId = "session-parts",
+            Prompt = "describe",
+        });
+
+        var completion = (await eventStore.GetEventsAsync(agent.Id))
+            .Where(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completion.Content.Should().BeEmpty();
+        completion.ContentEmitted.Should().BeFalse();
+        completion.OutputParts.Should().ContainSingle(x => x.Kind == ChatContentPartKind.Text && x.Text == "part-only");
+        completion.ToolCalls.Should().HaveCount(2);
+        completion.ToolCalls.Should().ContainSingle(x => x.ArgumentsJson == "{}");
+        completion.ToolCalls.Should().ContainSingle(x => x.ArgumentsJson == "[]");
+    }
+
+    [Fact]
+    public void WorkflowRoleGAgent_ResolveWorkflowRequestInputParts_ShouldCombinePromptWithProtoParts()
+    {
+        var method = typeof(WorkflowRoleGAgent).GetMethod(
+            "ResolveWorkflowRequestInputParts",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        var withoutPrompt = new ChatRequestEvent();
+        withoutPrompt.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Text,
+            Text = "part-only",
+        });
+        var partsWithoutPrompt = (IReadOnlyList<ContentPart>)method!.Invoke(null, [withoutPrompt])!;
+        partsWithoutPrompt.Should().ContainSingle();
+        partsWithoutPrompt[0].Text.Should().Be("part-only");
+
+        var withPrompt = new ChatRequestEvent { Prompt = "prompt" };
+        withPrompt.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Text,
+            Text = "part",
+        });
+        var partsWithPrompt = (IReadOnlyList<ContentPart>)method.Invoke(null, [withPrompt])!;
+        partsWithPrompt.Should().HaveCount(2);
+        partsWithPrompt[0].Text.Should().Be("prompt");
+        partsWithPrompt[1].Text.Should().Be("part");
+    }
+
+    [Fact]
+    public void WorkflowRoleGAgent_ToolCallAccumulator_ShouldPromoteAndReuseStreamingToolDeltas()
+    {
+        var (accumulator, track, build) = CreateWorkflowToolCallAccumulator();
+
+        track.Invoke(accumulator, [new ToolCall { Id = "", Name = "lookup", ArgumentsJson = "{" }]);
+        track.Invoke(accumulator, [new ToolCall { Id = "", Name = "", ArgumentsJson = "\"q\"" }]);
+        track.Invoke(accumulator, [new ToolCall { Id = "known-1", Name = "", ArgumentsJson = "}" }]);
+        track.Invoke(accumulator, [new ToolCall { Id = "", Name = "", ArgumentsJson = "!" }]);
+
+        var toolCalls = (IReadOnlyList<ToolCall>)build.Invoke(accumulator, [])!;
+        toolCalls.Should().ContainSingle();
+        toolCalls[0].Id.Should().Be("known-1");
+        toolCalls[0].Name.Should().Be("lookup");
+        toolCalls[0].ArgumentsJson.Should().Be("{\"q\"}!");
+    }
+
+    [Fact]
+    public void WorkflowRoleGAgent_ToolCallAccumulator_ShouldReplaceNonFirstAnonymousOrderKey()
+    {
+        var (accumulator, track, build) = CreateWorkflowToolCallAccumulator();
+        var type = accumulator.GetType();
+
+        track.Invoke(accumulator, [new ToolCall { Id = "first", Name = "first_tool", ArgumentsJson = "{}" }]);
+        type.GetField("_lastKnownKey", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(accumulator, null);
+
+        track.Invoke(accumulator, [new ToolCall { Id = "", Name = "second_tool", ArgumentsJson = "[" }]);
+        track.Invoke(accumulator, [new ToolCall { Id = "second", Name = "", ArgumentsJson = "]" }]);
+
+        var toolCalls = (IReadOnlyList<ToolCall>)build.Invoke(accumulator, [])!;
+        toolCalls.Should().HaveCount(2);
+        toolCalls[0].Id.Should().Be("first");
+        toolCalls[1].Id.Should().Be("second");
+        toolCalls[1].Name.Should().Be("second_tool");
+        toolCalls[1].ArgumentsJson.Should().Be("[]");
+    }
+
+    [Fact]
+    public void WorkflowRoleGAgent_ToolCallAccumulator_ShouldRecoverWhenActiveAnonymousKeyIsStale()
+    {
+        var (accumulator, track, build) = CreateWorkflowToolCallAccumulator();
+        var type = accumulator.GetType();
+
+        type.GetField("_activeAnonymousKey", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(accumulator, "anon:missing");
+        track.Invoke(accumulator, [new ToolCall { Id = "known", Name = "", ArgumentsJson = "" }]);
+
+        var toolCalls = (IReadOnlyList<ToolCall>)build.Invoke(accumulator, [])!;
+        toolCalls.Should().ContainSingle();
+        toolCalls[0].Id.Should().Be("known");
+        toolCalls[0].Name.Should().BeEmpty();
+        toolCalls[0].ArgumentsJson.Should().BeEmpty();
+    }
+
     private static WorkflowGAgent CreateDefinitionAgent(IEventStore? eventStore = null)
     {
         eventStore ??= new InMemoryEventStore();
@@ -1910,6 +2105,21 @@ public class WorkflowGAgentCoverageTests
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
+    private static (object Accumulator, MethodInfo Track, MethodInfo Build) CreateWorkflowToolCallAccumulator()
+    {
+        var type = typeof(WorkflowRoleGAgent).GetNestedType(
+            "WorkflowToolCallAccumulator",
+            BindingFlags.NonPublic);
+        type.Should().NotBeNull();
+        var accumulator = Activator.CreateInstance(type!);
+        accumulator.Should().NotBeNull();
+        var track = type!.GetMethod("TrackDelta", BindingFlags.Public | BindingFlags.Instance);
+        var build = type.GetMethod("BuildToolCalls", BindingFlags.Public | BindingFlags.Instance);
+        track.Should().NotBeNull();
+        build.Should().NotBeNull();
+        return (accumulator!, track!, build!);
+    }
+
     private static string BuildValidWorkflowYaml(
         string roleId,
         string roleName,
@@ -2072,6 +2282,24 @@ public class WorkflowGAgentCoverageTests
         }
     }
 
+    private sealed class EmptyMessageThrowingWorkflowIntentLlmProvider : WorkflowIntentLlmProviderBase
+    {
+        public List<LLMRequest> Requests { get; } = [];
+
+        public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            await Task.CompletedTask;
+            var emit = false;
+            if (emit)
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+            throw new InvalidOperationException(" ");
+        }
+    }
+
     private sealed class CancellationWorkflowIntentLlmProvider : WorkflowIntentLlmProviderBase
     {
         public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -2125,6 +2353,59 @@ public class WorkflowGAgentCoverageTests
                 },
             };
             yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ContentPartAndAnonymousToolWorkflowIntentLlmProvider : WorkflowIntentLlmProviderBase
+    {
+        private int _calls;
+
+        public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            if (Interlocked.Increment(ref _calls) > 1)
+            {
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContentPart = ContentPart.TextPart("part-only"),
+            };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "",
+                    Name = "",
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "known-1",
+                    Name = "search",
+                    ArgumentsJson = "",
+                },
+            };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "",
+                    Name = "",
+                    ArgumentsJson = "[]",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
             await Task.CompletedTask;
         }
     }

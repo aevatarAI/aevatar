@@ -18,6 +18,13 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class WorkflowRuntimeModuleBranchTests
 {
     [Fact]
+    public void LlmRuntimeModules_CanHandle_ShouldReturnFalseForEmptyPayload()
+    {
+        new EvaluateModule().CanHandle(new EventEnvelope()).Should().BeFalse();
+        new ReflectModule().CanHandle(new EventEnvelope()).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task DelayModule_ShouldValidateIds_AndCompleteImmediatelyForZeroDuration()
     {
         var module = new DelayModule();
@@ -226,6 +233,220 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task EvaluateModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "evaluate",
+                RunId = "run-evaluate-invalid",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.StepId.Should().BeEmpty();
+        failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldIgnoreUnsupportedAndUncorrelatedCompletionBranches()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(new EventEnvelope(), ctx, CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "transform-step",
+                StepType = "transform",
+                RunId = "run-evaluate-ignore",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = "",
+                Success = true,
+                Content = "5",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = "missing-session",
+                Success = true,
+                Content = "5",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        ctx.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldPublishDefaultLlmFailure_WhenCompletionFailsWithoutError()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-failure",
+                StepType = "evaluate",
+                RunId = "run-evaluate-failure",
+                Input = "draft",
+                TargetRole = "judge",
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = false,
+                Error = " ",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.StepId.Should().Be("evaluate-failure");
+        failure.RunId.Should().Be("run-evaluate-failure");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Be("evaluate LLM call failed.");
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldPublishDispatchFailure_WhenRoleSendFails()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            SendToException = new InvalidOperationException("role inbox unavailable"),
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-dispatch-failure",
+                StepType = "evaluate",
+                RunId = "run-evaluate-dispatch-failure",
+                Input = "draft",
+                TargetRole = "judge",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.StepId.Should().Be("evaluate-dispatch-failure");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("evaluate dispatch failed");
+        failure.Error.Should().Contain("role inbox unavailable");
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldTrimChatAnnotationsAndUseFallbackThreshold()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-annotations",
+                StepType = "evaluate",
+                RunId = " ",
+                Parameters =
+                {
+                    ["threshold"] = "not-a-number",
+                    ["on_below"] = "revise",
+                    [" tenant "] = " alpha ",
+                    ["timeout_ms"] = "100",
+                    ["blank"] = " ",
+                    [" "] = "ignored",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        intent.RunId.Should().Be("default");
+        intent.StepId.Should().Be("evaluate-annotations");
+        intent.SessionId.Should().Be("agent-1:default:evaluate-annotations:a1");
+        intent.Prompt.Should().Contain("Content to evaluate:");
+        intent.Annotations.Should().ContainKey("tenant").WhoseValue.Should().Be("alpha");
+        intent.Annotations.Should().NotContainKey("timeout_ms");
+        intent.Annotations.Should().NotContainKey("blank");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = true,
+                Content = "score: 2 / 5",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().BeEmpty();
+        completion.BranchKey.Should().Be("revise");
+        completion.Annotations["evaluate.score"].Should().Be("2.0");
+        completion.Annotations["evaluate.passed"].Should().Be(bool.FalseString);
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldPublishZeroScorePass_WhenContentHasNoNumberAndThresholdIsZero()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-zero",
+                StepType = "evaluate",
+                RunId = "run-evaluate-zero",
+                Input = "draft",
+                Parameters = { ["threshold"] = "0" },
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = true,
+                Content = "no numeric verdict",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        completion.Success.Should().BeTrue();
+        completion.BranchKey.Should().BeEmpty();
+        completion.Annotations["evaluate.score"].Should().Be("0.0");
+        completion.Annotations["evaluate.passed"].Should().Be(bool.TrueString);
+    }
+
+    [Fact]
     public async Task ReflectModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
     {
         var module = new ReflectModule();
@@ -246,6 +467,236 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.Success.Should().BeFalse();
         failure.StepId.Should().BeEmpty();
         failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldIgnoreUnsupportedAndUncorrelatedCompletionBranches()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(new EventEnvelope(), ctx, CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "transform-step",
+                StepType = "transform",
+                RunId = "run-reflect-ignore",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = "",
+                Success = true,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = "missing-session",
+                Success = true,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        ctx.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishDefaultLlmFailure_WhenCompletionFailsWithoutError()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-failure",
+                StepType = "reflect",
+                RunId = "run-reflect-failure",
+                Input = "draft",
+                TargetRole = "reviewer",
+            }),
+            ctx,
+            CancellationToken.None);
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = false,
+                Error = " ",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.StepId.Should().Be("reflect-failure");
+        failure.RunId.Should().Be("run-reflect-failure");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Be("reflect LLM call failed.");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishDispatchFailure_WhenRoleSendFails()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            SendToException = new InvalidOperationException("role inbox unavailable"),
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-dispatch-failure",
+                StepType = "reflect",
+                RunId = "run-reflect-dispatch-failure",
+                Input = "draft",
+                TargetRole = "reviewer",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.StepId.Should().Be("reflect-dispatch-failure");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("reflect dispatch failed");
+        failure.Error.Should().Contain("role inbox unavailable");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldClampRoundsTrimParametersAndUseDefaultRunSessionId()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-trim",
+                StepType = "reflect",
+                RunId = " ",
+                Parameters =
+                {
+                    ["max_rounds"] = "99",
+                    [" criteria "] = " correctness ",
+                    [" trace "] = " abc ",
+                    ["empty"] = " ",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        intent.RunId.Should().Be("default");
+        intent.StepId.Should().Be("reflect-trim");
+        intent.SessionId.Should().Be("agent-1:default:reflect-trim_r0_critique:a1");
+        intent.Annotations.Should().ContainKey("trace").WhoseValue.Should().Be("abc");
+        intent.Annotations.Should().NotContainKey("empty");
+        intent.Prompt.Should().Contain("correctness");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = intent.SessionId,
+                Success = true,
+                Content = "still needs work",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var improve = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
+        improve.SessionId.Should().Be("agent-1:default:reflect-trim_r1_improve:a1");
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishImproveDispatchFailure()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-improve-fails",
+                StepType = "reflect",
+                RunId = "run-reflect-improve-fails",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+        var critique = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        ctx.SendToException = new InvalidOperationException("improve inbox unavailable");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = critique.SessionId,
+                Success = true,
+                Content = "needs work",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("reflect improve dispatch failed");
+        failure.Error.Should().Contain("improve inbox unavailable");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishCritiqueDispatchFailureAfterImproveCompletion()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-critique-fails",
+                StepType = "reflect",
+                RunId = "run-reflect-critique-fails",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+        var critique = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = critique.SessionId,
+                Success = true,
+                Content = "needs work",
+            }),
+            ctx,
+            CancellationToken.None);
+        var improve = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
+        ctx.SendToException = new InvalidOperationException("critique inbox unavailable");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = improve.SessionId,
+                Success = true,
+                Content = "improved draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("reflect critique dispatch failed");
+        failure.Error.Should().Contain("critique inbox unavailable");
     }
 
     [Fact]
@@ -421,6 +872,10 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
+        public Exception? SendToException { get; set; }
+
         public List<RecordedCallback> Scheduled { get; } = [];
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
@@ -471,7 +926,16 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage => Task.CompletedTask;
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = options;
+            if (SendToException != null)
+                throw SendToException;
+
+            Sent.Add((targetActorId, evt));
+            return Task.CompletedTask;
+        }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
