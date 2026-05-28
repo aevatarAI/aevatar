@@ -69,6 +69,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChatRunActorPort, ChatRunActorAdapter>();
         services.TryAddSingleton<ChatRunToolCompletionCoordinator>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
+        services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();

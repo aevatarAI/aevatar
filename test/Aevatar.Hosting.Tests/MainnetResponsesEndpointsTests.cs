@@ -332,11 +332,7 @@ public sealed class MainnetResponsesEndpointsTests
     public async Task AevatarSubstituteTools_ShouldPersistTodoAndTaskThroughAgentToolStatePort()
     {
         var commandPort = new RecordingResponsesAgentToolStatePort();
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -384,11 +380,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebFetch",
             "https://example.com/docs",
             """{"url":"https://example.com/docs","content":"cached"}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -428,11 +420,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebSearch",
             "aevatar docs\n3",
             """{"results":[{"title":"cached docs"}]}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -2897,6 +2885,17 @@ public sealed class MainnetResponsesEndpointsTests
                 ["scope_id"] = callerScope.ScopeId,
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
             });
+    }
+
+    private static ResponsesAevatarToolProvider CreateResponsesAevatarToolProvider(
+        RecordingResponsesAgentToolStatePort port)
+    {
+        var service = new ResponsesWebSubstituteToolExecutionService(
+            port,
+            port,
+            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
+            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        return new ResponsesAevatarToolProvider(port, service);
     }
 
     private sealed class StubAgentTool : IAgentTool
