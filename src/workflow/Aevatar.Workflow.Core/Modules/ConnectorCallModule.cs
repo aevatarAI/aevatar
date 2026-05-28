@@ -187,6 +187,11 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             return;
         }
 
+        // Refactor (iter158/cluster-157-004-timeout-cts):
+        //   Old: connector timeout used inline CTS/call-stack cancellation, so late
+        //        connector completions raced with in-memory continuation state.
+        //   New: the actor owns a typed durable timeout event keyed by operation id;
+        //        timeout and late completion both reconcile through persisted module state.
         var completion = new StepCompletedEvent
         {
             StepId = pending.StepId,

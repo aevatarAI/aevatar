@@ -113,7 +113,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         try
         {
-            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
+            await PersistProbeTerminalEventsAsync(outcome, active.OperationId);
         }
         catch (EventStoreOptimisticConcurrencyException ex)
         {
@@ -139,7 +139,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         try
         {
-            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = completed.Outcome });
+            await PersistProbeTerminalEventsAsync(completed.Outcome, active.OperationId);
         }
         catch (EventStoreOptimisticConcurrencyException ex)
         {
@@ -149,6 +149,19 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         }
 
         await EnsureNextTickAsync(initial: false);
+    }
+
+    private Task PersistProbeTerminalEventsAsync(HealthProbeOutcome outcome, string operationId)
+    {
+        // Refactor (iter158/cluster-157-004-timeout-cts):
+        // Old: HealthProbeObserved also cleared ActiveExecution, leaving the typed
+        //      HealthProbeExecutionCleared domain event with no producer.
+        // New: probe completion persists observed outcome and explicit clear event
+        //      together, so execution lifecycle remains actor-owned and observable.
+        return PersistDomainEventsAsync([
+            new HealthProbeObserved { Outcome = outcome },
+            new HealthProbeExecutionCleared { OperationId = operationId },
+        ]);
     }
 
     // ─── Probe execution ───
@@ -357,7 +370,6 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             next.RecentOutcomes.Add(outcome.Clone());
             TrimRecentOutcomes(next, outcome.ObservedAt);
         }
-        next.ActiveExecution = null;
 
         if (outcome?.Status == HealthOutcomeStatus.Ok)
         {
