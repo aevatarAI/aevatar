@@ -1222,6 +1222,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_previous/cancel");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -1235,6 +1237,14 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
         provider.LastRequest.Should().BeNull();
     }
 
