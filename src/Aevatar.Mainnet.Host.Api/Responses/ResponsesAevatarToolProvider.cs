@@ -88,16 +88,34 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
 
         protected static ResponsesWebSubstituteToolExecutionRequest BuildWebRequest(
             string toolName,
-            string argumentsJson)
+            ResponsesWebFetchToolInput input)
         {
             var scope = ResolveScope();
-            return new ResponsesWebSubstituteToolExecutionRequest(
-                toolName,
-                scope.ScopeId,
-                scope.OwnerSubject,
-                scope.ResponseId,
-                argumentsJson,
-                AgentToolRequestContext.NyxIdAccessToken ?? string.Empty);
+            return new ResponsesWebSubstituteToolExecutionRequest
+            {
+                ToolName = toolName,
+                ScopeId = scope.ScopeId,
+                OwnerSubject = scope.OwnerSubject,
+                ResponseId = scope.ResponseId,
+                NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty,
+                Fetch = input,
+            };
+        }
+
+        protected static ResponsesWebSubstituteToolExecutionRequest BuildWebRequest(
+            string toolName,
+            ResponsesWebSearchToolInput input)
+        {
+            var scope = ResolveScope();
+            return new ResponsesWebSubstituteToolExecutionRequest
+            {
+                ToolName = toolName,
+                ScopeId = scope.ScopeId,
+                OwnerSubject = scope.OwnerSubject,
+                ResponseId = scope.ResponseId,
+                NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty,
+                Search = input,
+            };
         }
     }
 
@@ -242,9 +260,10 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
-            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, argumentsJson), ct)
+            var input = ResponsesWebSubstituteToolJson.ParseFetchInput(argumentsJson);
+            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, input), ct)
                 .ConfigureAwait(false);
-            return result.ResultJson;
+            return ResponsesWebSubstituteToolJson.ToBoundaryJson(result);
         }
     }
 
@@ -281,9 +300,10 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
-            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, argumentsJson), ct)
+            var input = ResponsesWebSubstituteToolJson.ParseSearchInput(argumentsJson);
+            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, input), ct)
                 .ConfigureAwait(false);
-            return result.ResultJson;
+            return ResponsesWebSubstituteToolJson.ToBoundaryJson(result);
         }
     }
 }

@@ -2937,7 +2937,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                resultJson,
+                ResponsesJsonValues.ParseBoundaryPayload(resultJson),
                 DateTimeOffset.UtcNow,
                 null,
                 0);
@@ -2995,7 +2995,7 @@ public sealed class MainnetResponsesEndpointsTests
                 trace.TraceId,
                 trace.CacheKey,
                 trace.CacheHit,
-                trace.ResultJson));
+                trace.Result.Clone()));
         }
 
         public Task<ResponsesAgentToolStateSnapshot?> GetAsync(

@@ -4,6 +4,8 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Web;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.AI.Tests;
 
@@ -48,7 +50,8 @@ public sealed class ToolProviderHttpClientOwnershipTests
         client.Dispose();
         var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
 
-        result.Should().Be("""{"items":[]}""");
+        result.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
+        result.StructValue.Fields.Should().ContainKey("items");
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
         request.Headers.Authorization!.Parameter.Should().Be("token-1");

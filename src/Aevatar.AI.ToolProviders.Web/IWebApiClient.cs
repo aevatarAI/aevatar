@@ -1,5 +1,7 @@
 namespace Aevatar.AI.ToolProviders.Web;
 
+using Google.Protobuf.WellKnownTypes;
+
 /// <summary>
 /// Abstraction over <see cref="WebApiClient"/> so consumers depend on the
 /// contract instead of the concrete HTTP client. Lets host code follow the
@@ -9,7 +11,7 @@ namespace Aevatar.AI.ToolProviders.Web;
 public interface IWebApiClient
 {
     /// <summary>Perform a web search via NyxID proxy or a direct API.</summary>
-    Task<string> SearchAsync(string token, string query, int maxResults, CancellationToken ct);
+    Task<Value> SearchAsync(string token, string query, int maxResults, CancellationToken ct);
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
     /// <param name="token">
