@@ -91,6 +91,16 @@ if ! head -5 "$PROMPT" | grep -q '^# Shared hard rules$'; then
   } > "$RENDERED_PROMPT"
 fi
 
+# Refactor (#1159): Old pattern: rendered prompts could contain unresolved envsubst placeholders
+# (cluster '', audit-iter-.md, dollar-brace-VAR, double-brace-name), leaking blank context to codex.
+# New principle: reject at render time so codex never runs with blank cluster context.
+UNRESOLVED_PROMPT_PATTERN='cluster[[:space:]]*('"''"'|``)|audit-iter-(MISSING-NUM)?\.md|\$\{[A-Z_]+\}|\{\{[A-Za-z_][A-Za-z0-9_]*\}\}'
+if grep -Eq "$UNRESOLVED_PROMPT_PATTERN" "$RENDERED_PROMPT"; then
+  echo "rendered prompt contains unresolved or blank placeholders: $RENDERED_PROMPT" >&2
+  grep -En "$UNRESOLVED_PROMPT_PATTERN" "$RENDERED_PROMPT" >&2 || true
+  exit 2
+fi
+
 # Project-wide minimum codex timeout: 3600s (1 hour). See CLAUDE.md
 # "Codex CLI 调用规范". Shorter timeouts cause codex to truncate
 # deep-scan / multi-file refactor work and inflate the controller's

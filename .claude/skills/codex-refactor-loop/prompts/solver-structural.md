@@ -31,6 +31,7 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
    - Cross-cluster: requires touching another in-flight cluster's PR
    - Performance regression not measurable locally (needs prod benchmark)
    - Mark each with `ESCALATE_REASON:<category>:<short>`
+5. **Answer split-first explicitly**: Can this be split into a no-new-abstraction first slice plus a later design slice? If yes, output both slices explicitly. Structural solver MUST NOT bundle when an independently valid narrow slice exists.
 
 ## Output
 
@@ -57,6 +58,8 @@ verdict: propose | abstain | escalate
 - Tests to add: <list with what behavior each asserts>
 - proto changes (if any): <field name + number + .proto file>
 - Runtime cost: <latency estimate, allocation estimate>
+- First slice: <no-new-abstraction narrow plan | none>
+- Later design slice: <later structural/design decision | none>
 
 ## Risks
 - <what this framing trades off vs the minimal-change framing>
@@ -73,9 +76,9 @@ verdict: propose | abstain | escalate
 ```
 
 End with EXACTLY ONE marker line:
-- `SOLVER_DONE:structural:propose:<summary>`
-- `SOLVER_DONE:structural:abstain:<reason>`
-- `SOLVER_DONE:structural:escalate:<reason>`
+- `SOLVER_DONE:structural:propose:<summary>[:first-slice=<narrow plan>]`
+- `SOLVER_DONE:structural:abstain:<reason>[:first-slice=<narrow plan>]`
+- `SOLVER_DONE:structural:escalate:<reason>[:first-slice=<narrow plan>]`
 - `SOLVER_DONE:structural:false-positive:<reason>`
 
 ## Hard rules
@@ -84,6 +87,7 @@ End with EXACTLY ONE marker line:
 - You do NOT commit / push / open PRs.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
+- If a no-new-abstraction first slice is independently valid, you MUST split it from the later design slice instead of bundling both into one plan.
 - No filler. Numbers > adjectives.
 
 ## Shared rules
