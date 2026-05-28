@@ -264,6 +264,7 @@ message PendingToolApprovalState {
   reserved "remote_status_check_callback_id";
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
+  AgentToolExecutionContextPayload tool_context = 14;
 }
 
 // Domain event: approval pending persisted.

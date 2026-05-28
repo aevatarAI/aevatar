@@ -271,9 +271,22 @@ public sealed class AIAbstractionsProtoCoverageTests
                 RemoteApprovalId = "remote-1",
                 RemoteStatusCheckAttempt = 2,
                 RemoteApprovalExpiresAtUnixMs = 123456,
+                ToolContext = new AgentToolExecutionContext(
+                    new AgentToolRequestIdentity("req-1", "call-1"),
+                    AgentToolCredentials.Empty,
+                    new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a"),
+                    new AgentToolSenderBindingContext("binding-a"),
+                    new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
+                    new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["trace-id"] = "trace-from-context",
+                    }).ToPayload(),
                 Metadata =
                 {
                     ["trace-id"] = "trace-1",
+                    ["open-annotation"] = "annotation-1",
                 },
             },
             VoicePresence =
@@ -340,6 +353,19 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
+        state.PendingApproval.Metadata.Should().ContainKey("open-annotation").WhoseValue.Should().Be("annotation-1");
+        state.PendingApproval.ToolContext.Should().NotBeNull();
+        var pendingContext = AgentToolExecutionContextMapper.FromPayload(state.PendingApproval.ToolContext);
+        pendingContext.Request.RequestId.Should().Be("req-1");
+        pendingContext.Request.CallId.Should().Be("call-1");
+        pendingContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        pendingContext.Caller.ScopeId.Should().Be("scope-a");
+        pendingContext.Channel.SenderId.Should().Be("sender-a");
+        pendingContext.SenderBinding.BindingId.Should().Be("binding-a");
+        pendingContext.Routing.ModelOverride.Should().Be("model-a");
+        pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
+        pendingContext.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
     }
