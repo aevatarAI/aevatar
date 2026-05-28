@@ -547,12 +547,18 @@ const DeploymentsScopeCard: React.FC<{
     <div
       style={{
         alignItems: "center",
-        display: "grid",
+        display: "flex",
+        flexWrap: "wrap",
         gap: 12,
-        gridTemplateColumns: "minmax(0, 1fr) auto",
+        justifyContent: "space-between",
       }}
     >
-      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+      <Space
+        data-testid="deployments-scope-card-heading"
+        orientation="vertical"
+        size={2}
+        style={{ flex: "1 1 220px", minWidth: 0 }}
+      >
         <span
           style={{
             color: "var(--ant-color-primary)",
@@ -570,6 +576,7 @@ const DeploymentsScopeCard: React.FC<{
             fontSize: 16,
             fontWeight: 700,
             lineHeight: 1.2,
+            overflowWrap: "anywhere",
           }}
         >
           团队 / 应用 / 命名空间
@@ -584,9 +591,11 @@ const DeploymentsScopeCard: React.FC<{
             borderRadius: 999,
             color: "var(--ant-color-primary)",
             display: "inline-flex",
+            flex: "1 1 240px",
             fontSize: 12,
             fontWeight: 600,
             minHeight: 30,
+            minWidth: 0,
             maxWidth: "100%",
             padding: "0 12px",
             whiteSpace: "nowrap",
@@ -697,9 +706,10 @@ const DeploymentsScopeCard: React.FC<{
             letterSpacing: "0.04em",
           }}
         >
-          结果窗口
+          返回条数
         </span>
         <InputNumber
+          aria-label="返回条数"
           controls={false}
           min={1}
           max={500}

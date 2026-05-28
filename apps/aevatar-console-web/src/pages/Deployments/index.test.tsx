@@ -307,9 +307,30 @@ describe("DeploymentsPage", () => {
         "Deployments 是 Platform 的发布工作台，聚焦当前 serving、rollout 进度和流量分配。",
       ),
     ).toBeInTheDocument();
+    expect(await screen.findByText("返回条数")).toBeInTheDocument();
+    expect(screen.queryByText("结果窗口")).toBeNull();
+    expect(screen.getByRole("spinbutton", { name: "返回条数" })).toHaveValue("200");
     expect(await screen.findByText("发布服务列表")).toBeInTheDocument();
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
     expect(screen.queryByText("发布摘要")).toBeNull();
+  });
+
+  it("keeps the scope card header readable with long loaded scope labels", async () => {
+    const longScopeIdForLayoutTest =
+      "scope-with-a-very-long-readable-identifier-for-layout-tests";
+
+    renderDeploymentsPage(
+      `/deployments?tenantId=${longScopeIdForLayoutTest}&appId=default&namespace=default&take=200`,
+    );
+
+    const heading = await screen.findByTestId("deployments-scope-card-heading");
+    expect(heading).toHaveStyle({
+      flex: "1 1 220px",
+      minWidth: "0",
+    });
+    expect(screen.getByText("团队 / 应用 / 命名空间")).toHaveStyle({
+      overflowWrap: "anywhere",
+    });
   });
 
   it("warns when scope edits have not been loaded yet", async () => {
