@@ -254,14 +254,6 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-            string scopeId,
-            string ownerSubject,
-            string sourceResponseId,
-            string argumentsJson,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
         public Task<ResponsesWebTraceResult> RecordWebTraceAsync(
             string scopeId,
             string ownerSubject,

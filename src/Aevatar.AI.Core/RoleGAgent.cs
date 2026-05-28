@@ -127,8 +127,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
                 RoleName, pending.ToolName, pending.RequestId);
 
-            // Restore typed context (NyxID access token etc.) so tool execution can
-            // read AgentToolRequestContext typed accessors.
+            // Restore scrubbed typed context so tool execution can read stable
+            // AgentToolRequestContext accessors without durable request bearer.
             try
             {
                 using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
@@ -167,7 +167,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         SessionId = Guid.NewGuid().ToString("N"),
                         ScopeId = pending.SessionId,
                     };
-                    foreach (var kv in pending.Metadata)
+                    foreach (var kv in ScrubPendingApprovalMetadata(pending.Metadata))
                         continuationRequest.Metadata[kv.Key] = kv.Value;
 
                     await SendToAsync(Id, continuationRequest);
@@ -238,7 +238,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
                     pending.IsDestructive,
-                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
+                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
 
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
@@ -301,7 +301,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
                     pending.RemoteApprovalId,
-                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
+                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -424,8 +424,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ArgumentsJson = args,
                     IsDestructive = true,
                 };
-                // Preserve metadata (NyxID access token etc.) for continuation
-                foreach (var kv in request.Metadata)
+                // Refactor (iter159/cluster-613-first):
+                //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+                //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
+                foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
                     pending.Metadata[kv.Key] = kv.Value;
 
                 return pending;
@@ -535,6 +537,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                $"{toolResult ?? "(no output)"}\n\n" +
                "Please continue with the original task based on this result.";
     }
+
+    private static IReadOnlyDictionary<string, string> ScrubPendingApprovalMetadata(
+        IReadOnlyDictionary<string, string>? metadata) =>
+        AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
 
     // ─── Pending approval state transitions ───
 

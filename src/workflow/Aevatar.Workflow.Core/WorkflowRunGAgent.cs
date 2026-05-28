@@ -22,11 +22,9 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
-// Refactor (iter115/cluster-3):
-//   Old pattern: WorkflowRunGAgent kept durable control/security facts in
-//                process-local runtime context.
-//   New principle: durable control/security facts live in typed WorkflowRunState;
-//                  runtime context carries only same-turn passthrough metadata.
+// Refactor (iter159/cluster-613-first):
+//   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+//   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
 // Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash

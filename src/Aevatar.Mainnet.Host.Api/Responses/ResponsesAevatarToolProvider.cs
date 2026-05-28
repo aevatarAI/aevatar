@@ -27,8 +27,9 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
         ValueTask.FromResult<IReadOnlyList<IAgentTool>>(
         [
             new TodoWriteTool(_commandPort),
-            new TaskTool("Task", _commandPort),
-            new TaskTool("task", _commandPort),
+            // Refactor (iter159/cluster-623-first):
+            //   Old pattern: fake Task substitute synthesized child_actor_id, returned accepted, recorded parent trace only
+            //   New principle: removed active substitute path; TodoWrite remains the only real substitute
             new WebFetchTool("WebFetch", _webExecution),
             new WebFetchTool("web_fetch", _webExecution),
             new WebSearchTool("WebSearch", _webExecution),
@@ -178,46 +179,6 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
                     status = todo.Status,
                 }).ToArray(),
             });
-        }
-    }
-
-    private sealed class TaskTool : ResponsesStateTool
-    {
-        private readonly string _name;
-        private readonly IResponsesAgentToolStateCommandPort _commandPort;
-
-        public TaskTool(string name, IResponsesAgentToolStateCommandPort commandPort)
-        {
-            _name = name;
-            _commandPort = commandPort;
-        }
-
-        public override string Name => _name;
-
-        public override string Description =>
-            "Record an Aevatar sub-agent task dispatch in agent-scoped topology state.";
-
-        public override string ParametersSchema => """
-            {
-              "type": "object",
-              "properties": {
-                "description": { "type": "string" },
-                "prompt": { "type": "string" },
-                "subagent_type": { "type": "string" }
-              }
-            }
-            """;
-
-        public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            var scope = ResolveScope();
-            var result = await _commandPort.RecordTaskAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                scope.ResponseId,
-                argumentsJson,
-                ct);
-            return result.ResultJson;
         }
     }
 
