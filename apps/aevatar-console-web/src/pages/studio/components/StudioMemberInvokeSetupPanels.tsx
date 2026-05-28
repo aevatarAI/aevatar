@@ -115,7 +115,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   payloadTypeUrl,
   prompt,
 }) => {
-  const isRunning = invokeStatus === 'running';
+  const isRunning =
+    invokeStatus === 'running' || invokeStatus === 'accepted';
   const promptPlaceholder =
     defaultPrompt || '输入 Prompt，发起一次独立 Invoke。';
   const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';

@@ -213,11 +213,13 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                     label={
                       entry.status === 'success'
                         ? 'Succeeded'
-                        : entry.status === 'running'
-                          ? 'Running'
-                          : entry.status === 'cancelled'
-                            ? 'Cancelled'
-                            : 'Failed'
+                        : entry.status === 'accepted'
+                          ? 'Accepted'
+                          : entry.status === 'running'
+                            ? 'Running'
+                            : entry.status === 'cancelled'
+                              ? 'Cancelled'
+                              : 'Failed'
                     }
                     status={entry.status}
                   />

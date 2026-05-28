@@ -70,6 +70,8 @@ function getStatusLabel(status: InvokeResultState['status']): string {
   switch (status) {
     case 'running':
       return 'Running';
+    case 'accepted':
+      return 'Accepted';
     case 'success':
       return 'Succeeded';
     case 'error':
@@ -565,6 +567,11 @@ const StudioMemberCurrentRunPanel: React.FC<
         detail: finishedAtLabel || 'Completed',
         label: 'Run finished',
       });
+    } else if (invokeResult.status === 'accepted') {
+      items.push({
+        detail: 'Command accepted, awaiting completion',
+        label: 'Run accepted',
+      });
     } else if (invokeResult.status === 'error' || invokeResult.status === 'cancelled') {
       items.push({
         detail: errorDescription || 'No extra error text',
@@ -678,7 +685,9 @@ const StudioMemberCurrentRunPanel: React.FC<
         </div>
         <div style={sectionStyle}>
           <span style={sectionLabelStyle}>Output</span>
-          {invokeResult.status === 'running' && !outputText ? (
+          {(invokeResult.status === 'running' ||
+            invokeResult.status === 'accepted') &&
+          !outputText ? (
             <Typography.Text style={helperTextStyle} type="secondary">
               Waiting for output...
             </Typography.Text>

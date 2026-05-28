@@ -98,6 +98,8 @@ export function getInvokeRunStatusLabel(
   switch (status) {
     case 'running':
       return '运行中';
+    case 'accepted':
+      return '已受理';
     case 'success':
       return '成功';
     case 'cancelled':
@@ -115,7 +117,7 @@ export function getInvokeStatusTone(status: InvokeResultState['status']): {
   readonly color: string;
   readonly dot: string;
 } {
-  if (status === 'running') {
+  if (status === 'running' || status === 'accepted') {
     return {
       background: studioInvokeColors.assistantSoft,
       border: studioInvokeColors.borderStrong,

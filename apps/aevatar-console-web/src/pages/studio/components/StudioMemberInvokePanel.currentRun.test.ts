@@ -49,7 +49,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         finalOutput: 'ok',
         runId: 'run-1',
         serviceId: 'script-1',
-        status: 'success',
+        status: 'accepted',
       },
       isChatEndpoint: false,
       payloadBase64: '',
@@ -74,7 +74,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         serviceId: 'script-1',
         serviceLabel: 'Script One',
         startedAtUtc: '2026-04-30T08:00:00.000Z',
-        status: 'success',
+        status: 'running',
       }),
     );
     expect(JSON.parse(model.rawOutput)).toEqual(
@@ -86,7 +86,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         errorCode: 'ERR_NONE',
         runId: 'run-1',
         serviceId: 'script-1',
-        status: 'success',
+        status: 'accepted',
       }),
     );
   });

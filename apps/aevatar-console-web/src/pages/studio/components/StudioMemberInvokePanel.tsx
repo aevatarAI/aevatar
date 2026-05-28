@@ -118,6 +118,8 @@ function getRunStatusLabel(status: InvokeResultState['status']): string {
   switch (status) {
     case 'running':
       return 'Running';
+    case 'accepted':
+      return 'Accepted';
     case 'success':
       return 'Succeeded';
     case 'error':
@@ -1236,7 +1238,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         responseJson: JSON.stringify(response, null, 2),
         runId,
         serviceId: selectedService.serviceId,
-        status: 'success',
+        status: 'accepted',
       };
       setInvokeResult(finalResult);
       setActiveRunCompletedAt(completedAt);
@@ -1255,7 +1257,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         runId,
         serviceId: selectedService.serviceId,
         startedAt,
-        status: 'success',
+        status: 'accepted',
         summary:
           trimPreview(trimmedPrompt, 72) ||
           trimPreview(trimmedPayloadTypeUrl, 72) ||

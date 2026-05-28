@@ -95,7 +95,7 @@ type InvokeResultState = {
   responseJson: string;
   runId: string;
   serviceId: string;
-  status: 'idle' | 'running' | 'success' | 'error';
+  status: 'idle' | 'accepted' | 'running' | 'success' | 'error';
   steps: RuntimeStepInfo[];
   thinking: string;
   toolCalls: RuntimeToolCallInfo[];
@@ -974,7 +974,7 @@ const ScopeInvokePage: React.FC = () => {
         responseJson: JSON.stringify(response, null, 2),
         runId: responseRunId,
         serviceId: selectedService.serviceId,
-        status: 'success',
+        status: 'accepted',
       });
     } catch (error) {
       setInvokeResult({
@@ -1095,7 +1095,8 @@ const ScopeInvokePage: React.FC = () => {
             'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
           title: 'Fix the live team setup',
         }
-      : invokeResult.status === 'success'
+      : invokeResult.status === 'success' ||
+          invokeResult.status === 'accepted'
         ? {
             action: handleOpenRuns,
             actionLabel: 'Continue in Runs',
@@ -1216,7 +1217,8 @@ const ScopeInvokePage: React.FC = () => {
             <Button onClick={() => setContextSurface('service')}>
               Browse services
             </Button>
-            {invokeResult.status === 'success' ? (
+            {invokeResult.status === 'success' ||
+            invokeResult.status === 'accepted' ? (
               <Button onClick={handleOpenRuns} type="primary">
                 Continue in Runs
               </Button>
@@ -1659,7 +1661,8 @@ const ScopeInvokePage: React.FC = () => {
                           type={
                             invokeResult.status === 'error'
                               ? 'error'
-                              : invokeResult.status === 'success'
+                              : invokeResult.status === 'success' ||
+                                  invokeResult.status === 'accepted'
                                 ? 'success'
                                 : 'info'
                           }

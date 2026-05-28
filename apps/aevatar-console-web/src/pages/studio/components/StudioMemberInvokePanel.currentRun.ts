@@ -20,7 +20,7 @@ export type InvokeResultState = {
   readonly responseJson: string;
   readonly runId: string;
   readonly serviceId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error' | 'cancelled';
+  readonly status: 'idle' | 'accepted' | 'running' | 'success' | 'error' | 'cancelled';
   readonly steps: RuntimeStepInfo[];
   readonly thinking: string;
   readonly toolCalls: RuntimeToolCallInfo[];
@@ -59,7 +59,7 @@ export type InvokeHistoryEntry = {
   readonly runId: string;
   readonly serviceId: string;
   readonly startedAt: number;
-  readonly status: 'running' | 'success' | 'error' | 'cancelled';
+  readonly status: 'accepted' | 'running' | 'success' | 'error' | 'cancelled';
   readonly summary: string;
   readonly snapshot: {
     readonly chatMessages: StudioInvokeChatMessage[];
