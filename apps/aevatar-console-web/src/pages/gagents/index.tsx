@@ -1231,7 +1231,7 @@ const GAgentsPage: React.FC = () => {
           if (event.type === AGUIEventType.RUN_ERROR) {
             nextError =
               readEventString(event, 'message') || 'Draft run failed.';
-            nextStatus = 'error';
+            nextStatus = 'failed';
           }
 
           return {

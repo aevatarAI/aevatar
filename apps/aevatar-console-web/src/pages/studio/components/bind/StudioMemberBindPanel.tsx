@@ -1422,7 +1422,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   }
                   type="success"
                 />
-              ) : smokeTestResult.status === 'error' ? (
+              ) : smokeTestResult.status === 'failed' ? (
                 <Alert
                   showIcon
                   message="Smoke test failed"
