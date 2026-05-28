@@ -13,13 +13,12 @@
 
 set -u  # 不用 -e/pipefail — daemon 必须存活,subshell 偶发 non-zero 不应导致整个 daemon 死
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="${CODEX_PROGRESS_REPO_ROOT:-$(cd "$(dirname "$0")/../../../.." && pwd)}"
 cd "$REPO_ROOT"
 
 INTERVAL="${INTERVAL:-600}"
 STATE_DIR=".refactor-loop"
 STATE_FILE="$STATE_DIR/codex-progress-state.json"
-LOG_DIR="$STATE_DIR/logs"
 MARKER_DIR="$STATE_DIR/markers"
 PROMPTS_DIR="$STATE_DIR/prompts"
 
@@ -66,6 +65,18 @@ is_finished() {
 
 is_zombie() {
   [ "$(jq -r '.state // empty' "$1" 2>/dev/null)" = "zombie" ]
+}
+
+has_exit_marker() {
+  tail -5 "$1" 2>/dev/null | grep -q '^EXIT='
+}
+
+is_stale_without_exit() {
+  local log=$1 mtime now age
+  mtime=$(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log")
+  now=$(date +%s)
+  age=$(( now - mtime ))
+  [ "$age" -gt 1800 ] && ! has_exit_marker "$log"
 }
 
 extract_tail() {
@@ -232,9 +243,10 @@ post_or_update() {
   rm -f "$body_file"
 }
 
-# 主 loop
-while true; do
+run_tick() {
   log_msg "tick"
+  # Refactor (#1172): Old: scan LOG_DIR/*.log all files (970 files, 97% wasted CPU).
+  # New: scan markers/*.json, O(in-flight count).
   for marker in "$MARKER_DIR"/*.json; do
     [ -f "$marker" ] || continue
     base=$(jq -r '.base // empty' "$marker" 2>/dev/null)
@@ -246,6 +258,10 @@ while true; do
     fi
     if [ ! -f "$log" ] && [ "$state" != "done" ]; then
       log_msg "skip $base: log not found: $log"
+      continue
+    fi
+    if [ "$state" = "running" ] && is_stale_without_exit "$log"; then
+      log_msg "skip zombie marker $base: stale log without EXIT"
       continue
     fi
     # 跳过 audit log(audit 完成后才能进 phase 2,不挂 issue);可以选 post 到 dashboard
@@ -263,5 +279,13 @@ while true; do
       *) log_msg "skip $base: unknown marker state=$state" ;;
     esac
   done
+}
+
+# 主 loop
+while true; do
+  run_tick
+  if [ "${CODEX_PROGRESS_REPORTER_RUN_ONCE:-0}" = "1" ]; then
+    break
+  fi
   sleep "$INTERVAL"
 done

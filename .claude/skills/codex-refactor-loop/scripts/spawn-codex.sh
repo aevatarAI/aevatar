@@ -134,6 +134,8 @@ fi
 mkdir -p "$MARKER_DIR"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUNNING_TMP="$MARKER_DIR/.$BASE.running.json.$$"
+# Refactor (#1172): Old: reporter inferred active runs by scanning log files.
+# New: spawn writes marker files as the reporter's bounded progress source.
 jq -n \
   --arg base "$BASE" \
   --arg log_path "$LOG" \
