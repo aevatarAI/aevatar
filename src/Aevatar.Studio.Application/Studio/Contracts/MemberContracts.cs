@@ -116,11 +116,15 @@ public sealed record StudioMemberBindingFailureResponse(
     string Message,
     DateTimeOffset FailedAt);
 
+// Refactor (iter159/cluster-594-first):
+//   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+//   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
 public sealed record StudioMemberBindingRunStatusResponse(
     string BindingRunId,
     string ScopeId,
     string MemberId,
     string Status,
+    long StateVersion,
     StudioMemberBindingFailureResponse? Failure = null,
     DateTimeOffset? UpdatedAt = null)
 {

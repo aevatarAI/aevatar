@@ -282,6 +282,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
                         ScopeId: scopeId,
                         MemberId: memberId,
                         Status: StudioMemberBindingRunStatusNames.Accepted,
+                        StateVersion: 1,
                         UpdatedAt: now.AddMinutes(-1)),
             };
         }
@@ -323,6 +324,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
                 ScopeId: scopeId,
                 MemberId: memberId,
                 Status: status,
+                StateVersion: _scenario.Completed ? 2 : 1,
                 UpdatedAt: DateTimeOffset.Parse("2026-05-21T00:00:00Z"))
             {
                 PlatformBindingCommandId = "platform-bind-1",
