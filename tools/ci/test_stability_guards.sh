@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
+bash .claude/skills/codex-refactor-loop/scripts/test_spawn_codex.sh
+
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
 if [[ ! -f "${allowlist_file}" ]]; then
