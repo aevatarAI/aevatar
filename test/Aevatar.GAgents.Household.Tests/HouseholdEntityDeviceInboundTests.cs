@@ -132,8 +132,11 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_SpeechDetected_DoesNotThrow()
+    public async Task HandleDeviceInbound_SpeechDetected_TriggersReasoning()
     {
+        var initialReasoningCount = _entity.State.ReasoningCountToday;
+        var eventStore = (InMemoryEventStoreForHouseholdTests)_serviceProvider.GetRequiredService<IEventStore>();
+
         var evt = new DeviceInbound
         {
             EventId = "evt-6",
@@ -142,11 +145,20 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             Speech = new SpeechPayload { Text = "Turn on the lights" },
         };
 
-        // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatStreamAsync.
-        // With the stub LLM provider, ChatStreamAsync returns "NO_ACTION" (no tool calls).
-        // The handler should complete without throwing.
-        var act = () => _entity.HandleDeviceInbound(evt);
-        await act.Should().NotThrowAsync();
+        await _entity.HandleDeviceInbound(evt);
+
+        _entity.State.ReasoningCountToday.Should().BeGreaterThan(
+            initialReasoningCount,
+            because: "speech payload text should reach HandleChat and increment reasoning count");
+
+        var reasoningEvents = eventStore.SnapshotEvents()
+            .Where(x => x.EventData.Is(ReasoningCompletedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ReasoningCompletedEvent>())
+            .ToList();
+        reasoningEvents.Should().ContainSingle();
+        reasoningEvents[0].Decision.Should().Be("NO_ACTION");
+        reasoningEvents[0].Reasoning.Should().Contain("NO_ACTION");
+        reasoningEvents[0].Reasoning.Should().Contain("no intervention needed.");
     }
 
     // ─── Test doubles ───
@@ -154,6 +166,15 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     private sealed class InMemoryEventStoreForHouseholdTests : IEventStore
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+
+        public IReadOnlyList<StateEvent> SnapshotEvents()
+        {
+            return _events.Values
+                .SelectMany(x => x)
+                .OrderBy(x => x.Version)
+                .Select(x => x.Clone())
+                .ToList();
+        }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
