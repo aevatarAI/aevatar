@@ -7,6 +7,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 bash .claude/skills/codex-refactor-loop/scripts/test_spawn_codex.sh
+bash tests/test_codex_progress_reporter.sh
 
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
