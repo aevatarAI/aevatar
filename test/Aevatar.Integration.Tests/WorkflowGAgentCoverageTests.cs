@@ -485,7 +485,9 @@ public class WorkflowGAgentCoverageTests
         });
 
         agent1.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
-        agent1.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token-123");
+        agent1.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        agent1.State.ExecutionContext.Llm.ModelOverride.Should().Be("model-main");
+        agent1.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route-fast");
         await agent1.DeactivateAsync();
 
         var persisted = await eventStore.GetEventsAsync(agent1.Id);
@@ -496,7 +498,7 @@ public class WorkflowGAgentCoverageTests
         await agent2.ActivateAsync();
 
         agent2.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
-        agent2.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token-123");
+        agent2.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
         agent2.State.ExecutionContext.Llm.ModelOverride.Should().Be("model-main");
         agent2.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route-fast");
     }
@@ -552,7 +554,9 @@ public class WorkflowGAgentCoverageTests
                 },
             }));
 
-        agent.State.ExecutionContext.Llm!.NyxidAccessToken.Should().Be("token");
+        agent.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        agent.State.ExecutionContext.Llm.ModelOverride.Should().Be("model");
+        agent.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route");
         agent.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
         agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
             .Unpack<SecureInputModuleState>()

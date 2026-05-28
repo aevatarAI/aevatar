@@ -327,6 +327,7 @@ public sealed class RoleGAgentStateCoverageTests
             ArgumentsJson = "{\"value\":1}",
         };
         agent.State.PendingApproval.Metadata["nyxid.access_token"] = "token-1";
+        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
 
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
@@ -342,7 +343,8 @@ public sealed class RoleGAgentStateCoverageTests
             .Should()
             .ContainSingle(x =>
                 x.ScopeId == "session-a" &&
-                x.Metadata["nyxid.access_token"] == "token-1" &&
+                !x.Metadata.ContainsKey("nyxid.access_token") &&
+                x.Metadata["trace-id"] == "trace-1" &&
                 x.Prompt.Contains("dangerous_tool") &&
                 x.Prompt.Contains("RESULT:{\"value\":1}"));
     }
@@ -469,6 +471,7 @@ public sealed class RoleGAgentStateCoverageTests
             ArgumentsJson = "{}",
         };
         agent.State.PendingApproval.Metadata["nyxid.access_token"] = "token-1";
+        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
 
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
@@ -482,7 +485,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
             .Be(DateTimeOffset.FromUnixTimeSeconds(1_800).ToUnixTimeMilliseconds());
         remotePort.Submitted.Should().ContainSingle()
-            .Which.Items[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("token-1");
+            .Which.Items.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        remotePort.Submitted.Single().Items["trace-id"].Should().Be("trace-1");
         remotePort.StatusQueries.Should().BeEmpty();
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
             .TimeoutRequests.Should().ContainSingle(x =>
@@ -879,6 +883,11 @@ public sealed class RoleGAgentStateCoverageTests
             SessionId = "session-a",
         };
         request.Metadata["trace-id"] = "trace-1";
+        request.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1";
+        request.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = "org-1";
+        request.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token-1";
+        request.Metadata[LLMRequestMetadataKeys.ModelOverride] = "model-a";
+        request.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "route-a";
 
         var pending = InvokePrivateInstance<PendingToolApprovalState?>(
             DetectPendingApprovalFromHistoryMethod,
@@ -893,6 +902,11 @@ public sealed class RoleGAgentStateCoverageTests
         pending.ArgumentsJson.Should().Be("{\"x\":1}");
         pending.IsDestructive.Should().BeTrue();
         pending.Metadata["trace-id"].Should().Be("trace-1");
+        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
     [Fact]

@@ -29,7 +29,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
-            chatRequest.LlmControl = command.LlmControl.ToPayload();
+            chatRequest.LlmControl = ToDurableLlmControlPayload(command.LlmControl);
 
         var envelope = new EventEnvelope
         {
@@ -90,4 +90,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
+
+    // Refactor (iter159/cluster-613-first):
+    //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+    //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
+    private static LLMControlContextPayload ToDurableLlmControlPayload(LLMControlContext control) =>
+        new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: control.ModelOverride,
+            NyxIdRoutePreference: control.NyxIdRoutePreference,
+            MaxToolRoundsOverride: control.MaxToolRoundsOverride,
+            UserMemoryPrompt: control.UserMemoryPrompt).ToPayload();
 }
