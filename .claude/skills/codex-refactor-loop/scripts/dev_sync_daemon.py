@@ -15,6 +15,7 @@ daemon 不参与 admin bypass / direct push;一切走 PR。
 """
 from __future__ import annotations
 
+import atexit
 import fcntl
 import json
 import os
@@ -311,17 +312,52 @@ def tick() -> None:
         log(f"reverse: gate — trunk 落后 dev {trunk_behind_dev} commits,reverse 暂停直到 forward 完")
 
 
+def _release_lock(fp) -> None:
+    try:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        fp.close()
+    except OSError:
+        pass
+    try:
+        LOCK_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def acquire_singleton_lock():
-    """fcntl exclusive lock — 第二实例启动时获取失败 → 立即 exit。"""
+    """两层独占:pgrep 兜底 + fcntl.flock 内核锁。
+
+    macOS APFS 实测 fcntl.flock 跨长期进程偶发漏检(pid 463 持锁,pid 1851 仍能
+    起来)。pgrep 显式扫 sibling 进程 → 第二实例 100% 退出。
+    """
+    me = os.getpid()
+    r = subprocess.run(
+        ["pgrep", "-f", "dev_sync_daemon.py"],
+        capture_output=True, text=True, timeout=5,
+    )
+    siblings = [int(p) for p in r.stdout.split() if p.isdigit() and int(p) != me]
+    if siblings:
+        log(f"dev_sync_daemon sibling pid(s) {siblings} already running, exit")
+        sys.exit(0)
+
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fp = open(LOCK_FILE, "w")
+    fp = open(LOCK_FILE, "a+")  # 不 truncate;失败时保留旧 pid 便于诊断
     try:
         fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        log(f"dev_sync_daemon already running (lock held on {LOCK_FILE}), exit")
+        fp.seek(0)
+        held = fp.read().strip()
+        log(f"dev_sync_daemon lock held (pid={held} {LOCK_FILE}), exit")
         sys.exit(0)
-    fp.write(f"{os.getpid()}\n")
+
+    fp.seek(0)
+    fp.truncate()
+    fp.write(f"{me}\n")
     fp.flush()
+    atexit.register(_release_lock, fp)
     return fp  # keep ref alive — lock 随 fp close 释放
 
 
