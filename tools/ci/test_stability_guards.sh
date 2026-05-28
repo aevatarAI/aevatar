@@ -12,8 +12,12 @@ allowlist_file="tools/ci/test_polling_allowlist.txt"
 
 run_python_tests() {
   if [ -d "tests" ] && command -v python3 >/dev/null 2>&1; then
-    echo "==> running python tests"
-    python3 -m pytest tests/ -v --tb=short || exit 1
+    if command -v pytest >/dev/null 2>&1 || python3 -m pytest --version >/dev/null 2>&1; then
+      echo "==> running python tests"
+      python3 -m pytest tests/ -v --tb=short || exit 1
+    else
+      echo "WARN: pytest not installed; skipping tests/ Python suite (install: pip install pytest)"
+    fi
   fi
 }
 
