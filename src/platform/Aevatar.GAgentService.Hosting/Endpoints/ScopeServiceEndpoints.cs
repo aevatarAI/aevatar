@@ -125,10 +125,8 @@ public static class ScopeServiceEndpoints
 
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
-                WorkflowName: null,
-                ActorId: null,
+                Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
-                WorkflowYamls: request.WorkflowYamls,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 LlmControl: await BuildScopedLlmControlAsync(http, ct));
@@ -148,7 +146,7 @@ public static class ScopeServiceEndpoints
                 new ChatInput
                 {
                     Prompt = chatRequest.Prompt,
-                    WorkflowYamls = chatRequest.WorkflowYamls,
+                    WorkflowYamls = chatRequest.Source.WorkflowYamls,
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
                     Metadata = scopedHeaders,

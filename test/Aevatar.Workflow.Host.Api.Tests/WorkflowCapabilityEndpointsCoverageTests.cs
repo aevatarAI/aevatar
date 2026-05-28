@@ -26,12 +26,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                "auto",
-                "actor-1",
+                WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1"),
                 SessionId: "session-1",
-                WorkflowYamls: ["name: inline"],
-                Metadata: new Dictionary<string, string>(),
-                Source: WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1")));
+                Metadata: new Dictionary<string, string>()));
     }
 
     [Fact]
@@ -50,12 +47,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                null,
-                "actor-1",
+                WorkflowChatSource.InlineYamlBundle(["name: inline"], actorId: "actor-1"),
                 SessionId: null,
-                WorkflowYamls: ["name: inline"],
-                Metadata: new Dictionary<string, string>(),
-                Source: WorkflowChatSource.InlineYamlBundle(["name: inline"], actorId: "actor-1")));
+                Metadata: new Dictionary<string, string>()));
     }
 
     [Fact]
@@ -103,11 +97,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                null,
-                null,
-                null,
+                WorkflowChatSource.Direct(),
                 Metadata: new Dictionary<string, string>(),
-                Source: WorkflowChatSource.Direct()));
+                LlmControl: null));
     }
 
     [Fact]
@@ -148,6 +140,35 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedAndLegacyInputsToEquivalentTypedSource()
+    {
+        var typed = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                WorkflowName = " auto ",
+                ActorId = " source-actor-1 ",
+                WorkflowYamls = ["name: auto"],
+            },
+        });
+        var legacy = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Workflow = " auto ",
+            AgentId = " source-actor-1 ",
+            WorkflowYamls = ["name: auto"],
+        });
+
+        typed.Succeeded.Should().BeTrue();
+        legacy.Succeeded.Should().BeTrue();
+        typed.Request!.Source.Should().BeEquivalentTo(legacy.Request!.Source);
+        typed.Request.Source.Should().BeEquivalentTo(
+            WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto", "source-actor-1"));
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldPreserveTypedInlineYamlSourceActorId()
     {
         var input = new ChatInput
@@ -167,7 +188,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto", "source-actor-1"));
-        result.Request.ActorId.Should().Be("source-actor-1");
+        result.Request.Source.ActorId.Should().Be("source-actor-1");
     }
 
     [Fact]
@@ -185,8 +206,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.DefinitionActor("source-actor-1", "direct"));
-        result.Request.WorkflowName.Should().Be("direct");
-        result.Request.ActorId.Should().Be("source-actor-1");
+        result.Request.Source.WorkflowName.Should().Be("direct");
+        result.Request.Source.ActorId.Should().Be("source-actor-1");
     }
 
     [Theory]
@@ -277,9 +298,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "describe this",
-                null,
-                null,
-                null,
+                WorkflowChatSource.Direct(),
                 InputParts:
                 [
                     new WorkflowChatInputPart
@@ -296,7 +315,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                     },
                 ],
                 Metadata: new Dictionary<string, string>(),
-                Source: WorkflowChatSource.Direct()));
+                LlmControl: null));
     }
 
     [Fact]

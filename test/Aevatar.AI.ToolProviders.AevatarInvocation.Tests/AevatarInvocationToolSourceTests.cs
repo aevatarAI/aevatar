@@ -405,7 +405,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
-        harness.WorkflowDispatch.Command!.WorkflowName.Should().Be("wf-main");
+        harness.WorkflowDispatch.Command!.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("scope_id", "scope-1");
@@ -415,6 +415,65 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("wf-command");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/wf-command");
+    }
+
+    [Fact]
+    public async Task aevatar_start_workflow_with_actor_id_dispatches_definition_actor_source()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-actor");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": " wf-main ",
+              "actor_id": " workflow-definition-actor ",
+              "inputs": {
+                "prompt": "run workflow"
+              },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
+    }
+
+    [Fact]
+    public async Task aevatar_start_workflow_with_workflow_yamls_dispatches_inline_yaml_bundle_source_and_trims_blank_entries()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-yamls");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": " wf-main ",
+              "actor_id": " workflow-definition-actor ",
+              "workflow_yamls": [
+                "  name: first\nsteps: []  ",
+                "   ",
+                "",
+                "name: second\nsteps: []\n"
+              ],
+              "inputs": {
+                "prompt": "run workflow"
+              },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
+        harness.WorkflowDispatch.Command.Source.WorkflowYamls.Should().Equal(
+            "name: first\nsteps: []",
+            "name: second\nsteps: []");
     }
 
     [Fact]

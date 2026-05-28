@@ -23,9 +23,11 @@ public sealed class OrleansActorTransportDispatchTests
     }
 
     [Fact]
-    public void HandledDispatchPortConstructor_WhenGrainFactoryIsNull_ShouldThrowArgumentNullException()
+    public void Constructor_WhenGrainFactoryIsNull_ShouldThrowArgumentNullException()
     {
-        var act = () => new OrleansActorHandledDispatchPort(null!);
+        var streams = new RecordingStreamProvider();
+
+        var act = () => new OrleansActorDispatchPort(null!, streams);
 
         act.Should().Throw<ArgumentNullException>()
             .WithParameterName("grainFactory");
@@ -52,65 +54,29 @@ public sealed class OrleansActorTransportDispatchTests
     }
 
     [Fact]
-    public async Task HandledDispatchPortAsync_ShouldWaitForGrainHandlingAndPropagateFailures()
+    public async Task DispatchPortAsync_ShouldValidateInputsBeforeResolvingGrain()
     {
         var grain = new RecordingRuntimeActorGrain();
+        var streams = new RecordingStreamProvider();
         var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
         ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
-        var dispatchPort = new OrleansActorHandledDispatchPort(grainFactory);
-        var envelope = new EventEnvelope
-        {
-            Id = "command-1",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        };
-
-        var admission = await dispatchPort.DispatchAndWaitHandledAsync("actor-0", envelope, CancellationToken.None);
-
-        admission.Accepted.Should().BeTrue();
-        admission.ActorId.Should().Be("actor-0");
-        admission.CommandId.Should().Be("command-1");
-        grain.IsInitializedCallCount.Should().Be(1);
-        grain.DispatchCount.Should().Be(1);
-        grain.LastHandledEnvelope.Should().NotBeNull();
-        grain.LastHandledEnvelope!.Runtime.Dispatch.PropagateFailure.Should().BeTrue();
-        envelope.Runtime.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandledDispatchPortAsync_WhenActorIsNotInitialized_ShouldThrowBeforeHandling()
-    {
-        var grain = new RecordingRuntimeActorGrain { Initialized = false };
-        var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
-        ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
-        var dispatchPort = new OrleansActorHandledDispatchPort(grainFactory);
-        var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
-
-        var act = () => dispatchPort.DispatchAndWaitHandledAsync("actor-0", envelope, CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Actor actor-0 is not initialized.");
-        grain.DispatchCount.Should().Be(0);
-        grain.IsInitializedCallCount.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task HandledDispatchPortAsync_ShouldValidateInputsBeforeResolvingGrain()
-    {
-        var grain = new RecordingRuntimeActorGrain();
-        var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
-        ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
-        var dispatchPort = new OrleansActorHandledDispatchPort(grainFactory);
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams);
         var envelope = new EventEnvelope();
 
-        await dispatchPort.Invoking(x => x.DispatchAndWaitHandledAsync(" ", envelope, CancellationToken.None))
-            .Should().ThrowAsync<ArgumentException>();
-        await dispatchPort.Invoking(x => x.DispatchAndWaitHandledAsync("actor-0", null!, CancellationToken.None))
-            .Should().ThrowAsync<ArgumentNullException>()
+        Func<Task> dispatchWithBlankActorId = async () =>
+            await dispatchPort.DispatchAsync(" ", envelope, CancellationToken.None);
+        Func<Task> dispatchWithNullEnvelope = async () =>
+            await dispatchPort.DispatchAsync("actor-0", null!, CancellationToken.None);
+        Func<Task> dispatchWithCanceledToken = async () =>
+            await dispatchPort.DispatchAsync("actor-0", envelope, new CancellationToken(true));
+
+        await dispatchWithBlankActorId.Should().ThrowAsync<ArgumentException>();
+        await dispatchWithNullEnvelope.Should().ThrowAsync<ArgumentNullException>()
             .WithParameterName("envelope");
-        await dispatchPort.Invoking(x => x.DispatchAndWaitHandledAsync("actor-0", envelope, new CancellationToken(true)))
-            .Should().ThrowAsync<OperationCanceledException>();
+        await dispatchWithCanceledToken.Should().ThrowAsync<OperationCanceledException>();
         grain.IsInitializedCallCount.Should().Be(0);
         grain.DispatchCount.Should().Be(0);
+        streams.GetProduced("actor-0").Should().BeEmpty();
     }
 
     [Fact]
