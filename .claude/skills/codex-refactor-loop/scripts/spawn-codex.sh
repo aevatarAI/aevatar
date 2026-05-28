@@ -114,11 +114,34 @@ fi
 
 mkdir -p "$(dirname "$LOG")"
 
+LOG_DIR_ABS="$(cd "$(dirname "$LOG")" && pwd)"
+if [[ "$(basename "$LOG_DIR_ABS")" = "logs" ]]; then
+  STATE_DIR="$(cd "$LOG_DIR_ABS/.." && pwd)"
+else
+  STATE_DIR="$LOG_DIR_ABS"
+fi
+MARKER_DIR="$STATE_DIR/markers"
+BASE="$(basename "$LOG" .log)"
+RUNNING_MARKER="$MARKER_DIR/$BASE.running.json"
+DONE_MARKER="$MARKER_DIR/$BASE.done.json"
+
 if (( DRY_RUN == 1 )); then
   echo "SPAWN: prompt=$RENDERED_PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL} dry-run=1" >&2
   head -5 "$RENDERED_PROMPT"
   exit 0
 fi
+
+mkdir -p "$MARKER_DIR"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUNNING_TMP="$MARKER_DIR/.$BASE.running.json.$$"
+jq -n \
+  --arg base "$BASE" \
+  --arg log_path "$LOG" \
+  --arg started_at "$STARTED_AT" \
+  '{base: $base, log_path: $log_path, started_at: $started_at, state: "running"}' \
+  > "$RUNNING_TMP"
+mv "$RUNNING_TMP" "$RUNNING_MARKER"
+rm -f "$DONE_MARKER"
 
 # Debug banner — caller / `tail` sees exact paths immediately (per maintainer 2026-05-19).
 # Both prompt + log are real files on disk; debug by `cat <prompt-path>` and `cat <log-path>`.
@@ -157,6 +180,21 @@ set -e
   echo "EXIT=$EXIT"
   echo "DONE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >> "$LOG"
+
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+VERDICT="$(tail -5 "$LOG" | grep -oE "^[A-Z_]+_DONE[:].*$|^REVIEW_DONE.*$|^META_JUDGE_DONE.*$|^META_RESOLVED.*$|^AUDIT_DONE.*$|^TRIAGE_DONE.*$|^FIX_DONE.*$" | tail -1 || true)"
+DONE_TMP="$MARKER_DIR/.$BASE.done.json.$$"
+jq -n \
+  --arg base "$BASE" \
+  --arg log_path "$LOG" \
+  --arg started_at "$STARTED_AT" \
+  --arg finished_at "$FINISHED_AT" \
+  --argjson exit_code "$EXIT" \
+  --arg verdict "$VERDICT" \
+  '{base: $base, log_path: $log_path, started_at: $started_at, finished_at: $finished_at, exit_code: $exit_code, verdict: $verdict, state: "done"}' \
+  > "$DONE_TMP"
+mv "$DONE_TMP" "$RUNNING_MARKER"
+mv "$RUNNING_MARKER" "$DONE_MARKER"
 
 echo "DONE: log=$LOG exit=$EXIT prompt=$RENDERED_PROMPT source_prompt=$PROMPT" >&2
 
