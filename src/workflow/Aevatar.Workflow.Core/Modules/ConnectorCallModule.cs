@@ -202,6 +202,8 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             ExecutionId = pending.ExecutionId,
         };
         completion.Annotations["connector.name"] = pending.ConnectorName;
+        completion.Annotations["connector.step_id"] = pending.StepId;
+        completion.Annotations["connector.run_id"] = pending.RunId;
         completion.Annotations["connector.type"] = pending.ConnectorType;
         completion.Annotations["connector.operation"] = pending.Operation;
         completion.Annotations["connector.attempts"] = pending.Attempt.ToString();

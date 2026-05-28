@@ -208,7 +208,10 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Success.Should().BeFalse();
         completed.Output.Should().BeEmpty();
         completed.Error.Should().Be("connector call timed out after 100ms");
+        completed.Error.Should().Contain("timed out");
         completed.Annotations["connector.name"].Should().Be("slow-default-fail");
+        completed.Annotations["connector.step_id"].Should().Be("s-timeout-fail");
+        completed.Annotations["connector.run_id"].Should().Be("run-timeout-fail");
         completed.Annotations["connector.type"].Should().Be("test");
         completed.Annotations["connector.operation"].Should().Be("sync");
         completed.Annotations["connector.attempts"].Should().Be("1");
@@ -267,8 +270,12 @@ public sealed class ConnectorCallModuleCoverageTests
             .ContainSingle()
             .Subject;
         timeoutCompletion.Success.Should().BeFalse();
+        timeoutCompletion.Output.Should().BeEmpty();
         timeoutCompletion.Error.Should().Be("connector call timed out after 100ms");
+        timeoutCompletion.Error.Should().Contain("timed out");
         timeoutCompletion.Annotations["connector.timeout_fired"].Should().Be("true");
+        timeoutCompletion.Annotations["connector.step_id"].Should().Be("s-stale-timeout");
+        timeoutCompletion.Annotations["connector.run_id"].Should().Be("run-stale-timeout");
 
         connector.Complete(new ConnectorResponse
         {
