@@ -18,6 +18,19 @@ FILES=(
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
 )
 
+capabilities_artifact_hits="$(
+  rg -n "public .*WorkflowCapabilitiesStartupArtifact.*IProjectionReadModel|IProjection(DocumentReader|WriteDispatcher|DocumentMetadataProvider)<WorkflowCapabilitiesStartupArtifact|ProjectionStore<WorkflowCapabilitiesStartupArtifact|DocumentProjectionStore<WorkflowCapabilitiesStartupArtifact" \
+    src/workflow src/platform \
+    -g '*.cs' \
+    || true
+)"
+
+if [[ -n "${capabilities_artifact_hits}" ]]; then
+  echo "${capabilities_artifact_hits}"
+  echo "WorkflowCapabilitiesStartupArtifact must not use projection readmodel/store framing."
+  exit 1
+fi
+
 version_hits="$(
   rg -n "StateVersion[[:space:]]*(\\+\\+|--|\\+=|-=)|\\+\\+[[:space:]]*[A-Za-z0-9_.]+\\.StateVersion|--[[:space:]]*[A-Za-z0-9_.]+\\.StateVersion|StateVersion[[:space:]]*=[[:space:]]*1\\b" \
     "${FILES[@]}" \

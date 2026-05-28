@@ -36,6 +36,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
             includeImplementationRef: true,
             includeLastBinding: true,
             includeBindingStatus: true);
+        document.StateVersion = 7;
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
@@ -55,6 +56,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.CurrentBindingRun.Should().NotBeNull();
         detail.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
         detail.CurrentBindingRun.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
+        detail.CurrentBindingRun.StateVersion.Should().Be(7);
     }
 
     [Fact]

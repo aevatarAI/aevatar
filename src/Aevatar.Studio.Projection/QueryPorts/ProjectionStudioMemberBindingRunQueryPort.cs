@@ -9,6 +9,9 @@ namespace Aevatar.Studio.Projection.QueryPorts;
 /// <summary>
 /// Reads binding-run status from the run actor's current-state read model.
 /// </summary>
+// Refactor (iter159/cluster-594-first):
+//   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+//   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
 public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBindingRunQueryPort
 {
     private readonly IProjectionDocumentReader<StudioMemberBindingRunCurrentStateDocument, string> _documentReader;
@@ -55,6 +58,7 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
             ScopeId: document.ScopeId,
             MemberId: document.MemberId,
             Status: NormalizeBindingRunStatusWire(document.Status),
+            StateVersion: document.StateVersion,
             Failure: failure,
             UpdatedAt: document.UpdatedAt?.ToDateTimeOffset())
         {

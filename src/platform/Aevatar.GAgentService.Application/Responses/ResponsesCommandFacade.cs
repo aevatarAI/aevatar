@@ -35,10 +35,11 @@ public sealed class ResponsesCommandFacade(
 
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(callerScopeContext);
 
         var normalizedResult = ResponsesRequestNormalizer.Normalize(request);
         if (!normalizedResult.Succeeded)
@@ -50,7 +51,7 @@ public sealed class ResponsesCommandFacade(
         }
 
         var normalized = normalizedResult.Request!;
-        var callerScopeResult = await ResolveCallerScopeAsync(bearerToken, ct);
+        var callerScopeResult = await ResolveCallerScopeAsync(callerScopeContext, ct);
         if (callerScopeResult.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 callerScopeResult.Error.StatusCode,
@@ -99,7 +100,7 @@ public sealed class ResponsesCommandFacade(
             continuation.PreviousSnapshot,
             callerScope,
             routedModelResult.Action!,
-            bearerToken,
+            callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             createdAt,
             ct);
@@ -118,12 +119,13 @@ public sealed class ResponsesCommandFacade(
     //   New principle: Application validates visibility and advances session status; Host maps the typed result to HTTP.
     public async Task<ResponsesCancelCommandResult> CancelAsync(
         string responseId,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(responseId);
+        ArgumentNullException.ThrowIfNull(callerScopeContext);
 
-        var callerScopeResult = await ResolveCallerScopeAsync(bearerToken, ct);
+        var callerScopeResult = await ResolveCallerScopeAsync(callerScopeContext, ct);
         if (callerScopeResult.Error is not null)
             return ResponsesCancelCommandResult.FromError(
                 callerScopeResult.Error.StatusCode,
@@ -209,11 +211,13 @@ public sealed class ResponsesCommandFacade(
         }
     }
 
-    private async Task<CallerScopeResult> ResolveCallerScopeAsync(string bearerToken, CancellationToken ct)
+    private async Task<CallerScopeResult> ResolveCallerScopeAsync(
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct)
     {
         try
         {
-            var callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
+            var callerScope = await callerScopeResolver.ResolveAsync(callerScopeContext, ct);
             return new CallerScopeResult(callerScope, null);
         }
         catch (ResponsesCallerScopeUnavailableException ex)

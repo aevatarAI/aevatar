@@ -10,7 +10,6 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
     private readonly IWorkflowDefinitionCatalog _registry;
     private readonly WorkflowDefinitionFileLoader _loader;
     private readonly FileBackedWorkflowCatalogPort _definitionMaterializer;
-    private readonly WorkflowCapabilitiesStartupMaterializer _capabilitiesMaterializer;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly ILogger<WorkflowDefinitionBootstrapHostedService> _logger;
 
@@ -18,14 +17,12 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
         IWorkflowDefinitionCatalog registry,
         WorkflowDefinitionFileLoader loader,
         FileBackedWorkflowCatalogPort definitionMaterializer,
-        WorkflowCapabilitiesStartupMaterializer capabilitiesMaterializer,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<WorkflowDefinitionBootstrapHostedService> logger)
     {
         _registry = registry;
         _loader = loader;
         _definitionMaterializer = definitionMaterializer;
-        _capabilitiesMaterializer = capabilitiesMaterializer;
         _options = options;
         _logger = logger;
     }
@@ -44,7 +41,6 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
             .Select(definition => definition!)
             .ToList();
         await _definitionMaterializer.MaterializeAsync(definitions, cancellationToken);
-        await _capabilitiesMaterializer.MaterializeAsync(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
