@@ -38,6 +38,121 @@ public sealed class ConversationReplyGeneratorTests
             };
 
     [Fact]
+    public async Task GenerateReplyAsync_WithPriorConversationHistory_BuildsSecondTurnRequestWithPreviousUserAndAssistant()
+    {
+        var providerFactory = new SequentialResponseProviderFactory("first assistant", "second assistant", "isolated assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        var first = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-1",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+                Content = new MessageContent { Text = "first user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var second = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-2",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+                Content = new MessageContent { Text = "second user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: first.AppendedHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-other",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-b:chat-2" },
+                Content = new MessageContent { Text = "other user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        first.AppendedHistory.Should().NotBeNull();
+        first.AppendedHistory!.Select(message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(("user", "first user"), ("assistant", "first assistant"));
+        second.AppendedHistory.Should().NotBeNull();
+        second.AppendedHistory!.Select(message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(("user", "second user"), ("assistant", "second assistant"));
+
+        providerFactory.Requests.Should().HaveCount(3);
+        providerFactory.Requests[1].Messages
+            .Where(message => message.Role is "user" or "assistant")
+            .Select(message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(
+                ("user", "first user"),
+                ("assistant", "first assistant"),
+                ("user", "second user"));
+
+        providerFactory.Requests[2].Messages
+            .Should()
+            .NotContain(message => message.Content == "first user" || message.Content == "first assistant");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenPriorHistoryWindowIsFull_StillExportsCurrentTurnHistory()
+    {
+        var providerFactory = new SequentialResponseProviderFactory("window assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var priorHistory = Enumerable.Range(0, 100)
+            .Select(index => new ConversationHistoryEntry
+            {
+                Role = index % 2 == 0 ? "user" : "assistant",
+                Content = $"prior {index}",
+            })
+            .ToArray();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-window",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-window" },
+                Content = new MessageContent { Text = "current user" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        providerFactory.Requests.Should().HaveCount(1);
+        providerFactory.Requests[0].Messages
+            .Where(message => message.Role is "user" or "assistant")
+            .Select(message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(("user", "prior 0"), ("assistant", "prior 1"), ("user", "current user"));
+        reply.AppendedHistory.Should().NotBeNull();
+        reply.AppendedHistory!.Select(message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(("user", "current user"), ("assistant", "window assistant"));
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_UsesConfiguredRelayCallbackUrlInSystemPrompt()
     {
         var providerFactory = new RecordingProviderFactory();
@@ -1013,6 +1128,30 @@ public sealed class ConversationReplyGeneratorTests
             {
                 IsLast = true,
             };
+        }
+    }
+
+    private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "sequential";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            var response = Requests.Count <= responses.Length ? responses[Requests.Count - 1] : "ok";
+            yield return new LLMStreamChunk { DeltaContent = response };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
         }
     }
 

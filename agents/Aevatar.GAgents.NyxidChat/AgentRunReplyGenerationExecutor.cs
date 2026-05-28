@@ -103,6 +103,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var terminalState = LlmReplyTerminalState.Completed;
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory = [];
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
 
@@ -129,7 +130,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     $"Metadata enrichment exceeded {(int)AgentRunGAgent.MetadataBuildBudget.TotalSeconds}s budget.";
                 await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent)
                     .ConfigureAwait(false);
-                return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+                return BuildCompleted(
+                    workItem,
+                    request,
+                    replyText,
+                    outboundIntent,
+                    terminalState,
+                    errorCode,
+                    errorSummary,
+                    appendedHistory);
             }
         }
 
@@ -147,6 +156,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                             generationContext.Metadata,
                             generationContext.LlmControl,
                             generationContext.ToolContext,
+                            request.PriorHistory.ToArray(),
                             streamingState,
                             CancellationToken.None)
                         .ConfigureAwait(false)
@@ -168,6 +178,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                         replyResult.Usage?.TotalTokens,
                         replyResult.FinishReason ?? "(none)");
                 }
+                appendedHistory = replyResult.AppendedHistory?.Select(entry => entry.Clone()).ToArray() ?? [];
 
                 outboundIntent = _interactiveReplyCollector?.TryTake();
             }
@@ -211,7 +222,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 .ConfigureAwait(false);
         }
 
-        return BuildCompleted(workItem, request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        return BuildCompleted(
+            workItem,
+            request,
+            replyText,
+            outboundIntent,
+            terminalState,
+            errorCode,
+            errorSummary,
+            appendedHistory);
     }
 
     private AgentRunReplyGenerationCompleted BuildCompleted(
@@ -221,7 +240,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory)
     {
         var completed = new AgentRunReplyGenerationCompleted
         {
@@ -238,6 +258,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         if (outboundIntent is not null)
             completed.Outbound = outboundIntent.Clone();
+        completed.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
         return completed;
     }
 

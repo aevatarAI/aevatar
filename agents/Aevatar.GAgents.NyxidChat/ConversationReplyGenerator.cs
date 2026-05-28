@@ -91,6 +91,26 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
+        return await GenerateReplyAsync(
+                activity,
+                metadata,
+                llmControl,
+                toolContext,
+                priorHistory: null,
+                streamingSink,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<ConversationReplyResult> GenerateReplyAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        IStreamingReplySink? streamingSink,
+        CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
@@ -124,6 +144,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                     replyPlan.Primary,
                     replyPlan.PrimaryControl,
                     replyPlan.PrimaryToolContext,
+                    priorHistory,
                     primaryTools,
                     streamingSink,
                     ct)
@@ -146,6 +167,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                     replyPlan.OwnerFallback,
                     replyPlan.OwnerFallbackControl ?? llmControl ?? LLMControlContext.Empty,
                     replyPlan.OwnerFallbackToolContext,
+                    priorHistory,
                     fallbackTools,
                     streamingSink,
                     ct)
@@ -208,6 +230,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         IReadOnlyDictionary<string, string> effectiveMetadata,
         LLMControlContext llmControl,
         AgentToolExecutionContext? baseToolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ToolManager tools,
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
@@ -220,8 +243,10 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
-            MaxMessages = MaxHistoryMessages,
+            MaxMessages = MaxHistoryMessages + Math.Min(priorHistory?.Count ?? 0, MaxHistoryMessages),
         };
+        history.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        var importedPriorCount = history.Messages.Count;
         var runtime = new ChatRuntime(
             providerFactory: ResolveProvider,
             history: history,
@@ -256,6 +281,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         // markers that ChatRuntime currently passes through.
         ReplyTokenUsage? aggregatedUsage = null;
         string? lastFinishReason = null;
+        var suppressInitialSlashCommandStatus = false;
         await foreach (var chunk in runtime.ChatStreamAsync(
                            [ContentPart.TextPart(activity.Content.Text)],
                            MaxToolRounds,
@@ -273,6 +299,18 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             if (string.IsNullOrEmpty(chunk.DeltaContent))
                 continue;
 
+            if (IsInitialSlashCommandStatusChunk(chunk.DeltaContent))
+            {
+                suppressInitialSlashCommandStatus = true;
+                if (streamingSink is not null && ShouldStreamVisibleReply(chunk.DeltaContent))
+                    await streamingSink.OnDeltaAsync(chunk.DeltaContent, ct);
+                continue;
+            }
+
+            if (suppressInitialSlashCommandStatus && IsSlashCommandStatusSpacerChunk(chunk.DeltaContent))
+                continue;
+
+            suppressInitialSlashCommandStatus = false;
             output.Append(chunk.DeltaContent);
             if (streamingSink is not null && ShouldStreamVisibleReply(output.ToString()))
                 await streamingSink.OnDeltaAsync(output.ToString(), ct);
@@ -281,8 +319,64 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         return new ConversationReplyResult(
             Text: output.ToString(),
             Usage: aggregatedUsage,
-            FinishReason: lastFinishReason);
+            FinishReason: lastFinishReason,
+            AppendedHistory: ExportAppendedHistory(history, importedPriorCount));
     }
+
+    private static bool IsInitialSlashCommandStatusChunk(string content) =>
+        content.StartsWith("⏳ 正在处理 `/", StringComparison.Ordinal);
+
+    private static bool IsSlashCommandStatusSpacerChunk(string content) =>
+        content.All(static ch => ch is '\r' or '\n');
+
+    private static IReadOnlyList<ConversationHistoryEntry> ExportAppendedHistory(
+        global::Aevatar.AI.Core.Chat.ChatHistory history,
+        int priorCount) =>
+        history.Messages
+            .Skip(Math.Clamp(priorCount, 0, history.Messages.Count))
+            .Select(ToConversationHistoryEntry)
+            .ToArray();
+
+    private static ChatMessage ToChatMessage(ConversationHistoryEntry entry) =>
+        new()
+        {
+            Role = string.IsNullOrWhiteSpace(entry.Role) ? "user" : entry.Role,
+            Content = string.IsNullOrEmpty(entry.Content) ? null : entry.Content,
+            ReasoningContent = string.IsNullOrEmpty(entry.ReasoningContent) ? null : entry.ReasoningContent,
+            ContentParts = entry.ContentParts.Select(ContentPartProtoMapper.FromProto).ToArray(),
+            ToolCallId = string.IsNullOrEmpty(entry.ToolCallId) ? null : entry.ToolCallId,
+            ToolCalls = entry.ToolCalls.Select(ToToolCall).ToArray(),
+        };
+
+    private static ConversationHistoryEntry ToConversationHistoryEntry(ChatMessage message)
+    {
+        var entry = new ConversationHistoryEntry
+        {
+            Role = message.Role ?? string.Empty,
+            Content = message.Content ?? string.Empty,
+            ReasoningContent = message.ReasoningContent ?? string.Empty,
+            ToolCallId = message.ToolCallId ?? string.Empty,
+        };
+        entry.ContentParts.AddRange((message.ContentParts ?? []).Select(ContentPartProtoMapper.ToProto));
+        entry.ToolCalls.AddRange((message.ToolCalls ?? []).Select(ToConversationToolCallEntry));
+        return entry;
+    }
+
+    private static ToolCall ToToolCall(ConversationToolCallEntry entry) =>
+        new()
+        {
+            Id = entry.Id ?? string.Empty,
+            Name = entry.Name ?? string.Empty,
+            ArgumentsJson = entry.ArgumentsJson ?? string.Empty,
+        };
+
+    private static ConversationToolCallEntry ToConversationToolCallEntry(ToolCall call) =>
+        new()
+        {
+            Id = call.Id ?? string.Empty,
+            Name = call.Name ?? string.Empty,
+            ArgumentsJson = call.ArgumentsJson ?? string.Empty,
+        };
 
     private static bool ShouldStreamVisibleReply(string accumulatedText)
     {

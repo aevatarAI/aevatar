@@ -61,6 +61,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     public const int MaxInboundTurnRetryCount = 5;
     private const int RelayReplayClaimsCap = 10000;
     private const int PendingRelayAdmissionsCap = 1000;
+    private const int RetainedHistoryMessagesCap = 100;
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -270,12 +271,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                             activity.Id;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            runCopy.PriorHistory.Clear();
+            runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
             persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
             persistedCopy.TargetRef = null;
             persistedCopy.LlmControl = null;
+            persistedCopy.PriorHistory.Clear();
             StripRuntimeCredentialsFromToolContext(persistedCopy);
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
@@ -700,6 +704,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
+            completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
             // ADR-0021 chain.delivered observable: persist the user-visible delivery ack
             // before the turn-completed summary event so readers do not need to infer
             // delivery status from the channel sink return code, and so existing
@@ -955,7 +960,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     finalizeText: failureText,
                     finalizeCommandId: commandId,
-                    terminalState: LlmReplyTerminalState.Failed);
+                    terminalState: LlmReplyTerminalState.Failed,
+                    appendedHistory: evt.AppendedHistory);
                 return true;
             }
 
@@ -966,7 +972,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     finalizeText: evt.Outbound?.Text ?? string.Empty,
                     finalizeCommandId: commandId,
-                    terminalState: LlmReplyTerminalState.Completed);
+                    terminalState: LlmReplyTerminalState.Completed,
+                    appendedHistory: evt.AppendedHistory);
                 return true;
             }
         }
@@ -1120,7 +1127,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         string? accumulatedText = null,
         string? finalizeText = null,
         string? finalizeCommandId = null,
-        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified) =>
+        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified,
+        IEnumerable<ConversationHistoryEntry>? appendedHistory = null) =>
         TransitionNyxRelayStreamingPhaseAsync(
             correlationId,
             state,
@@ -1133,6 +1141,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 PendingTerminalState = terminalState == LlmReplyTerminalState.Unspecified
                     ? s.PendingTerminalState
                     : terminalState,
+                PendingAppendedHistory = appendedHistory is null
+                    ? s.PendingAppendedHistory
+                    : appendedHistory.Select(entry => entry.Clone()).ToArray(),
             });
 
     private async Task ScheduleNyxRelayTextOperationTimeoutAsync(
@@ -1603,6 +1614,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     : state.PendingTerminalState,
                 ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ready.AppendedHistory.AddRange(state.PendingAppendedHistory.Select(entry => entry.Clone()));
             var runtimeContext = BuildNyxRelayRuntimeContext(
                 correlationId,
                 ready.Activity,
@@ -1686,6 +1698,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
+        completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         // ADR-0021 chain.delivered observable: the streaming path always reaches this
         // function with a user-visible placeholder message id (any partial / full /
         // failure-self-heal text the user actually saw). Persist a Delivered event
@@ -2139,6 +2152,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             next.Conversation = evt.Conversation.Clone();
         }
+        AppendHistoryBounded(next.RetainedHistory, evt.AppendedHistory, RetainedHistoryMessagesCap);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
@@ -2401,6 +2415,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
         if (evt.HasNyxRelayTerminalState)
             lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
+        if (evt.AppendedHistory.Count > 0)
+        {
+            lifecycle.PendingAppendedHistory.Clear();
+            lifecycle.PendingAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+        }
 
         if (evt.ChangedAtUnixMs > 0)
             lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
@@ -2639,6 +2658,21 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         int cap)
     {
         field.Add(value);
+        while (field.Count > cap)
+            field.RemoveAt(0);
+    }
+
+    private static void AppendHistoryBounded(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        IEnumerable<ConversationHistoryEntry> entries,
+        int cap)
+    {
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Role))
+                continue;
+            field.Add(entry.Clone());
+        }
         while (field.Count > cap)
             field.RemoveAt(0);
     }

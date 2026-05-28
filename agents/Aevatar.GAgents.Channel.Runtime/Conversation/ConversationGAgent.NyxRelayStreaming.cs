@@ -59,7 +59,8 @@ public sealed partial class ConversationGAgent
         string? PendingAccumulatedText,
         string? PendingFinalizeText,
         string? PendingFinalizeCommandId,
-        LlmReplyTerminalState PendingTerminalState)
+        LlmReplyTerminalState PendingTerminalState,
+        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory)
     {
         public static NyxRelayStreamingState Initial { get; } =
             new(
@@ -73,7 +74,8 @@ public sealed partial class ConversationGAgent
                 PendingAccumulatedText: null,
                 PendingFinalizeText: null,
                 PendingFinalizeCommandId: null,
-                PendingTerminalState: LlmReplyTerminalState.Unspecified);
+                PendingTerminalState: LlmReplyTerminalState.Unspecified,
+                PendingAppendedHistory: []);
 
         public bool AllowsInterimEdit =>
             Phase is NyxRelayStreamingPhase.Idle
@@ -145,7 +147,8 @@ public sealed partial class ConversationGAgent
             NormalizeOptional(lifecycle.PendingAccumulatedText),
             NormalizeOptional(lifecycle.PendingFinalizeText),
             NormalizeOptional(lifecycle.PendingFinalizeCommandId),
-            lifecycle.PendingNyxRelayTerminalState);
+            lifecycle.PendingNyxRelayTerminalState,
+            lifecycle.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray());
     }
 
     /// <summary>
@@ -203,6 +206,9 @@ public sealed partial class ConversationGAgent
             PendingAccumulatedText = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingAccumulatedText,
             PendingFinalizeText = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingFinalizeText,
             PendingFinalizeCommandId = IsTerminalNyxRelayStreamingPhase(next) ? null : carried.PendingFinalizeCommandId,
+            PendingAppendedHistory = IsTerminalNyxRelayStreamingPhase(next)
+                ? []
+                : carried.PendingAppendedHistory,
             PendingTerminalState = IsTerminalNyxRelayStreamingPhase(next)
                 ? LlmReplyTerminalState.Unspecified
                 : carried.PendingTerminalState,
@@ -298,8 +304,26 @@ public sealed partial class ConversationGAgent
             evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
         if (current.PendingTerminalState != updated.PendingTerminalState)
             evt.NyxRelayTerminalState = updated.PendingTerminalState;
+        if (!HistoryEntriesEqual(current.PendingAppendedHistory, updated.PendingAppendedHistory))
+            evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
 
         return evt;
+    }
+
+    private static bool HistoryEntriesEqual(
+        IReadOnlyList<ConversationHistoryEntry> left,
+        IReadOnlyList<ConversationHistoryEntry> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private long NextNyxRelayTextOperationGeneration(NyxRelayStreamingState state) =>

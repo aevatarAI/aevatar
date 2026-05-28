@@ -1982,7 +1982,7 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-fallback-1");
-        result.Outbound.Text.Should().Be("Choose one");
+        result.Outbound.Text.Should().Be("Choose one\n• Confirm");
         result.Outbound.Actions.Should().BeEmpty();
         relayHandler.Requests.Should().ContainSingle();
         relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-fallback-1\"");
@@ -2055,7 +2055,7 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.SentActivityId.Should().Be("reply-text-fallback-1");
-        result.Outbound.Text.Should().Be("Choose one");
+        result.Outbound.Text.Should().Be("Choose one\n• Confirm");
         result.Outbound.Actions.Should().BeEmpty();
     }
 

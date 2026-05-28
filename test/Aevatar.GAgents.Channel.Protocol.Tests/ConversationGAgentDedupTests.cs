@@ -742,6 +742,96 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenSameConversationRunsTwice_InjectsAndRetainsPreviousHistory()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-1", "lark:scope-a:chat-1"));
+        var firstReady = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-1",
+            Activity = CreateActivity("act-history-1", "lark:scope-a:chat-1"),
+            Outbound = new MessageContent { Text = "first assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "first user" });
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "assistant", Content = "first assistant" });
+        await agent.HandleLlmReplyReadyAsync(firstReady);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-2", "lark:scope-a:chat-1"));
+
+        agent.State.RetainedHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("user", "first user"));
+        agent.State.RetainedHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("assistant", "first assistant"));
+        dispatcher.Dispatched.Count.ShouldBe(2);
+        dispatcher.Dispatched[0].PriorHistory.ShouldBeEmpty();
+        dispatcher.Dispatched[1].PriorHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("user", "first user"));
+        dispatcher.Dispatched[1].PriorHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("assistant", "first assistant"));
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenDifferentConversationActorRuns_DoesNotInjectOtherConversationHistory()
+    {
+        var firstDispatcher = new RecordingRunDispatcher();
+        var secondDispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (firstAgent, _) = CreateAgent(runner, "conv-lark-history-a", firstDispatcher);
+        var (secondAgent, _) = CreateAgent(runner, "conv-lark-history-b", secondDispatcher);
+
+        await firstAgent.HandleInboundActivityAsync(CreateActivity("act-history-a1", "lark:scope-a:chat-1"));
+        var firstReady = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-a1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-a1",
+            Activity = CreateActivity("act-history-a1", "lark:scope-a:chat-1"),
+            Outbound = new MessageContent { Text = "scope a assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "scope a user" });
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "assistant", Content = "scope a assistant" });
+        await firstAgent.HandleLlmReplyReadyAsync(firstReady);
+
+        await secondAgent.HandleInboundActivityAsync(CreateActivity("act-history-b1", "lark:scope-b:chat-1"));
+
+        firstAgent.State.RetainedHistory.ShouldNotBeEmpty();
+        secondAgent.State.RetainedHistory.ShouldBeEmpty();
+        secondDispatcher.Dispatched.ShouldHaveSingleItem();
+        secondDispatcher.Dispatched[0].PriorHistory.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenDuplicateCorrelationId_CollapsesToSingleOutboundCommit()
     {
         var runner = new RecordingTurnRunner();
