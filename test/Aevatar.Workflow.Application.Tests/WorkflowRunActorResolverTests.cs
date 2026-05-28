@@ -355,6 +355,32 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldReturnInvalidWorkflowYaml_WhenNamedInlineDocumentNameMismatchesYaml()
+    {
+        const string helperWorkflowYaml =
+            """
+            name: helper
+            roles: []
+            steps: []
+            """;
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[helperWorkflowYaml] = WorkflowYamlParseResult.Success("helper");
+        var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle(
+                    "foo",
+                    [new WorkflowChatInlineYamlDocument("foo", helperWorkflowYaml)])),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Target.Should().BeNull();
+        actorPort.CreateRunBindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldReturnAgentNotFound_WhenSourceActorBindingMissing()
     {
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
