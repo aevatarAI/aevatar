@@ -19,6 +19,38 @@ public class StreamForwardingRulesTests
     }
 
     [Fact]
+    public void CreateCommittedObservationBinding_ShouldMatchOnlyCommittedStateEventPublished()
+    {
+        var binding = StreamForwardingRules.CreateCommittedObservationBinding("child", "parent");
+
+        binding.SourceStreamId.Should().Be("child");
+        binding.TargetStreamId.Should().Be("parent");
+        binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        binding.DirectionFilter.Should().BeEmpty();
+        binding.EventTypeFilter.Should().ContainSingle()
+            .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
+
+        var committedEnvelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new CommittedStateEventPublished()),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("child", TopologyAudience.Self),
+        };
+        var nonCommittedEnvelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new StringValue { Value = "not committed state" }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("child", TopologyAudience.Self),
+        };
+        var emptyEnvelope = new EventEnvelope
+        {
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("child", TopologyAudience.Self),
+        };
+
+        StreamForwardingRules.Matches(binding, committedEnvelope).Should().BeTrue();
+        StreamForwardingRules.Matches(binding, nonCommittedEnvelope).Should().BeFalse();
+        StreamForwardingRules.Matches(binding, emptyEnvelope).Should().BeFalse();
+    }
+
+    [Fact]
     public void Matches_WhenDirectionFilteredOut_ShouldReturnFalse()
     {
         var envelope = new EventEnvelope

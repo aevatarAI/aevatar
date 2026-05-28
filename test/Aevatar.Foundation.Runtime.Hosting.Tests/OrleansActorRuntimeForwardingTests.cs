@@ -56,10 +56,17 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         grains["parent"].Children.Should().Contain("child");
         grains["child"].ParentId.Should().Be("parent");
-        var bindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
-        var binding = bindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
-        binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
-        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+        var parentBindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
+        var hierarchyBinding = parentBindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
+        hierarchyBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        hierarchyBinding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+
+        var childBindings = await registry.ListBySourceAsync("child", CancellationToken.None);
+        var committedObservationBinding = childBindings.Should().ContainSingle(x => x.TargetStreamId == "parent").Subject;
+        committedObservationBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        committedObservationBinding.DirectionFilter.Should().BeEmpty();
+        committedObservationBinding.EventTypeFilter.Should().ContainSingle()
+            .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
     }
 
     [Fact]
@@ -73,6 +80,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["parent"].Children.Should().NotContain("child");
         grains["child"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child", CancellationToken.None)).Should().BeEmpty();
     }
 
     [Fact]
@@ -119,6 +127,8 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["child-2"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
         (await registry.ListBySourceAsync("middle", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child-1", CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync("child-2", CancellationToken.None)).Should().BeEmpty();
         grains["middle"].Calls.Should().ContainInOrder("Purge", "Deactivate");
     }
 
