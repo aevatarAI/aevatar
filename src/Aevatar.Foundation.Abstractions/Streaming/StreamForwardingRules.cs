@@ -1,5 +1,7 @@
 namespace Aevatar.Foundation.Abstractions.Streaming;
 
+using Google.Protobuf.WellKnownTypes;
+
 /// <summary>
 /// Shared stream-forwarding rules used by local runtime and Orleans runtime.
 /// </summary>
@@ -22,6 +24,26 @@ public static class StreamForwardingRules
             [
                 TopologyAudience.Children,
                 TopologyAudience.ParentAndChildren,
+            ],
+        };
+    }
+
+    public static StreamForwardingBinding CreateCommittedObservationBinding(
+        string sourceStreamId,
+        string targetStreamId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+
+        return new StreamForwardingBinding
+        {
+            SourceStreamId = sourceStreamId,
+            TargetStreamId = targetStreamId,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [],
+            EventTypeFilter =
+            [
+                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
             ],
         };
     }

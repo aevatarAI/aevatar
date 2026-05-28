@@ -897,8 +897,9 @@ public sealed class WorkflowCoreModulesCoverageTests
         var module = new LLMCallModule();
 
         module.CanHandle(Envelope(new StepRequestEvent { StepType = "llm_call", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
-        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(RoleReply("s1", "done"))).Should().BeTrue();
+        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
+        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
         module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
         module.CanHandle(new EventEnvelope()).Should().BeFalse();
     }
@@ -1068,7 +1069,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_RoleReplyRecorded_ShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1087,11 +1088,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = textSessionId,
-                Content = "a1",
-            }, publisherId: "role-worker-1"),
+            Envelope(RoleReply(textSessionId, "a1", roleActorId: "role-worker-1")),
             ctx,
             CancellationToken.None);
 
@@ -1116,18 +1113,61 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
-            {
-                SessionId = chatSessionId,
-                Content = "a2",
-            }),
+            Envelope(RoleReply(chatSessionId, "a2", roleActorId: "role-worker-2")),
             ctx,
             CancellationToken.None);
 
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
+        chatCompleted.WorkerId.Should().Be("role-worker-2");
         chatCompleted.Output.Should().Be("a2");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_PresentationFrames_ShouldNotCompletePendingStep()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-presentation",
+                StepType = "llm_call",
+                RunId = "run-presentation",
+                Input = "q",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-presentation", "llm-presentation", attempt: 1);
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = sessionId,
+                Content = "presentation text",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = "presentation response",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(RoleReply(sessionId, "committed role reply")),
+            ctx,
+            CancellationToken.None);
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-presentation");
+        completed.Output.Should().Be("committed role reply");
     }
 
     [Fact]
@@ -1150,11 +1190,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = sessionId,
-                Content = "[[AEVATAR_LLM_ERROR]] provider returned 429",
-            }, publisherId: "role-worker-failed"),
+            Envelope(RoleReply(sessionId, "[[AEVATAR_LLM_ERROR]] provider returned 429", roleActorId: "role-worker-failed")),
             ctx,
             CancellationToken.None);
 
@@ -1202,20 +1238,12 @@ public sealed class WorkflowCoreModulesCoverageTests
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = "",
-                Content = "x",
-            }),
+            Envelope(RoleReply("", "x")),
             ctx,
             CancellationToken.None);
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
-            {
-                SessionId = "missing",
-                Content = "y",
-            }),
+            Envelope(RoleReply("missing", "y")),
             ctx,
             CancellationToken.None);
 
@@ -1494,6 +1522,20 @@ public sealed class WorkflowCoreModulesCoverageTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
     }
+
+    private static WorkflowRoleReplyRecordedEvent RoleReply(
+        string sessionId,
+        string content,
+        string roleActorId = "role-worker") =>
+        new()
+        {
+            RunId = "run",
+            RoleActorId = roleActorId,
+            RoleId = "assistant",
+            SessionId = sessionId,
+            Content = content,
+            ContentEmitted = true,
+        };
 
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool
     {

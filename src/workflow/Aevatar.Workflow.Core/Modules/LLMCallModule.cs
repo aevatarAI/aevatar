@@ -21,6 +21,11 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
+//                and converted them to StepCompletedEvent.
+//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
+//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
@@ -43,8 +48,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor) ||
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
                 payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
@@ -60,15 +64,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
         {
-            await HandleTextMessageEndAsync(payload.Unpack<TextMessageEndEvent>(), envelope, ctx, ct);
-            return;
-        }
-
-        if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            await HandleChatResponseAsync(payload.Unpack<ChatResponseEvent>(), ctx, ct);
+            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), ctx, ct);
             return;
         }
 
@@ -162,9 +160,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task HandleTextMessageEndAsync(
-        TextMessageEndEvent evt,
-        EventEnvelope envelope,
+    private async Task HandleRoleReplyRecordedAsync(
+        WorkflowRoleReplyRecordedEvent evt,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -177,10 +174,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
-            await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(pending, error, evt.RoleActorId, ctx, ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -199,49 +195,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = pending.RunId,
                 Success = true,
                 Output = evt.Content ?? string.Empty,
-                WorkerId = publisherActorId,
-            },
-            TopologyAudience.Self,
-            ct);
-        await RemovePendingAsync(sessionId, pending, ctx, ct);
-    }
-
-    private async Task HandleChatResponseAsync(
-        ChatResponseEvent evt,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        var sessionId = evt.SessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
-            return;
-
-        await StopWatchdogAsync(pending, ctx, ct);
-        if (TryExtractLlmFailure(evt.Content, out var error))
-        {
-            await PublishFailedCompletionAsync(pending, error, ctx.AgentId, ctx, ct);
-            await RemovePendingAsync(sessionId, pending, ctx, ct);
-            return;
-        }
-
-        ctx.Logger.LogInformation(
-            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed_non_streaming output_len={OutputLen} output_redacted=true",
-            pending.RunId,
-            pending.StepId,
-            sessionId,
-            evt.Content?.Length ?? 0);
-
-        await ctx.PublishAsync(
-            new StepCompletedEvent
-            {
-                StepId = pending.StepId,
-                RunId = pending.RunId,
-                Success = true,
-                Output = evt.Content ?? string.Empty,
-                WorkerId = ctx.AgentId,
+                WorkerId = evt.RoleActorId,
             },
             TopologyAudience.Self,
             ct);
