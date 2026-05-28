@@ -27,6 +27,14 @@ mkdir -p "$STATE_DIR" "$MARKER_DIR"
 
 log_msg() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
 
+md5_cmd() {
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum | awk '{print $1}'
+  else
+    md5 -q
+  fi
+}
+
 # parse log basename → target number (issue or PR)
 # 优先从对应 prompt 文件 grep "#NNN"; 次选从 log 文件名 pattern 提取
 parse_target() {
@@ -190,7 +198,7 @@ post_or_update() {
 
   local body cur_md5
   body=$(build_body "$base" "$log" "$finished")
-  cur_md5=$(echo "$body" | md5)
+  cur_md5=$(echo "$body" | md5_cmd)
 
   # 内容没变化且没 finish 切换 → skip
   if [ "$cur_md5" = "$prev_md5" ] && [ "$finished" = "$prev_finished" ]; then
