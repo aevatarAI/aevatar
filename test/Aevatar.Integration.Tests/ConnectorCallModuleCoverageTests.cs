@@ -102,7 +102,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request, correlationId: "corr-1"), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request, correlationId: "corr-1"), ctx);
 
         connector.Attempts.Should().Be(2);
         connector.LastRequest.Should().NotBeNull();
@@ -121,7 +121,8 @@ public sealed class ConnectorCallModuleCoverageTests
     public async Task HandleAsync_WhenTimeoutAndContinue_ShouldKeepInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        await registry.RegisterAsync(ConnectorRegistration.External(new DelayConnector("slow")));
+        var connector = new ManualConnector("slow");
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -137,14 +138,34 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var callTask = module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var timeout = ctx.Scheduled.Single(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(timeout), ctx, CancellationToken.None);
+
+        var completed = ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Single();
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("original");
         completed.Annotations["connector.continued_on_error"].Should().Be("true");
         completed.Annotations["connector.timeout_ms"].Should().Be("100");
         completed.Annotations.Should().ContainKey("connector.error");
+
+        connector.Complete(new ConnectorResponse
+        {
+            Success = true,
+            Output = "late",
+        });
+        await callTask;
+        await DrainConnectorContinuationsAsync(module, ctx);
+        ctx.Published.ToArray()
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle();
     }
 
     [Fact]
@@ -184,7 +205,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-secure"}""");
@@ -232,7 +253,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
@@ -258,7 +279,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
@@ -284,7 +305,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeFalse();
@@ -313,6 +334,30 @@ public sealed class ConnectorCallModuleCoverageTests
                 CorrelationId = correlationId ?? string.Empty,
             },
         };
+    }
+
+    private static async Task HandleAndDrainAsync(
+        ConnectorCallModule module,
+        EventEnvelope envelope,
+        TestEventHandlerContext ctx)
+    {
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+        await DrainConnectorContinuationsAsync(module, ctx);
+    }
+
+    private static async Task DrainConnectorContinuationsAsync(
+        ConnectorCallModule module,
+        TestEventHandlerContext ctx)
+    {
+        for (var index = 0; index < ctx.Published.Count; index++)
+        {
+            if (ctx.Published[index].evt is not WorkflowConnectorAttemptCompletedEvent completed)
+                continue;
+
+            ctx.Published.RemoveAt(index);
+            index--;
+            await module.HandleAsync(Envelope(completed), ctx, CancellationToken.None);
+        }
     }
 
     private sealed class ThrowThenSuccessConnector(string name) : IConnector
@@ -354,6 +399,24 @@ public sealed class ConnectorCallModuleCoverageTests
                 Output = "late",
             };
         }
+    }
+
+    private sealed class ManualConnector(string name) : IConnector
+    {
+        private readonly TaskCompletionSource<ConnectorResponse> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Name { get; } = name;
+        public string Type => "test";
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return _completion.Task;
+        }
+
+        public void Complete(ConnectorResponse response) => _completion.SetResult(response);
     }
 
     private sealed class EchoConnector(string name) : IConnector

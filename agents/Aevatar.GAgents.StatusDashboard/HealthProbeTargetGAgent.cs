@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -25,8 +26,10 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     public static string ProjectionKind => "health-probe-target";
 
     internal const string TickCallbackId = "health-probe-tick";
+    internal const string ExecutionTimeoutCallbackPrefix = "health-probe-execution-timeout";
     internal const int RetainedOutcomeCount = 120;
     private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
+    private TimeProvider? _cachedTimeProvider;
 
     // ─── Commands ───
 
@@ -79,7 +82,34 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             return;
         }
 
-        var outcome = await ExecuteProbeWithGuardsAsync(descriptor);
+        await StartProbeExecutionAsync(descriptor);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleTimeoutFiredAsync(HealthProbeTimeoutFiredEvent timeout)
+    {
+        ArgumentNullException.ThrowIfNull(timeout);
+        var active = State.ActiveExecution;
+        if (active == null ||
+            string.IsNullOrWhiteSpace(timeout.OperationId) ||
+            !string.Equals(active.OperationId, timeout.OperationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var timedOutAt = timeout.TimedOutAt ?? Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow());
+        var startedAt = active.StartedAt?.ToDateTimeOffset() ?? timedOutAt.ToDateTimeOffset();
+        var latencyMs = Math.Max(0, (int)Math.Round((timedOutAt.ToDateTimeOffset() - startedAt).TotalMilliseconds));
+        var timeoutMs = timeout.TimeoutMs > 0 ? timeout.TimeoutMs : active.TimeoutMs;
+        var descriptor = State.Spec;
+        var outcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Down,
+            LatencyMs = latencyMs,
+            Detail = "timeout",
+            ErrorMessage = $"Probe '{descriptor?.ProbeKind ?? active.Slug}' exceeded {timeoutMs}ms.",
+            ObservedAt = timedOutAt,
+        };
 
         try
         {
@@ -88,8 +118,34 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         catch (EventStoreOptimisticConcurrencyException ex)
         {
             Logger.LogInformation(ex,
+                "Probe {Slug} timeout outcome lost a concurrent tick race; next tick will be re-armed",
+                timeout.Slug);
+        }
+
+        await EnsureNextTickAsync(initial: false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleCompletedAsync(HealthProbeCompletedEvent completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var active = State.ActiveExecution;
+        if (active == null ||
+            string.IsNullOrWhiteSpace(completed.OperationId) ||
+            !string.Equals(active.OperationId, completed.OperationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = completed.Outcome });
+        }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            Logger.LogInformation(ex,
                 "Probe {Slug} observed outcome lost a concurrent tick race; next tick will be re-armed",
-                descriptor.Slug);
+                completed.Slug);
         }
 
         await EnsureNextTickAsync(initial: false);
@@ -97,7 +153,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
     // ─── Probe execution ───
 
-    private async Task<HealthProbeOutcome> ExecuteProbeWithGuardsAsync(HealthProbeTargetDescriptor descriptor)
+    private async Task StartProbeExecutionAsync(HealthProbeTargetDescriptor descriptor)
     {
         var registry = Services.GetService<IHealthProbeExecutorRegistry>();
         var timeProvider = ResolveTimeProvider();
@@ -108,55 +164,54 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         if (registry == null)
         {
-            return new HealthProbeOutcome
+            await ObserveImmediateOutcomeAsync(new HealthProbeOutcome
             {
                 Status = HealthOutcomeStatus.Down,
                 Detail = "registry_unavailable",
                 ErrorMessage = "IHealthProbeExecutorRegistry is not registered in DI.",
                 ObservedAt = observedAt,
-            };
+            });
+            return;
         }
 
         var executor = registry.Resolve(descriptor.ProbeKind);
         if (executor == null)
         {
-            return new HealthProbeOutcome
+            await ObserveImmediateOutcomeAsync(new HealthProbeOutcome
             {
                 Status = HealthOutcomeStatus.Down,
                 Detail = "unknown_probe_kind",
                 ErrorMessage = $"No executor registered for probe kind '{descriptor.ProbeKind}'.",
                 ObservedAt = observedAt,
-            };
+            });
+            return;
         }
 
-        var timeoutMs = descriptor.TimeoutMs > 0 ? descriptor.TimeoutMs : 5_000;
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs), timeProvider);
         var startedAt = timeProvider.GetTimestamp();
+        var timeoutMs = descriptor.TimeoutMs > 0 ? descriptor.TimeoutMs : 5_000;
+        var execution = await RegisterExecutionTimeoutAsync(descriptor, timeoutMs);
+        _ = ExecuteProbeAndSignalAsync(executor, descriptor.Clone(), execution, startedAt);
+    }
+
+    private async Task ExecuteProbeAndSignalAsync(
+        IHealthProbeExecutor executor,
+        HealthProbeTargetDescriptor descriptor,
+        HealthProbeExecutionState execution,
+        long startedAt)
+    {
+        var timeProvider = ResolveTimeProvider();
+        HealthProbeOutcome outcome;
         try
         {
-            var outcome = await executor.ProbeAsync(descriptor, cts.Token);
-            // Always overwrite latency and observed_at with the in-actor values
-            // so executors stay focused on the upstream signal.
+            outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
             outcome.LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt));
             outcome.ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
-            return outcome;
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
-        {
-            return new HealthProbeOutcome
-            {
-                Status = HealthOutcomeStatus.Down,
-                LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt)),
-                Detail = "timeout",
-                ErrorMessage = $"Probe '{descriptor.ProbeKind}' exceeded {timeoutMs}ms.",
-                ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
-            };
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Probe '{Kind}' for {Slug} threw unexpectedly",
                 descriptor.ProbeKind, descriptor.Slug);
-            return new HealthProbeOutcome
+            outcome = new HealthProbeOutcome
             {
                 Status = HealthOutcomeStatus.Down,
                 LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt)),
@@ -165,6 +220,27 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
                 ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
             };
         }
+
+        await SendToAsync(Id, new HealthProbeCompletedEvent
+        {
+            Slug = descriptor.Slug,
+            OperationId = execution.OperationId,
+            Outcome = outcome,
+        }, CancellationToken.None);
+    }
+
+    private async Task ObserveImmediateOutcomeAsync(HealthProbeOutcome outcome)
+    {
+        try
+        {
+            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
+        }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            Logger.LogInformation(ex, "Immediate probe outcome lost a concurrent tick race; next tick will be re-armed");
+        }
+
+        await EnsureNextTickAsync(initial: false);
     }
 
     // ─── Self-scheduling ───
@@ -191,6 +267,46 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             });
     }
 
+    private async Task<HealthProbeExecutionState> RegisterExecutionTimeoutAsync(
+        HealthProbeTargetDescriptor descriptor,
+        int timeoutMs)
+    {
+        var now = ResolveTimeProvider().GetUtcNow();
+        var ticks = ResolveTimeProvider().GetTimestamp();
+        var operationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            "health-probe-operation",
+            descriptor.Slug,
+            now.ToUnixTimeMilliseconds().ToString(),
+            ticks.ToString());
+        var execution = new HealthProbeExecutionState
+        {
+            OperationId = operationId,
+            Slug = descriptor.Slug,
+            StartedAt = Timestamp.FromDateTimeOffset(now),
+            TimeoutMs = timeoutMs,
+        };
+        await PersistDomainEventAsync(new HealthProbeExecutionStarted
+        {
+            Execution = execution.Clone(),
+        });
+
+        await ScheduleSelfDurableTimeoutAsync(
+            RuntimeCallbackKeyComposer.BuildCallbackId(
+                ExecutionTimeoutCallbackPrefix,
+                descriptor.Slug,
+                operationId),
+            TimeSpan.FromMilliseconds(timeoutMs),
+            new HealthProbeTimeoutFiredEvent
+            {
+                Slug = descriptor.Slug,
+                OperationId = operationId,
+                TimedOutAt = Timestamp.FromDateTimeOffset(now.AddMilliseconds(timeoutMs)),
+                TimeoutMs = timeoutMs,
+            });
+
+        return execution;
+    }
+
     // ─── Activation ───
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -213,6 +329,8 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             .Match(current, evt)
             .On<HealthProbeConfigured>(ApplyConfigured)
             .On<HealthProbeObserved>(ApplyObserved)
+            .On<HealthProbeExecutionStarted>(ApplyExecutionStarted)
+            .On<HealthProbeExecutionCleared>(ApplyExecutionCleared)
             .OrCurrent();
 
     private static HealthProbeTargetState ApplyConfigured(HealthProbeTargetState s, HealthProbeConfigured evt)
@@ -224,6 +342,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         next.LastSuccessAt = null;
         next.ConsecutiveFailures = 0;
         next.RecentOutcomes.Clear();
+        next.ActiveExecution = null;
         return next;
     }
 
@@ -238,6 +357,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             next.RecentOutcomes.Add(outcome.Clone());
             TrimRecentOutcomes(next, outcome.ObservedAt);
         }
+        next.ActiveExecution = null;
 
         if (outcome?.Status == HealthOutcomeStatus.Ok)
         {
@@ -247,6 +367,24 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         else
         {
             next.ConsecutiveFailures += 1;
+        }
+        return next;
+    }
+
+    private static HealthProbeTargetState ApplyExecutionStarted(HealthProbeTargetState s, HealthProbeExecutionStarted evt)
+    {
+        var next = s.Clone();
+        next.ActiveExecution = evt.Execution?.Clone();
+        return next;
+    }
+
+    private static HealthProbeTargetState ApplyExecutionCleared(HealthProbeTargetState s, HealthProbeExecutionCleared evt)
+    {
+        var next = s.Clone();
+        if (next.ActiveExecution != null &&
+            string.Equals(next.ActiveExecution.OperationId, evt.OperationId, StringComparison.Ordinal))
+        {
+            next.ActiveExecution = null;
         }
         return next;
     }
@@ -273,7 +411,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         timestamp != null && timestamp.ToDateTimeOffset() < cutoff;
 
     private TimeProvider ResolveTimeProvider() =>
-        Services.GetService<TimeProvider>() ?? TimeProvider.System;
+        _cachedTimeProvider ??= Services.GetService<TimeProvider>() ?? TimeProvider.System;
 
     private static int ToLatencyMs(TimeSpan elapsed) =>
         (int)Math.Clamp(elapsed.TotalMilliseconds, 0, int.MaxValue);

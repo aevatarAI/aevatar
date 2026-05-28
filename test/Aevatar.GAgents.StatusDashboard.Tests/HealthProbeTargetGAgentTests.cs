@@ -48,6 +48,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
             EventSourcingBehaviorFactory =
                 _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<HealthProbeTargetState>>(),
         };
+        _agent.EventPublisher = new InlineSelfPublisher(_agent);
         SetActorId(_agent, "health-probe::test");
         await _agent.ActivateAsync();
     }
@@ -177,7 +178,6 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     public async Task Tick_WhenProbeExceedsTimeout_UsesInjectedClockForCancellationAndOutcome()
     {
         const int timeoutBudgetMs = 30_000;
-        const int timeoutAdvanceMs = timeoutBudgetMs + 1;
         var startedAt = DateTimeOffset.Parse("2026-05-21T10:10:00Z");
         _timeProvider.SetUtcNow(startedAt);
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
@@ -189,17 +189,16 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         var tickTask = _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
         await _executor.ProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var timedOutAt = startedAt.AddMilliseconds(timeoutAdvanceMs);
-        _timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutAdvanceMs));
-
-        await tickTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var timeout = _scheduler.ScheduledEvents.OfType<HealthProbeTimeoutFiredEvent>().Single();
+        await _agent.HandleTimeoutFiredAsync(timeout);
 
         _executor.Invocations.Should().Be(1);
         _agent.State.LastOutcome.Should().NotBeNull();
         _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Down);
         _agent.State.LastOutcome.Detail.Should().Be("timeout");
-        _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset().Should().Be(timedOutAt);
-        _agent.State.LastOutcome.LatencyMs.Should().Be(timeoutAdvanceMs);
+        _agent.State.LastOutcome.ObservedAt.ToDateTimeOffset().Should().Be(startedAt.AddMilliseconds(timeoutBudgetMs));
+        _agent.State.LastOutcome.LatencyMs.Should().Be(timeoutBudgetMs);
+        tickTask.IsCompleted.Should().BeTrue("the tick turn only starts the actor-owned probe operation");
     }
 
     [Fact]
@@ -290,7 +289,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         });
 
         var scheduledBeforeTick = _scheduler.ScheduledTimeouts;
-        _eventStore.ThrowOptimisticConcurrencyOnNextAppend = true;
+        _eventStore.ThrowOptimisticConcurrencyOnNextObservedAppend = true;
         _executor.NextOutcome = new HealthProbeOutcome
         {
             Status = HealthOutcomeStatus.Ok,
@@ -300,7 +299,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
 
         _executor.Invocations.Should().Be(1);
-        _scheduler.ScheduledTimeouts.Should().Be(scheduledBeforeTick + 1,
+        _scheduler.ScheduledTimeouts.Should().Be(scheduledBeforeTick + 2,
             "a transient duplicate tick race must not kill the probe schedule");
     }
 
@@ -350,6 +349,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         public TimeSpan Delay { get; set; }
         public bool WaitForCancellation { get; set; }
         public TaskCompletionSource ProbeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ProbeCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
         {
@@ -361,12 +361,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
                 throw ex;
             }
             if (WaitForCancellation)
-            {
-                var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                await using var registration = ct.Register(static state =>
-                    ((TaskCompletionSource)state!).TrySetCanceled(), cancelled);
-                await cancelled.Task;
-            }
+                await ProbeCompletion.Task;
             if (Delay > TimeSpan.Zero)
             {
                 TimeProvider.Advance(Delay);
@@ -379,7 +374,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
 
-        public bool ThrowOptimisticConcurrencyOnNextAppend { get; set; }
+        public bool ThrowOptimisticConcurrencyOnNextObservedAppend { get; set; }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId, IEnumerable<StateEvent> events, long expectedVersion, CancellationToken ct = default)
@@ -391,9 +386,10 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
                 _events[agentId] = stream;
             }
             var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
-            if (ThrowOptimisticConcurrencyOnNextAppend)
+            if (ThrowOptimisticConcurrencyOnNextObservedAppend &&
+                events.Any(x => x.EventData.Is(HealthProbeObserved.Descriptor)))
             {
-                ThrowOptimisticConcurrencyOnNextAppend = false;
+                ThrowOptimisticConcurrencyOnNextObservedAppend = false;
                 throw new EventStoreOptimisticConcurrencyException(agentId, expectedVersion, currentVersion + 1);
             }
             if (currentVersion != expectedVersion)
@@ -444,11 +440,16 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     {
         public int ScheduledTimeouts { get; private set; }
         public IMessage? LastScheduledEvent { get; private set; }
+        public List<IMessage> ScheduledEvents { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
         {
             ScheduledTimeouts++;
-            LastScheduledEvent = request.TriggerEnvelope.Payload.Unpack<HealthProbeTickRequested>();
+            if (request.TriggerEnvelope.Payload.Is(HealthProbeTimeoutFiredEvent.Descriptor))
+                LastScheduledEvent = request.TriggerEnvelope.Payload.Unpack<HealthProbeTimeoutFiredEvent>();
+            else
+                LastScheduledEvent = request.TriggerEnvelope.Payload.Unpack<HealthProbeTickRequested>();
+            ScheduledEvents.Add(LastScheduledEvent);
             return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
@@ -460,5 +461,46 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
             Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, 1, RuntimeCallbackBackend.InMemory));
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class InlineSelfPublisher(HealthProbeTargetGAgent agent) : IEventPublisher
+    {
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            return DispatchAsync(evt, ct);
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = sourceEnvelope;
+            _ = options;
+            return DispatchAsync(evt, ct);
+        }
+
+        private async Task DispatchAsync(IMessage evt, CancellationToken ct)
+        {
+            switch (evt)
+            {
+                case HealthProbeCompletedEvent completed:
+                    await agent.HandleCompletedAsync(completed);
+                    break;
+            }
+        }
     }
 }
