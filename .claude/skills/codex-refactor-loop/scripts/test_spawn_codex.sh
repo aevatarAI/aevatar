@@ -57,6 +57,28 @@ run_dry() {
     2>"${stderr_file}"
 }
 
+run_dry_expect_exit() {
+  local prompt_file="$1"
+  local stdout_file="$2"
+  local stderr_file="$3"
+  local expected_exit="$4"
+  local actual_exit
+
+  set +e
+  "${SPAWN_CODEX}" \
+    --cd "${TMP_DIR}" \
+    --prompt "${prompt_file}" \
+    --log "${TMP_DIR}/codex.log" \
+    --timeout 3600 \
+    --dry-run \
+    >"${stdout_file}" \
+    2>"${stderr_file}"
+  actual_exit=$?
+  set -e
+
+  [[ "${actual_exit}" -eq "${expected_exit}" ]] || fail "expected exit ${expected_exit}, got ${actual_exit}"
+}
+
 case1_prompt="${TMP_DIR}/role-no-shared.md"
 case1_stdout="${TMP_DIR}/case1.stdout"
 case1_stderr="${TMP_DIR}/case1.stderr"
@@ -103,5 +125,51 @@ assert_contains "${case3_stderr}" "dry-run=1"
 assert_contains "${case3_stdout}" "# Shared hard rules"
 assert_not_contains "${case3_stderr}" "DONE:"
 [[ ! -f "${TMP_DIR}/codex.log" ]] || fail "dry-run should not invoke codex or write log"
+
+case4_prompt="${TMP_DIR}/role-blank-cluster.md"
+case4_stdout="${TMP_DIR}/case4.stdout"
+case4_stderr="${TMP_DIR}/case4.stderr"
+cat >"${case4_prompt}" <<'PROMPT'
+# Invalid blank cluster
+
+cluster ''
+PROMPT
+
+run_dry_expect_exit "${case4_prompt}" "${case4_stdout}" "${case4_stderr}" 2
+assert_contains "${case4_stderr}" "unresolved or blank placeholders"
+
+case5_prompt="${TMP_DIR}/role-missing-audit-num.md"
+case5_stdout="${TMP_DIR}/case5.stdout"
+case5_stderr="${TMP_DIR}/case5.stderr"
+cat >"${case5_prompt}" <<'PROMPT'
+# Invalid missing audit number
+
+Read /tmp/audit-iter-MISSING-NUM.md before continuing.
+PROMPT
+
+run_dry_expect_exit "${case5_prompt}" "${case5_stdout}" "${case5_stderr}" 2
+
+case6_prompt="${TMP_DIR}/role-unresolved-envsubst.md"
+case6_stdout="${TMP_DIR}/case6.stdout"
+case6_stderr="${TMP_DIR}/case6.stderr"
+cat >"${case6_prompt}" <<'PROMPT'
+# Invalid unresolved envsubst
+
+cluster ${CLUSTER_ID}
+PROMPT
+
+run_dry_expect_exit "${case6_prompt}" "${case6_stdout}" "${case6_stderr}" 2
+
+case7_prompt="${TMP_DIR}/role-valid-placeholder-check.md"
+case7_stdout="${TMP_DIR}/case7.stdout"
+case7_stderr="${TMP_DIR}/case7.stderr"
+cat >"${case7_prompt}" <<'PROMPT'
+# Valid prompt
+
+cluster cluster-1159
+Read /tmp/audit-iter-42.md before continuing.
+PROMPT
+
+run_dry_expect_exit "${case7_prompt}" "${case7_stdout}" "${case7_stderr}" 0
 
 echo "spawn-codex regression tests passed."

@@ -91,10 +91,23 @@ if ! head -5 "$PROMPT" | grep -q '^# Shared hard rules$'; then
   } > "$RENDERED_PROMPT"
 fi
 
+<<<<<<< Updated upstream
 UNRESOLVED_PROMPT_PATTERN="cluster[[:space:]]*(''|\`\`)|audit-iter-(MISSING-NUM)?\.md|\$\{[A-Z_]+\}|\{\{[A-Za-z_][A-Za-z0-9_]*\}\}"
 if grep -Eq "$UNRESOLVED_PROMPT_PATTERN" "$RENDERED_PROMPT"; then
   echo "rendered prompt contains unresolved or blank placeholders: $RENDERED_PROMPT" >&2
   grep -En "$UNRESOLVED_PROMPT_PATTERN" "$RENDERED_PROMPT" >&2 || true
+=======
+# Refactor (#1159): Old pattern: rendered prompts could contain unresolved envsubst placeholders
+# (cluster '', audit-iter-.md), leaking blank context to codex.
+# New principle: reject at render time so codex never runs with blank cluster context.
+BLANK_PLACEHOLDER_PATTERN="cluster[[:space:]]+''|audit-iter-(MISSING-NUM)?\.md"
+if grep -Eq "$BLANK_PLACEHOLDER_PATTERN" "$RENDERED_PROMPT" || grep -Fq '${CLUSTER_ID}' "$RENDERED_PROMPT"; then
+  echo "unresolved or blank placeholders in rendered prompt: $RENDERED_PROMPT" >&2
+  {
+    grep -En "$BLANK_PLACEHOLDER_PATTERN" "$RENDERED_PROMPT" || true
+    grep -Fn '${CLUSTER_ID}' "$RENDERED_PROMPT" || true
+  } | head -5 >&2
+>>>>>>> Stashed changes
   exit 2
 fi
 
