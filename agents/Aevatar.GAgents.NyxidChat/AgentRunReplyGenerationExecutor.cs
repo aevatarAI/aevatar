@@ -21,11 +21,11 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter107/cluster-1-channel-business-io-process-queue):
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
+// Refactor (iter149/issue1132): Old pattern: reply generation carried an optional handled-dispatch adapter for stream chunk delivery.  New principle: executor depends on accepted-only IActorDispatchPort and lets actor events report later completion.
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
     private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly IActorHandledDispatchPort? _actorHandledDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -42,8 +42,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ILogger<AgentRunReplyGenerationExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null,
-        IActorHandledDispatchPort? actorHandledDispatchPort = null)
+        TimeProvider? timeProvider = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -53,7 +52,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _userConfigQueryPort = userConfigQueryPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _actorHandledDispatchPort = actorHandledDispatchPort;
     }
 
     public async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
@@ -384,7 +382,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
         return new TurnStreamingReplySink(
-            _actorHandledDispatchPort ?? new AdmissionOnlyHandledDispatchPortAdapter(_actorDispatchPort),
+            _actorDispatchPort,
             targetActorId,
             request.CorrelationId,
             request.RegistrationId,
@@ -394,22 +392,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             _timeProvider,
             _logger,
             cardMode);
-    }
-
-    private sealed class AdmissionOnlyHandledDispatchPortAdapter : IActorHandledDispatchPort
-    {
-        private readonly IActorDispatchPort _dispatchPort;
-
-        public AdmissionOnlyHandledDispatchPortAdapter(IActorDispatchPort dispatchPort)
-        {
-            _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        }
-
-        public Task<DispatchAdmission> DispatchAndWaitHandledAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default) =>
-            _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
     private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink)

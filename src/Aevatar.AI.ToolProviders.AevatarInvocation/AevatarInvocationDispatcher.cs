@@ -201,18 +201,24 @@ public sealed class AevatarInvocationDispatcher
 
         var metadata = BuildLegacyMetadata(scope.Value!, request.Inputs.Headers);
         metadata[WorkflowRunCommandMetadataKeys.ScopeId] = scope.Value!.ScopeId;
+        var workflowYamls = request.WorkflowYamls.Count == 0
+            ? null
+            : request.WorkflowYamls
+                .Where(static item => !string.IsNullOrWhiteSpace(item))
+                .Select(static item => item.Trim())
+                .ToArray();
+        var workflowName = request.WorkflowId.Trim();
+        var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
+        var source = workflowYamls is { Length: > 0 }
+            ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
+            : string.IsNullOrWhiteSpace(actorId)
+                ? WorkflowChatSource.CatalogWorkflow(workflowName)
+                : WorkflowChatSource.DefinitionActor(actorId, workflowName);
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
-            WorkflowName: request.WorkflowId.Trim(),
-            ActorId: string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim(),
+            Source: source,
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
-            WorkflowYamls: request.WorkflowYamls.Count == 0
-                ? null
-                : request.WorkflowYamls
-                    .Where(static item => !string.IsNullOrWhiteSpace(item))
-                    .Select(static item => item.Trim())
-                    .ToArray(),
             Metadata: metadata,
             ScopeId: scope.Value.ScopeId);
 

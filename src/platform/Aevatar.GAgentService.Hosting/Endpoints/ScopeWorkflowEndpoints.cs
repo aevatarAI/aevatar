@@ -433,10 +433,8 @@ public static class ScopeWorkflowEndpoints
             http,
             new WorkflowChatRunRequest(
                 prompt,
-                workflow.WorkflowName,
-                workflow.ActorId,
+                WorkflowChatSource.DefinitionActor(workflow.ActorId, workflow.WorkflowName),
                 sessionId,
-                WorkflowYamls: null,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
                 LlmControl: llmControl),

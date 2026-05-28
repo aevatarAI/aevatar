@@ -34,7 +34,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -78,7 +78,7 @@ public sealed class WorkflowApplicationLayerTests
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             (frame, _) =>
             {
                 emittedFrames.Enqueue(frame);
@@ -135,7 +135,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var executeTask = service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             async (acceptedReceipt, _) =>
             {
@@ -181,7 +181,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -220,7 +220,7 @@ public sealed class WorkflowApplicationLayerTests
                     WorkflowProjectionCompletionStatus.Completed)));
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -250,7 +250,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -273,7 +273,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             pipeline);
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -291,7 +291,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             new FakeAcceptedDispatchPipeline { Result = AcceptedSuccess(target, receipt) });
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);

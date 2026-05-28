@@ -561,7 +561,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
@@ -588,7 +588,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
         var act = async () => await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", "workflow-1", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("workflow-1")),
             new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
             {
                 Target = target,

@@ -29,7 +29,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
-        var source = ResolveSource(request);
+        // Refactor (iter112/cluster-3): Old pattern: resolver rebuilt source from legacy request mirrors. New principle: Application consumes the typed WorkflowChatSource as the single command source.
+        var source = request.Source;
         var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(source.WorkflowName);
         var sourceActorId = source.ActorId;
         var inlineWorkflowYamls = source.WorkflowYamls?.ToList() ?? [];
@@ -103,23 +104,6 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             createdRun,
             workflowNameForRun,
             WorkflowChatRunStartError.None);
-    }
-
-    private static WorkflowChatSource ResolveSource(WorkflowChatRunRequest request)
-    {
-        if (request.Source != null)
-            return request.Source;
-
-        if (request.WorkflowYamls is { Count: > 0 })
-            return WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls, request.WorkflowName, request.ActorId);
-
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-            return WorkflowChatSource.DefinitionActor(request.ActorId, request.WorkflowName);
-
-        if (!string.IsNullOrWhiteSpace(request.WorkflowName))
-            return WorkflowChatSource.CatalogWorkflow(request.WorkflowName);
-
-        return WorkflowChatSource.Direct();
     }
 
     private async Task<WorkflowActorResolutionResult> ResolveFromSourceActorAsync(

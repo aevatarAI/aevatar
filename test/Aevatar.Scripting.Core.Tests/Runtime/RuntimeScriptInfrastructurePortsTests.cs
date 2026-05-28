@@ -256,6 +256,7 @@ public class RuntimeScriptInfrastructurePortsTests
         captured!.ScopeId.Should().Be("scope-9");
         captured.DefinitionActorId.Should().Be("definition-1");
         captured.Revision.Should().Be("rev-1");
+        runtime.DispatchRequests.Should().ContainSingle(x => x == "runtime-1");
     }
 
     [Fact]

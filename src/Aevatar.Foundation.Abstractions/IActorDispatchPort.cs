@@ -64,6 +64,7 @@ internal sealed record DispatchAdmissionFollowUp(
 /// <summary>
 /// Actor envelope dispatch contract.
 /// </summary>
+// Refactor (iter149/issue1132): Old pattern: handled-dispatch side contract implied actor-turn completion.  New principle: IActorDispatchPort exposes accepted-only runtime/inbox admission.
 public interface IActorDispatchPort
 {
     /// <summary>
@@ -72,16 +73,4 @@ public interface IActorDispatchPort
     /// committed, or observed by a read model.
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
-}
-
-/// <summary>
-/// Optional runtime contract for callers that explicitly require one actor turn to finish.
-/// This is separate from <see cref="IActorDispatchPort"/> so accepted-only ACK semantics stay honest.
-/// </summary>
-public interface IActorHandledDispatchPort
-{
-    Task<DispatchAdmission> DispatchAndWaitHandledAsync(
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct = default);
 }
