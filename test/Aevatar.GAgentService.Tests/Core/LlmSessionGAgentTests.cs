@@ -764,6 +764,49 @@ public sealed class LlmSessionGAgentTests
         actor.State.Completion!.OutputText.Should().Be("local result accepted");
     }
 
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderThrows_ShouldRecordFailedCompletion()
+    {
+        var provider = new ThrowingLlmProviderFactory(
+            new NyxIdAuthenticationRequiredException("nyxid"));
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.ActiveRun.FailureCode.Should().Be("authentication_required");
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.FailureCode.Should().Be("authentication_required");
+        actor.State.Completion.FailureMessage.Should().Contain("NyxID authentication required");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderCancels_ShouldRecordCancelledCompletion()
+    {
+        var provider = new ThrowingLlmProviderFactory(new OperationCanceledException());
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
+        actor.State.Record.CancelledAt.Should().NotBeNull();
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(4);
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.FailureCode.Should().Be("request_cancelled");
+        actor.State.Completion.FailureMessage.Should().Be("LLM run was cancelled.");
+    }
+
     private static LlmSessionGAgent CreateActor(
         string responseId,
         Action<IServiceCollection>? configureServices = null) =>
@@ -884,6 +927,30 @@ public sealed class LlmSessionGAgentTests
             }
 
             await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingLlmProviderFactory(Exception exception) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            throw exception;
+            #pragma warning disable CS0162
+            yield return new LLMStreamChunk();
+            #pragma warning restore CS0162
         }
     }
 
