@@ -247,7 +247,9 @@ assert_file_missing "${case7_audit_marker}"
 assert_file_missing "${case7_remote_marker}"
 assert_not_contains "${GH_LOG}" "comment"
 
-assert_not_contains "${REPORTER}" 'for log in "$LOG_DIR"/*.log'
+if grep -vE '^[[:space:]]*#' "${REPORTER}" | grep -Fq 'for log in "$LOG_DIR"/*.log'; then
+  fail "reporter still scans logs instead of markers"
+fi
 if grep -Eq '^LOG_DIR=' "${REPORTER}"; then
   fail "reporter still declares unused LOG_DIR"
 fi

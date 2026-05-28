@@ -245,8 +245,10 @@ post_or_update() {
 
 run_tick() {
   log_msg "tick"
-  # Refactor (#1172): Old: scan LOG_DIR/*.log all files (970 files, 97% wasted CPU).
-  # New: scan markers/*.json, O(in-flight count).
+  # Refactor (iter158/cluster-1172-markers-event-design):
+  # Old: for log in "$LOG_DIR"/*.log; tail -5 to detect EXIT。
+  # New: for marker in .refactor-loop/markers/*.json;读 marker.state 字段判定 finished;
+  #      不再 tail log content(spawn-codex 写 marker 是 source of truth)。
   for marker in "$MARKER_DIR"/*.json; do
     [ -f "$marker" ] || continue
     base=$(jq -r '.base // empty' "$marker" 2>/dev/null)

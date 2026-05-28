@@ -134,8 +134,12 @@ fi
 mkdir -p "$MARKER_DIR"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUNNING_TMP="$MARKER_DIR/.$BASE.running.json.$$"
-# Refactor (#1172): Old: reporter inferred active runs by scanning log files.
-# New: spawn writes marker files as the reporter's bounded progress source.
+# Refactor (iter158/cluster-1172-markers-event-design):
+# Old: spawn-codex 只写 log,reporter 必须 tail log 末尾 grep EXIT marker 判断 finished;
+#      reporter 每 600s 扫 LOG_DIR/*.log 全部(~970 files),97% 浪费 CPU + IO。
+# New: spawn-codex 启动时写 .refactor-loop/markers/<base>.running.json,EXIT 后
+#      atomic rename → <base>.done.json(含 verdict from tail grep + exit_code + finished_at)。
+#      reporter 只扫 markers/(O(in-flight count)),不再 tail log。
 jq -n \
   --arg base "$BASE" \
   --arg log_path "$LOG" \
