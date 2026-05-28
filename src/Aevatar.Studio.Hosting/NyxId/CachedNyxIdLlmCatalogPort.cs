@@ -9,7 +9,14 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.NyxId;
 
-// Refactor (iter159/cluster-646-first): Old: 每次 fetch  New: bounded SWR decorator caller-keyed
+// Refactor (iter159/cluster-646-first):
+//   Old pattern: Every IUserLlmCatalogPort.GetServicesAsync call fetched NyxID directly during the request path,
+//                amplifying NyxID catalog IO across hot-path Studio requests.
+//   New principle: Host/NyxID adapter owns a bounded stale-while-revalidate snapshot, keyed by NyxID authority +
+//                  caller bearer fingerprint. The snapshot is a non-authoritative performance hint — NOT a readmodel,
+//                  NOT actor state, NOT a query fact source. Authoritative facts remain in NyxID; cache eviction,
+//                  miss, or disabled mode falls back to authoritative fetch. ProvisionAsync invalidates the caller's
+//                  snapshot to keep stale window honest.
 internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposable
 {
     private readonly IUserLlmCatalogPort _inner;
@@ -119,6 +126,10 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
         {
             _logger.LogWarning(ex, "NyxID LLM catalog SWR refresh failed.");
         }
+        finally
+        {
+            _refreshingKeys.TryRemove(key, out _);
+        }
     }
 
     private void Store(
@@ -135,7 +146,6 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
             key,
             entry,
             new MemoryCacheEntryOptions().SetSize(1));
-        _refreshingKeys.TryRemove(key, out _);
     }
 
     private NyxIdLlmCatalogCacheKey BuildKey(string bearerToken)

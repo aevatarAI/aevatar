@@ -162,7 +162,9 @@ public sealed class CachedNyxIdLlmCatalogPortTests
         var inner = new RecordingCatalogPort();
         inner.Enqueue(MakeResult("anthropic", "/old"));
         inner.EnqueueFailure(new InvalidOperationException("NyxID unavailable"));
+        inner.Enqueue(MakeResult("anthropic", "/new"));
         var refreshCompleted = inner.SignalOnCallCompletion(callNumber: 2);
+        var retryRefreshCompleted = inner.SignalOnCallCompletion(callNumber: 3);
         var port = CreatePort(inner, timeProvider: clock);
 
         await port.GetServicesAsync("bearer-1", CancellationToken.None);
@@ -171,10 +173,13 @@ public sealed class CachedNyxIdLlmCatalogPortTests
         var stale = await port.GetServicesAsync("bearer-1", CancellationToken.None);
         await refreshCompleted.Task;
         var stillStale = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        await retryRefreshCompleted.Task;
+        var refreshed = await port.GetServicesAsync("bearer-1", CancellationToken.None);
 
         stale.Services.Single().RouteValue.Should().Be("/old");
         stillStale.Services.Single().RouteValue.Should().Be("/old");
-        inner.GetCalls.Should().Be(2);
+        refreshed.Services.Single().RouteValue.Should().Be("/new");
+        inner.GetCalls.Should().Be(3);
     }
 
     [Fact]
