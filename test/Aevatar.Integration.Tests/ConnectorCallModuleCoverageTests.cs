@@ -144,10 +144,7 @@ public sealed class ConnectorCallModuleCoverageTests
         await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var services = new ServiceCollection()
-            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
-            .BuildServiceProvider();
+        var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
@@ -201,10 +198,7 @@ public sealed class ConnectorCallModuleCoverageTests
         await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var services = new ServiceCollection()
-            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
-            .BuildServiceProvider();
+        var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
@@ -296,10 +290,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         await registry.RegisterAsync(ConnectorRegistration.External(new EchoConnector("intent")));
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var services = new ServiceCollection()
-            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
-            .BuildServiceProvider();
+        var services = new ServiceCollection().BuildServiceProvider();
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = new TestEventHandlerContext(services, new TestAgent("connector-module-test-agent"), NullLogger.Instance);
         var request = new StepRequestEvent
@@ -325,8 +316,6 @@ public sealed class ConnectorCallModuleCoverageTests
         intent.ConnectorRequestRunId.Should().Be("run-intent");
         intent.ConnectorName.Should().Be("intent");
         intent.Operation.Should().Be("op");
-
-        queue.Items.Should().BeEmpty("the actor-owned committed intent handler is responsible for transport enqueue");
     }
 
     private static TestEventHandlerContext CreateContext()

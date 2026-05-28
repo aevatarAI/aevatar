@@ -29,7 +29,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
         services.TryAddSingleton<IWorkflowConnectorResolver, RegistryBackedWorkflowConnectorResolver>();
         services.TryAddSingleton<IWorkflowStepIoExecutor, WorkflowStepIoExecutor>();
-        services.TryAddSingleton<IWorkflowStepIoDispatchQueue, WorkflowStepIoDispatchQueue>();
+        services.TryAddSingleton<WorkflowStepIoExecutorDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowStepIoWorker>());
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<

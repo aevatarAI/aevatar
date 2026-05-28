@@ -42,6 +42,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = state.FinalError ?? string.Empty,
             ExecutionStateCount = state.ExecutionStates.Count,
+            PendingIoWorkItemCount = state.PendingIoWorkItems.Count,
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,

@@ -23,6 +23,7 @@ public sealed class WorkflowExecutionReadModelMapper
             RequestedSteps = 0,
             CompletedSteps = 0,
             RoleReplyCount = 0,
+            PendingIoWorkItemCount = source.PendingIoWorkItemCount,
         };
     }
 

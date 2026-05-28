@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
@@ -218,12 +219,8 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_WhenToolConfigured_ShouldPublishCommittedIntentOnly()
     {
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var services = new ServiceCollection()
-            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
-            .BuildServiceProvider();
         var module = new ToolCallModule();
-        var ctx = CreateContext(services);
+        var ctx = CreateContext();
         var request = new StepRequestEvent
         {
             StepId = "step-intent",
@@ -244,12 +241,10 @@ public sealed class WorkflowCoreModulesCoverageTests
         intent.ExecutionId.Should().Be("exec-intent");
         intent.ToolName.Should().Be("intent_tool");
         intent.ArgumentsJson.Should().Be("""{"x":1}""");
-
-        queue.Items.Should().BeEmpty("the actor-owned committed intent handler is responsible for transport enqueue");
     }
 
     [Fact]
-    public async Task WorkflowStepIoDispatchQueue_ProcessOne_ShouldExecuteAndDispatchToolContinuation()
+    public async Task WorkflowStepIoExecutorDispatcher_ProcessOne_ShouldExecutePendingStateAndDispatchToolContinuation()
     {
         var executor = new FakeWorkflowStepIoExecutor
         {
@@ -267,11 +262,24 @@ public sealed class WorkflowCoreModulesCoverageTests
         var services = new ServiceCollection()
             .AddSingleton<IWorkflowStepIoExecutor>(executor)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<WorkflowStepIoExecutorDispatcher>()
             .BuildServiceProvider();
-        var queue = new WorkflowStepIoDispatchQueue(services);
-        var sourceEnvelope = Envelope(
-            new ToolCallIntentEvent(),
-            propagation: new EnvelopePropagation
+        var dispatcher = services.GetRequiredService<WorkflowStepIoExecutorDispatcher>();
+        var pending = new WorkflowRunState.Types.PendingIoWorkItem
+        {
+            WorkItemId = "run-worker:step-worker:exec-worker",
+            RunId = "run-worker",
+            StepId = "step-worker",
+            ExecutionId = "exec-worker",
+            ToolIntent = new ToolCallIntentEvent
+            {
+                RunId = "run-worker",
+                StepId = "step-worker",
+                ExecutionId = "exec-worker",
+                ToolName = "echo",
+                ArgumentsJson = "{}",
+            },
+            SourcePropagation = new EnvelopePropagation
             {
                 CorrelationId = "corr-worker",
                 Trace = new TraceContext
@@ -280,23 +288,11 @@ public sealed class WorkflowCoreModulesCoverageTests
                     SpanId = "span-1",
                     TraceFlags = "01",
                 },
-            });
-        sourceEnvelope.Propagation.Baggage["tenant"] = "test";
-        var workItem = WorkflowStepIoWorkItem.Create(
-            "workflow-run-worker",
-            sourceEnvelope,
-            new ToolCallIntentEvent
-            {
-                StepId = "step-worker",
-                RunId = "run-worker",
-                ExecutionId = "exec-worker",
-                ToolName = "echo",
-                ArgumentsJson = "{}",
             },
-            static (stepExecutor, intent) =>
-                stepExecutor.ExecuteToolCallAsync(intent, CancellationToken.None));
+        };
+        pending.SourcePropagation.Baggage["tenant"] = "test";
 
-        await queue.ProcessOneAsync(workItem);
+        await dispatcher.ProcessOneAsync("workflow-run-worker", pending);
 
         executor.ToolIntents.Should().ContainSingle(x => x.StepId == "step-worker");
         var dispatched = dispatchPort.Dispatches.Should().ContainSingle().Subject;
@@ -314,7 +310,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowStepIoDispatchQueue_ProcessOne_WhenExecutorFails_ShouldDispatchFailureContinuation()
+    public async Task WorkflowStepIoExecutorDispatcher_ProcessOne_WhenExecutorFails_ShouldDispatchFailureContinuation()
     {
         var executor = new FakeWorkflowStepIoExecutor
         {
@@ -324,23 +320,27 @@ public sealed class WorkflowCoreModulesCoverageTests
         var services = new ServiceCollection()
             .AddSingleton<IWorkflowStepIoExecutor>(executor)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<WorkflowStepIoExecutorDispatcher>()
             .BuildServiceProvider();
-        var queue = new WorkflowStepIoDispatchQueue(services);
-        var workItem = WorkflowStepIoWorkItem.Create(
-            "workflow-run-failure",
-            Envelope(new ToolCallIntentEvent(), propagation: new EnvelopePropagation { CorrelationId = "corr-failure" }),
-            new ToolCallIntentEvent
+        var dispatcher = services.GetRequiredService<WorkflowStepIoExecutorDispatcher>();
+        var pending = new WorkflowRunState.Types.PendingIoWorkItem
+        {
+            WorkItemId = "run-failure:step-failure:exec-failure",
+            RunId = "run-failure",
+            StepId = "step-failure",
+            ExecutionId = "exec-failure",
+            ToolIntent = new ToolCallIntentEvent
             {
-                StepId = "step-failure",
                 RunId = "run-failure",
+                StepId = "step-failure",
                 ExecutionId = "exec-failure",
                 ToolName = "explode",
                 ArgumentsJson = "{}",
             },
-            static (stepExecutor, intent) =>
-                stepExecutor.ExecuteToolCallAsync(intent, CancellationToken.None));
+            SourcePropagation = new EnvelopePropagation { CorrelationId = "corr-failure" },
+        };
 
-        await queue.ProcessOneAsync(workItem);
+        await dispatcher.ProcessOneAsync("workflow-run-failure", pending);
 
         var dispatched = dispatchPort.Dispatches.Should().ContainSingle().Subject;
         dispatched.ActorId.Should().Be("workflow-run-failure");

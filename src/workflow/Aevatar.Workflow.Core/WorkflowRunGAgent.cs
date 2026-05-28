@@ -539,24 +539,30 @@ public sealed class WorkflowRunGAgent
     public async Task HandleToolCallIntent(ToolCallIntentEvent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        await WorkflowStepIoExecutorDispatcher.DispatchToolCallAsync(
-            Id,
-            ActiveInboundEnvelope ?? new EventEnvelope(),
-            Services,
-            intent,
-            CancellationToken.None);
+        await PersistDomainEventAsync(new WorkflowStepIoWorkItemRegisteredEvent
+        {
+            WorkItemId = BuildPendingIoWorkItemId(intent.RunId, intent.StepId, intent.ExecutionId),
+            RunId = intent.RunId ?? string.Empty,
+            StepId = intent.StepId ?? string.Empty,
+            ExecutionId = intent.ExecutionId ?? string.Empty,
+            ToolIntent = intent.Clone(),
+            SourcePropagation = ActiveInboundEnvelope?.Propagation?.Clone(),
+        }, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleConnectorCallIntent(ConnectorCallIntentEvent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        await WorkflowStepIoExecutorDispatcher.DispatchConnectorCallAsync(
-            Id,
-            ActiveInboundEnvelope ?? new EventEnvelope(),
-            Services,
-            intent,
-            CancellationToken.None);
+        await PersistDomainEventAsync(new WorkflowStepIoWorkItemRegisteredEvent
+        {
+            WorkItemId = BuildPendingIoWorkItemId(intent.RunId, intent.StepId, intent.ExecutionId),
+            RunId = intent.RunId ?? string.Empty,
+            StepId = intent.StepId ?? string.Empty,
+            ExecutionId = intent.ExecutionId ?? string.Empty,
+            ConnectorIntent = intent.Clone(),
+            SourcePropagation = ActiveInboundEnvelope?.Propagation?.Clone(),
+        }, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -564,6 +570,13 @@ public sealed class WorkflowRunGAgent
     public async Task HandleToolCallContinuationResult(ToolCallContinuationResultEvent result)
     {
         ArgumentNullException.ThrowIfNull(result);
+        await PersistDomainEventAsync(new WorkflowStepIoWorkItemCompletedEvent
+        {
+            WorkItemId = BuildPendingIoWorkItemId(result.RunId, result.StepId, result.ExecutionId),
+            RunId = result.RunId ?? string.Empty,
+            StepId = result.StepId ?? string.Empty,
+            ExecutionId = result.ExecutionId ?? string.Empty,
+        }, CancellationToken.None);
         await PublishAsync(new ToolResultEvent
         {
             CallId = result.StepId,
@@ -579,6 +592,13 @@ public sealed class WorkflowRunGAgent
     public async Task HandleConnectorCallContinuationResult(ConnectorCallContinuationResultEvent result)
     {
         ArgumentNullException.ThrowIfNull(result);
+        await PersistDomainEventAsync(new WorkflowStepIoWorkItemCompletedEvent
+        {
+            WorkItemId = BuildPendingIoWorkItemId(result.RunId, result.StepId, result.ExecutionId),
+            RunId = result.RunId ?? string.Empty,
+            StepId = result.StepId ?? string.Empty,
+            ExecutionId = result.ExecutionId ?? string.Empty,
+        }, CancellationToken.None);
         await PublishAsync(WorkflowStepIoContinuationMapper.FromConnectorResult(result), TopologyAudience.Self);
     }
 
@@ -761,6 +781,8 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
             .On<WorkflowRunExecutionContextUpdatedEvent>(ApplyWorkflowRunExecutionContextUpdated)
             .On<WorkflowRunExecutionContextClearedEvent>(ApplyWorkflowRunExecutionContextCleared)
+            .On<WorkflowStepIoWorkItemRegisteredEvent>(ApplyWorkflowStepIoWorkItemRegistered)
+            .On<WorkflowStepIoWorkItemCompletedEvent>(ApplyWorkflowStepIoWorkItemCompleted)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
@@ -803,6 +825,8 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
+        next.PendingIoWorkItems.Clear();
+        next.PendingIoWorkItemIndexByWorkItemId.Clear();
         next.LastCommandId = string.Empty;
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
@@ -917,6 +941,64 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowStepIoWorkItemRegistered(
+        WorkflowRunState current,
+        WorkflowStepIoWorkItemRegisteredEvent evt)
+    {
+        var next = current.Clone();
+        var workItemId = ResolvePendingIoWorkItemId(evt.WorkItemId, evt.RunId, evt.StepId, evt.ExecutionId);
+        if (string.IsNullOrWhiteSpace(workItemId))
+            return next;
+
+        var pending = new WorkflowRunState.Types.PendingIoWorkItem
+        {
+            WorkItemId = workItemId,
+            RunId = evt.RunId ?? string.Empty,
+            StepId = evt.StepId ?? string.Empty,
+            ExecutionId = evt.ExecutionId ?? string.Empty,
+            SourcePropagation = evt.SourcePropagation?.Clone(),
+        };
+
+        switch (evt.IntentCase)
+        {
+            case WorkflowStepIoWorkItemRegisteredEvent.IntentOneofCase.ToolIntent:
+                pending.ToolIntent = evt.ToolIntent.Clone();
+                break;
+            case WorkflowStepIoWorkItemRegisteredEvent.IntentOneofCase.ConnectorIntent:
+                pending.ConnectorIntent = evt.ConnectorIntent.Clone();
+                break;
+            default:
+                return next;
+        }
+
+        if (TryFindPendingIoWorkItemIndex(next, workItemId, out var existingIndex))
+        {
+            next.PendingIoWorkItems[existingIndex] = pending;
+            next.PendingIoWorkItemIndexByWorkItemId[workItemId] = existingIndex;
+            return next;
+        }
+
+        next.PendingIoWorkItems.Add(pending);
+        next.PendingIoWorkItemIndexByWorkItemId[workItemId] = next.PendingIoWorkItems.Count - 1;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowStepIoWorkItemCompleted(
+        WorkflowRunState current,
+        WorkflowStepIoWorkItemCompletedEvent evt)
+    {
+        var next = current.Clone();
+        var workItemId = ResolvePendingIoWorkItemId(evt.WorkItemId, evt.RunId, evt.StepId, evt.ExecutionId);
+        if (string.IsNullOrWhiteSpace(workItemId) ||
+            !TryFindPendingIoWorkItemIndex(next, workItemId, out var index))
+        {
+            return next;
+        }
+
+        RemovePendingIoWorkItemAt(next, index);
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowExecutionStateUpserted(WorkflowRunState current, WorkflowExecutionStateUpsertedEvent evt)
     {
         var next = current.Clone();
@@ -953,6 +1035,8 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
+        next.PendingIoWorkItems.Clear();
+        next.PendingIoWorkItemIndexByWorkItemId.Clear();
         return next;
     }
 
@@ -965,6 +1049,8 @@ public sealed class WorkflowRunGAgent
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
+        next.PendingIoWorkItems.Clear();
+        next.PendingIoWorkItemIndexByWorkItemId.Clear();
         return next;
     }
 
@@ -982,7 +1068,71 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
+        next.PendingIoWorkItems.Clear();
+        next.PendingIoWorkItemIndexByWorkItemId.Clear();
         return next;
+    }
+
+    private static string BuildPendingIoWorkItemId(string? runId, string? stepId, string? executionId) =>
+        string.Join(
+            ":",
+            [
+                string.IsNullOrWhiteSpace(runId) ? "_" : runId.Trim(),
+                string.IsNullOrWhiteSpace(stepId) ? "_" : stepId.Trim(),
+                string.IsNullOrWhiteSpace(executionId) ? "_" : executionId.Trim(),
+            ]);
+
+    private static string ResolvePendingIoWorkItemId(
+        string? workItemId,
+        string? runId,
+        string? stepId,
+        string? executionId) =>
+        string.IsNullOrWhiteSpace(workItemId)
+            ? BuildPendingIoWorkItemId(runId, stepId, executionId)
+            : workItemId.Trim();
+
+    private static bool TryFindPendingIoWorkItemIndex(
+        WorkflowRunState state,
+        string workItemId,
+        out int index)
+    {
+        if (state.PendingIoWorkItemIndexByWorkItemId.TryGetValue(workItemId, out var mappedIndex) &&
+            mappedIndex >= 0 &&
+            mappedIndex < state.PendingIoWorkItems.Count &&
+            string.Equals(state.PendingIoWorkItems[mappedIndex].WorkItemId, workItemId, StringComparison.Ordinal))
+        {
+            index = mappedIndex;
+            return true;
+        }
+
+        for (var i = 0; i < state.PendingIoWorkItems.Count; i++)
+        {
+            if (!string.Equals(state.PendingIoWorkItems[i].WorkItemId, workItemId, StringComparison.Ordinal))
+                continue;
+
+            index = i;
+            return true;
+        }
+
+        index = -1;
+        return false;
+    }
+
+    private static void RemovePendingIoWorkItemAt(WorkflowRunState state, int index)
+    {
+        var removedWorkItemId = state.PendingIoWorkItems[index].WorkItemId;
+        var tailIndex = state.PendingIoWorkItems.Count - 1;
+        if (index != tailIndex)
+        {
+            var moved = state.PendingIoWorkItems[tailIndex].Clone();
+            state.PendingIoWorkItems[index] = moved;
+            if (!string.IsNullOrWhiteSpace(moved.WorkItemId))
+                state.PendingIoWorkItemIndexByWorkItemId[moved.WorkItemId] = index;
+        }
+
+        state.PendingIoWorkItems.RemoveAt(tailIndex);
+        if (!string.IsNullOrWhiteSpace(removedWorkItemId))
+            state.PendingIoWorkItemIndexByWorkItemId.Remove(removedWorkItemId);
     }
 
     private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolvedEvent _) => current;

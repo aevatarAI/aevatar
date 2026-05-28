@@ -6,11 +6,15 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Integration.Tests;
 
@@ -171,13 +175,16 @@ public class ConnectorCallIntegrationTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(registry);
+        var workflowSnapshots = new MutableWorkflowExecutionCurrentStateQueryPort();
+        services.AddSingleton(workflowSnapshots);
+        services.AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(workflowSnapshots);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        return new TestEnvironment(provider, runtime);
+        return new TestEnvironment(provider, runtime, workflowSnapshots);
     }
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
@@ -188,6 +195,7 @@ public class ConnectorCallIntegrationTests
     {
         var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-definition-" + Guid.NewGuid().ToString("N")[..8]);
         var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-root-run-" + Guid.NewGuid().ToString("N")[..8]);
+        provider.GetRequiredService<MutableWorkflowExecutionCurrentStateQueryPort>().Upsert(runActor.Id);
 
         await definitionActor.HandleEventAsync(new EventEnvelope
         {
@@ -226,6 +234,7 @@ public class ConnectorCallIntegrationTests
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
         var workflowCompleted = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ioIntentObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
@@ -235,6 +244,11 @@ public class ConnectorCallIntegrationTests
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 stepCompletions.Add(payload.Unpack<StepCompletedEvent>());
+            }
+            else if (payload.Is(ToolCallIntentEvent.Descriptor) ||
+                     payload.Is(ConnectorCallIntentEvent.Descriptor))
+            {
+                ioIntentObserved.TrySetResult();
             }
             else if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
@@ -253,6 +267,19 @@ public class ConnectorCallIntegrationTests
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var first = await Task.WhenAny(workflowCompleted.Task, ioIntentObserved.Task.WaitAsync(timeout.Token));
+        if (first != workflowCompleted.Task)
+        {
+            var worker = new WorkflowStepIoWorker(provider, NullLogger<WorkflowStepIoWorker>.Instance);
+            await worker.ScanPendingItemsAsync(timeout.Token);
+        }
+
+        while (!workflowCompleted.Task.IsCompleted)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
+
         var completed = await workflowCompleted.Task.WaitAsync(timeout.Token);
         await runtime.DestroyAsync(runActor.Id);
         await runtime.DestroyAsync(definitionActor.Id);
@@ -293,7 +320,52 @@ public class ConnectorCallIntegrationTests
         }
     }
 
-    private sealed record TestEnvironment(ServiceProvider Provider, IActorRuntime Runtime) : IAsyncDisposable
+    private sealed class MutableWorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
+    {
+        private readonly List<WorkflowActorSnapshot> _snapshots = [];
+
+        public bool EnableActorQueryEndpoints => true;
+
+        public void Upsert(string actorId)
+        {
+            _snapshots.RemoveAll(x => string.Equals(x.ActorId, actorId, StringComparison.Ordinal));
+            _snapshots.Add(new WorkflowActorSnapshot
+            {
+                ActorId = actorId,
+                PendingIoWorkItemCount = 1,
+            });
+        }
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_snapshots.FirstOrDefault(x =>
+                string.Equals(x.ActorId, actorId, StringComparison.Ordinal)));
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>(_snapshots.Take(take).ToList());
+        }
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowActorProjectionState?>(null);
+        }
+    }
+
+    private sealed record TestEnvironment(
+        ServiceProvider Provider,
+        IActorRuntime Runtime,
+        MutableWorkflowExecutionCurrentStateQueryPort WorkflowSnapshots) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
         {

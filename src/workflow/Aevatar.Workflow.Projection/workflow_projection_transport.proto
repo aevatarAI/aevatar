@@ -50,6 +50,7 @@ message WorkflowExecutionCurrentStateDocument {
   string final_error = 15;
   int32 execution_state_count = 16;
   google.protobuf.BoolValue success_wrapper = 17;
+  int32 pending_io_work_item_count = 18;
 }
 
 message WorkflowExecutionTopologyEdge {

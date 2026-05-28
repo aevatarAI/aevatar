@@ -14,6 +14,8 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -1604,14 +1606,9 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_HandleToolCallIntent_ShouldEnqueueCommittedIntentFromActorHandler()
+    public async Task WorkflowRunGAgent_HandleToolCallIntent_ShouldPersistPendingIoWorkItemInActorState()
     {
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var agent = CreateRunAgent(servicesConfigure: services =>
-        {
-            services.RemoveAll<IWorkflowStepIoDispatchQueue>();
-            services.AddSingleton<IWorkflowStepIoDispatchQueue>(queue);
-        });
+        var agent = CreateRunAgent();
         SetAgentId(agent, "workflow-run-tool-intent");
         var intent = new ToolCallIntentEvent
         {
@@ -1629,21 +1626,18 @@ public class WorkflowGAgentCoverageTests
 
         await agent.HandleEventAsync(inbound);
 
-        var item = queue.Items.Should().ContainSingle().Subject;
-        item.TargetActorId.Should().Be("workflow-run-tool-intent");
-        item.Intent.Should().BeOfType<ToolCallIntentEvent>().Which.StepId.Should().Be("tool-step");
-        item.SourceEnvelope.Propagation.CorrelationId.Should().Be("corr-tool-intent");
+        var item = agent.State.PendingIoWorkItems.Should().ContainSingle().Subject;
+        item.WorkItemId.Should().Be("run-tool:tool-step:exec-tool");
+        item.ToolIntent.StepId.Should().Be("tool-step");
+        item.ToolIntent.ToolName.Should().Be("echo");
+        item.SourcePropagation.CorrelationId.Should().Be("corr-tool-intent");
+        agent.State.PendingIoWorkItemIndexByWorkItemId["run-tool:tool-step:exec-tool"].Should().Be(0);
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_HandleConnectorCallIntent_ShouldEnqueueCommittedIntentFromActorHandler()
+    public async Task WorkflowRunGAgent_HandleConnectorCallIntent_ShouldPersistPendingIoWorkItemInActorState()
     {
-        var queue = new RecordingWorkflowStepIoDispatchQueue();
-        var agent = CreateRunAgent(servicesConfigure: services =>
-        {
-            services.RemoveAll<IWorkflowStepIoDispatchQueue>();
-            services.AddSingleton<IWorkflowStepIoDispatchQueue>(queue);
-        });
+        var agent = CreateRunAgent();
         SetAgentId(agent, "workflow-run-connector-intent");
         var intent = new ConnectorCallIntentEvent
         {
@@ -1665,10 +1659,12 @@ public class WorkflowGAgentCoverageTests
 
         await agent.HandleEventAsync(inbound);
 
-        var item = queue.Items.Should().ContainSingle().Subject;
-        item.TargetActorId.Should().Be("workflow-run-connector-intent");
-        item.Intent.Should().BeOfType<ConnectorCallIntentEvent>().Which.StepId.Should().Be("connector-step");
-        item.SourceEnvelope.Propagation.CorrelationId.Should().Be("corr-connector-intent");
+        var item = agent.State.PendingIoWorkItems.Should().ContainSingle().Subject;
+        item.WorkItemId.Should().Be("run-connector:connector-step:exec-connector");
+        item.ConnectorIntent.StepId.Should().Be("connector-step");
+        item.ConnectorIntent.ConnectorName.Should().Be("http");
+        item.SourcePropagation.CorrelationId.Should().Be("corr-connector-intent");
+        agent.State.PendingIoWorkItemIndexByWorkItemId["run-connector:connector-step:exec-connector"].Should().Be(0);
     }
 
     [Fact]
@@ -1709,6 +1705,36 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_HandleToolCallContinuationResult_ShouldClearPendingIoWorkItem()
+    {
+        var agent = CreateRunAgent();
+        SetAgentId(agent, "workflow-run-tool-clear-pending");
+        await agent.HandleEventAsync(Envelope(new ToolCallIntentEvent
+        {
+            StepId = "tool-step",
+            RunId = "run-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "echo",
+            ArgumentsJson = "{}",
+        }, "workflow-run-tool-clear-pending", TopologyAudience.Self));
+
+        agent.State.PendingIoWorkItems.Should().ContainSingle();
+
+        await agent.HandleEventAsync(Envelope(new ToolCallContinuationResultEvent
+        {
+            StepId = "tool-step",
+            RunId = "run-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "echo",
+            Success = true,
+            ResultJson = "{}",
+        }, "workflow-run-tool-clear-pending", TopologyAudience.Self));
+
+        agent.State.PendingIoWorkItems.Should().BeEmpty();
+        agent.State.PendingIoWorkItemIndexByWorkItemId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_HandleConnectorCallContinuationResult_ShouldPublishStepCompleted()
     {
         var publisher = new RecordingEventPublisher();
@@ -1743,6 +1769,60 @@ public class WorkflowGAgentCoverageTests
         completed.Annotations["connector.name"].Should().Be("http");
         completed.Annotations["connector.operation"].Should().Be("post");
         completed.Annotations["connector.attempts"].Should().Be("2");
+    }
+
+    [Fact]
+    public async Task WorkflowStepIoWorker_AfterRestart_ShouldConsumePendingActorStateAndDispatchContinuation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = runtime;
+        var executor = new FakeWorkflowStepIoExecutor
+        {
+            ToolResult = new ToolCallContinuationResultEvent
+            {
+                StepId = "tool-step",
+                RunId = "run-tool",
+                ExecutionId = "exec-tool",
+                ToolName = "echo",
+                Success = true,
+                ResultJson = """{"ok":true}""",
+            },
+        };
+        var queryPort = new RecordingWorkflowExecutionCurrentStateQueryPort([
+            new()
+            {
+                ActorId = "workflow-run-worker-restart",
+                PendingIoWorkItemCount = 1,
+            },
+        ]);
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<IWorkflowStepIoExecutor>(executor)
+            .AddSingleton<IWorkflowExecutionCurrentStateQueryPort>(queryPort)
+            .AddSingleton<WorkflowStepIoExecutorDispatcher>()
+            .BuildServiceProvider();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-worker-restart");
+        runtime.RegisterAgent("workflow-run-worker-restart", agent);
+        await agent.HandleEventAsync(Envelope(new ToolCallIntentEvent
+        {
+            StepId = "tool-step",
+            RunId = "run-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "echo",
+            ArgumentsJson = "{}",
+        }, "workflow-run-worker-restart", TopologyAudience.Self));
+        agent.State.PendingIoWorkItems.Should().ContainSingle();
+
+        var restartedWorker = new WorkflowStepIoWorker(
+            services,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkflowStepIoWorker>.Instance);
+        await restartedWorker.ScanPendingItemsAsync();
+
+        executor.ToolIntents.Should().ContainSingle(x => x.StepId == "tool-step");
+        runtime.DispatchRequests.Should().Contain("workflow-run-worker-restart");
+        agent.State.PendingIoWorkItems.Should().BeEmpty();
     }
 
     private static WorkflowGAgent CreateDefinitionAgent(IEventStore? eventStore = null)
@@ -2115,6 +2195,76 @@ public class WorkflowGAgentCoverageTests
             var child = new FakeWorkflowRunChildAgent(actorId);
             CreatedChildWorkflowAgents.Add(child);
             return child;
+        }
+    }
+
+    private sealed class RecordingWorkflowExecutionCurrentStateQueryPort(
+        IReadOnlyList<WorkflowActorSnapshot> snapshots)
+        : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public bool EnableActorQueryEndpoints => true;
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(snapshots.FirstOrDefault(x =>
+                string.Equals(x.ActorId, actorId, StringComparison.Ordinal)));
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>(snapshots.Take(take).ToList());
+        }
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowActorProjectionState?>(null);
+        }
+    }
+
+    private sealed class FakeWorkflowStepIoExecutor : IWorkflowStepIoExecutor
+    {
+        public List<ToolCallIntentEvent> ToolIntents { get; } = [];
+        public ToolCallContinuationResultEvent? ToolResult { get; init; }
+
+        public Task<ToolCallContinuationResultEvent> ExecuteToolCallAsync(
+            ToolCallIntentEvent intent,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ToolIntents.Add(intent.Clone());
+            return Task.FromResult(ToolResult?.Clone() ?? new ToolCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ToolName = intent.ToolName,
+                Success = true,
+            });
+        }
+
+        public Task<ConnectorCallContinuationResultEvent> ExecuteConnectorCallAsync(
+            ConnectorCallIntentEvent intent,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ConnectorCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ConnectorName = intent.ConnectorName,
+                Operation = intent.Operation,
+                Success = true,
+            });
         }
     }
 

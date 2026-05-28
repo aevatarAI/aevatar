@@ -22,6 +22,7 @@ message WorkflowActorSnapshot {
   int32 requested_steps = 12;
   int32 completed_steps = 13;
   int32 role_reply_count = 14;
+  int32 pending_io_work_item_count = 15;
 }
 
 message WorkflowActorProjectionState {

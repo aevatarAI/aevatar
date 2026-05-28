@@ -1,142 +1,37 @@
-using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Core.Modules;
 
-internal static class WorkflowStepIoExecutorDispatcher
+internal sealed class WorkflowStepIoExecutorDispatcher
 {
-    public static Task DispatchToolCallAsync(
-        string targetActorId,
-        EventEnvelope sourceEnvelope,
-        IServiceProvider services,
-        ToolCallIntentEvent intent,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
-        ArgumentNullException.ThrowIfNull(sourceEnvelope);
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(intent);
-        var queue = services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
-        return queue.EnqueueAsync(
-            WorkflowStepIoWorkItem.Create(
-                targetActorId,
-                sourceEnvelope,
-                intent.Clone(),
-                static (executor, typedIntent) =>
-                    executor.ExecuteToolCallAsync(typedIntent, CancellationToken.None)),
-            ct).AsTask();
-    }
-
-    public static Task DispatchConnectorCallAsync(
-        string targetActorId,
-        EventEnvelope sourceEnvelope,
-        IServiceProvider services,
-        ConnectorCallIntentEvent intent,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
-        ArgumentNullException.ThrowIfNull(sourceEnvelope);
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(intent);
-        var queue = services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
-        return queue.EnqueueAsync(
-            WorkflowStepIoWorkItem.Create(
-                targetActorId,
-                sourceEnvelope,
-                intent.Clone(),
-                static (executor, typedIntent) =>
-                    executor.ExecuteConnectorCallAsync(typedIntent, CancellationToken.None)),
-            ct).AsTask();
-    }
-}
-
-internal interface IWorkflowStepIoDispatchQueue
-{
-    ValueTask EnqueueAsync(WorkflowStepIoWorkItem item, CancellationToken ct);
-    IAsyncEnumerable<WorkflowStepIoWorkItem> DequeueAllAsync(CancellationToken ct);
-}
-
-internal sealed class WorkflowStepIoDispatchQueue : IWorkflowStepIoDispatchQueue, IDisposable
-{
-    private const int Capacity = 256;
-    private const int WorkerCount = 4;
     private readonly IServiceProvider _services;
-    private readonly ILogger _logger;
-    private readonly CancellationTokenSource _shutdown = new();
-    private int _started;
-    private readonly Channel<WorkflowStepIoWorkItem> _channel = Channel.CreateBounded<WorkflowStepIoWorkItem>(
-        new BoundedChannelOptions(Capacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
-            SingleWriter = false,
-        });
 
-    public WorkflowStepIoDispatchQueue(
-        IServiceProvider services,
-        ILogger<WorkflowStepIoDispatchQueue>? logger = null)
+    public WorkflowStepIoExecutorDispatcher(IServiceProvider services)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
-        _logger = logger ?? NullLogger<WorkflowStepIoDispatchQueue>.Instance;
     }
 
-    public ValueTask EnqueueAsync(WorkflowStepIoWorkItem item, CancellationToken ct)
+    internal async Task ProcessOneAsync(
+        string targetActorId,
+        WorkflowRunState.Types.PendingIoWorkItem pending,
+        CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(item);
-        EnsureStarted();
-        return _channel.Writer.WriteAsync(item, ct);
-    }
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
+        ArgumentNullException.ThrowIfNull(pending);
 
-    public IAsyncEnumerable<WorkflowStepIoWorkItem> DequeueAllAsync(CancellationToken ct) =>
-        _channel.Reader.ReadAllAsync(ct);
-
-    public void EnsureStarted()
-    {
-        if (Interlocked.Exchange(ref _started, 1) == 1)
-            return;
-
-        for (var i = 0; i < WorkerCount; i++)
-            _ = Task.Run(() => ProcessQueueAsync(_shutdown.Token));
-    }
-
-    private async Task ProcessQueueAsync(CancellationToken stoppingToken)
-    {
-        await foreach (var item in DequeueAllAsync(stoppingToken))
-        {
-            try
-            {
-                await ProcessOneAsync(item, stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Workflow step IO worker failed. targetActorId={TargetActorId} intent={IntentType}",
-                    item.TargetActorId,
-                    item.Intent.Descriptor.FullName);
-            }
-        }
-    }
-
-    internal async Task ProcessOneAsync(WorkflowStepIoWorkItem item, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(item);
+        var item = WorkflowStepIoWorkItem.FromPending(targetActorId, pending);
         var executor = _services.GetRequiredService<IWorkflowStepIoExecutor>();
         var dispatchPort = _services.GetRequiredService<IActorDispatchPort>();
         IMessage continuation;
         try
         {
-            continuation = await item.ExecuteAsync(executor);
+            continuation = await item.ExecuteAsync(executor, ct);
         }
         catch (Exception ex)
         {
@@ -146,34 +41,94 @@ internal sealed class WorkflowStepIoDispatchQueue : IWorkflowStepIoDispatchQueue
         var envelope = WorkflowStepIoContinuationEnvelopeFactory.Create(item, continuation);
         await dispatchPort.DispatchAsync(item.TargetActorId, envelope, ct);
     }
-
-    public void Dispose()
-    {
-        _shutdown.Cancel();
-        _shutdown.Dispose();
-    }
 }
 
 internal sealed class WorkflowStepIoWorker : BackgroundService
 {
-    private readonly IWorkflowStepIoDispatchQueue _queue;
+    private readonly IServiceProvider _services;
     private readonly ILogger<WorkflowStepIoWorker> _logger;
 
     public WorkflowStepIoWorker(
-        IWorkflowStepIoDispatchQueue queue,
+        IServiceProvider services,
         ILogger<WorkflowStepIoWorker> logger)
     {
-        _queue = queue ?? throw new ArgumentNullException(nameof(queue));
+        _services = services ?? throw new ArgumentNullException(nameof(services));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_queue is WorkflowStepIoDispatchQueue queue)
-            queue.EnsureStarted();
-        else
-            _logger.LogDebug("Workflow step IO dispatch queue is provided by {QueueType}", _queue.GetType().Name);
-        return Task.CompletedTask;
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            try
+            {
+                await ScanPendingItemsAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workflow step IO worker scan failed.");
+            }
+        }
+    }
+
+    internal async Task ScanPendingItemsAsync(CancellationToken ct = default)
+    {
+        var queryPort = _services.GetService<IWorkflowExecutionCurrentStateQueryPort>();
+        if (queryPort == null)
+        {
+            _logger.LogDebug("Workflow step IO worker skipped because no workflow current-state query port is registered.");
+            return;
+        }
+
+        var snapshots = await queryPort.ListActorSnapshotsAsync(1000, ct);
+        foreach (var snapshot in snapshots.Where(x => x.PendingIoWorkItemCount > 0))
+            await ProcessActorPendingItemsAsync(snapshot.ActorId, ct);
+    }
+
+    internal async Task ProcessActorPendingItemsAsync(string actorId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorId))
+            return;
+
+        var runtime = _services.GetService<IActorRuntime>();
+        if (runtime == null)
+        {
+            _logger.LogDebug("Workflow step IO worker skipped actor {ActorId} because no actor runtime is registered.", actorId);
+            return;
+        }
+
+        var actor = await runtime.GetAsync(actorId.Trim());
+        if (actor?.Agent is not IAgent<WorkflowRunState> workflowRun)
+            return;
+
+        var dispatcher = _services.GetRequiredService<WorkflowStepIoExecutorDispatcher>();
+        var pendingItems = workflowRun.State.PendingIoWorkItems
+            .Select(x => x.Clone())
+            .ToList();
+        foreach (var pending in pendingItems)
+        {
+            try
+            {
+                await dispatcher.ProcessOneAsync(actorId, pending, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Workflow step IO worker failed. targetActorId={TargetActorId} workItemId={WorkItemId}",
+                    actorId,
+                    pending.WorkItemId);
+            }
+        }
     }
 }
 
@@ -191,8 +146,8 @@ internal static class WorkflowStepIoContinuationEnvelopeFactory
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(item.TargetActorId, TopologyAudience.Self),
         };
 
-        if (item.SourceEnvelope.Propagation != null)
-            envelope.Propagation = item.SourceEnvelope.Propagation.Clone();
+        if (item.SourcePropagation != null)
+            envelope.Propagation = item.SourcePropagation.Clone();
 
         return envelope;
     }
@@ -233,43 +188,75 @@ internal static class WorkflowStepIoContinuationEnvelopeFactory
 
 internal sealed class WorkflowStepIoWorkItem
 {
-    private readonly Func<IWorkflowStepIoExecutor, Task<IMessage>> _execute;
+    private readonly Func<IWorkflowStepIoExecutor, CancellationToken, Task<IMessage>> _execute;
 
     private WorkflowStepIoWorkItem(
         string targetActorId,
-        EventEnvelope sourceEnvelope,
+        string workItemId,
+        EnvelopePropagation? sourcePropagation,
         IMessage intent,
-        Func<IWorkflowStepIoExecutor, Task<IMessage>> execute)
+        Func<IWorkflowStepIoExecutor, CancellationToken, Task<IMessage>> execute)
     {
         TargetActorId = targetActorId;
-        SourceEnvelope = sourceEnvelope;
+        WorkItemId = workItemId;
+        SourcePropagation = sourcePropagation;
         Intent = intent;
         _execute = execute;
     }
 
     public string TargetActorId { get; }
-    public EventEnvelope SourceEnvelope { get; }
+    public string WorkItemId { get; }
+    public EnvelopePropagation? SourcePropagation { get; }
     public IMessage Intent { get; }
 
-    public static WorkflowStepIoWorkItem Create<TIntent, TContinuation>(
+    public static WorkflowStepIoWorkItem FromPending(
         string targetActorId,
-        EventEnvelope sourceEnvelope,
+        WorkflowRunState.Types.PendingIoWorkItem pending)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
+        ArgumentNullException.ThrowIfNull(pending);
+
+        return pending.IntentCase switch
+        {
+            WorkflowRunState.Types.PendingIoWorkItem.IntentOneofCase.ToolIntent => Create(
+                targetActorId,
+                pending.WorkItemId,
+                pending.SourcePropagation,
+                pending.ToolIntent,
+                static (executor, typedIntent, token) =>
+                    executor.ExecuteToolCallAsync(typedIntent, token)),
+            WorkflowRunState.Types.PendingIoWorkItem.IntentOneofCase.ConnectorIntent => Create(
+                targetActorId,
+                pending.WorkItemId,
+                pending.SourcePropagation,
+                pending.ConnectorIntent,
+                static (executor, typedIntent, token) =>
+                    executor.ExecuteConnectorCallAsync(typedIntent, token)),
+            _ => throw new InvalidOperationException(
+                $"Workflow step IO work item '{pending.WorkItemId}' has no intent."),
+        };
+    }
+
+    private static WorkflowStepIoWorkItem Create<TIntent, TContinuation>(
+        string targetActorId,
+        string workItemId,
+        EnvelopePropagation? sourcePropagation,
         TIntent intent,
-        Func<IWorkflowStepIoExecutor, TIntent, Task<TContinuation>> execute)
+        Func<IWorkflowStepIoExecutor, TIntent, CancellationToken, Task<TContinuation>> execute)
         where TIntent : class, IMessage<TIntent>
         where TContinuation : IMessage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
-        ArgumentNullException.ThrowIfNull(sourceEnvelope);
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(execute);
 
         return new WorkflowStepIoWorkItem(
             targetActorId.Trim(),
-            sourceEnvelope.Clone(),
+            workItemId?.Trim() ?? string.Empty,
+            sourcePropagation?.Clone(),
             intent.Clone(),
-            async executor => await execute(executor, intent.Clone()));
+            async (executor, token) => await execute(executor, intent.Clone(), token));
     }
 
-    public Task<IMessage> ExecuteAsync(IWorkflowStepIoExecutor executor) => _execute(executor);
+    public Task<IMessage> ExecuteAsync(IWorkflowStepIoExecutor executor, CancellationToken ct) => _execute(executor, ct);
 }

@@ -3,6 +3,7 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "agent_messages.proto";
 
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
 message BindWorkflowRunDefinitionEvent
@@ -143,6 +144,23 @@ message ConnectorCallContinuationResultEvent {
   int32 timeout_ms = 11;
   double duration_ms = 12;
   map<string, string> annotations = 13;
+}
+message WorkflowStepIoWorkItemRegisteredEvent {
+  string work_item_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string execution_id = 4;
+  oneof intent {
+    ToolCallIntentEvent tool_intent = 5;
+    ConnectorCallIntentEvent connector_intent = 6;
+  }
+  aevatar.EnvelopePropagation source_propagation = 7;
+}
+message WorkflowStepIoWorkItemCompletedEvent {
+  string work_item_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string execution_id = 4;
 }
 message SubWorkflowInvokeRequestedEvent
 {

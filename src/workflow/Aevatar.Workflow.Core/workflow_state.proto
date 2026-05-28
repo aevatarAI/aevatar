@@ -4,6 +4,8 @@ option csharp_namespace = "Aevatar.Workflow.Core";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "agent_messages.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowState
 {
@@ -119,6 +121,19 @@ message WorkflowRunState
     repeated string child_run_ids = 1;
   }
 
+  message PendingIoWorkItem
+  {
+    string work_item_id = 1;
+    string run_id = 2;
+    string step_id = 3;
+    string execution_id = 4;
+    oneof intent {
+      ToolCallIntentEvent tool_intent = 5;
+      ConnectorCallIntentEvent connector_intent = 6;
+    }
+    aevatar.EnvelopePropagation source_propagation = 7;
+  }
+
   string definition_actor_id = 1;
   string workflow_yaml = 2;
   string workflow_name = 3;
@@ -141,6 +156,8 @@ message WorkflowRunState
   repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
   map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
   WorkflowRunExecutionContextState execution_context = 21;
+  repeated PendingIoWorkItem pending_io_work_items = 22;
+  map<string, int32> pending_io_work_item_index_by_work_item_id = 23;
 }
 
 message WorkflowRunExecutionContextState
