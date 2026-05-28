@@ -225,12 +225,12 @@ public class ActorCommandTargetDispatcherTests
     }
 }
 
-public class HandledActorCommandTargetDispatcherTests
+public class ActorCommandTargetDispatcherPortTests
 {
     [Fact]
     public void Constructor_WhenDispatchPortIsNull_ShouldThrowArgumentNullException()
     {
-        var act = () => new HandledActorCommandTargetDispatcher<FakeCommandTarget>(null!);
+        var act = () => new ActorCommandTargetDispatcher<FakeCommandTarget>(null!);
 
         act.Should().Throw<ArgumentNullException>()
             .WithParameterName("dispatchPort");
@@ -239,8 +239,8 @@ public class HandledActorCommandTargetDispatcherTests
     [Fact]
     public async Task DispatchAsync_ShouldDelegateToHandledDispatchPort()
     {
-        var port = new RecordingHandledDispatchPort();
-        var dispatcher = new HandledActorCommandTargetDispatcher<FakeCommandTarget>(port);
+        var port = new RecordingDispatchPort();
+        var dispatcher = new ActorCommandTargetDispatcher<FakeCommandTarget>(port);
         var target = new FakeCommandTarget("actor-1");
         var envelope = new EventEnvelope { Id = "command-1" };
 
@@ -255,8 +255,8 @@ public class HandledActorCommandTargetDispatcherTests
     [Fact]
     public async Task DispatchAsync_ShouldValidateInputsBeforeDelegating()
     {
-        var port = new RecordingHandledDispatchPort();
-        var dispatcher = new HandledActorCommandTargetDispatcher<FakeCommandTarget>(port);
+        var port = new RecordingDispatchPort();
+        var dispatcher = new ActorCommandTargetDispatcher<FakeCommandTarget>(port);
         var envelope = new EventEnvelope();
 
         await dispatcher.Invoking(x => x.DispatchAsync(null!, envelope, CancellationToken.None))
@@ -549,11 +549,11 @@ internal sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
         throw new NotSupportedException();
 }
 
-internal sealed class RecordingHandledDispatchPort : IActorHandledDispatchPort
+internal sealed class RecordingDispatchPort : IActorDispatchPort
 {
     public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
-    public Task<DispatchAdmission> DispatchAndWaitHandledAsync(
+    public Task<DispatchAdmission> DispatchAsync(
         string actorId,
         EventEnvelope envelope,
         CancellationToken ct = default)
