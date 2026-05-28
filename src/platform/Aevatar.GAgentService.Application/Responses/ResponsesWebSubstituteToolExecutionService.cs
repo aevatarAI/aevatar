@@ -74,7 +74,9 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             };
         }
 
-        // Refactor (iter159/cluster-624-first): Old: Host owned WebFetch/WebSearch orchestration  New: moved to Application/AI traced wrapper.
+        // Refactor (iter159/cluster-624-first):
+        //   Old pattern: Host provider owned WebFetch/WebSearch execution, cache lookup, and trace recording.
+        //   New principle: Application service owns web execution/tracing; Host only adapts tool JSON and composition.
         // The URL came from LLM-controlled input. Never forward the caller's
         // NyxID bearer to an arbitrary fetch target.
         var result = await _webClient.FetchUrlAsync(token: string.Empty, url, ct).ConfigureAwait(false);
