@@ -77,13 +77,3 @@ ${UNCOVERED_LINES}
 - 禁止"mock everything"式测试（每个测试至少有一条真业务断言；纯 mock 验证调用次数的测试不算覆盖）。
 
 开始执行。
-
----
-
-## AI 内容标识符(强制)
-
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
-
-    ⟦AI:AUTO-LOOP⟧
-
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
