@@ -35,6 +35,10 @@ public static class StreamForwardingRules
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: modules watched presentation completion frames as local workflow facts.
+        // New principle: committed observation forwarding belongs to the runtime relay path.
+        // Child actors publish committed state once, and runtime stream rules fan that fact to parents.
         return new StreamForwardingBinding
         {
             SourceStreamId = sourceStreamId,

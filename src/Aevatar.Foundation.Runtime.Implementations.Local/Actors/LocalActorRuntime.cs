@@ -297,6 +297,10 @@ public sealed class LocalActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: workflow modules inferred completion from presentation frame descriptors.
+        // New principle: committed child state is observed through runtime-owned stream relay.
+        // Local runtime registers the same child-to-parent committed observation path as Orleans.
         await _streams.GetStream(childId).UpsertRelayAsync(
             StreamForwardingRules.CreateCommittedObservationBinding(childId, parentId),
             ct);
