@@ -333,9 +333,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    // Refactor (iter115/cluster-3):
-    //   Old pattern: LLM control values were recovered from process-local runtime context.
-    //   New principle: LLM control values are typed actor state and survive actor replay.
+    // Refactor (iter159/cluster-613-first):
+    //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+    //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
     private static void ApplyTypedLlmControl(
         IWorkflowExecutionContext ctx,
         ChatRequestEvent chatRequest)
@@ -344,7 +344,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: Normalize(llm.NyxidAccessToken),
+            NyxIdAccessToken: null,
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: Normalize(llm.ModelOverride),

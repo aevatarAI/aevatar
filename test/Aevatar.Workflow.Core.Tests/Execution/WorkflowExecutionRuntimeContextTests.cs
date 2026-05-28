@@ -45,7 +45,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public async Task SetToolContext_ShouldPromoteLlmValuesToTypedState()
+    public async Task SetToolContext_ShouldPromoteOnlyDurableLlmValuesToTypedState()
     {
         var host = new RecordingStateHost();
 
@@ -64,7 +64,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 },
             });
 
-        host.ExecutionContextState.Llm!.NyxidAccessToken.Should().Be("token");
+        host.ExecutionContextState.Llm!.NyxidAccessToken.Should().BeEmpty();
         host.ExecutionContextState.Llm.ModelOverride.Should().Be("model");
         host.ExecutionContextState.Llm.NyxidRoutePreference.Should().Be("route");
     }
@@ -113,6 +113,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             AgentToolExecutionContext.Empty with
             {
                 Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token" },
+                Routing = LLMRequestRoutingContext.Empty with { ModelOverride = "model" },
             });
 
         await WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(host);
