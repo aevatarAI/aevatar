@@ -3,6 +3,7 @@ import {
   type Edge,
   type Node,
 } from '@xyflow/react';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import type { StudioGraphEdgeData, StudioGraphNodeData } from './graph';
 import type { StudioExecutionDetail } from './models';
 
@@ -19,7 +20,7 @@ export type ExecutionLogItem = {
 
 export type StepExecutionState = {
   readonly stepId: string;
-  status: 'idle' | 'active' | 'waiting' | 'completed' | 'failed';
+  status: CqrsStatus;
   stepType: string;
   targetRole: string;
   startedAt: string | null;
@@ -234,7 +235,7 @@ export function buildExecutionTrace(
       }
 
       const stepState = getOrCreateExecutionStepState(stepStates, stepId);
-      stepState.status = 'active';
+      stepState.status = 'running';
       stepState.stepType = String(customPayload?.stepType || stepState.stepType || '');
       stepState.targetRole = String(
         customPayload?.targetRole || stepState.targetRole || '',
@@ -274,7 +275,7 @@ export function buildExecutionTrace(
       }
 
       const stepState = getOrCreateExecutionStepState(stepStates, stepId);
-      stepState.status = 'waiting';
+      stepState.status = 'paused';
       stepState.stepType = stepState.stepType || interactionKind;
       latestStepId = stepId;
 
@@ -374,7 +375,7 @@ export function buildExecutionTrace(
       }
 
       const stepState = getOrCreateExecutionStepState(stepStates, stepId);
-      stepState.status = 'active';
+      stepState.status = 'running';
       latestStepId = stepId;
       const interactionKind = normalizeExecutionInteractionKind(
         customPayload?.suspensionType,
@@ -501,7 +502,7 @@ export function buildExecutionTrace(
     if (
       logs[index].interaction &&
       stepId &&
-      stepStates.get(stepId)?.status === 'waiting'
+      stepStates.get(stepId)?.status === 'paused'
     ) {
       defaultLogIndex = index;
       break;

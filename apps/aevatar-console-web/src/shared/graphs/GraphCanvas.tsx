@@ -101,9 +101,9 @@ function StudioWorkflowNode({
       ? '#16A34A'
       : executionStatus === 'failed'
         ? '#DC2626'
-        : executionStatus === 'waiting'
+        : executionStatus === 'paused'
           ? '#D97706'
-          : executionStatus === 'active'
+          : executionStatus === 'running'
             ? '#2563EB'
             : '#94A3B8';
 
@@ -192,7 +192,7 @@ function StudioWorkflowNode({
                   ? '#DCFCE7'
                   : executionStatus === 'failed'
                     ? '#FEE2E2'
-                    : executionStatus === 'waiting'
+                    : executionStatus === 'paused'
                       ? '#FEF3C7'
                       : '#DBEAFE',
               borderRadius: 999,

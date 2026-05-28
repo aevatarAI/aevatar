@@ -900,7 +900,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const activeExecutionInteraction =
     activeExecutionLog?.interaction &&
     activeExecutionLog.stepId &&
-    executionTrace?.stepStates.get(activeExecutionLog.stepId)?.status === 'waiting'
+    executionTrace?.stepStates.get(activeExecutionLog.stepId)?.status === 'paused'
       ? activeExecutionLog.interaction
       : null;
   const executionActionKeyBase =

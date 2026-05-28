@@ -5,6 +5,7 @@ import {
   type Node,
   type XYPosition,
 } from '@xyflow/react';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 
 export type StudioGraphRole = {
   readonly id: string;
@@ -43,7 +44,7 @@ export type StudioGraphNodeData = {
   readonly targetRole: string;
   readonly parametersSummary: string;
   readonly branchCount: number;
-  readonly executionStatus?: 'idle' | 'active' | 'waiting' | 'completed' | 'failed';
+  readonly executionStatus?: CqrsStatus;
   readonly executionFocused?: boolean;
 };
 
