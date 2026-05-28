@@ -176,6 +176,74 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreferTypedInlineBundleSubmessageOverLegacyAliases()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                WorkflowName = "legacy",
+                ActorId = "legacy-actor",
+                WorkflowYamls = ["name: legacy"],
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = " typed ",
+                    ActorId = " typed-actor ",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "typed",
+                            Yaml = "name: typed",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        result.Request.Source.InlineBundle.Should().BeEquivalentTo(new WorkflowChatInlineYamlBundleSource(
+            "typed",
+            [new WorkflowChatInlineYamlDocument("typed", "name: typed")],
+            "typed-actor"));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectBlankTypedInlineBundleYamlDocument()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = "auto",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "auto",
+                            Yaml = "   ",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldTrimTypedCatalogNameSubmessage()
     {
         var result = ChatRunRequestNormalizer.Normalize(new ChatInput

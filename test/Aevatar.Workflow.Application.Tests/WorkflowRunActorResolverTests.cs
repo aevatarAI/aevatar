@@ -381,6 +381,42 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldCreateRun_WhenNamedInlineDocumentNameMatchesYaml()
+    {
+        const string entryWorkflowYaml =
+            """
+            name: inline_entry
+            roles: []
+            steps: []
+            """;
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
+        var resolver = new WorkflowRunActorResolver(
+            new StaticWorkflowActorBindingReader(null),
+            actorPort,
+            actorPort,
+            new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle(
+                    "inline_entry",
+                    [new WorkflowChatInlineYamlDocument("inline_entry", entryWorkflowYaml)])),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("inline_entry");
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("run-1");
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(entryWorkflowYaml);
+        actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldReturnAgentNotFound_WhenSourceActorBindingMissing()
     {
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
