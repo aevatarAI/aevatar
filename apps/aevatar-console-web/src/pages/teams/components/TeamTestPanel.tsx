@@ -14,15 +14,16 @@ import {
   FactLine,
   factValueFontFamily,
 } from "./TeamDetailPrimitives";
+import type { CqrsStatus } from "@/shared/models/cqrsState";
 import type { TeamTestErrorDescription } from "./teamTestErrors";
 
-export type TeamTestStatus =
-  | "idle"
-  | "setting-entry"
-  | "running"
-  | "success"
-  | "error"
-  | "stopped";
+/**
+ * UI-local status for the team test panel.
+ *
+ * Terminal values ("completed" / "failed") are CQRS-aligned via CqrsStatus.
+ * "setting-entry" is a UI-only transient phase with no CQRS equivalent.
+ */
+export type TeamTestStatus = CqrsStatus | "setting-entry";
 
 export type TeamTestRosterRow = {
   readonly buildStudioHref: string;
@@ -39,7 +40,7 @@ export type TeamTestRosterRow = {
 export type TeamTestLastResult = {
   readonly finishedAtLabel: string;
   readonly runId?: string;
-  readonly status: "success" | "error" | "stopped";
+  readonly status: "completed" | "failed";
   readonly summary: string;
 };
 
@@ -78,23 +79,17 @@ function resolveTestStatusPill(
         border: `1px solid ${token.colorInfoBorder}`,
         color: token.colorInfo,
       };
-    case "success":
+    case "completed":
       return {
         background: token.colorSuccessBg,
         border: `1px solid ${token.colorSuccessBorder}`,
         color: token.colorSuccess,
       };
-    case "error":
+    case "failed":
       return {
         background: token.colorErrorBg,
         border: `1px solid ${token.colorErrorBorder}`,
         color: token.colorError,
-      };
-    case "stopped":
-      return {
-        background: token.colorWarningBg,
-        border: `1px solid ${token.colorWarningBorder}`,
-        color: token.colorWarning,
       };
     default:
       return {
@@ -111,12 +106,10 @@ function formatStatusLabel(status: TeamTestStatus): string {
       return "正在设置入口";
     case "running":
       return "测试中";
-    case "success":
+    case "completed":
       return "已完成";
-    case "error":
+    case "failed":
       return "失败";
-    case "stopped":
-      return "已停止";
     default:
       return "待测试";
   }

@@ -1156,11 +1156,11 @@ const TeamDetailPage: React.FC = () => {
           accumulator.finalOutput ||
           accumulator.errorText ||
           "Team Test stopped.";
-        setTeamTestStatus("stopped");
+        setTeamTestStatus("failed");
         setTeamTestLastResult({
           finishedAtLabel: formatLocalTimeLabel(new Date()),
           runId: accumulator.runId || undefined,
-          status: "stopped",
+          status: "failed",
           summary: stoppedSummary,
         });
         return;
@@ -1171,7 +1171,7 @@ const TeamDetailPage: React.FC = () => {
         accumulator.finalOutput ||
         accumulator.assistantText ||
         "Team returned an empty response.";
-      const nextStatus = accumulator.errorText ? "error" : "success";
+      const nextStatus = accumulator.errorText ? "failed" : "completed";
       setTeamTestResultText(summary);
       setTeamTestStatus(nextStatus);
       if (accumulator.errorText) {
@@ -1185,23 +1185,23 @@ const TeamDetailPage: React.FC = () => {
       });
     } catch (error) {
       if (controller.signal.aborted || isAbortLikeError(error)) {
-        setTeamTestStatus("stopped");
+        setTeamTestStatus("failed");
         setTeamTestError(describeTeamTestError(error));
         setTeamTestLastResult({
           finishedAtLabel: formatLocalTimeLabel(new Date()),
-          status: "stopped",
+          status: "failed",
           summary: "Team Test stopped.",
         });
         return;
       }
 
       const errorDescription = describeTeamTestError(error);
-      setTeamTestStatus("error");
+      setTeamTestStatus("failed");
       setTeamTestError(errorDescription);
       setTeamTestResultText(errorDescription.description);
       setTeamTestLastResult({
         finishedAtLabel: formatLocalTimeLabel(new Date()),
-        status: "error",
+        status: "failed",
         summary: errorDescription.description,
       });
     } finally {
@@ -1273,12 +1273,12 @@ const TeamDetailPage: React.FC = () => {
               kind: "entry_syncing",
               title: "Team entry 正在同步",
             };
-            setTeamTestStatus("error");
+            setTeamTestStatus("failed");
             setTeamTestError(errorDescription);
             setTeamTestResultText(errorDescription.description);
             setTeamTestLastResult({
               finishedAtLabel: formatLocalTimeLabel(new Date()),
-              status: "error",
+              status: "failed",
               summary: errorDescription.description,
             });
             return;
@@ -1292,7 +1292,7 @@ const TeamDetailPage: React.FC = () => {
           error,
           "Team entry update failed.",
         );
-        setTeamTestStatus("error");
+        setTeamTestStatus("failed");
         setTeamTestError(errorDescription);
         void message.error(errorDescription.title);
       } finally {
@@ -1333,7 +1333,7 @@ const TeamDetailPage: React.FC = () => {
         error,
         "Team entry update failed.",
       );
-      setTeamTestStatus("error");
+      setTeamTestStatus("failed");
       setTeamTestError(errorDescription);
       void message.error(errorDescription.title);
     } finally {
