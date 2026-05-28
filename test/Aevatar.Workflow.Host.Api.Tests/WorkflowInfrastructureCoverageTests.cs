@@ -17,6 +17,7 @@ using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
@@ -293,9 +294,6 @@ public sealed class WorkflowInfrastructureCoverageTests
                     new RecordingActorRuntime(),
                     new RecordingActorDispatchPort(),
                     NullLogger<FileBackedWorkflowCatalogPort>.Instance),
-                new WorkflowCapabilitiesStartupMaterializer(
-                    new RecordingCapabilitiesWriteDispatcher(),
-                    []),
                 Options.Create(options),
                 NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
 
@@ -316,7 +314,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowCapabilitiesStartupMaterializer_ShouldMaterializePrimitiveAndConnectorReadModels()
+    public async Task WorkflowInfrastructureCapabilitiesProvider_ShouldComposePrimitiveConnectorAndWorkflowCapabilities()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), "wf-capabilities-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempHome);
@@ -368,17 +366,36 @@ public sealed class WorkflowInfrastructureCoverageTests
                   ]
                 }
                 """);
-            var writer = new RecordingCapabilitiesWriteDispatcher();
-            var materializer = new WorkflowCapabilitiesStartupMaterializer(
-                writer,
-                [new CustomModulePack()]);
+            var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+            var catalogPort = new WorkflowCatalogReadModelQueryPort(
+                new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+                {
+                    Items =
+                    [
+                        new WorkflowCatalogCurrentStateDocument
+                        {
+                            Id = "alpha",
+                            WorkflowName = "alpha",
+                            Source = "builtin",
+                            UpdatedAt = updatedAt,
+                            StateVersion = 7,
+                            Primitives = ["assign"],
+                        },
+                    ],
+                },
+                new WorkflowCatalogReadModelMapper());
+            var provider = new WorkflowInfrastructureCapabilitiesProvider(
+                [new CustomModulePack()],
+                catalogPort,
+                new WorkflowCatalogReadModelMapper());
 
-            await materializer.MaterializeAsync(CancellationToken.None);
+            var document = await provider.GetCapabilitiesAsync(CancellationToken.None);
 
-            writer.LastWritten.Should().NotBeNull();
-            var document = writer.LastWritten!;
-            document.Id.Should().Be(WorkflowCapabilitiesStartupMaterializer.ArtifactId);
             document.GeneratedAtUtc.Should().BeAfter(DateTimeOffset.MinValue);
+            document.ProjectionWatermark.Should().BeOnOrAfter(updatedAt);
+            document.Workflows.Should().ContainSingle(workflow =>
+                workflow.Name == "alpha" &&
+                workflow.AuthorityStateVersion == 7);
             var primitiveNames = document.Primitives.Select(primitive => primitive.Name).ToList();
             primitiveNames.Should().Contain("connector_call");
             primitiveNames.Should().Contain("llm_call");
@@ -440,17 +457,20 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowCapabilitiesStartupMaterializer_ShouldHonorCancellation()
+    public async Task WorkflowInfrastructureCapabilitiesProvider_ShouldHonorCancellation()
     {
-        var writer = new RecordingCapabilitiesWriteDispatcher();
-        var materializer = new WorkflowCapabilitiesStartupMaterializer(writer, []);
+        var provider = new WorkflowInfrastructureCapabilitiesProvider(
+            [],
+            new WorkflowCatalogReadModelQueryPort(
+                new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>(),
+                new WorkflowCatalogReadModelMapper()),
+            new WorkflowCatalogReadModelMapper());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var act = async () => await materializer.MaterializeAsync(cts.Token);
+        var act = async () => await provider.GetCapabilitiesAsync(cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        writer.LastWritten.Should().BeNull();
     }
 
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
@@ -512,21 +532,29 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
-    private sealed class RecordingCapabilitiesWriteDispatcher
-        : IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>
+    private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
     {
-        public WorkflowCapabilitiesStartupArtifact? LastWritten { get; private set; }
+        public IReadOnlyList<TReadModel> Items { get; init; } = [];
 
-        public Task<ProjectionWriteResult> UpsertAsync(
-            WorkflowCapabilitiesStartupArtifact readModel,
-            CancellationToken ct = default)
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
         {
-            LastWritten = readModel;
-            return Task.FromResult(ProjectionWriteResult.Applied());
+            _ = key;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TReadModel?>(null);
         }
 
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            Task.FromResult(ProjectionWriteResult.Applied());
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            _ = query;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+            {
+                Items = Items,
+            });
+        }
     }
 
     private sealed class CustomModulePack : IWorkflowModulePack
