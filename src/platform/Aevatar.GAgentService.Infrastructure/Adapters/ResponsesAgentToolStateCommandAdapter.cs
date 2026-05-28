@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -73,46 +72,9 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         return new ResponsesTodoWriteResult(actor.Id, sourceResponseId, snapshots);
     }
 
-    public async Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-        string scopeId,
-        string ownerSubject,
-        string sourceResponseId,
-        string argumentsJson,
-        CancellationToken ct = default)
-    {
-        var actor = await EnsureActorAsync(scopeId, ownerSubject, ct);
-        var taskId = ResponseAgentToolStateIds.NewTaskId();
-        var childActorId = $"{actor.Id}-task-{taskId["task_".Length..]}";
-        var description = ExtractTaskDescription(argumentsJson);
-        var resultJson = JsonSerializer.Serialize(new
-        {
-            task_id = taskId,
-            child_actor_id = childActorId,
-            status = "accepted",
-            note = "Task dispatch has been recorded in Aevatar task topology state. Full sub-agent execution is owned by the GAgent topology issue.",
-        });
-
-        await _dispatchPort.DispatchAsync(
-            actor.Id,
-            CreateEnvelope(
-                actor.Id,
-                Any.Pack(new RecordResponsesTaskRequested
-                {
-                    SourceResponseId = NormalizeOptional(sourceResponseId) ?? string.Empty,
-                    TaskId = taskId,
-                    ChildActorId = childActorId,
-                    Description = description,
-                    Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
-                    Result = ResponsesJsonValues.ParseBoundaryPayload(resultJson),
-                    Status = ResponsesAgentToolTaskStatus.Accepted,
-                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                }),
-                $"{sourceResponseId}:task:{taskId}"),
-            ct);
-
-        return new ResponsesTaskDispatchResult(actor.Id, taskId, childActorId, "accepted", resultJson);
-    }
-
+    // Refactor (iter159/cluster-623-first):
+    //   Old pattern: fake Task substitute synthesized child_actor_id, returned accepted, recorded parent trace only
+    //   New principle: removed active substitute path; TodoWrite remains the only real substitute
     public async Task<ResponsesWebTraceResult> RecordWebTraceAsync(
         string scopeId,
         string ownerSubject,
@@ -214,36 +176,6 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                 CorrelationId = commandId,
             },
         };
-
-    private static string ExtractTaskDescription(string? argumentsJson)
-    {
-        if (string.IsNullOrWhiteSpace(argumentsJson))
-            return string.Empty;
-
-        try
-        {
-            using var document = JsonDocument.Parse(argumentsJson);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return argumentsJson.Trim();
-            return GetString(root, "description")
-                   ?? GetString(root, "prompt")
-                   ?? GetString(root, "task")
-                   ?? GetString(root, "input")
-                   ?? argumentsJson.Trim();
-        }
-        catch (JsonException)
-        {
-            return argumentsJson.Trim();
-        }
-    }
-
-    private static string? GetString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value))
-            return null;
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
-    }
 
     private static string? NormalizeOptional(string? value)
     {
