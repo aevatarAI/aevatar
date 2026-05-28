@@ -88,6 +88,40 @@ public sealed class CachedNyxIdLlmCatalogPortTests
     }
 
     [Fact]
+    public async Task GetServicesAsync_ShouldCoalesceStaleReads_WhenRefreshIsInFlight()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-05-29T10:00:00Z"));
+        var inner = new RecordingCatalogPort();
+        var refreshStarted = inner.SignalOnCallStart(callNumber: 2);
+        var refreshCompleted = inner.SignalOnCallCompletion(callNumber: 2);
+        var releaseRefresh = new TaskCompletionSource();
+        inner.Enqueue(MakeResult("anthropic", "/old"));
+        inner.EnqueueAfter(releaseRefresh.Task, MakeResult("anthropic", "/new"));
+        var port = CreatePort(inner, timeProvider: clock);
+
+        await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(61));
+
+        var firstStale = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        await refreshStarted.Task;
+        var secondStale = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        var thirdStale = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+
+        firstStale.Services.Single().RouteValue.Should().Be("/old");
+        secondStale.Services.Single().RouteValue.Should().Be("/old");
+        thirdStale.Services.Single().RouteValue.Should().Be("/old");
+        inner.GetCalls.Should().Be(2);
+
+        releaseRefresh.SetResult();
+        await refreshCompleted.Task;
+        await Task.Yield();
+        var refreshed = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+
+        refreshed.Services.Single().RouteValue.Should().Be("/new");
+        inner.GetCalls.Should().Be(2);
+    }
+
+    [Fact]
     public async Task GetServicesAsync_ShouldKeepStaleSnapshot_WhenRefreshFails()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-05-29T10:00:00Z"));
@@ -199,6 +233,7 @@ public sealed class CachedNyxIdLlmCatalogPortTests
     private sealed class RecordingCatalogPort : IUserLlmCatalogPort
     {
         private readonly Queue<Func<Task<NyxIdLlmServicesResult>>> _responses = new();
+        private readonly Dictionary<int, TaskCompletionSource> _callStartSignals = new();
         private readonly Dictionary<int, TaskCompletionSource> _callSignals = new();
 
         public int GetCalls { get; private set; }
@@ -212,8 +247,22 @@ public sealed class CachedNyxIdLlmCatalogPortTests
         public void Enqueue(NyxIdLlmServicesResult result) =>
             _responses.Enqueue(() => Task.FromResult(result));
 
+        public void EnqueueAfter(Task gate, NyxIdLlmServicesResult result) =>
+            _responses.Enqueue(async () =>
+            {
+                await gate.ConfigureAwait(false);
+                return result;
+            });
+
         public void EnqueueFailure(Exception exception) =>
             _responses.Enqueue(() => Task.FromException<NyxIdLlmServicesResult>(exception));
+
+        public TaskCompletionSource SignalOnCallStart(int callNumber)
+        {
+            var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _callStartSignals.Add(callNumber, source);
+            return source;
+        }
 
         public TaskCompletionSource SignalOnCallCompletion(int callNumber)
         {
@@ -227,6 +276,8 @@ public sealed class CachedNyxIdLlmCatalogPortTests
             GetCalls++;
             var callNumber = GetCalls;
             CapturedBearers.Add(bearerToken);
+            if (_callStartSignals.TryGetValue(callNumber, out var startSignal))
+                startSignal.SetResult();
 
             if (_responses.Count == 0)
                 throw new InvalidOperationException("No catalog response queued.");
