@@ -10,6 +10,13 @@ bash .claude/skills/codex-refactor-loop/scripts/test_spawn_codex.sh
 
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
+run_python_tests() {
+  if [ -d "tests" ] && command -v python3 >/dev/null 2>&1; then
+    echo "==> running python tests"
+    python3 -m pytest tests/ -v --tb=short || exit 1
+  fi
+}
+
 if [[ ! -f "${allowlist_file}" ]]; then
   echo "Missing allowlist: ${allowlist_file}"
   exit 1
@@ -18,6 +25,7 @@ fi
 hits="$(rg -n "Task\\.Delay\\(|WaitUntilAsync\\(" test -g '*.cs' || true)"
 if [[ -z "${hits}" ]]; then
   echo "No polling waits found in tests."
+  run_python_tests
   exit 0
 fi
 
@@ -39,3 +47,4 @@ if [[ -n "${disallowed}" ]]; then
 fi
 
 echo "Test stability guard passed (polling waits constrained by allowlist)."
+run_python_tests
