@@ -61,7 +61,7 @@ End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
 
 - Open actual test files; don't infer from implement summary.
 - A single `verdict: reject` from this role on a real coverage gap is correct even if other reviewers approve.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - No bilingual requirement (internal artifact).
 
 ## Shared rules

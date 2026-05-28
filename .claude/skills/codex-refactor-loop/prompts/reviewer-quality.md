@@ -59,7 +59,7 @@ End with marker: `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
 
 - Open the actual files, not just hunks.
 - "I don't like this style" without an objective heuristic = approve (taste is the author's, not yours).
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - No bilingual requirement (internal artifact).
 
 ## Shared rules

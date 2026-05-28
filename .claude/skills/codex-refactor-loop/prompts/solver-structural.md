@@ -82,7 +82,7 @@ End with EXACTLY ONE marker line:
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
 - No filler. Numbers > adjectives.
 

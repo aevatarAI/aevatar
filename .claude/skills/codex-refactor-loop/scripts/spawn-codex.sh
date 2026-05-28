@@ -81,6 +81,7 @@ if [[ ! -f "$SHARED_PROMPT" ]]; then
   exit 2
 fi
 
+# Refactor (#1148): Old pattern: prompt inline repeated hard rules. New principle: shared _shared.md prepend via spawn-codex.
 if ! head -5 "$PROMPT" | grep -q '^# Shared hard rules$'; then
   RENDERED_PROMPT=$(mktemp /tmp/codex-prompt-rendered.XXXXXXXX)
   {
