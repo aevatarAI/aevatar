@@ -27,6 +27,10 @@ import type { MenuProps } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
+import {
+  normalizeAsyncOperationState,
+  probeAsyncOperation,
+} from '@/shared/asyncOperations';
 import type { StudioAppContext } from '@/shared/studio/models';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import {
@@ -649,8 +653,29 @@ function buildSaveObservationRequest(
   };
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function waitForAsyncOperationProbeTick(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 250));
+}
+
+function normalizeScriptSaveOperationState(
+  observation: ScopeScriptSaveObservationResult | null,
+  stale = false,
+) {
+  return normalizeAsyncOperationState({
+    accepted: true,
+    observation,
+    observationStatus:
+      observation?.status === 'applied'
+        ? 'applied'
+        : observation?.status === 'rejected'
+          ? 'rejected'
+          : observation
+            ? 'pending'
+            : null,
+    terminal: observation?.isTerminal ?? false,
+    stale,
+    message: observation?.message || '',
+  });
 }
 
 function catalogMatchesPromotion(
@@ -1603,41 +1628,36 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     accepted: ScopeScriptUpsertAcceptedResponse,
   ): Promise<ScopeScriptSaveObservationResult> => {
     const request = buildSaveObservationRequest(accepted);
-    let lastObservation: ScopeScriptSaveObservationResult | null = null;
-    let lastError: unknown = null;
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const observation = await scriptsApi.observeSaveScript(
+    const result = await probeAsyncOperation({
+      maxAttempts: 8,
+      read: () =>
+        scriptsApi.observeSaveScript(
           resolvedScopeId,
           accepted.acceptedScript.scriptId,
           request,
-        );
-        lastObservation = observation;
-        lastError = null;
-        if (observation.isTerminal) {
-          return observation;
-        }
-      } catch (error) {
-        lastError = error;
-      }
+        ),
+      isTerminal: (observation) =>
+        normalizeScriptSaveOperationState(observation).terminal,
+      canRetryError: () => true,
+      waitForNextAttempt: waitForAsyncOperationProbeTick,
+    });
 
-      await wait(250);
+    if (result.observation != null) {
+      return result.observation;
     }
 
-    if (lastObservation != null) {
-      return lastObservation;
+    if (result.error != null) {
+      throw result.error;
     }
 
-    if (lastError != null) {
-      throw lastError;
-    }
-
-    return lastObservation ?? {
+    const staleState = normalizeScriptSaveOperationState(null, result.exhausted);
+    return {
       scopeId: accepted.acceptedScript.scopeId,
       scriptId: accepted.acceptedScript.scriptId,
       status: 'pending',
-      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
+      message:
+        staleState.message ||
+        `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
       currentScript: null,
       isTerminal: false,
     };
@@ -1663,7 +1683,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         // Ignore transient query failures while the catalog is catching up.
       }
 
-      await wait(250);
+      await waitForAsyncOperationProbeTick();
     }
 
     return null;
@@ -1679,12 +1699,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
       });
       const observation = await observeAcceptedSave(accepted);
+      const operationState = normalizeScriptSaveOperationState(
+        observation,
+        observation.status === 'pending',
+      );
       await refreshScopeScripts();
-      if (observation.status === 'rejected') {
+      if (operationState.status === 'failed') {
         throw new Error(observation.message);
       }
 
-      if (observation.status === 'applied') {
+      if (operationState.status === 'observed') {
         const detail = await scriptsApi.getScript(
           resolvedScopeId,
           accepted.acceptedScript.scriptId,
@@ -1711,8 +1735,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
-        type: observation.status === 'applied' ? 'success' : 'warning',
-        message: observation.status === 'applied'
+        type: operationState.status === 'observed' ? 'success' : 'warning',
+        message: operationState.status === 'observed'
           ? `Saved ${accepted.acceptedScript.scriptId} into workspace ${accepted.acceptedScript.scopeId}.`
           : observation.message,
       });
