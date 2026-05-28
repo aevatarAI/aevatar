@@ -122,6 +122,43 @@ describe('async operation state helper', () => {
     expect(waitForNextAttempt).toHaveBeenCalledTimes(2);
   });
 
+  it('probeAsyncOperation rejects immediately for non-retryable error', async () => {
+    const nonRetryableError = new Error('non-404 API error');
+    const read = jest.fn().mockRejectedValue(nonRetryableError);
+    const waitForNextAttempt = jest.fn().mockResolvedValue(undefined);
+    const canRetryError = jest.fn().mockReturnValue(false);
+
+    await expect(
+      probeAsyncOperation<{ readonly status: 'pending' }>({
+        maxAttempts: 3,
+        read,
+        isTerminal: () => false,
+        canRetryError,
+        waitForNextAttempt,
+      }),
+    ).rejects.toBe(nonRetryableError);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(canRetryError).toHaveBeenCalledWith(nonRetryableError);
+    expect(waitForNextAttempt).not.toHaveBeenCalled();
+  });
+
+  it('probeAsyncOperation rejects when canRetryError is absent and read fails', async () => {
+    const err = new Error('any error');
+    const read = jest.fn().mockRejectedValue(err);
+    const waitForNextAttempt = jest.fn().mockResolvedValue(undefined);
+
+    await expect(
+      probeAsyncOperation<{ readonly status: 'pending' }>({
+        maxAttempts: 3,
+        read,
+        isTerminal: () => false,
+        waitForNextAttempt,
+      }),
+    ).rejects.toBe(err);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(waitForNextAttempt).not.toHaveBeenCalled();
+  });
+
   it('returns the latest pending observation when attempts are exhausted', async () => {
     type ProbeObservation = { readonly status: 'pending' };
     const read = jest.fn(
