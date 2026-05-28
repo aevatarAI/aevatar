@@ -24,7 +24,7 @@ describe('StudioMemberInvokePanel current run model', () => {
     expect(model.rawOutput).toBe('');
   });
 
-  it('builds observe seed and raw output with separated identifiers', () => {
+  it('keeps accepted invoke receipts open in observe seed and raw output', () => {
     const startedAt = Date.parse('2026-04-30T08:00:00Z');
     const completedAt = Date.parse('2026-04-30T08:00:01Z');
     const model = buildStudioInvokeCurrentRunViewModel({
@@ -65,7 +65,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         actorId: 'actor-1',
         commandId: 'cmd-1',
         correlationId: 'corr-1',
-        completedAtUtc: '2026-04-30T08:00:01.000Z',
+        completedAtUtc: null,
         endpointId: 'command',
         errorCode: 'ERR_NONE',
         payloadTypeUrl: 'type.googleapis.com/example.Command',
@@ -87,6 +87,46 @@ describe('StudioMemberInvokePanel current run model', () => {
         runId: 'run-1',
         serviceId: 'script-1',
         status: 'accepted',
+      }),
+    );
+  });
+
+  it('includes completion time for terminal observe seeds', () => {
+    const startedAt = Date.parse('2026-04-30T08:00:00Z');
+    const completedAt = Date.parse('2026-04-30T08:00:01Z');
+    const model = buildStudioInvokeCurrentRunViewModel({
+      activeRunCompletedAt: completedAt,
+      chatMessageCount: 0,
+      currentMemberLabel: 'script-1',
+      currentRunRequest: {
+        mode: 'stream',
+        payloadBase64: '',
+        payloadTypeUrl: '',
+        prompt: 'hello',
+        startedAt,
+      },
+      invokeResult: {
+        ...createIdleInvokeResult(),
+        actorId: 'actor-1',
+        endpointId: 'chat',
+        finalOutput: 'ok',
+        mode: 'stream',
+        runId: 'run-1',
+        serviceId: 'script-1',
+        status: 'success',
+      },
+      isChatEndpoint: true,
+      payloadBase64: '',
+      payloadTypeUrl: '',
+      selectedEndpointId: 'chat',
+      selectedServiceDisplayName: 'Script One',
+      selectedServiceId: 'script-1',
+    });
+
+    expect(model.observeSessionSeed).toEqual(
+      expect.objectContaining({
+        completedAtUtc: '2026-04-30T08:00:01.000Z',
+        status: 'success',
       }),
     );
   });

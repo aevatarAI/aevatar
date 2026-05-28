@@ -1241,7 +1241,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         status: 'accepted',
       };
       setInvokeResult(finalResult);
-      setActiveRunCompletedAt(completedAt);
+      setActiveRunCompletedAt(null);
       upsertRequestHistory({
         completedAt,
         createdAt: completedAt,

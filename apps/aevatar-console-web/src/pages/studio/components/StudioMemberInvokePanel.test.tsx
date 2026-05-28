@@ -687,12 +687,13 @@ describe('StudioMemberInvokePanel', () => {
       expect(onObserveSessionChange).toHaveBeenLastCalledWith(
         expect.objectContaining({
           actorId: 'actor-1',
-          completedAtUtc: expect.any(String),
+          commandId: 'cmd-1',
+          completedAtUtc: null,
           endpointId: 'submit',
           prompt: 'Route this escalation to billing review.',
           runId: 'run-1',
           serviceId: 'default',
-          status: 'success',
+          status: 'running',
         }),
       );
     });
@@ -704,13 +705,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getAllByText('Route this escalation to billing review.').length,
     ).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Accepted').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Latest run')).toBeTruthy();
     expect(screen.getByText('Status summary')).toBeTruthy();
     expect(screen.getByText('Input')).toBeTruthy();
     expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getByText('没有返回可展示内容。'),
-    ).toBeTruthy();
+    expect(screen.getByText('Waiting for output...')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();

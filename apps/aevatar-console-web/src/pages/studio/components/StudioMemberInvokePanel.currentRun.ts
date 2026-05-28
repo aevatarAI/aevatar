@@ -20,7 +20,13 @@ export type InvokeResultState = {
   readonly responseJson: string;
   readonly runId: string;
   readonly serviceId: string;
-  readonly status: 'idle' | 'accepted' | 'running' | 'success' | 'error' | 'cancelled';
+  readonly status:
+    | 'idle'
+    | 'accepted'
+    | 'running'
+    | 'success'
+    | 'error'
+    | 'cancelled';
   readonly steps: RuntimeStepInfo[];
   readonly thinking: string;
   readonly toolCalls: RuntimeToolCallInfo[];
@@ -81,6 +87,21 @@ function toIsoTimestamp(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value)
     ? new Date(value).toISOString()
     : '';
+}
+
+function getCompletedAtUtc(input: {
+  readonly completedAt: number | null;
+  readonly status: InvokeResultState['status'];
+}): string | null {
+  if (
+    input.status !== 'success' &&
+    input.status !== 'error' &&
+    input.status !== 'cancelled'
+  ) {
+    return null;
+  }
+
+  return toIsoTimestamp(input.completedAt) || null;
 }
 
 export function createIdleInvokeResult(): InvokeResultState {
@@ -164,7 +185,10 @@ function buildObserveSessionSeed(input: {
     assistantText: input.invokeResult.assistantText,
     commandId: trimOptional(input.invokeResult.commandId),
     correlationId: trimOptional(input.invokeResult.correlationId),
-    completedAtUtc: toIsoTimestamp(input.activeRunCompletedAt) || null,
+    completedAtUtc: getCompletedAtUtc({
+      completedAt: input.activeRunCompletedAt,
+      status: input.invokeResult.status,
+    }),
     endpointId,
     error: input.invokeResult.error,
     errorCode: input.invokeResult.errorCode,
