@@ -1,4 +1,5 @@
 import { Button, Empty, Input, Select, Space, Tag, Typography } from 'antd';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import React from 'react';
 import type { StudioNodeInspectorDraft } from '@/shared/studio/document';
 import {
@@ -156,8 +157,7 @@ const yamlEditorStyle: React.CSSProperties = {
   background: 'var(--ant-color-fill-quaternary)',
   border: '1px solid var(--ant-color-border-secondary)',
   borderRadius: 10,
-  fontFamily:
-    "'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace",
+  fontFamily: aevatarMonoFontFamily,
   fontSize: 13,
   lineHeight: 1.5,
 };

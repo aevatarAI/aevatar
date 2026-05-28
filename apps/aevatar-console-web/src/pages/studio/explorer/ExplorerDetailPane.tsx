@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Space, Spin, Tag, Typography } from "antd";
 import React from "react";
 import type { ExplorerManifestEntry } from "@/shared/api/explorerApi";
+import { aevatarMonoFontFamily } from "@/shared/ui/compactText";
 import ExplorerContentView from "./ExplorerContentView";
 
 type ExplorerDetailPaneProps = {
@@ -59,8 +60,7 @@ const editorShellStyle: React.CSSProperties = {
 };
 
 const editorStyle: React.CSSProperties = {
-  fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, "Liberation Mono", monospace',
+  fontFamily: aevatarMonoFontFamily,
   fontSize: 13,
   minHeight: 360,
 };

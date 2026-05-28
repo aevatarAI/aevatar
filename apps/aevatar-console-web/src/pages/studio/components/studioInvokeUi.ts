@@ -1,4 +1,5 @@
 import type React from 'react';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
 
 export const studioInvokeColors = {
@@ -27,8 +28,7 @@ export const studioInvokeColors = {
   textSoft: '#334155',
 } as const;
 
-export const monoFontFamily =
-  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
+export const monoFontFamily = aevatarMonoFontFamily;
 
 export const contractStatusPillBaseStyle: React.CSSProperties = {
   borderRadius: 999,

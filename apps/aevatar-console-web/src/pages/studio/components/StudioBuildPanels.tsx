@@ -1,4 +1,5 @@
 import { parseCustomEvent } from '@aevatar-react-sdk/agui';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import {
   AGUIEventType,
   CustomEventName,
@@ -315,7 +316,7 @@ const workflowDryRunOutputStyle: React.CSSProperties = {
   border: '1px solid #efe7da',
   borderRadius: 14,
   color: '#425466',
-  fontFamily: 'Monaco, Menlo, monospace',
+  fontFamily: aevatarMonoFontFamily,
   fontSize: 12,
   lineHeight: '20px',
   margin: 0,
@@ -418,7 +419,7 @@ const dryRunOutputStyle: React.CSSProperties = {
   border: '1px solid #efe7da',
   borderRadius: 14,
   color: '#425466',
-  fontFamily: 'Monaco, Menlo, monospace',
+  fontFamily: aevatarMonoFontFamily,
   fontSize: 12,
   lineHeight: '20px',
   margin: 0,

@@ -5,6 +5,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Empty, Modal, message, Space, Tag, Typography } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import { cardStackStyle, embeddedPanelStyle } from '@/shared/ui/proComponents';
 
 type WorkflowYamlViewerProps = {
@@ -80,7 +81,7 @@ const lineNumberStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.14)',
   color: 'var(--ant-color-text-tertiary)',
   fontFamily:
-    "'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace",
+    aevatarMonoFontFamily,
   fontSize: 12,
   padding: '4px 12px',
   textAlign: 'right',
@@ -90,7 +91,7 @@ const lineNumberStyle = {
 const codeContentStyle = {
   color: '#0f172a',
   fontFamily:
-    "'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace",
+    aevatarMonoFontFamily,
   fontSize: 13,
   minHeight: 22,
   padding: '4px 16px',

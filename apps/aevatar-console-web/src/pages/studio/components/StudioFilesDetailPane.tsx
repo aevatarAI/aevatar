@@ -14,6 +14,7 @@ import type {
   StoredChatMessage,
 } from '@/pages/chat/chatTypes';
 import { formatDateTime } from '@/shared/datetime/dateTime';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import { studioApi } from '@/shared/studio/api';
 import type {
   StudioConnectorCatalog,
@@ -172,7 +173,7 @@ const editorTextAreaStyle: React.CSSProperties = {
   border: 'none',
   color: '#374151',
   fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
+    aevatarMonoFontFamily,
   fontSize: 13,
   lineHeight: 1.7,
   minHeight: 400,
@@ -188,7 +189,7 @@ const codePreviewStyle: React.CSSProperties = {
   borderRadius: 14,
   color: '#374151',
   fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
+    aevatarMonoFontFamily,
   fontSize: 12,
   lineHeight: 1.7,
   margin: 0,
@@ -286,7 +287,7 @@ const fieldTextareaStyle: React.CSSProperties = {
   ...fieldInputStyle,
   background: '#FAFAF9',
   fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
+    aevatarMonoFontFamily,
   lineHeight: 1.6,
   minHeight: 72,
   resize: 'vertical',
@@ -919,7 +920,7 @@ function FieldInput(props: {
         style={{
           ...fieldInputStyle,
           fontFamily: props.mono
-            ? 'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace'
+            ? aevatarMonoFontFamily
             : fieldInputStyle.fontFamily,
         }}
       />
@@ -1410,7 +1411,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     <span
                       style={{
                         fontFamily:
-                          'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
+                          aevatarMonoFontFamily,
                       }}
                     >
                       {role.id || 'role_id'}

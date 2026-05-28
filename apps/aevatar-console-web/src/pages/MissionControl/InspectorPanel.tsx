@@ -5,6 +5,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Card, Empty, Input, Space, Tag, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import {
   drawerBodyStyle,
   drawerScrollStyle,
@@ -35,8 +36,7 @@ import {
 } from './presentation';
 
 const monoStyle: React.CSSProperties = {
-  fontFamily:
-    "'SFMono-Regular', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+  fontFamily: aevatarMonoFontFamily,
 };
 
 type InspectorPanelProps = {

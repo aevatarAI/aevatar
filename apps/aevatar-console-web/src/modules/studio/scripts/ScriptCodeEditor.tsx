@@ -6,6 +6,7 @@ import Editor, {
 import React from 'react';
 import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
 import type * as MonacoEditorNamespace from 'monaco-editor';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 
 const monacoEditor = require(
   'monaco-editor/esm/vs/editor/editor.api.js',
@@ -168,7 +169,7 @@ const ScriptCodeEditor: React.FC<ScriptCodeEditorProps> = ({
         onMount={onMount}
         options={{
           automaticLayout: true,
-          fontFamily: 'Menlo, Monaco, Consolas, monospace',
+          fontFamily: aevatarMonoFontFamily,
           fontLigatures: false,
           fontSize: 13,
           glyphMargin: true,

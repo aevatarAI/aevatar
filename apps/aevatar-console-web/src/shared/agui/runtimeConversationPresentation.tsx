@@ -5,6 +5,7 @@ import type {
   RuntimeStepInfo,
   RuntimeToolCallInfo,
 } from "./runtimeEventSemantics";
+import { aevatarMonoFontFamily } from "@/shared/ui/compactText";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 
 function renderInline(text: string): React.ReactNode[] {
@@ -19,7 +20,7 @@ function renderInline(text: string): React.ReactNode[] {
             borderRadius: 6,
             color: "#be185d",
             fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              aevatarMonoFontFamily,
             fontSize: 12,
             padding: "2px 6px",
           }}
@@ -74,7 +75,7 @@ function renderContent(text: string): React.ReactNode {
                 borderBottom: "1px solid #e5e7eb",
                 color: "#6b7280",
                 fontFamily:
-                  "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+                  aevatarMonoFontFamily,
                 fontSize: 11,
                 padding: "8px 12px",
               }}
@@ -85,7 +86,7 @@ function renderContent(text: string): React.ReactNode {
           <pre
             style={{
               fontFamily:
-                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+                aevatarMonoFontFamily,
               fontSize: 13,
               margin: 0,
               overflowX: "auto",
@@ -301,7 +302,7 @@ function ToolCallIndicator({
         <span
           style={{
             fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              aevatarMonoFontFamily,
           }}
         >
           {tool.name || tool.id}
@@ -314,7 +315,7 @@ function ToolCallIndicator({
             borderRadius: 10,
             color: "#6b7280",
             fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              aevatarMonoFontFamily,
             fontSize: 11,
             margin: "6px 0 0 22px",
             maxHeight: 120,
@@ -709,7 +710,7 @@ export function RuntimeEventPreviewPanel({
               color: "#4b5563",
               display: "flex",
               fontFamily:
-                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+                aevatarMonoFontFamily,
               fontSize: 11,
               gap: 8,
               padding: "8px 14px",

@@ -29,6 +29,7 @@ import React, {
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
 import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useMissionControlRuntime, type UseMissionControlRuntimeResult } from './hooks/useMissionControlRuntime';
 import InspectorPanel from './InspectorPanel';
@@ -61,8 +62,7 @@ const scrollerStyle: React.CSSProperties = {
 };
 
 const monoStyle: React.CSSProperties = {
-  fontFamily:
-    "'SFMono-Regular', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+  fontFamily: aevatarMonoFontFamily,
 };
 
 type MissionStageView = 'topology' | 'execution_flow';

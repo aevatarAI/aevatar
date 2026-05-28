@@ -21,6 +21,7 @@ import type {
   ServiceCatalogSnapshot,
   ServiceEndpointSnapshot,
 } from '@/shared/models/services';
+import { aevatarMonoFontFamily } from '@/shared/ui/compactText';
 import { isChatServiceEndpoint } from '@/shared/runs/scopeConsole';
 import {
   describeScopeServiceBindingTarget,
@@ -184,8 +185,7 @@ function buildRevisionFromMemberBinding(
   };
 }
 
-const monoFontFamily =
-  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
+const monoFontFamily = aevatarMonoFontFamily;
 
 const rootStyle: React.CSSProperties = {
   minWidth: 0,
