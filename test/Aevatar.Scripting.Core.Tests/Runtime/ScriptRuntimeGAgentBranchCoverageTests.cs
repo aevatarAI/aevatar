@@ -343,21 +343,22 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         }));
 
         harness.Agent.State.LastRunId.Should().Be("run-committed");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
         harness.Agent.State.LastEventId.Should().Be(ScriptSources.UppercaseEventTypeUrl);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot!.Unpack<SimpleTextState>().Value.Should().Be("HELLO");
         var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
-        persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
-        var outcome = persisted.Select(x => x.EventData)
-            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+        var factStateEvent = persisted.Single(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
             .Unpack<ScriptRunOutcomeRecordedEvent>();
         outcome.ScriptRunId.Should().Be("run-committed");
         outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
         outcome.CommandId.Should().Be("command-committed");
         outcome.CorrelationId.Should().Be("corr-1");
         outcome.CommittedFactCount.Should().Be(1);
-        outcome.StateVersion.Should().Be(2);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
+        outcome.StateVersion.Should().Be(factStateEvent.Version + 1);
         outcome.Result.Should().NotBeNull();
         harness.Agent.State.LastRunOutcome.Should().NotBeNull();
         harness.Agent.State.LastRunOutcome.ScriptRunId.Should().Be("run-committed");
@@ -387,14 +388,15 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
 
         var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
         persisted.Should().NotContain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
-        var outcome = persisted.Select(x => x.EventData)
-            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
             .Unpack<ScriptRunOutcomeRecordedEvent>();
         outcome.ScriptRunId.Should().Be("run-no-facts");
         outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
         outcome.CommandId.Should().Be("command-no-facts");
         outcome.CorrelationId.Should().Be("correlation-no-facts");
         outcome.CommittedFactCount.Should().Be(0);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
         outcome.Result.Should().BeNull();
         harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
     }
@@ -424,15 +426,67 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             .WithMessage("*script contract rejected*");
 
         var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
-        var outcome = persisted.Select(x => x.EventData)
-            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
             .Unpack<ScriptRunOutcomeRecordedEvent>();
         outcome.ScriptRunId.Should().Be("run-failed");
         outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
         outcome.CommandId.Should().Be("command-failed");
         outcome.Error.Should().Be("script contract rejected");
         outcome.CommittedFactCount.Should().Be(0);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
         harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+    }
+
+    [Theory]
+    [InlineData("definition-2", "scope-1", "bound to definition `definition-1`", "scope-1")]
+    [InlineData("definition-1", "scope-2", "bound to scope `scope-1`", "scope-2")]
+    public async Task HandleEnvelopeAsync_ShouldRecordFailedOutcome_WhenRunTargetValidationFails(
+        string targetDefinitionActorId,
+        string targetScopeId,
+        string expectedError,
+        string expectedOutcomeScopeId)
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent, "scope-1");
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-validation-failed",
+                CommandId = "command-validation-failed",
+                CorrelationId = "correlation-validation-failed",
+                ScopeId = targetScopeId,
+                DefinitionActorId = targetDefinitionActorId,
+                ScriptRevision = "rev-1",
+                RequestedEventType = "integration.requested",
+                InputPayload = Any.Pack(new SimpleTextCommand
+                {
+                    CommandId = "command-validation-failed",
+                    Value = "hello",
+                }),
+            },
+            correlationId: string.Empty));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedError}*");
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().NotContain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcomeStateEvent = persisted
+            .Where(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var outcome = outcomeStateEvent.EventData.Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-validation-failed");
+        outcome.CommandId.Should().Be("command-validation-failed");
+        outcome.CorrelationId.Should().Be("correlation-validation-failed");
+        outcome.ScopeId.Should().Be(expectedOutcomeScopeId);
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        outcome.CommittedFactCount.Should().Be(0);
+        outcome.Error.Should().Contain(expectedError);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
     }
 
     [Fact]
@@ -559,7 +613,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         return new CachedScriptBehaviorArtifactResolver(compiler);
     }
 
-    private static BindScriptBehaviorRequestedEvent CreateBindRequest() =>
+    private static BindScriptBehaviorRequestedEvent CreateBindRequest(string scopeId = "") =>
         new()
         {
             DefinitionActorId = "definition-1",
@@ -571,10 +625,11 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             ReadModelSchemaVersion = "1",
             ReadModelSchemaHash = "schema-hash",
+            ScopeId = scopeId,
         };
 
-    private static async Task BindAsync(ScriptBehaviorGAgent agent) =>
-        await agent.HandleEnvelopeAsync(BuildEnvelope(CreateBindRequest()));
+    private static async Task BindAsync(ScriptBehaviorGAgent agent, string scopeId = "") =>
+        await agent.HandleEnvelopeAsync(BuildEnvelope(CreateBindRequest(scopeId)));
 
     private static EventEnvelope BuildEnvelope(IMessage payload, string? correlationId = "corr-1") =>
         new()

@@ -45,6 +45,7 @@ public sealed class ScriptExecutionSessionEventProjector
         if (!string.IsNullOrWhiteSpace(envelope.Propagation?.CorrelationId))
             return envelope.Propagation.CorrelationId;
 
+        // Refactor (iter149/cluster-1133): Old pattern: envelope-based session routing.  New principle: typed ScriptRunOutcomeRecordedEvent.CorrelationId fallback for session correlation.
         if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) == true)
         {
             var published = envelope.Payload.Unpack<CommittedStateEventPublished>();

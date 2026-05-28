@@ -184,19 +184,19 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             throw;
         }
 
-        if (facts.Count > 0)
-            await PersistDomainEventsAsync(facts, ct);
-
         if (run == null)
+        {
+            if (facts.Count > 0)
+                await PersistDomainEventsAsync(facts, ct);
             return;
+        }
 
         var result = facts.Count == 0
             ? null
             : facts[^1].DomainEventPayload?.Clone();
-        var stateVersion = facts.Count == 0
-            ? State.LastAppliedEventVersion + 1
-            : State.LastAppliedEventVersion;
-        await PersistDomainEventAsync(
+        var currentVersion = State.LastAppliedEventVersion;
+        var outcomeStateVersion = currentVersion + facts.Count + 1;
+        var outcomeEvent =
             BuildOutcomeRecordedEvent(
                 runId,
                 commandId,
@@ -206,8 +206,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 string.Empty,
                 result,
                 facts.Count,
-                stateVersion),
-            ct);
+                outcomeStateVersion);
+        await PersistDomainEventsAsync(facts.Concat<IMessage>([outcomeEvent]).ToList(), ct);
     }
 
     private void ValidateRunTarget(RunScriptRequestedEvent? run)
