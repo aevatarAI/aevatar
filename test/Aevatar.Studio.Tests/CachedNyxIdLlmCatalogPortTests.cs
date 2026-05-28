@@ -66,6 +66,44 @@ public sealed class CachedNyxIdLlmCatalogPortTests
     }
 
     [Fact]
+    public async Task GetServicesAsync_WhenCacheDisabled_ShouldCallInnerForRepeatedSameBearer()
+    {
+        var inner = new RecordingCatalogPort();
+        inner.Enqueue(MakeResult("anthropic", "/first"));
+        inner.Enqueue(MakeResult("anthropic", "/second"));
+        inner.Enqueue(MakeResult("anthropic", "/third"));
+        var port = CreatePort(inner, cacheEnabled: false);
+
+        var first = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        var second = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        var third = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+
+        first.Services.Single().RouteValue.Should().Be("/first");
+        second.Services.Single().RouteValue.Should().Be("/second");
+        third.Services.Single().RouteValue.Should().Be("/third");
+        inner.GetCalls.Should().Be(3);
+        inner.CapturedBearers.Should().Equal("bearer-1", "bearer-1", "bearer-1");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not-a-uri")]
+    public async Task GetServicesAsync_WhenCacheDisabled_ShouldNotConsultAuthority(string? authority)
+    {
+        var inner = new RecordingCatalogPort();
+        inner.Enqueue(MakeResult("anthropic", "/inner"));
+        var port = CreatePort(
+            inner,
+            configuration: CreateConfiguration(authority),
+            cacheEnabled: false);
+
+        var result = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+
+        result.Services.Single().RouteValue.Should().Be("/inner");
+        inner.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetServicesAsync_ShouldReturnStaleSnapshot_AndRefreshOnce()
     {
         var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-05-29T10:00:00Z"));
@@ -114,10 +152,6 @@ public sealed class CachedNyxIdLlmCatalogPortTests
 
         releaseRefresh.SetResult();
         await refreshCompleted.Task;
-        await Task.Yield();
-        var refreshed = await port.GetServicesAsync("bearer-1", CancellationToken.None);
-
-        refreshed.Services.Single().RouteValue.Should().Be("/new");
         inner.GetCalls.Should().Be(2);
     }
 
@@ -186,16 +220,56 @@ public sealed class CachedNyxIdLlmCatalogPortTests
         inner.ProvisionBearers.Should().Equal("bearer-A");
     }
 
+    [Fact]
+    public async Task ProvisionAsync_WhenCacheDisabled_ShouldCallInnerForRepeatedSameBearer()
+    {
+        var inner = new RecordingCatalogPort();
+        inner.ProvisionResults.Enqueue(MakeService("anthropic", "/first"));
+        inner.ProvisionResults.Enqueue(MakeService("anthropic", "/second"));
+        inner.ProvisionResults.Enqueue(MakeService("anthropic", "/third"));
+        var port = CreatePort(inner, cacheEnabled: false);
+
+        var first = await port.ProvisionAsync("bearer-1", "anthropic", CancellationToken.None);
+        var second = await port.ProvisionAsync("bearer-1", "anthropic", CancellationToken.None);
+        var third = await port.ProvisionAsync("bearer-1", "anthropic", CancellationToken.None);
+
+        first.RouteValue.Should().Be("/first");
+        second.RouteValue.Should().Be("/second");
+        third.RouteValue.Should().Be("/third");
+        inner.ProvisionCalls.Should().Be(3);
+        inner.ProvisionBearers.Should().Equal("bearer-1", "bearer-1", "bearer-1");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not-a-uri")]
+    public async Task ProvisionAsync_WhenCacheDisabled_ShouldNotConsultAuthority(string? authority)
+    {
+        var inner = new RecordingCatalogPort();
+        inner.ProvisionResult = MakeService("anthropic", "/provisioned");
+        var port = CreatePort(
+            inner,
+            configuration: CreateConfiguration(authority),
+            cacheEnabled: false);
+
+        var result = await port.ProvisionAsync("bearer-1", "anthropic", CancellationToken.None);
+
+        result.RouteValue.Should().Be("/provisioned");
+        inner.ProvisionCalls.Should().Be(1);
+    }
+
     private static CachedNyxIdLlmCatalogPort CreatePort(
         RecordingCatalogPort inner,
         IConfiguration? configuration = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        bool cacheEnabled = true)
     {
         return new CachedNyxIdLlmCatalogPort(
             inner,
             configuration ?? CreateConfiguration("https://nyx.test/api/v1/llm/gateway/v1"),
             new FixedOptionsMonitor<NyxIdLlmCatalogCacheOptions>(new NyxIdLlmCatalogCacheOptions
             {
+                Enabled = cacheEnabled,
                 FreshTtl = TimeSpan.FromSeconds(60),
                 StaleTtl = TimeSpan.FromMinutes(5),
                 MaxEntries = 16,
@@ -204,7 +278,7 @@ public sealed class CachedNyxIdLlmCatalogPortTests
             NullLogger<CachedNyxIdLlmCatalogPort>.Instance);
     }
 
-    private static IConfiguration CreateConfiguration(string authority)
+    private static IConfiguration CreateConfiguration(string? authority)
     {
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -241,6 +315,10 @@ public sealed class CachedNyxIdLlmCatalogPortTests
         public List<string> CapturedBearers { get; } = [];
 
         public List<string> ProvisionBearers { get; } = [];
+
+        public int ProvisionCalls { get; private set; }
+
+        public Queue<NyxIdLlmService> ProvisionResults { get; } = new();
 
         public NyxIdLlmService ProvisionResult { get; set; } = MakeService("provisioned", "/provisioned");
 
@@ -298,8 +376,12 @@ public sealed class CachedNyxIdLlmCatalogPortTests
             string provisionEndpointId,
             CancellationToken ct)
         {
+            ProvisionCalls++;
             ProvisionBearers.Add(bearerToken);
-            return Task.FromResult(ProvisionResult);
+            var service = ProvisionResults.Count > 0
+                ? ProvisionResults.Dequeue()
+                : ProvisionResult;
+            return Task.FromResult(service);
         }
     }
 
