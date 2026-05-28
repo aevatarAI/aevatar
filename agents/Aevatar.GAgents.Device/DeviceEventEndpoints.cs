@@ -201,15 +201,83 @@ public static class DeviceEventEndpoints
         var eventType = inner.TryGetProperty("event_type", out var et) ? et.GetString() ?? string.Empty : string.Empty;
         var timestamp = inner.TryGetProperty("timestamp", out var ts) ? ts.GetString() ?? string.Empty : string.Empty;
 
-        return new DeviceInbound
+        var inbound = new DeviceInbound
         {
             EventId = eventId,
             Source = source,
             EventType = eventType,
             Timestamp = timestamp,
-            PayloadJson = contentText,
             DeviceId = senderId,
         };
+
+        // Refactor (iter162/cluster-001-first):
+        //   Old pattern: adapter forwarded raw JSON via DeviceInbound.payload_json into actor.
+        //   New principle: adapter parses external JSON once and maps to typed DeviceInbound payload oneof;
+        //                  unknown event types are rejected at the adapter boundary.
+        switch (eventType)
+        {
+            case "temperature_change":
+                inbound.Sensor = ParseSensorPayload(inner);
+                break;
+            case "person_detected":
+            case "scene_summary":
+            case "camera_scene":
+                inbound.CameraScene = ParseCameraScenePayload(inner);
+                break;
+            case "speech_detected":
+                inbound.Speech = ParseSpeechPayload(inner);
+                break;
+            case "motion_detected":
+                inbound.Motion = ParseMotionPayload(inner);
+                break;
+            default:
+                throw new JsonException($"Unsupported device event_type '{eventType}'");
+        }
+
+        return inbound;
+    }
+
+    private static SensorPayload ParseSensorPayload(JsonElement inner)
+    {
+        var payload = new SensorPayload();
+        if (inner.TryGetProperty("temperature", out var temp)) payload.Temperature = temp.GetDouble();
+        if (inner.TryGetProperty("humidity", out var hum)) payload.Humidity = hum.GetDouble();
+        if (inner.TryGetProperty("light_level", out var light)) payload.LightLevel = light.GetDouble();
+        if (inner.TryGetProperty("motion", out var motion)) payload.MotionDetected = motion.GetBoolean();
+        if (inner.TryGetProperty("motion_detected", out var motionDetected))
+            payload.MotionDetected = motionDetected.GetBoolean();
+        return payload;
+    }
+
+    private static CameraScenePayload ParseCameraScenePayload(JsonElement inner)
+    {
+        return new CameraScenePayload
+        {
+            Description = inner.TryGetProperty("description", out var description)
+                ? description.GetString() ?? string.Empty
+                : string.Empty,
+        };
+    }
+
+    private static SpeechPayload ParseSpeechPayload(JsonElement inner)
+    {
+        return new SpeechPayload
+        {
+            Text = inner.TryGetProperty("text", out var text)
+                ? text.GetString() ?? string.Empty
+                : string.Empty,
+        };
+    }
+
+    private static MotionPayload ParseMotionPayload(JsonElement inner)
+    {
+        var detected = true;
+        if (inner.TryGetProperty("detected", out var detectedElement))
+            detected = detectedElement.GetBoolean();
+        else if (inner.TryGetProperty("motion", out var motionElement))
+            detected = motionElement.GetBoolean();
+
+        return new MotionPayload { Detected = detected };
     }
 
     // ─── Registration CRUD ───

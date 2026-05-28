@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -193,40 +192,36 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            switch (evt.EventType)
+            // Refactor (iter162/cluster-001-first):
+            //   Old pattern: actor branched on EventType then JsonDocument.Parse(evt.PayloadJson).
+            //   New principle: actor switches on PayloadCase and reads typed proto fields directly;
+            //                  no JSON parsing inside business logic.
+            switch (evt.PayloadCase)
             {
-                case "temperature_change":
+                case DeviceInbound.PayloadOneofCase.Sensor:
                 {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var sensorEvt = new SensorDataEvent();
-                    if (root.TryGetProperty("temperature", out var temp)) sensorEvt.Temperature = temp.GetDouble();
-                    if (root.TryGetProperty("humidity", out var hum)) sensorEvt.Humidity = hum.GetDouble();
-                    if (root.TryGetProperty("light_level", out var light)) sensorEvt.LightLevel = light.GetDouble();
-                    if (root.TryGetProperty("motion", out var motion)) sensorEvt.MotionDetected = motion.GetBoolean();
-                    await HandleSensorData(sensorEvt);
+                    await HandleSensorData(new SensorDataEvent
+                    {
+                        Temperature = evt.Sensor.Temperature,
+                        Humidity = evt.Sensor.Humidity,
+                        LightLevel = evt.Sensor.LightLevel,
+                        MotionDetected = evt.Sensor.MotionDetected,
+                    });
                     break;
                 }
-                case "person_detected":
-                case "scene_summary":
+                case DeviceInbound.PayloadOneofCase.CameraScene:
                 {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var desc = root.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
-                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = desc });
+                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = evt.CameraScene.Description });
                     break;
                 }
-                case "motion_detected":
+                case DeviceInbound.PayloadOneofCase.Motion:
                 {
-                    var sensorEvt = new SensorDataEvent { MotionDetected = true };
-                    await HandleSensorData(sensorEvt);
+                    await HandleSensorData(new SensorDataEvent { MotionDetected = evt.Motion.Detected });
                     break;
                 }
-                case "speech_detected":
+                case DeviceInbound.PayloadOneofCase.Speech:
                 {
-                    using var doc = JsonDocument.Parse(evt.PayloadJson);
-                    var root = doc.RootElement;
-                    var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                    var text = evt.Speech.Text;
                     if (!string.IsNullOrWhiteSpace(text))
                     {
                         await HandleChat(new HouseholdChatEvent
@@ -237,18 +232,13 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
                     }
                     break;
                 }
+                case DeviceInbound.PayloadOneofCase.None:
                 default:
                     Logger.LogWarning(
-                        "[Household] Unknown device event type: {EventType}, source={Source}",
+                        "[Household] Dropping device event without typed payload: type={EventType}, source={Source}",
                         evt.EventType, evt.Source);
                     break;
             }
-        }
-        catch (JsonException ex)
-        {
-            Logger.LogWarning(ex,
-                "[Household] Failed to parse device event payload: type={EventType}, source={Source}",
-                evt.EventType, evt.Source);
         }
         catch (Exception ex)
         {
