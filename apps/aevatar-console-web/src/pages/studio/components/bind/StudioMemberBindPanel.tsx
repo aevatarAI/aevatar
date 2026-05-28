@@ -14,6 +14,7 @@ import {
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import type {
   ScopeServiceBindingCatalogSnapshot,
 } from '@/shared/models/runtime/scopeServices';
@@ -94,7 +95,7 @@ type SmokeTestResult = {
   readonly latencyMs: number;
   readonly responseSummary: string;
   readonly runId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error';
+  readonly status: CqrsStatus;
 };
 
 function isStudioMemberBindingRunTerminal(
@@ -781,7 +782,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             accumulator.assistantText ||
             'Model returned an empty response.',
           runId: accumulator.runId,
-          status: accumulator.errorText ? 'error' : 'success',
+          status: accumulator.errorText ? 'failed' : 'completed',
         });
         return;
       }
@@ -822,7 +823,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             accumulator.assistantText ||
             'Model returned an empty response.',
           runId: accumulator.runId,
-          status: accumulator.errorText ? 'error' : 'success',
+          status: accumulator.errorText ? 'failed' : 'completed',
         });
         return;
       }
@@ -842,7 +843,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         latencyMs: Date.now() - startedAt,
         responseSummary: JSON.stringify(response, null, 2),
         runId: trimOptional(String(response.request_id || response.requestId || '')),
-        status: 'success',
+        status: 'completed',
       });
     } catch (error) {
       setSmokeTestResult({
@@ -851,7 +852,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         latencyMs: Date.now() - startedAt,
         responseSummary: '',
         runId: '',
-        status: 'error',
+        status: 'failed',
       });
       void message.error(
         error instanceof Error ? error.message : String(error),
@@ -1408,7 +1409,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   Continue to Invoke
                 </Button>
               </div>
-              {smokeTestResult.status === 'success' ? (
+              {smokeTestResult.status === 'completed' ? (
                 <Alert
                   showIcon
                   message={`Smoke test passed in ${smokeTestResult.latencyMs}ms`}

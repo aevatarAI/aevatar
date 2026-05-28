@@ -29,6 +29,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 import { parseRunContextData } from '@/shared/agui/customEventData';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { history } from '@/shared/navigation/history';
 import {
@@ -76,7 +77,7 @@ type GAgentRunState = {
   error: string;
   events: AGUIEvent[];
   runId: string;
-  status: 'idle' | 'running' | 'success' | 'error';
+  status: CqrsStatus;
 };
 
 type GAgentBindingEndpointDraft = {
@@ -1152,7 +1153,7 @@ const GAgentsPage: React.FC = () => {
       setRunState((current) => ({
         ...current,
         error: 'Workspace, GAgent type, and prompt are required before running.',
-        status: 'error',
+        status: 'failed',
       }));
       return;
     }
@@ -1247,11 +1248,11 @@ const GAgentsPage: React.FC = () => {
 
       await invalidateActorQueries(normalizedScopeId);
       setRunState((current) =>
-        current.status === 'error' || controller.signal.aborted
+        current.status === 'failed' || controller.signal.aborted
           ? current
           : {
               ...current,
-              status: current.events.length > 0 ? 'success' : 'idle',
+              status: current.events.length > 0 ? 'completed' : 'idle',
             },
       );
     } catch (error) {
@@ -1261,7 +1262,7 @@ const GAgentsPage: React.FC = () => {
           setRunState((current) => ({
             ...current,
             error: reason.message,
-            status: 'error',
+            status: 'failed',
           }));
         }
         return;
@@ -1270,7 +1271,7 @@ const GAgentsPage: React.FC = () => {
       setRunState((current) => ({
         ...current,
         error: error instanceof Error ? error.message : String(error),
-        status: 'error',
+        status: 'failed',
       }));
     } finally {
       window.clearTimeout(timeoutId);
@@ -1287,7 +1288,7 @@ const GAgentsPage: React.FC = () => {
       current.status === 'running'
         ? {
             ...current,
-            status: current.events.length > 0 ? 'success' : 'idle',
+            status: current.events.length > 0 ? 'completed' : 'idle',
           }
         : current,
     );

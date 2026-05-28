@@ -210,9 +210,9 @@ function deriveConversationSession(
     serviceId: meta?.serviceId || "",
     status:
       lastAssistant?.status === "error"
-        ? "error"
+        ? "failed"
         : messages.length > 0
-          ? "success"
+          ? "completed"
           : "idle",
     updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
   };
@@ -917,7 +917,7 @@ const ChatPage: React.FC = () => {
       const currentState = onboardingState ?? { step: "select_provider" as const };
       const trimmedInput = input.trim();
       const createOnboardingSession = (
-        status: ChatSessionState["status"] = "success"
+        status: ChatSessionState["status"] = "completed"
       ): ChatSessionState => ({
         ...createIdleSession(scopeId, selectedService.id),
         status,
@@ -1168,7 +1168,7 @@ const ChatPage: React.FC = () => {
           setIsStreaming(false);
           await commitOnboardingMessages(
             completedMessages,
-            createOnboardingSession("success")
+            createOnboardingSession("completed")
           );
         } catch (error) {
           const completedMessages = creatingMessages.map((message) =>
@@ -1197,7 +1197,7 @@ const ChatPage: React.FC = () => {
           setIsStreaming(false);
           await commitOnboardingMessages(
             completedMessages,
-            createOnboardingSession("error")
+            createOnboardingSession("failed")
           );
         }
 
@@ -1305,7 +1305,7 @@ const ChatPage: React.FC = () => {
             scopeId,
             selectedService.id,
             accumulator,
-            accumulator.errorText ? "error" : "running"
+            accumulator.errorText ? "failed" : "running"
           )
         );
       }
@@ -1317,7 +1317,7 @@ const ChatPage: React.FC = () => {
         scopeId,
         selectedService.id,
         accumulator,
-        accumulator.errorText ? "error" : "success"
+        accumulator.errorText ? "failed" : "completed"
       );
 
       setMessages((current) => {
@@ -1353,7 +1353,7 @@ const ChatPage: React.FC = () => {
         scopeId,
         selectedService.id,
         accumulator,
-        "error"
+        "failed"
       );
       setMessages((current) => {
         const erroredMessages = current.map((entry) =>
@@ -1466,7 +1466,7 @@ const ChatPage: React.FC = () => {
         const finalSession: ChatSessionState = {
           ...session,
           error: unavailableMessage,
-          status: "error",
+          status: "failed",
           updatedAt: Date.now(),
         };
         setMessages((current) => {
@@ -1571,7 +1571,7 @@ const ChatPage: React.FC = () => {
               scopeId,
               selectedService.id,
               accumulator,
-              accumulator.errorText ? "error" : "running",
+              accumulator.errorText ? "failed" : "running",
               session
             )
           );
@@ -1584,7 +1584,7 @@ const ChatPage: React.FC = () => {
           scopeId,
           selectedService.id,
           accumulator,
-          accumulator.errorText ? "error" : "success",
+          accumulator.errorText ? "failed" : "completed",
           session
         );
 
@@ -1618,7 +1618,7 @@ const ChatPage: React.FC = () => {
           scopeId,
           selectedService.id,
           accumulator,
-          "error",
+          "failed",
           session
         );
         setMessages((current) => {
@@ -1912,7 +1912,7 @@ const ChatPage: React.FC = () => {
         runId: result.runId || session.runId,
         scopeId,
         serviceId: targetService.id,
-        status: result.success ? "running" : "error",
+        status: result.success ? "running" : "failed",
         updatedAt: Date.now(),
       };
       const note = result.success

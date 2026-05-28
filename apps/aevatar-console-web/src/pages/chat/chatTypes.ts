@@ -5,6 +5,7 @@ import type {
   RuntimeToolApprovalRequestInfo,
   RuntimeToolCallInfo,
 } from "@/shared/agui/runtimeEventSemantics";
+import type { CqrsStatus } from "@/shared/models/cqrsState";
 
 export type { RuntimeEvent };
 
@@ -104,7 +105,7 @@ export type ChatSessionState = {
   commandId: string;
   runId: string;
   eventCount: number;
-  status: "idle" | "running" | "success" | "error";
+  status: CqrsStatus;
   error?: string;
   updatedAt?: number;
 };

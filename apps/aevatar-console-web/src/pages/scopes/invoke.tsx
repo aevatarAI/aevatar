@@ -35,6 +35,7 @@ import {
   type RuntimeToolCallInfo,
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { history } from '@/shared/navigation/history';
@@ -95,7 +96,7 @@ type InvokeResultState = {
   responseJson: string;
   runId: string;
   serviceId: string;
-  status: 'idle' | 'running' | 'success' | 'error';
+  status: CqrsStatus;
   steps: RuntimeStepInfo[];
   thinking: string;
   toolCalls: RuntimeToolCallInfo[];
@@ -728,7 +729,7 @@ const ScopeInvokePage: React.FC = () => {
     setInvokeResult((current) => ({
       ...current,
       error: 'Invocation aborted by operator.',
-      status: 'error',
+      status: 'failed',
     }));
   };
 
@@ -825,7 +826,7 @@ const ScopeInvokePage: React.FC = () => {
             responseJson: '',
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: accumulator.errorText ? 'error' : 'running',
+            status: accumulator.errorText ? 'failed' : 'running',
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
@@ -861,7 +862,7 @@ const ScopeInvokePage: React.FC = () => {
             responseJson: '',
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: accumulator.errorText ? 'error' : 'success',
+            status: accumulator.errorText ? 'failed' : 'completed',
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
@@ -899,7 +900,7 @@ const ScopeInvokePage: React.FC = () => {
             mode: 'stream',
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: 'error',
+            status: 'failed',
             steps: [...accumulator.steps],
             thinking: accumulator.thinking,
             toolCalls: [...accumulator.toolCalls],
@@ -974,7 +975,7 @@ const ScopeInvokePage: React.FC = () => {
         responseJson: JSON.stringify(response, null, 2),
         runId: responseRunId,
         serviceId: selectedService.serviceId,
-        status: 'success',
+        status: 'completed',
       });
     } catch (error) {
       setInvokeResult({
@@ -983,7 +984,7 @@ const ScopeInvokePage: React.FC = () => {
         error: error instanceof Error ? error.message : String(error),
         mode: 'invoke',
         serviceId: selectedService.serviceId,
-        status: 'error',
+        status: 'failed',
       });
     }
   };
@@ -1095,7 +1096,7 @@ const ScopeInvokePage: React.FC = () => {
             'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
           title: 'Fix the live team setup',
         }
-      : invokeResult.status === 'success'
+      : invokeResult.status === 'completed'
         ? {
             action: handleOpenRuns,
             actionLabel: 'Continue in Runs',
@@ -1216,7 +1217,7 @@ const ScopeInvokePage: React.FC = () => {
             <Button onClick={() => setContextSurface('service')}>
               Browse services
             </Button>
-            {invokeResult.status === 'success' ? (
+            {invokeResult.status === 'completed' ? (
               <Button onClick={handleOpenRuns} type="primary">
                 Continue in Runs
               </Button>
@@ -1657,9 +1658,9 @@ const ScopeInvokePage: React.FC = () => {
                             'endpoint'
                           }`}
                           type={
-                            invokeResult.status === 'error'
+                            invokeResult.status === 'failed'
                               ? 'error'
-                              : invokeResult.status === 'success'
+                              : invokeResult.status === 'completed'
                                 ? 'success'
                                 : 'info'
                           }

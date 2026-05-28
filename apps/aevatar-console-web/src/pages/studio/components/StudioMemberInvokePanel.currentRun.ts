@@ -3,6 +3,7 @@ import type {
   RuntimeStepInfo,
   RuntimeToolCallInfo,
 } from '@/shared/agui/runtimeEventSemantics';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
 
 export type InvokeResultState = {
@@ -20,7 +21,7 @@ export type InvokeResultState = {
   readonly responseJson: string;
   readonly runId: string;
   readonly serviceId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error' | 'cancelled';
+  readonly status: CqrsStatus;
   readonly steps: RuntimeStepInfo[];
   readonly thinking: string;
   readonly toolCalls: RuntimeToolCallInfo[];
@@ -59,7 +60,7 @@ export type InvokeHistoryEntry = {
   readonly runId: string;
   readonly serviceId: string;
   readonly startedAt: number;
-  readonly status: 'running' | 'success' | 'error' | 'cancelled';
+  readonly status: CqrsStatus;
   readonly summary: string;
   readonly snapshot: {
     readonly chatMessages: StudioInvokeChatMessage[];
@@ -186,10 +187,12 @@ function buildObserveSessionSeed(input: {
       trimOptional(input.selectedServiceDisplayName) || input.currentMemberLabel,
     startedAtUtc: toIsoTimestamp(input.currentRunRequest?.startedAt) || '',
     status:
+      input.invokeResult.status === 'failed' ||
       input.invokeResult.status === 'error' ||
       input.invokeResult.status === 'cancelled'
         ? 'error'
-        : input.invokeResult.status === 'success'
+        : input.invokeResult.status === 'completed' ||
+            input.invokeResult.status === 'success'
           ? 'success'
           : 'running',
   };

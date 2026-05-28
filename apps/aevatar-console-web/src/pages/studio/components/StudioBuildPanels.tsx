@@ -35,6 +35,7 @@ import {
   buildRuntimeGAgentTypeLabel,
   type RuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
+import type { CqrsStatus } from '@/shared/models/cqrsState';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
   addPackageFile,
@@ -469,7 +470,7 @@ type DraftRunState = {
   readonly events: readonly AGUIEvent[];
   readonly finalOutput: string;
   readonly runId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error';
+  readonly status: CqrsStatus;
 };
 
 const IDLE_DRAFT_RUN_STATE: DraftRunState = {
@@ -516,7 +517,7 @@ function renderRunOutput(state: DraftRunState): string {
     return 'Waiting for assistant output...';
   }
 
-  if (state.status === 'success' && getRunDebugLines(state).length > 0) {
+  if (state.status === 'completed' && getRunDebugLines(state).length > 0) {
     return 'Run completed, but no assistant output was returned.';
   }
 
@@ -695,7 +696,7 @@ async function consumeAguiDraftRun(
         if (finalOutput.trim()) {
           nextFinalOutput = finalOutput.trim();
         }
-        nextStatus = 'success';
+        nextStatus = 'completed';
       }
 
       if (event.type === AGUIEventType.CUSTOM) {
@@ -715,7 +716,7 @@ async function consumeAguiDraftRun(
         nextError =
           String((event as { message?: string }).message || '').trim() ||
           'Draft run failed.';
-        nextStatus = 'error';
+        nextStatus = 'failed';
       }
 
       return {
@@ -1112,11 +1113,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
 
       await consumeAguiDraftRun(response, controller.signal, setRunState);
       setRunState((current) =>
-        current.status === 'error' || controller.signal.aborted
+        current.status === 'failed' || controller.signal.aborted
           ? current
           : {
               ...current,
-              status: current.events.length > 0 ? 'success' : 'idle',
+              status: current.events.length > 0 ? 'completed' : 'idle',
             },
       );
     } catch (error) {
@@ -1137,7 +1138,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
         error: rawMessage,
-        status: 'error',
+        status: 'failed',
       });
     } finally {
       runPendingRef.current = false;
@@ -3276,7 +3277,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
         error: 'Workspace, GAgent type, and prompt are required before running.',
-        status: 'error',
+        status: 'failed',
       });
       return;
     }
@@ -3307,11 +3308,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
 
       await consumeAguiDraftRun(response, controller.signal, setRunState);
       setRunState((current) =>
-        current.status === 'error' || controller.signal.aborted
+        current.status === 'failed' || controller.signal.aborted
           ? current
           : {
               ...current,
-              status: current.events.length > 0 ? 'success' : 'idle',
+              status: current.events.length > 0 ? 'completed' : 'idle',
             },
       );
     } catch (error) {
@@ -3321,7 +3322,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           setRunState({
             ...IDLE_DRAFT_RUN_STATE,
             error: reason.message,
-            status: 'error',
+            status: 'failed',
           });
         }
         return;
@@ -3330,7 +3331,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
         error: describeError(error),
-        status: 'error',
+        status: 'failed',
       });
     } finally {
       window.clearTimeout(timeoutId);
