@@ -35,6 +35,28 @@ md5_cmd() {
   fi
 }
 
+file_mtime_epoch() {
+  local file=$1
+  if stat -c %Y "$file" >/dev/null 2>&1; then
+    stat -c %Y "$file"
+  else
+    stat -f %m "$file"
+  fi
+}
+
+file_btime_epoch() {
+  local file=$1 value
+  if value=$(stat -c %W "$file" 2>/dev/null); then
+    if [ "$value" -gt 0 ] 2>/dev/null; then
+      echo "$value"
+      return
+    fi
+    file_mtime_epoch "$file"
+  else
+    stat -f %B "$file"
+  fi
+}
+
 # parse log basename → target number (issue or PR)
 # 优先从对应 prompt 文件 grep "#NNN"; 次选从 log 文件名 pattern 提取
 parse_target() {
@@ -81,7 +103,7 @@ has_exit_marker() {
 
 is_stale_without_exit() {
   local log=$1 mtime now age
-  mtime=$(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log")
+  mtime=$(file_mtime_epoch "$log")
   now=$(date +%s)
   age=$(( now - mtime ))
   [ "$age" -gt 1800 ] && ! has_exit_marker "$log"
@@ -94,7 +116,7 @@ extract_tail() {
 
 elapsed_sec() {
   local log=$1 mtime now
-  mtime=$(stat -f %B "$log" 2>/dev/null || stat -c %Y "$log")
+  mtime=$(file_btime_epoch "$log")
   now=$(date +%s)
   echo $(( now - mtime ))
 }
