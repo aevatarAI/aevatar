@@ -13,7 +13,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
-import StudioPage from "./index";
+import StudioPage, { buildStudioMemberBindingPendingNotice } from "./index";
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -5277,6 +5277,7 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       memberId: "workspace-demo",
       status: "platform_binding_pending",
+      stateVersion: 11,
       failure: null,
       updatedAt: "2026-04-27T08:15:01Z",
     });
@@ -5308,6 +5309,24 @@ describe("StudioPage", () => {
 
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("member")).toBe("member:workspace-demo");
+  });
+
+  it("includes readmodel freshness in pending member binding notices", () => {
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", {
+        bindingRunId: "bind-member-workflow-1",
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+        status: "platform_binding_pending",
+        stateVersion: 11,
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      }).message,
+    ).toContain("Read model observed v11.");
+
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", null).message,
+    ).toContain("Read model has not materialized this run yet.");
   });
 
   it("normalizes legacy workflow:default links and keeps the bound member contract when switching away and back", async () => {
