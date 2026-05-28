@@ -572,6 +572,7 @@ function record_if_unprotected() {
 
 BEGIN {
   in_endpoint = 0;
+  has_actor_current_state_route = 0;
 }
 
 FNR == 1 {
@@ -590,6 +591,8 @@ FNR == 1 {
 
   if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?agents"/ ||
       line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-actors\/\{[^}]+}\/current-state"/) {
+    if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-actors\/\{actorId}\/current-state"/)
+      has_actor_current_state_route = 1;
     record_if_unprotected();
     in_endpoint = 1;
     endpoint_file = FILENAME;
@@ -614,6 +617,10 @@ FNR == 1 {
 
 END {
   record_if_unprotected();
+  if (has_actor_current_state_route == 0) {
+    print "Workflow actor current-state route must be exposed as /workflow-actors/{ActorId}/current-state.";
+    exit 2;
+  }
 }
 ' "${workflow_actor_current_state_endpoint_files[@]}"
   )"
