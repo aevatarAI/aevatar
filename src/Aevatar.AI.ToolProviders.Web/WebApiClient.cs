@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -28,7 +30,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
     }
 
     /// <summary>Perform a web search via NyxID proxy or direct API.</summary>
-    public async Task<string> SearchAsync(
+    public async Task<Value> SearchAsync(
         string token, string query, int maxResults, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_options.NyxIdSearchSlug) &&
@@ -36,16 +38,16 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         {
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
             var url = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/{Uri.EscapeDataString(_options.NyxIdSearchSlug)}{path}";
-            return await GetAsync(token, url, ct);
+            return ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
         if (!string.IsNullOrWhiteSpace(_options.SearchApiBaseUrl))
         {
             var url = $"{_options.SearchApiBaseUrl.TrimEnd('/')}/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
-            return await GetAsync(token, url, ct);
+            return ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
-        return """{"error":"No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions."}""";
+        return ErrorObject("No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions.");
     }
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
@@ -189,6 +191,28 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
             _logger.LogWarning(ex, "Web API request failed: {Url}", url);
             return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
         }
+    }
+
+    private static Value ParseSearchPayload(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return new Value { StructValue = new Struct() };
+
+        try
+        {
+            return JsonParser.Default.Parse<Value>(payload);
+        }
+        catch (InvalidJsonException)
+        {
+            return Value.ForString(payload);
+        }
+    }
+
+    private static Value ErrorObject(string message)
+    {
+        var error = new Value { StructValue = new Struct() };
+        error.StructValue.Fields["error"] = Value.ForString(message);
+        return error;
     }
 
     public void Dispose()
