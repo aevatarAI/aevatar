@@ -1170,7 +1170,7 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_ShouldPersistObservedWorkflowCommandId_FromChatMetadata()
+    public async Task WorkflowRunGAgent_ShouldPersistObservedWorkflowCommandId_FromInboundEnvelopeId()
     {
         var eventStore = new InMemoryEventStore();
         var agent = CreateRunAgent(eventStore: eventStore);
@@ -1186,13 +1186,24 @@ public class WorkflowGAgentCoverageTests
 
         (await agent.GetDescriptionAsync()).Should().Contain("bound");
 
-        await agent.HandleChatRequest(new ChatRequestEvent
+        var request = new ChatRequestEvent
         {
             Prompt = "hello",
             SessionId = "session-1",
             Headers =
             {
-                ["workflow.command_id"] = "cmd-123",
+                ["workflow.command_id"] = "legacy-header-must-not-win",
+            },
+        };
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "cmd-123",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(request),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("api", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-123",
             },
         });
 
