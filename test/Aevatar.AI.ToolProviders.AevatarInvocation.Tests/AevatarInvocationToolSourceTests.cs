@@ -968,7 +968,7 @@ public sealed class AevatarInvocationToolSourceTests
 
     private sealed class StubWorkflowExecutionQueryService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowRunCurrentStateQueryEnabled => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; set; } = [];
 
@@ -986,7 +986,7 @@ public sealed class AevatarInvocationToolSourceTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult(Snapshot);
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default) =>

@@ -5414,7 +5414,7 @@ public sealed class ScopeServiceEndpointsTests
 
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowRunCurrentStateQueryEnabled => true;
 
         public Dictionary<string, WorkflowActorSnapshot> SnapshotsByActorId { get; } = new(StringComparer.Ordinal);
 
@@ -5438,7 +5438,7 @@ public sealed class ScopeServiceEndpointsTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             SnapshotCalls.Add(actorId);
             SnapshotsByActorId.TryGetValue(actorId, out var snapshot);

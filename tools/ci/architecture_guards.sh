@@ -538,16 +538,14 @@ if [ -n "${forbidden_web_api_port_report}" ]; then
   exit 1
 fi
 
-# Refactor (iter12/cluster-022):
+# Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
 #   Old: actor query endpoints could be mapped without auth, exposing readmodel
 #   by raw actor id.
-#   New: CI guard requires explicit .RequireAuthorization() or
-#   security-allowlist comment per endpoint.
-#   TODO: Once a caller-scope query contract exists, extend this guard to require
-#   AI workflow tools to reference that scoped query port.
-workflow_actor_query_endpoint_files=()
+#   New: workflow-run current-state readmodel endpoints must carry the same
+#   explicit .RequireAuthorization() or security-allowlist protection.
+workflow_run_current_state_endpoint_files=()
 while IFS= read -r endpoint_file; do
-  workflow_actor_query_endpoint_files+=("${endpoint_file}")
+  workflow_run_current_state_endpoint_files+=("${endpoint_file}")
 done < <(
   find src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi \
     -type f \
@@ -555,9 +553,9 @@ done < <(
     | sort
 )
 
-if [ "${#workflow_actor_query_endpoint_files[@]}" -gt 0 ]; then
+if [ "${#workflow_run_current_state_endpoint_files[@]}" -gt 0 ]; then
   set +e
-  workflow_actor_query_authz_report="$(
+  workflow_run_current_state_authz_report="$(
     awk '
 function trim(value) {
   sub(/^[[:space:]]+/, "", value);
@@ -585,7 +583,7 @@ FNR == 1 {
   line = $0;
 
   if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?agents"/ ||
-      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?actors\/\{[^}]+}/) {
+      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-runs\/\{[^}]+}\/current-state"/) {
     record_if_unprotected();
     in_endpoint = 1;
     endpoint_file = FILENAME;
@@ -611,19 +609,19 @@ FNR == 1 {
 END {
   record_if_unprotected();
 }
-' "${workflow_actor_query_endpoint_files[@]}"
+' "${workflow_run_current_state_endpoint_files[@]}"
   )"
-  workflow_actor_query_authz_status=$?
+  workflow_run_current_state_authz_status=$?
   set -e
 
-  if [[ ${workflow_actor_query_authz_status} -ne 0 ]]; then
-    echo "Workflow actor query authorization guard execution failed."
-    exit "${workflow_actor_query_authz_status}"
+  if [[ ${workflow_run_current_state_authz_status} -ne 0 ]]; then
+    echo "Workflow run current-state authorization guard execution failed."
+    exit "${workflow_run_current_state_authz_status}"
   fi
 
-  if [ -n "${workflow_actor_query_authz_report}" ]; then
-    echo "${workflow_actor_query_authz_report}"
-    echo "Workflow actor query endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
+  if [ -n "${workflow_run_current_state_authz_report}" ]; then
+    echo "${workflow_run_current_state_authz_report}"
+    echo "Workflow run current-state endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
     exit 1
   fi
 fi

@@ -9,7 +9,7 @@ namespace Aevatar.AI.ToolProviders.Workflow;
 
 /// <summary>
 /// Workflow tool source. Provides tools for inspecting workflow executions,
-/// actor state (via readmodel), and event timelines.
+/// workflow-run current state (via readmodel), and event timelines.
 /// </summary>
 public sealed class WorkflowAgentToolSource : IAgentToolSource
 {
@@ -39,7 +39,7 @@ public sealed class WorkflowAgentToolSource : IAgentToolSource
         {
             new WorkflowStatusTool(_queryService, _options),
             new WorkflowArtifactQueryTool(_queryService, _options),
-            new ActorInspectTool(_queryService, _options),
+            new WorkflowRunCurrentStateTool(_queryService, _options),
             new EventQueryTool(_queryService, _options),
         };
 

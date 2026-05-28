@@ -2,7 +2,7 @@ namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
 public interface IWorkflowExecutionQueryApplicationService
 {
-    bool ActorQueryEnabled { get; }
+    bool WorkflowRunCurrentStateQueryEnabled { get; }
 
     Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default);
 
@@ -14,7 +14,10 @@ public interface IWorkflowExecutionQueryApplicationService
 
     Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default);
 
-    Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: application query contract exposed actor snapshot inspection by actorId.
+    //   New principle: application query contract exposes workflow-run current-state readmodel lookup by workflowRunId.
+    Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string workflowRunId, CancellationToken ct = default);
 
     // Refactor (iter29/cluster-029-workflow-history-artifact):
     //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)

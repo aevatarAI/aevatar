@@ -242,15 +242,15 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
-    public async Task ActorInspectTool_Graph_ShouldNotExposeWorkflowArtifactSubgraph()
+    public async Task WorkflowRunCurrentStateTool_Graph_ShouldNotExposeWorkflowArtifactSubgraph()
     {
         var query = new RecordingWorkflowExecutionQueryService();
-        var tool = new ActorInspectTool(query, new WorkflowToolOptions { MaxGraphDepth = 2 });
+        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions { MaxGraphDepth = 2 });
 
-        var result = await tool.ExecuteAsync("""{"action":"graph","actor_id":"run-1","graph_depth":4,"take":11}""");
+        var result = await tool.ExecuteAsync("""{"action":"graph","workflow_run_id":"run-1","graph_depth":4,"take":11}""");
 
         using var document = JsonDocument.Parse(result);
-        document.RootElement.GetProperty("error").GetString().Should().Be("Unsupported actor_inspect action 'graph'");
+        document.RootElement.GetProperty("error").GetString().Should().Be("Unsupported workflow_run_current_state action 'graph'");
         tool.ParametersSchema.Should().NotContain("\"graph\"");
         tool.ParametersSchema.Should().NotContain("\"graph_depth\"");
         query.Calls.Should().BeEmpty();
@@ -332,7 +332,7 @@ public sealed class WorkflowRunToolContractTests
 
     private sealed class RecordingWorkflowExecutionQueryService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled { get; init; } = true;
+        public bool WorkflowRunCurrentStateQueryEnabled { get; init; } = true;
         public List<string> Calls { get; } = [];
         public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowCatalogItem> Catalog { get; init; } = [];
@@ -363,7 +363,7 @@ public sealed class WorkflowRunToolContractTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string workflowRunId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorSnapshot?>(null);
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)

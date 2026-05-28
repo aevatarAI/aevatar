@@ -318,7 +318,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
 
     private sealed class RecordingWorkflowQueryService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowRunCurrentStateQueryEnabled => true;
         public string? LastActorId { get; private set; }
         public WorkflowActorSnapshot? Snapshot { get; set; }
 
@@ -336,7 +336,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             LastActorId = actorId;
             return Task.FromResult(Snapshot);

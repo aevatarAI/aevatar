@@ -231,7 +231,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new WorkflowExecutionProjectionOptions
             {
                 Enabled = true,
-                EnableActorQueryEndpoints = true,
+                WorkflowRunCurrentStateQueryEnabled = true,
             },
             currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
             {
@@ -258,9 +258,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 ],
             });
 
-        var snapshot = await harness.CurrentStatePort.GetActorSnapshotAsync("actor-1");
-        var snapshots = await harness.CurrentStatePort.ListActorSnapshotsAsync(5);
-        var projectionState = await harness.CurrentStatePort.GetActorProjectionStateAsync("actor-1");
+        var snapshot = await harness.CurrentStatePort.GetWorkflowRunCurrentStateAsync("actor-1");
+        var snapshots = await harness.CurrentStatePort.ListWorkflowRunCurrentStatesAsync(5);
+        var projectionState = await harness.CurrentStatePort.GetWorkflowRunProjectionStateAsync("actor-1");
 
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("actor-1");
@@ -279,12 +279,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
-            EnableActorQueryEndpoints = false,
+            WorkflowRunCurrentStateQueryEnabled = false,
         });
-        disabled.CurrentStatePort.EnableActorQueryEndpoints.Should().BeFalse();
-        (await disabled.CurrentStatePort.GetActorSnapshotAsync("actor-1")).Should().BeNull();
-        (await disabled.CurrentStatePort.ListActorSnapshotsAsync()).Should().BeEmpty();
-        (await disabled.CurrentStatePort.GetActorProjectionStateAsync("actor-1")).Should().BeNull();
+        disabled.CurrentStatePort.WorkflowRunCurrentStateQueryEnabled.Should().BeFalse();
+        (await disabled.CurrentStatePort.GetWorkflowRunCurrentStateAsync("actor-1")).Should().BeNull();
+        (await disabled.CurrentStatePort.ListWorkflowRunCurrentStatesAsync()).Should().BeEmpty();
+        (await disabled.CurrentStatePort.GetWorkflowRunProjectionStateAsync("actor-1")).Should().BeNull();
         disabled.CurrentStateReader.GetCalls.Should().Be(0);
         disabled.CurrentStateReader.QueryCalls.Should().Be(0);
 
@@ -292,11 +292,11 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new WorkflowExecutionProjectionOptions
             {
                 Enabled = true,
-                EnableActorQueryEndpoints = true,
+                WorkflowRunCurrentStateQueryEnabled = true,
             },
             currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>());
-        (await missing.CurrentStatePort.GetActorSnapshotAsync("   ")).Should().BeNull();
-        (await missing.CurrentStatePort.GetActorProjectionStateAsync("actor-404")).Should().BeNull();
+        (await missing.CurrentStatePort.GetWorkflowRunCurrentStateAsync("   ")).Should().BeNull();
+        (await missing.CurrentStatePort.GetWorkflowRunProjectionStateAsync("actor-404")).Should().BeNull();
         missing.CurrentStateReader.GetCalls.Should().Be(1);
     }
 

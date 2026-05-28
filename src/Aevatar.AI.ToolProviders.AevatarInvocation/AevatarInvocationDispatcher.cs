@@ -279,7 +279,7 @@ public sealed class AevatarInvocationDispatcher
             if (terminal != null)
                 return AevatarInvocationJson.Serialize(MapTerminal(terminal, runId));
 
-            var workflow = await _workflowQueryService.GetActorSnapshotAsync(actorId!, ct);
+            var workflow = await _workflowQueryService.GetWorkflowRunCurrentStateAsync(actorId!, ct);
             if (workflow != null &&
                 (string.IsNullOrWhiteSpace(workflow.LastCommandId) ||
                  string.Equals(workflow.LastCommandId, runId, StringComparison.Ordinal)))
@@ -646,7 +646,7 @@ public sealed class AevatarInvocationDispatcher
             });
         }
 
-        var snapshot = await _workflowQueryService.GetActorSnapshotAsync(query.ActorId.Trim(), ct);
+        var snapshot = await _workflowQueryService.GetWorkflowRunCurrentStateAsync(query.ActorId.Trim(), ct);
         return AevatarInvocationJson.Serialize(new QueryReadModelResult
         {
             ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,

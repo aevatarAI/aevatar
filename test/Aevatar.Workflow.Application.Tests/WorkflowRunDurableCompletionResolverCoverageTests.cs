@@ -127,9 +127,9 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         public Exception? Exception { get; set; }
         public bool ThrowOnCancellation { get; set; }
         public List<string> ActorIds { get; } = [];
-        public bool EnableActorQueryEndpoints => true;
+        public bool WorkflowRunCurrentStateQueryEnabled => true;
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             ActorIds.Add(actorId);
             if (ThrowOnCancellation)
@@ -139,10 +139,10 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
             return Task.FromResult(Snapshot);
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 }

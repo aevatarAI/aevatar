@@ -246,15 +246,18 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         }
     }
 
-    public async Task<JsonElement?> GetActorSnapshotAsync(
-        string actorId,
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: SDK called /api/actors/{actorId} and named the result an actor snapshot.
+    //   New principle: SDK calls the workflow-run current-state readmodel endpoint by workflowRunId.
+    public async Task<JsonElement?> GetWorkflowRunCurrentStateAsync(
+        string workflowRunId,
         CancellationToken cancellationToken = default)
     {
-        EnsureNotBlank(actorId, nameof(actorId));
+        EnsureNotBlank(workflowRunId, nameof(workflowRunId));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"/api/actors/{Uri.EscapeDataString(actorId)}");
+            $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/current-state");
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
@@ -265,7 +268,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             throw WorkflowSdkJson.BuildHttpException(
                 response.StatusCode,
                 rawPayload,
-                $"Actor snapshot request failed with HTTP {(int)response.StatusCode}.");
+                $"Workflow-run current-state request failed with HTTP {(int)response.StatusCode}.");
         }
 
         if (string.IsNullOrWhiteSpace(rawPayload))
@@ -279,7 +282,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse actor snapshot response payload.",
+                "Failed to parse workflow-run current-state response payload.",
                 rawPayload,
                 ex);
         }
