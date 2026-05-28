@@ -331,6 +331,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
         {
             RunId = "run-committed",
+            CommandId = "command-committed",
             DefinitionActorId = "definition-1",
             ScriptRevision = "rev-1",
             RequestedEventType = "integration.requested",
@@ -348,6 +349,90 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         harness.Agent.State.StateRoot!.Unpack<SimpleTextState>().Value.Should().Be("HELLO");
         var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
         persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcome = persisted.Select(x => x.EventData)
+            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-committed");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        outcome.CommandId.Should().Be("command-committed");
+        outcome.CorrelationId.Should().Be("corr-1");
+        outcome.CommittedFactCount.Should().Be(1);
+        outcome.StateVersion.Should().Be(2);
+        outcome.Result.Should().NotBeNull();
+        harness.Agent.State.LastRunOutcome.Should().NotBeNull();
+        harness.Agent.State.LastRunOutcome.ScriptRunId.Should().Be("run-committed");
+        harness.Agent.State.LastRunOutcome.CommittedFactCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRecordSucceededOutcome_WhenRunProducesNoFacts()
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-no-facts",
+            CommandId = "command-no-facts",
+            CorrelationId = "correlation-no-facts",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-no-facts",
+                Value = "hello",
+            }),
+        }, correlationId: string.Empty));
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().NotContain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcome = persisted.Select(x => x.EventData)
+            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-no-facts");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        outcome.CommandId.Should().Be("command-no-facts");
+        outcome.CorrelationId.Should().Be("correlation-no-facts");
+        outcome.CommittedFactCount.Should().Be(0);
+        outcome.Result.Should().BeNull();
+        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRecordFailedOutcome_WhenRunDispatchFails()
+    {
+        var harness = CreateHarness(
+            dispatcher: new ThrowingDispatcher(new InvalidOperationException("script contract rejected")));
+        await BindAsync(harness.Agent);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-failed",
+            CommandId = "command-failed",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-failed",
+                Value = "hello",
+            }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*script contract rejected*");
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        var outcome = persisted.Select(x => x.EventData)
+            .Single(x => x.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-failed");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        outcome.CommandId.Should().Be("command-failed");
+        outcome.Error.Should().Be("script contract rejected");
+        outcome.CommittedFactCount.Should().Be(0);
+        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
     }
 
     [Fact]
@@ -529,6 +614,18 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(factory(request));
+        }
+    }
+
+    private sealed class ThrowingDispatcher(Exception exception) : IScriptBehaviorDispatcher
+    {
+        public Task<IReadOnlyList<ScriptDomainFactCommitted>> DispatchAsync(
+            ScriptBehaviorDispatchRequest request,
+            CancellationToken ct)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<IReadOnlyList<ScriptDomainFactCommitted>>(exception);
         }
     }
 

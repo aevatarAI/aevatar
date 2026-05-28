@@ -263,14 +263,21 @@ public class WorkflowIntegrationTests
         });
 
         // Then
-        (await runtime.ExistsAsync(definitionActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(runActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(researcherActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(reviewerActorId)).Should().BeTrue();
-        (await runtime.ExistsAsync(writerActorId)).Should().BeTrue();
+        await WaitForActorAsync(runtime, definitionActorId);
+        await WaitForActorAsync(runtime, runActorId);
+        await WaitForActorAsync(runtime, researcherActorId);
+        await WaitForActorAsync(runtime, reviewerActorId);
+        await WaitForActorAsync(runtime, writerActorId);
 
         // 验证层级
-        var children = await runActor.GetChildrenIdsAsync();
+        var children = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ => await runActor.GetChildrenIdsAsync(),
+            childIds => childIds.Count == 3 &&
+                        childIds.Contains(researcherActorId) &&
+                        childIds.Contains(reviewerActorId) &&
+                        childIds.Contains(writerActorId),
+            $"Workflow run children not visible. actor_id={runActorId}",
+            CancellationToken.None);
         children.Should().HaveCount(3);
         children.Should().Contain(researcherActorId);
         children.Should().Contain(reviewerActorId);
@@ -287,6 +294,15 @@ public class WorkflowIntegrationTests
             $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
             CancellationToken.None);
         researcher!.RoleName.Should().Be("Researcher");
+    }
+
+    private static async Task WaitForActorAsync(IActorRuntime runtime, string actorId)
+    {
+        await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ => await runtime.ExistsAsync(actorId),
+            exists => exists,
+            $"Actor not visible. actor_id={actorId}",
+            CancellationToken.None);
     }
 
     // ═══════════════════════════════════════════════════════════
