@@ -229,6 +229,44 @@ function mockBuildScriptServiceRevisionCatalog(
   };
 }
 
+function mockBuildGAgentServiceRevisionCatalog(
+  overrides?: Partial<{
+    scopeId: string;
+    serviceId: string;
+    displayName: string;
+    actorTypeName: string;
+    revisionId: string;
+  }>
+) {
+  const actorTypeName = overrides?.actorTypeName ?? "Tests.OrdersGAgent, Tests";
+  const revisionId = overrides?.revisionId ?? "rev-gagent-1";
+  const catalog = mockBuildServiceRevisionCatalog({
+    scopeId: overrides?.scopeId,
+    serviceId: overrides?.serviceId ?? "gagent-1",
+    displayName: overrides?.displayName ?? "gagent-1",
+    workflowName: "",
+    revisionId,
+  });
+
+  return {
+    ...catalog,
+    revisions: [
+      {
+        ...catalog.revisions[0],
+        implementationKind: "gagent",
+        workflowName: "",
+        workflowDefinitionActorId: "",
+        inlineWorkflowCount: 0,
+        scriptId: "",
+        scriptRevision: "",
+        scriptDefinitionActorId: "",
+        scriptSourceHash: "",
+        staticActorTypeName: actorTypeName,
+      },
+    ],
+  };
+}
+
 function mockBuildServiceRunSummary(
   overrides?: Partial<{
     scopeId: string;
@@ -5894,6 +5932,122 @@ describe("StudioPage", () => {
         "true"
       );
     });
+  });
+
+  it("keeps Bind active when selecting an unbound GAgent Team member from Bind", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "draft1",
+        displayName: "draft1",
+        lifecycleStage: "created",
+        publishedServiceId: "",
+        lastBoundRevisionId: null,
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "gagent-1",
+        displayName: "gagent-1",
+        implementationKind: "gagent",
+        lifecycleStage: "created",
+        publishedServiceId: "",
+        lastBoundRevisionId: null,
+        teamId: "t-alpha",
+      },
+    ];
+    mockScopeRuntimeApi.listServices.mockResolvedValue([]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Adraft1&step=bind&tab=bindings"
+    );
+
+    const rail = await screen.findByLabelText("Team members");
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(await within(rail).findByRole("button", { name: "gagent-1" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:gagent-1");
+      expect(searchParams.get("step")).toBe("bind");
+      expect(searchParams.get("tab")).toBe("bindings");
+      expect(searchParams.get("focus")).toBeNull();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
+      expect(within(rail).getByRole("button", { name: "gagent-1" })).toHaveAttribute(
+        "aria-current",
+        "true"
+      );
+    });
+    expect(screen.queryByTestId("studio-gagent-build-panel")).toBeNull();
+  });
+
+  it("keeps Build active when selecting a GAgent Team member from Build", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "draft1",
+        displayName: "draft1",
+        lifecycleStage: "created",
+        publishedServiceId: "",
+        lastBoundRevisionId: null,
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "gagent-1",
+        displayName: "gagent-1",
+        implementationKind: "gagent",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "gagent-service",
+        lastBoundRevisionId: "rev-gagent-1",
+        teamId: "t-alpha",
+      },
+    ];
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceId: "gagent-service",
+        displayName: "gagent-1",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-gagent",
+        endpoints: [
+          {
+            endpointId: "run",
+            displayName: "Run",
+            kind: "command",
+            description: "Run gagent-1.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+    mockScopeRuntimeApi.getServiceRevisions.mockResolvedValue(
+      mockBuildGAgentServiceRevisionCatalog({
+        serviceId: "gagent-service",
+        displayName: "gagent-1",
+      })
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Adraft1&focus=workflow%3Aworkflow-1&step=build&tab=studio"
+    );
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    fireEvent.click(await within(rail).findByRole("button", { name: "gagent-1" }));
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:gagent-1");
+      expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("focus")).toBeNull();
+      expect(within(rail).getByRole("button", { name: "gagent-1" })).toHaveAttribute(
+        "aria-current",
+        "true"
+      );
+    });
+    expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
   });
 
   it("recovers a direct unbound Workflow Team member Bind link with workflow focus", async () => {
