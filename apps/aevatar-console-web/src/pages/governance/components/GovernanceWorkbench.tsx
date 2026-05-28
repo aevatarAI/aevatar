@@ -1899,7 +1899,7 @@ const GovernanceWorkbench: React.FC = () => {
                   <div
                     style={{
                       background:
-                        "linear-gradient(180deg, rgba(24, 144, 255, 0.06) 0%, rgba(255, 255, 255, 0.98) 100%)",
+                        "var(--gradient-surface-primary-header)",
                       borderBottom: `1px solid ${surfaceToken.colorBorderSecondary}`,
                       display: "flex",
                       flexDirection: "column",

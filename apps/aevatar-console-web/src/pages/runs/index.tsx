@@ -147,8 +147,7 @@ const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
 const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   alignItems: "center",
   backdropFilter: "blur(10px)",
-  background:
-    "linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%)",
+  background: "var(--gradient-surface-elevated)",
   border: "1px solid rgba(226, 232, 240, 0.95)",
   borderRadius: 16,
   display: "flex",
@@ -166,8 +165,7 @@ const runsWorkbenchHeaderButtonAccentClassName =
 const runsWorkbenchHeaderToolbarCss = `
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName} {
   align-items: center;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%);
+  background: var(--gradient-surface-card);
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 12px;
   box-shadow:
@@ -189,8 +187,7 @@ const runsWorkbenchHeaderToolbarCss = `
 
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}:hover,
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonClassName}:focus {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(239, 246, 255, 0.92) 100%);
+  background: var(--gradient-button-hover);
   border-color: rgba(59, 130, 246, 0.3);
   box-shadow:
     0 10px 22px rgba(59, 130, 246, 0.12),
@@ -204,8 +201,7 @@ const runsWorkbenchHeaderToolbarCss = `
 }
 
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName} {
-  background:
-    linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.88) 100%);
+  background: var(--gradient-accent-default);
   border-color: rgba(59, 130, 246, 0.28);
   box-shadow:
     0 10px 22px rgba(59, 130, 246, 0.14),
@@ -215,8 +211,7 @@ const runsWorkbenchHeaderToolbarCss = `
 
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName}:hover,
 .${runsWorkbenchHeaderToolbarClassName} .${runsWorkbenchHeaderButtonAccentClassName}:focus {
-  background:
-    linear-gradient(180deg, rgba(219, 234, 254, 1) 0%, rgba(191, 219, 254, 0.96) 100%);
+  background: var(--gradient-accent-hover);
   border-color: rgba(37, 99, 235, 0.38);
   box-shadow:
     0 14px 28px rgba(37, 99, 235, 0.18),
@@ -295,8 +290,7 @@ const runsChatTraceWrapStyle: React.CSSProperties = {
 };
 
 const runsChatComposerCardStyle: React.CSSProperties = {
-  background:
-    "linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%)",
+  background: "var(--gradient-surface-card)",
   border: "1px solid rgba(148, 163, 184, 0.18)",
   borderRadius: 20,
   boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
@@ -372,7 +366,7 @@ const runsChatComposerCss = `
 
 .${runsChatComposerClassName}::before {
   background:
-    radial-gradient(circle at top right, rgba(22, 119, 255, 0.14), transparent 55%);
+    var(--gradient-glow-accent);
   content: "";
   height: 220px;
   pointer-events: none;
@@ -396,7 +390,7 @@ const runsChatComposerCss = `
 
 .${runsChatComposerInputShellClassName} {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 100%);
+    var(--gradient-surface-input-shell);
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 16px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);

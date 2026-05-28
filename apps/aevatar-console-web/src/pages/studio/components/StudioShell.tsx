@@ -77,7 +77,7 @@ const shellRootStyle: React.CSSProperties = {
 
 const railStyle: React.CSSProperties = {
   background:
-    'linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(249, 245, 237, 0.98) 100%)',
+    'var(--gradient-surface-rail-warm)',
   borderRight: '1px solid #ebe2d4',
   display: 'flex',
   flexDirection: 'column',
@@ -610,7 +610,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                     role="button"
                     style={{
                       background: isSelected
-                        ? 'linear-gradient(180deg, rgba(25, 34, 48, 0.98) 0%, rgba(34, 43, 58, 0.98) 100%)'
+                        ? 'var(--gradient-surface-dark-card)'
                         : 'rgba(255, 252, 246, 0.98)',
                       border: `1px solid ${isSelected ? '#141a22' : '#ebe3d4'}`,
                       borderRadius: 16,

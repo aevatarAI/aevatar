@@ -1746,7 +1746,7 @@ export const TopologyExplorerPage: React.FC<{
                                 </Typography.Text>
                                 <div
                                   style={{
-                                    background: "linear-gradient(180deg, rgba(248, 250, 252, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%)",
+                                    background: "var(--gradient-surface-graph)",
                                     border: `1px solid ${token.colorBorderSecondary}`,
                                     borderRadius: 18,
                                     padding: 10,
@@ -1915,7 +1915,7 @@ export const TopologyExplorerPage: React.FC<{
                 {graphControls}
                 <div
                   style={{
-                    background: "linear-gradient(180deg, rgba(248, 250, 252, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%)",
+                    background: "var(--gradient-surface-graph)",
                     border: `1px solid ${token.colorBorderSecondary}`,
                     borderRadius: 20,
                     flex: 1,
