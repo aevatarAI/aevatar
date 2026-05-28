@@ -140,6 +140,42 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedInlineBundleSubmessage()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = " auto ",
+                    ActorId = " source-actor-1 ",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "auto",
+                            Yaml = "name: auto",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        result.Request.Source.InlineBundle.Should().NotBeNull();
+        result.Request.Source.InlineBundle!.EntryName.Should().Be("auto");
+        result.Request.Source.InlineBundle.ActorId.Should().Be("source-actor-1");
+        result.Request.Source.InlineBundle.YamlDocuments.Should().ContainSingle()
+            .Which.Should().Be(new WorkflowChatInlineYamlDocument("auto", "name: auto"));
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldNormalizeTypedAndLegacyInputsToEquivalentTypedSource()
     {
         var typed = ChatRunRequestNormalizer.Normalize(new ChatInput

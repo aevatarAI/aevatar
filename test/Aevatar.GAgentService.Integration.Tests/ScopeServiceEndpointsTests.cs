@@ -56,10 +56,13 @@ public sealed class ScopeServiceEndpointsTests
         {
             implementationKind = "workflow",
             displayName = "Orders App",
-            workflowYamls = new[]
+            workflow = new
             {
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                },
             },
         });
 
@@ -74,6 +77,26 @@ public sealed class ScopeServiceEndpointsTests
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldIgnoreTopLevelWorkflowYamlsFallback()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "workflow",
+            displayName = "Orders App",
+            workflowYamls = new[]
+            {
+                "name: legacy\nsteps:\n  - run: echo legacy",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.Workflow.Should().BeNull();
     }
 
     [Fact]
