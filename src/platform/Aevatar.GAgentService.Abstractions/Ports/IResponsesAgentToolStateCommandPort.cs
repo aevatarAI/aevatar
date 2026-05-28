@@ -11,13 +11,6 @@ public interface IResponsesAgentToolStateCommandPort
         string argumentsJson,
         CancellationToken ct = default);
 
-    Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-        string scopeId,
-        string ownerSubject,
-        string sourceResponseId,
-        string argumentsJson,
-        CancellationToken ct = default);
-
     Task<ResponsesWebTraceResult> RecordWebTraceAsync(
         string scopeId,
         string ownerSubject,
@@ -30,13 +23,6 @@ public sealed record ResponsesTodoWriteResult(
     string ActorId,
     string SourceResponseId,
     IReadOnlyList<ResponsesTodoItemSnapshot> Todos);
-
-public sealed record ResponsesTaskDispatchResult(
-    string ActorId,
-    string TaskId,
-    string ChildActorId,
-    string Status,
-    string ResultJson);
 
 public sealed record ResponsesWebTraceResult(
     string ActorId,

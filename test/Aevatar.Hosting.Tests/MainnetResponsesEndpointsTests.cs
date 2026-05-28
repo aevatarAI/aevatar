@@ -329,7 +329,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task AevatarSubstituteTools_ShouldPersistTodoAndTaskThroughAgentToolStatePort()
+    public async Task AevatarSubstituteTools_ShouldPersistTodoWithoutRegisteringFakeTask()
     {
         var commandPort = new RecordingResponsesAgentToolStatePort();
         var provider = new ResponsesAevatarToolProvider(
@@ -357,11 +357,11 @@ public sealed class MainnetResponsesEndpointsTests
             var todoResult = await todoTool.ExecuteAsync(
                 """{"todos":[{"id":"todo-1","content":"Ship prototype","status":"in_progress"}]}""");
 
-            var taskTool = substituteTools.Single(x => x.Name == "Task");
-            var taskResult = await taskTool.ExecuteAsync("""{"prompt":"summarize state"}""");
-
             todoResult.Should().Contain("stored");
-            taskResult.Should().Contain("accepted");
+            substituteTools.Select(static tool => tool.Name)
+                .Should()
+                .Contain("TodoWrite")
+                .And.NotContain(["Task", "task"]);
         }
         finally
         {
@@ -372,8 +372,6 @@ public sealed class MainnetResponsesEndpointsTests
         commandPort.TodoWrites[0].ScopeId.Should().Be("scope-1");
         commandPort.TodoWrites[0].OwnerSubject.Should().Be("owner-1");
         commandPort.TodoWrites[0].SourceResponseId.Should().Be("resp_1");
-        commandPort.Tasks.Should().ContainSingle();
-        commandPort.Tasks[0].ArgumentsJson.Should().Contain("summarize state");
     }
 
     [Fact]
@@ -2926,8 +2924,6 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> TodoWrites { get; } = [];
 
-        public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> Tasks { get; } = [];
-
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, ResponsesWebTraceInput Trace)> WebTraces { get; } = [];
 
         public string SeedWebCache(string toolName, string value, string resultJson)
@@ -2965,22 +2961,6 @@ public sealed class MainnetResponsesEndpointsTests
                         DateTimeOffset.UtcNow,
                         DateTimeOffset.UtcNow),
                 ]));
-        }
-
-        public Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-            string scopeId,
-            string ownerSubject,
-            string sourceResponseId,
-            string argumentsJson,
-            CancellationToken ct = default)
-        {
-            Tasks.Add((scopeId, ownerSubject, sourceResponseId, argumentsJson));
-            return Task.FromResult(new ResponsesTaskDispatchResult(
-                "responses-agent-tools-test",
-                "task_1",
-                "responses-agent-tools-test-task-1",
-                "accepted",
-                """{"status":"accepted"}"""));
         }
 
         public Task<ResponsesWebTraceResult> RecordWebTraceAsync(
