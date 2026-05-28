@@ -117,6 +117,66 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_lark_action_card_sends_text_only_fallback()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { message_id = "mid", platform_message_id = "pmid" }));
+        var client = CreateClient(handler);
+        var producer = Substitute.For<IChannelNativeMessageProducer>();
+        producer.Channel.Returns(ChannelId.From("lark"));
+        producer.Evaluate(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>())
+            .Returns(ComposeCapability.Exact);
+        producer.Produce(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>())
+            .Returns(new ChannelNativeMessage(
+                Text: "Pick one",
+                CardPayload: new { schema = "2.0", body = new { elements = Array.Empty<object>() } },
+                MessageType: "interactive",
+                Capability: ComposeCapability.Exact));
+        var registry = new ChannelMessageComposerRegistry(
+            Array.Empty<IMessageComposer>(),
+            new[] { producer });
+        var dispatcher = new NyxIdRelayInteractiveReplyDispatcher(
+            registry,
+            client,
+            NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
+        var intent = new MessageContent { Text = "Pick one" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "approve",
+            Label = "Approve",
+            IsPrimary = true,
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "reject",
+            Label = "Reject",
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            ChannelId.From("lark"),
+            "msg-lark-actions",
+            "relay-token",
+            intent,
+            new ComposeContext());
+
+        result.Succeeded.Should().BeTrue();
+        result.FellBackToText.Should().BeTrue();
+        result.Capability.Should().Be(ComposeCapability.Exact);
+        handler.LastRequestBody.Should().NotBeNull();
+        using var document = JsonDocument.Parse(handler.LastRequestBody!);
+        document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("Pick one\n• Approve\n• Reject");
+        handler.LastRequestBody.Should().NotContain("metadata");
+        handler.LastRequestBody.Should().NotContain("card");
+    }
+
+    [Fact]
     public async Task DispatchAsync_without_producer_synthesizes_fallback_text_from_cards()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK,
@@ -164,6 +224,12 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
         var intent = new MessageContent();
         var card = new CardBlock { Title = "Title", Text = "Body" };
         card.Fields.Add(new CardField { Title = "Key", Text = "Value" });
+        card.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "detail",
+            Label = "Details",
+        });
         intent.Cards.Add(card);
         intent.Actions.Add(new ActionElement
         {
@@ -184,19 +250,34 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
         fallback.Should().Contain("Body");
         fallback.Should().Contain("Key: Value");
         fallback.Should().Contain("• Confirm");
+        fallback.Should().Contain("• Details");
         fallback.Should().NotContain("Comment", "text input labels should not appear in text fallback");
     }
 
     [Fact]
-    public void BuildTextFallback_prefers_existing_text_over_card_synthesis()
+    public void BuildTextFallback_existing_text_includes_non_input_action_labels()
     {
         var intent = new MessageContent { Text = "explicit text" };
         var card = new CardBlock { Title = "ignored-card-title" };
         intent.Cards.Add(card);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "confirm",
+            Label = "Confirm",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "comment",
+            Label = "Comment",
+        });
 
         var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
 
-        fallback.Should().Be("explicit text");
+        fallback.Should().Be("explicit text\n• Confirm");
+        fallback.Should().NotContain("ignored-card-title");
+        fallback.Should().NotContain("Comment");
     }
 
     [Fact]
