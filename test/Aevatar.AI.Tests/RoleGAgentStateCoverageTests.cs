@@ -640,6 +640,63 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_ShouldScrubOwnedKeysAndPreserveTraceMetadata()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Unknown,
+                "still pending")));
+        var agent = CreateRoleAgent(provider, "role-status-scrub-metadata", remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+            RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+        var ownedKeys = new[]
+        {
+            LLMRequestMetadataKeys.RequestId,
+            LLMRequestMetadataKeys.CallId,
+            LLMRequestMetadataKeys.ScopeId,
+            LLMRequestMetadataKeys.OwnerSubject,
+            LLMRequestMetadataKeys.ResponseId,
+            LLMRequestMetadataKeys.NyxIdAccessToken,
+            LLMRequestMetadataKeys.NyxIdOrgToken,
+            LLMRequestMetadataKeys.SenderNyxIdAccessToken,
+            LLMRequestMetadataKeys.SenderBindingId,
+            LLMRequestMetadataKeys.NyxIdRoutePreference,
+            LLMRequestMetadataKeys.ModelOverride,
+            LLMRequestMetadataKeys.MaxToolRoundsOverride,
+            LLMRequestMetadataKeys.UserMemoryPrompt,
+            LLMRequestMetadataKeys.ConnectedServicesContext,
+        };
+
+        foreach (var key in ownedKeys)
+            agent.State.PendingApproval.Metadata[key] = $"owned-{key}";
+        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        var items = remotePort.StatusQueries.Should().ContainSingle().Which.Items;
+        items.Should().NotContainKeys(ownedKeys);
+        items.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+    }
+
+    [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenUnknownReachesMaxAttempts_ShouldPersistTerminalFailure()
     {
         using var provider = BuildServiceProvider();
