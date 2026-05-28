@@ -11,38 +11,44 @@ namespace Aevatar.Workflow.Core.Modules;
 
 internal static class WorkflowStepIoExecutorDispatcher
 {
-    // Refactor (iter110/cluster-1): Old pattern: modules blocked actor handling on connector/tool IO.  New principle: modules publish typed intents and this internal bounded dispatcher returns connector/tool-specific continuations.
     public static Task DispatchToolCallAsync(
-        IWorkflowExecutionContext ctx,
+        string targetActorId,
+        EventEnvelope sourceEnvelope,
+        IServiceProvider services,
         ToolCallIntentEvent intent,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(ctx);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
+        ArgumentNullException.ThrowIfNull(sourceEnvelope);
+        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(intent);
-        var queue = ctx.Services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
+        var queue = services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
         return queue.EnqueueAsync(
             WorkflowStepIoWorkItem.Create(
-                ctx.AgentId,
-                ctx.InboundEnvelope,
+                targetActorId,
+                sourceEnvelope,
                 intent.Clone(),
                 static (executor, typedIntent) =>
                     executor.ExecuteToolCallAsync(typedIntent, CancellationToken.None)),
             ct).AsTask();
     }
 
-    // Refactor (iter110/cluster-1): Old pattern: connector_call retry and timeout executed inline in the module turn.  New principle: connector typed intent is handed to an executor and its typed continuation wakes the actor later.
     public static Task DispatchConnectorCallAsync(
-        IWorkflowExecutionContext ctx,
+        string targetActorId,
+        EventEnvelope sourceEnvelope,
+        IServiceProvider services,
         ConnectorCallIntentEvent intent,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(ctx);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
+        ArgumentNullException.ThrowIfNull(sourceEnvelope);
+        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(intent);
-        var queue = ctx.Services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
+        var queue = services.GetRequiredService<IWorkflowStepIoDispatchQueue>();
         return queue.EnqueueAsync(
             WorkflowStepIoWorkItem.Create(
-                ctx.AgentId,
-                ctx.InboundEnvelope,
+                targetActorId,
+                sourceEnvelope,
                 intent.Clone(),
                 static (executor, typedIntent) =>
                     executor.ExecuteConnectorCallAsync(typedIntent, CancellationToken.None)),
@@ -105,11 +111,7 @@ internal sealed class WorkflowStepIoDispatchQueue : IWorkflowStepIoDispatchQueue
         {
             try
             {
-                var executor = _services.GetRequiredService<IWorkflowStepIoExecutor>();
-                var dispatchPort = _services.GetRequiredService<IActorDispatchPort>();
-                var continuation = await item.ExecuteAsync(executor);
-                var envelope = WorkflowStepIoContinuationEnvelopeFactory.Create(item, continuation);
-                await dispatchPort.DispatchAsync(item.TargetActorId, envelope, CancellationToken.None);
+                await ProcessOneAsync(item, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -124,6 +126,25 @@ internal sealed class WorkflowStepIoDispatchQueue : IWorkflowStepIoDispatchQueue
                     item.Intent.Descriptor.FullName);
             }
         }
+    }
+
+    internal async Task ProcessOneAsync(WorkflowStepIoWorkItem item, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var executor = _services.GetRequiredService<IWorkflowStepIoExecutor>();
+        var dispatchPort = _services.GetRequiredService<IActorDispatchPort>();
+        IMessage continuation;
+        try
+        {
+            continuation = await item.ExecuteAsync(executor);
+        }
+        catch (Exception ex)
+        {
+            continuation = WorkflowStepIoContinuationEnvelopeFactory.CreateFailureContinuation(item, ex);
+        }
+
+        var envelope = WorkflowStepIoContinuationEnvelopeFactory.Create(item, continuation);
+        await dispatchPort.DispatchAsync(item.TargetActorId, envelope, ct);
     }
 
     public void Dispose()
@@ -174,6 +195,39 @@ internal static class WorkflowStepIoContinuationEnvelopeFactory
             envelope.Propagation = item.SourceEnvelope.Propagation.Clone();
 
         return envelope;
+    }
+
+    public static IMessage CreateFailureContinuation(
+        WorkflowStepIoWorkItem item,
+        Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(exception);
+        return item.Intent switch
+        {
+            ToolCallIntentEvent intent => new ToolCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ToolName = intent.ToolName,
+                Success = false,
+                Error = exception.Message,
+            },
+            ConnectorCallIntentEvent intent => new ConnectorCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ConnectorName = intent.ConnectorName,
+                Operation = intent.Operation,
+                Success = false,
+                Error = exception.Message,
+                TimeoutMs = intent.TimeoutMs,
+            },
+            _ => throw new InvalidOperationException(
+                $"Unsupported workflow step IO intent '{item.Intent.Descriptor.FullName}'."),
+        };
     }
 }
 

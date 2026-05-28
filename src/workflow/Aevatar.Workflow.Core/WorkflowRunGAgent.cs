@@ -536,6 +536,30 @@ public sealed class WorkflowRunGAgent
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleToolCallIntent(ToolCallIntentEvent intent)
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        await WorkflowStepIoExecutorDispatcher.DispatchToolCallAsync(
+            Id,
+            ActiveInboundEnvelope ?? new EventEnvelope(),
+            Services,
+            intent,
+            CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleConnectorCallIntent(ConnectorCallIntentEvent intent)
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        await WorkflowStepIoExecutorDispatcher.DispatchConnectorCallAsync(
+            Id,
+            ActiveInboundEnvelope ?? new EventEnvelope(),
+            Services,
+            intent,
+            CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     // Refactor (iter110/cluster-1): Old pattern: tool_call modules emitted StepCompletedEvent after direct external tool IO.  New principle: WorkflowRunGAgent reconciles typed tool continuation results inside actor event handling.
     public async Task HandleToolCallContinuationResult(ToolCallContinuationResultEvent result)
     {

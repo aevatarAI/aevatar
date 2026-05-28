@@ -292,7 +292,7 @@ public sealed class ConnectorCallModuleCoverageTests
     }
 
     [Fact]
-    public async Task HandleAsync_WhenConnectorPresent_ShouldPublishIntentAndEnqueueExternalIo()
+    public async Task HandleAsync_WhenConnectorPresent_ShouldPublishCommittedIntentOnly()
     {
         var registry = new ConfiguredConnectorRegistry();
         await registry.RegisterAsync(ConnectorRegistration.External(new EchoConnector("intent")));
@@ -326,9 +326,7 @@ public sealed class ConnectorCallModuleCoverageTests
         intent.ConnectorName.Should().Be("intent");
         intent.Operation.Should().Be("op");
 
-        queue.Items.Should().ContainSingle();
-        queue.Items[0].TargetActorId.Should().Be(ctx.AgentId);
-        queue.Items[0].Intent.Should().BeOfType<ConnectorCallIntentEvent>();
+        queue.Items.Should().BeEmpty("the actor-owned committed intent handler is responsible for transport enqueue");
     }
 
     private static TestEventHandlerContext CreateContext()

@@ -180,7 +180,6 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             intent.Headers[key] = value;
 
         await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
-        await WorkflowStepIoExecutorDispatcher.DispatchConnectorCallAsync(ctx, intent, ct);
     }
 
     private static async Task PublishConnectorResultAsync(

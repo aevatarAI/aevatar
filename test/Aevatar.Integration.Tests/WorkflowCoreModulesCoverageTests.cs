@@ -216,7 +216,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task ToolCallModule_WhenToolConfigured_ShouldPublishIntentAndEnqueueExternalIo()
+    public async Task ToolCallModule_WhenToolConfigured_ShouldPublishCommittedIntentOnly()
     {
         var queue = new RecordingWorkflowStepIoDispatchQueue();
         var services = new ServiceCollection()
@@ -245,9 +245,113 @@ public sealed class WorkflowCoreModulesCoverageTests
         intent.ToolName.Should().Be("intent_tool");
         intent.ArgumentsJson.Should().Be("""{"x":1}""");
 
-        queue.Items.Should().ContainSingle();
-        queue.Items[0].TargetActorId.Should().Be(ctx.AgentId);
-        queue.Items[0].Intent.Should().BeOfType<ToolCallIntentEvent>();
+        queue.Items.Should().BeEmpty("the actor-owned committed intent handler is responsible for transport enqueue");
+    }
+
+    [Fact]
+    public async Task WorkflowStepIoDispatchQueue_ProcessOne_ShouldExecuteAndDispatchToolContinuation()
+    {
+        var executor = new FakeWorkflowStepIoExecutor
+        {
+            ToolResult = new ToolCallContinuationResultEvent
+            {
+                StepId = "step-worker",
+                RunId = "run-worker",
+                ExecutionId = "exec-worker",
+                ToolName = "echo",
+                Success = true,
+                ResultJson = """{"ok":true}""",
+            },
+        };
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoExecutor>(executor)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .BuildServiceProvider();
+        var queue = new WorkflowStepIoDispatchQueue(services);
+        var sourceEnvelope = Envelope(
+            new ToolCallIntentEvent(),
+            propagation: new EnvelopePropagation
+            {
+                CorrelationId = "corr-worker",
+                Trace = new TraceContext
+                {
+                    TraceId = "trace-1",
+                    SpanId = "span-1",
+                    TraceFlags = "01",
+                },
+            });
+        sourceEnvelope.Propagation.Baggage["tenant"] = "test";
+        var workItem = WorkflowStepIoWorkItem.Create(
+            "workflow-run-worker",
+            sourceEnvelope,
+            new ToolCallIntentEvent
+            {
+                StepId = "step-worker",
+                RunId = "run-worker",
+                ExecutionId = "exec-worker",
+                ToolName = "echo",
+                ArgumentsJson = "{}",
+            },
+            static (stepExecutor, intent) =>
+                stepExecutor.ExecuteToolCallAsync(intent, CancellationToken.None));
+
+        await queue.ProcessOneAsync(workItem);
+
+        executor.ToolIntents.Should().ContainSingle(x => x.StepId == "step-worker");
+        var dispatched = dispatchPort.Dispatches.Should().ContainSingle().Subject;
+        dispatched.ActorId.Should().Be("workflow-run-worker");
+        dispatched.Envelope.Payload.Should().NotBeNull();
+        var continuation = dispatched.Envelope.Payload.Unpack<ToolCallContinuationResultEvent>();
+        continuation.Success.Should().BeTrue();
+        continuation.ResultJson.Should().Be("""{"ok":true}""");
+        dispatched.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        dispatched.Envelope.Route.PublisherActorId.Should().Be("workflow-run-worker");
+        dispatched.Envelope.Propagation.Should().NotBeNull();
+        dispatched.Envelope.Propagation.CorrelationId.Should().Be("corr-worker");
+        dispatched.Envelope.Propagation.Trace.TraceId.Should().Be("trace-1");
+        dispatched.Envelope.Propagation.Baggage["tenant"].Should().Be("test");
+    }
+
+    [Fact]
+    public async Task WorkflowStepIoDispatchQueue_ProcessOne_WhenExecutorFails_ShouldDispatchFailureContinuation()
+    {
+        var executor = new FakeWorkflowStepIoExecutor
+        {
+            ToolException = new InvalidOperationException("tool transport failed"),
+        };
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoExecutor>(executor)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .BuildServiceProvider();
+        var queue = new WorkflowStepIoDispatchQueue(services);
+        var workItem = WorkflowStepIoWorkItem.Create(
+            "workflow-run-failure",
+            Envelope(new ToolCallIntentEvent(), propagation: new EnvelopePropagation { CorrelationId = "corr-failure" }),
+            new ToolCallIntentEvent
+            {
+                StepId = "step-failure",
+                RunId = "run-failure",
+                ExecutionId = "exec-failure",
+                ToolName = "explode",
+                ArgumentsJson = "{}",
+            },
+            static (stepExecutor, intent) =>
+                stepExecutor.ExecuteToolCallAsync(intent, CancellationToken.None));
+
+        await queue.ProcessOneAsync(workItem);
+
+        var dispatched = dispatchPort.Dispatches.Should().ContainSingle().Subject;
+        dispatched.ActorId.Should().Be("workflow-run-failure");
+        var continuation = dispatched.Envelope.Payload.Unpack<ToolCallContinuationResultEvent>();
+        continuation.StepId.Should().Be("step-failure");
+        continuation.RunId.Should().Be("run-failure");
+        continuation.ExecutionId.Should().Be("exec-failure");
+        continuation.ToolName.Should().Be("explode");
+        continuation.Success.Should().BeFalse();
+        continuation.Error.Should().Contain("tool transport failed");
+        dispatched.Envelope.Propagation.CorrelationId.Should().Be("corr-failure");
     }
 
     [Fact]
@@ -1495,7 +1599,10 @@ public sealed class WorkflowCoreModulesCoverageTests
             NullLogger<WorkflowStepIoExecutor>.Instance);
     }
 
-    private static EventEnvelope Envelope(IMessage evt, string? publisherId = null)
+    private static EventEnvelope Envelope(
+        IMessage evt,
+        string? publisherId = null,
+        EnvelopePropagation? propagation = null)
     {
         return new EventEnvelope
         {
@@ -1503,7 +1610,74 @@ public sealed class WorkflowCoreModulesCoverageTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
+            Propagation = propagation,
         };
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<DispatchedEnvelope> Dispatches { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Dispatches.Add(new DispatchedEnvelope(actorId, envelope.Clone()));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed record DispatchedEnvelope(string ActorId, EventEnvelope Envelope);
+
+    private sealed class FakeWorkflowStepIoExecutor : IWorkflowStepIoExecutor
+    {
+        public List<ToolCallIntentEvent> ToolIntents { get; } = [];
+        public List<ConnectorCallIntentEvent> ConnectorIntents { get; } = [];
+        public ToolCallContinuationResultEvent? ToolResult { get; init; }
+        public ConnectorCallContinuationResultEvent? ConnectorResult { get; init; }
+        public Exception? ToolException { get; init; }
+        public Exception? ConnectorException { get; init; }
+
+        public Task<ToolCallContinuationResultEvent> ExecuteToolCallAsync(
+            ToolCallIntentEvent intent,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ToolIntents.Add(intent.Clone());
+            if (ToolException != null)
+                throw ToolException;
+
+            return Task.FromResult(ToolResult?.Clone() ?? new ToolCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ToolName = intent.ToolName,
+                Success = true,
+            });
+        }
+
+        public Task<ConnectorCallContinuationResultEvent> ExecuteConnectorCallAsync(
+            ConnectorCallIntentEvent intent,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ConnectorIntents.Add(intent.Clone());
+            if (ConnectorException != null)
+                throw ConnectorException;
+
+            return Task.FromResult(ConnectorResult?.Clone() ?? new ConnectorCallContinuationResultEvent
+            {
+                StepId = intent.StepId,
+                RunId = intent.RunId,
+                ExecutionId = intent.ExecutionId,
+                ConnectorName = intent.ConnectorName,
+                Operation = intent.Operation,
+                Success = true,
+            });
+        }
     }
 
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool

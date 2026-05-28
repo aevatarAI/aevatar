@@ -22,6 +22,7 @@ using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
@@ -1602,6 +1603,148 @@ public class WorkflowGAgentCoverageTests
             .ContainSingle(x => x.Content == "Workflow execution stopped.");
     }
 
+    [Fact]
+    public async Task WorkflowRunGAgent_HandleToolCallIntent_ShouldEnqueueCommittedIntentFromActorHandler()
+    {
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var agent = CreateRunAgent(servicesConfigure: services =>
+        {
+            services.RemoveAll<IWorkflowStepIoDispatchQueue>();
+            services.AddSingleton<IWorkflowStepIoDispatchQueue>(queue);
+        });
+        SetAgentId(agent, "workflow-run-tool-intent");
+        var intent = new ToolCallIntentEvent
+        {
+            StepId = "tool-step",
+            RunId = "run-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "echo",
+            ArgumentsJson = "{}",
+        };
+        var inbound = Envelope(
+            intent,
+            "workflow-run-tool-intent",
+            TopologyAudience.Self,
+            new EnvelopePropagation { CorrelationId = "corr-tool-intent" });
+
+        await agent.HandleEventAsync(inbound);
+
+        var item = queue.Items.Should().ContainSingle().Subject;
+        item.TargetActorId.Should().Be("workflow-run-tool-intent");
+        item.Intent.Should().BeOfType<ToolCallIntentEvent>().Which.StepId.Should().Be("tool-step");
+        item.SourceEnvelope.Propagation.CorrelationId.Should().Be("corr-tool-intent");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_HandleConnectorCallIntent_ShouldEnqueueCommittedIntentFromActorHandler()
+    {
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var agent = CreateRunAgent(servicesConfigure: services =>
+        {
+            services.RemoveAll<IWorkflowStepIoDispatchQueue>();
+            services.AddSingleton<IWorkflowStepIoDispatchQueue>(queue);
+        });
+        SetAgentId(agent, "workflow-run-connector-intent");
+        var intent = new ConnectorCallIntentEvent
+        {
+            StepId = "connector-step",
+            RunId = "run-connector",
+            ExecutionId = "exec-connector",
+            ConnectorRequestRunId = "run-connector",
+            ConnectorName = "http",
+            Operation = "post",
+            Input = "input",
+            Payload = "{}",
+            TimeoutMs = 1000,
+        };
+        var inbound = Envelope(
+            intent,
+            "workflow-run-connector-intent",
+            TopologyAudience.Self,
+            new EnvelopePropagation { CorrelationId = "corr-connector-intent" });
+
+        await agent.HandleEventAsync(inbound);
+
+        var item = queue.Items.Should().ContainSingle().Subject;
+        item.TargetActorId.Should().Be("workflow-run-connector-intent");
+        item.Intent.Should().BeOfType<ConnectorCallIntentEvent>().Which.StepId.Should().Be("connector-step");
+        item.SourceEnvelope.Propagation.CorrelationId.Should().Be("corr-connector-intent");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_HandleToolCallContinuationResult_ShouldPublishToolResultThenStepCompleted()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent();
+        SetAgentId(agent, "workflow-run-tool-continuation");
+        agent.EventPublisher = publisher;
+        var result = new ToolCallContinuationResultEvent
+        {
+            StepId = "tool-step",
+            RunId = "run-tool",
+            ExecutionId = "exec-tool",
+            ToolName = "echo",
+            Success = true,
+            ResultJson = """{"ok":true}""",
+        };
+
+        await agent.HandleEventAsync(Envelope(result, "workflow-run-tool-continuation", TopologyAudience.Self));
+
+        publisher.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
+            typeof(ToolResultEvent),
+            typeof(StepCompletedEvent));
+        publisher.Published.Select(x => x.direction).Should().AllBeEquivalentTo(TopologyAudience.Self);
+
+        var toolResult = publisher.Published[0].evt.Should().BeOfType<ToolResultEvent>().Subject;
+        toolResult.CallId.Should().Be("tool-step");
+        toolResult.Success.Should().BeTrue();
+        toolResult.ResultJson.Should().Be("""{"ok":true}""");
+
+        var completed = publisher.Published[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.StepId.Should().Be("tool-step");
+        completed.RunId.Should().Be("run-tool");
+        completed.ExecutionId.Should().Be("exec-tool");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("""{"ok":true}""");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_HandleConnectorCallContinuationResult_ShouldPublishStepCompleted()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent();
+        SetAgentId(agent, "workflow-run-connector-continuation");
+        agent.EventPublisher = publisher;
+        var result = new ConnectorCallContinuationResultEvent
+        {
+            StepId = "connector-step",
+            RunId = "run-connector",
+            ExecutionId = "exec-connector",
+            ConnectorName = "http",
+            ConnectorType = "test",
+            Operation = "post",
+            Success = true,
+            Output = "connector-output",
+            Attempts = 2,
+            TimeoutMs = 1000,
+            DurationMs = 12.34,
+        };
+
+        await agent.HandleEventAsync(Envelope(result, "workflow-run-connector-continuation", TopologyAudience.Self));
+
+        publisher.Published.Should().ContainSingle();
+        publisher.Published[0].direction.Should().Be(TopologyAudience.Self);
+        var completed = publisher.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.StepId.Should().Be("connector-step");
+        completed.RunId.Should().Be("run-connector");
+        completed.ExecutionId.Should().Be("exec-connector");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("connector-output");
+        completed.Annotations["connector.name"].Should().Be("http");
+        completed.Annotations["connector.operation"].Should().Be("post");
+        completed.Annotations["connector.attempts"].Should().Be("2");
+    }
+
     private static WorkflowGAgent CreateDefinitionAgent(IEventStore? eventStore = null)
     {
         eventStore ??= new InMemoryEventStore();
@@ -1636,7 +1779,8 @@ public class WorkflowGAgentCoverageTests
         IEventModuleFactory<IWorkflowExecutionContext>? eventModuleFactory = null,
         IEnumerable<IWorkflowModulePack>? packs = null,
         IEventStore? eventStore = null,
-        IWorkflowDefinitionResolver? workflowResolver = null)
+        IWorkflowDefinitionResolver? workflowResolver = null,
+        Action<IServiceCollection>? servicesConfigure = null)
     {
         runtime ??= new RecordingActorRuntime();
         roleResolver ??= new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
@@ -1644,7 +1788,7 @@ public class WorkflowGAgentCoverageTests
         packs ??= [];
         eventStore ??= new InMemoryEventStore();
 
-        var services = BuildServices(eventStore, workflowResolver);
+        var services = BuildServices(eventStore, workflowResolver, servicesConfigure);
         var agent = new WorkflowRunGAgent(runtime, runtime, roleResolver, eventModuleFactory, packs, workflowResolver)
         {
             Services = services,
@@ -1656,7 +1800,8 @@ public class WorkflowGAgentCoverageTests
 
     private static ServiceProvider BuildServices(
         IEventStore eventStore,
-        IWorkflowDefinitionResolver? workflowResolver)
+        IWorkflowDefinitionResolver? workflowResolver,
+        Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
@@ -1672,10 +1817,16 @@ public class WorkflowGAgentCoverageTests
         if (workflowResolver != null)
             services.AddSingleton(workflowResolver);
 
+        configure?.Invoke(services);
+
         return services.BuildServiceProvider();
     }
 
-    private static EventEnvelope Envelope(IMessage message, string publisherId, TopologyAudience direction)
+    private static EventEnvelope Envelope(
+        IMessage message,
+        string publisherId,
+        TopologyAudience direction,
+        EnvelopePropagation? propagation = null)
     {
         return new EventEnvelope
         {
@@ -1683,7 +1834,7 @@ public class WorkflowGAgentCoverageTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
-            Propagation = new EnvelopePropagation
+            Propagation = propagation ?? new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
             },

@@ -60,6 +60,5 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ArgumentsJson = argumentsJson,
         };
         await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
-        await WorkflowStepIoExecutorDispatcher.DispatchToolCallAsync(ctx, intent, ct);
     }
 }
