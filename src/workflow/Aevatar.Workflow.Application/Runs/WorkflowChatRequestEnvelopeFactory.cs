@@ -24,7 +24,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
         AppendMetadata(chatRequest.Headers, context.Headers);
-        chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
@@ -33,7 +32,12 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 
         var envelope = new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            // Refactor (iter163/cluster-002-first):
+            //   Old pattern: workflow command id was written into ChatRequestEvent.Headers[workflow.command_id]
+            //                while Headers also carried transport context.
+            //   New principle: EventEnvelope.Id carries the workflow command identity;
+            //                  Headers stay transport-only.
+            Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
             Route = EnvelopeRouteSemantics.CreateDirect("api", context.TargetId),
