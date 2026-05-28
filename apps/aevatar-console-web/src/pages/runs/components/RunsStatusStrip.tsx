@@ -26,7 +26,6 @@ type RunsStatusStripProps = {
 
 const stripStyle: React.CSSProperties = {
   alignItems: "center",
-  backdropFilter: "blur(8px)",
   background: "var(--ant-color-bg-container)",
   border: "1px solid var(--ant-color-border-secondary)",
   borderRadius: 12,

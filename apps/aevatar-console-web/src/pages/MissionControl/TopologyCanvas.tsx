@@ -514,11 +514,10 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
         <div
           style={{
             alignItems: 'center',
-            backdropFilter: 'blur(8px)',
             background:
               connectionStatus === 'disconnected'
-                ? 'rgba(15, 23, 42, 0.68)'
-                : 'rgba(15, 23, 42, 0.32)',
+                ? 'rgba(15, 23, 42, 0.88)'
+                : 'rgba(15, 23, 42, 0.55)',
             display: 'flex',
             flexDirection: 'column',
             gap: 10,

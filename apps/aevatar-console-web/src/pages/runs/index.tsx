@@ -146,9 +146,8 @@ const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
 
 const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   alignItems: "center",
-  backdropFilter: "blur(10px)",
   background:
-    "linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%)",
+    "linear-gradient(180deg, rgba(248, 250, 252, 1) 0%, rgba(255, 255, 255, 1) 100%)",
   border: "1px solid rgba(226, 232, 240, 0.95)",
   borderRadius: 16,
   display: "flex",

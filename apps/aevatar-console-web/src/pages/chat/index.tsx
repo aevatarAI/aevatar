@@ -2015,7 +2015,6 @@ const ChatPage: React.FC = () => {
         <header
           style={{
             background: "rgba(255,255,255,0.95)",
-            backdropFilter: "blur(10px)",
             borderBottom: "1px solid #e7e5e4",
             flexShrink: 0,
             overflow: "visible",

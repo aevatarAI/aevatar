@@ -249,7 +249,6 @@ function MissionHeaderBar({
     <div
       style={{
         alignItems: 'center',
-        backdropFilter: 'blur(12px)',
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 4,
