@@ -1,12 +1,6 @@
-// ─────────────────────────────────────────────────────────────
-// ToolCallModule — 工具调用模块
-// 在工作流步骤中调用 Agent 的注册工具
-// ─────────────────────────────────────────────────────────────
-
 using Aevatar.Foundation.Abstractions;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -14,18 +8,6 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly IEnumerable<IAgentToolSource> _toolSources;
-    private readonly ILogger<ToolCallModule> _logger;
-    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
-
-    public ToolCallModule(
-        IEnumerable<IAgentToolSource> toolSources,
-        ILogger<ToolCallModule> logger)
-    {
-        _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
     public string Name => "tool_call";
     public int Priority => 10;
 
@@ -34,30 +16,34 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
+    // Refactor (iter110/cluster-1): Old pattern: tool_call discovered/executed tools and published StepCompletedEvent inside the actor/module turn.  New principle: tool_call publishes typed tool intent and only typed continuation results complete the step.
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
-        if (payload == null) return;
+        if (payload == null)
+            return;
 
         var request = payload.Unpack<StepRequestEvent>();
-        if (request.StepType != "tool_call") return;
+        if (request.StepType != "tool_call")
+            return;
 
-        var toolName = request.Parameters.GetValueOrDefault("tool", "").Trim();
+        var toolName = request.Parameters.GetValueOrDefault("tool", string.Empty).Trim();
         if (string.IsNullOrEmpty(toolName))
         {
-            await ctx.PublishAsync(new StepCompletedEvent
+            await ctx.PublishAsync(new ToolCallContinuationResultEvent
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
-                Success = false, Error = "tool_call 缺少 tool 参数",
+                ExecutionId = request.ExecutionId,
+                Success = false,
+                Error = "tool_call 缺少 tool 参数",
             }, TopologyAudience.Self, ct);
             return;
         }
 
         var argumentsJson = string.IsNullOrWhiteSpace(request.Input) ? "{}" : request.Input;
-        ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
+        ctx.Logger.LogInformation("ToolCall: {StepId} typed intent for tool {Tool}", request.StepId, toolName);
 
-        // 发布 Tool 调用开始事件（供观测/UI）
         await ctx.PublishAsync(new ToolCallEvent
         {
             ToolName = toolName,
@@ -65,134 +51,15 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
         }, TopologyAudience.Self, ct);
 
-        var toolIndex = await GetOrDiscoverAsync(ct);
-        if (!toolIndex.TryGetValue(toolName, out var tool))
-        {
-            const string notFound = "tool not found or no tool sources configured";
-            await PublishToolFailureAsync(ctx, request, toolName, notFound, ct);
-            return;
-        }
-
-        try
-        {
-            var result = await tool.ExecuteAsync(argumentsJson, ct);
-
-            await ctx.PublishAsync(new ToolResultEvent
-            {
-                CallId = request.StepId,
-                Success = true,
-                ResultJson = result,
-            }, TopologyAudience.Self, ct);
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = result,
-            }, TopologyAudience.Self, ct);
-        }
-        catch (Exception ex)
-        {
-            await PublishToolFailureAsync(ctx, request, toolName, ex.Message, ct);
-            ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
-        }
-    }
-
-    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
-    {
-        while (true)
-        {
-            var current = _toolIndex;
-            if (TryGetReusableTask(current, out var cached))
-                return cached;
-
-            // Refactor (iter88/cluster-088):
-            // Old: workflow tool discovery started before CompareExchange, so loser callers could
-            // repeat source discovery and external MCP lifecycle work.
-            // New: publish Lazy<Task<T>> before evaluation; only the winning Lazy starts discovery.
-            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-                () => DiscoverAllToolsAsync(_toolSources, _logger, ct),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-            var winner = Interlocked.CompareExchange(ref _toolIndex, candidate, current);
-            if (ReferenceEquals(winner, current))
-                return candidate.Value;
-        }
-    }
-
-    private static bool TryGetReusableTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
-        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
-    {
-        task = null!;
-        if (current == null)
-            return false;
-
-        if (!current.IsValueCreated)
-        {
-            task = current.Value;
-            return true;
-        }
-
-        var existing = current.Value;
-        if (existing.IsFaulted || existing.IsCanceled)
-            return false;
-
-        task = existing;
-        return true;
-    }
-    private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
-        IEnumerable<IAgentToolSource> toolSources,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var index = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in toolSources)
-        {
-            IReadOnlyList<IAgentTool> tools;
-            try
-            {
-                tools = await source.DiscoverToolsAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
-                continue;
-            }
-
-            foreach (var tool in tools)
-                index[tool.Name] = tool;
-        }
-
-        return index;
-    }
-
-    private static async Task PublishToolFailureAsync(
-        IWorkflowExecutionContext ctx,
-        StepRequestEvent request,
-        string toolName,
-        string error,
-        CancellationToken ct)
-    {
-        var errorMessage = $"tool '{toolName}' execution failed: {error}";
-
-        await ctx.PublishAsync(new ToolResultEvent
-        {
-            CallId = request.StepId,
-            Success = false,
-            Error = errorMessage,
-        }, TopologyAudience.Self, ct);
-
-        await ctx.PublishAsync(new StepCompletedEvent
+        var intent = new ToolCallIntentEvent
         {
             StepId = request.StepId,
             RunId = request.RunId,
-            Success = false,
-            Error = errorMessage,
-        }, TopologyAudience.Self, ct);
+            ExecutionId = request.ExecutionId,
+            ToolName = toolName,
+            ArgumentsJson = argumentsJson,
+        };
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
+        await WorkflowStepIoExecutorDispatcher.DispatchToolCallAsync(ctx, intent, ct);
     }
 }

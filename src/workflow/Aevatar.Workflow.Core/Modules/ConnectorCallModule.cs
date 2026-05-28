@@ -1,9 +1,8 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
@@ -38,6 +37,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     }
 
     /// <inheritdoc />
+    // Refactor (iter110/cluster-1): Old pattern: connector_call resolved connectors, ran external IO, retried/time-limited, and published StepCompletedEvent in the module turn.  New principle: connector_call publishes connector-specific typed intent/result and only continuation reconciliation completes the step.
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         if (envelope.Payload == null)
@@ -90,7 +90,15 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
 
         if (string.IsNullOrWhiteSpace(connectorName))
         {
-            await PublishFailureAsync(ctx, request, "connector_call missing required parameter: connector", ct);
+            await PublishConnectorResultAsync(
+                ctx,
+                WorkflowStepIoContinuationMapper.ConnectorFailure(
+                    request,
+                    connectorName,
+                    operation,
+                    "connector_call missing required parameter: connector",
+                    timeoutMs),
+                ct);
             return;
         }
 
@@ -100,11 +108,27 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             if (optional || string.Equals(onMissing, "skip", StringComparison.OrdinalIgnoreCase))
             {
                 ctx.Logger.LogWarning("ConnectorCall: step={StepId} connector={Connector} not found, skip", request.StepId, connectorName);
-                await PublishSkippedAsync(ctx, request, connectorName, operation, "connector_not_found", timeoutMs, ct);
+                await PublishConnectorResultAsync(
+                    ctx,
+                    WorkflowStepIoContinuationMapper.ConnectorSkipped(
+                        request,
+                        connectorName,
+                        operation,
+                        "connector_not_found",
+                        timeoutMs),
+                    ct);
                 return;
             }
 
-            await PublishFailureAsync(ctx, request, $"connector '{connectorName}' not found", ct);
+            await PublishConnectorResultAsync(
+                ctx,
+                WorkflowStepIoContinuationMapper.ConnectorFailure(
+                    request,
+                    connectorName,
+                    operation,
+                    $"connector '{connectorName}' not found",
+                    timeoutMs),
+                ct);
             return;
         }
 
@@ -117,167 +141,77 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (allowed.Count > 0 && !allowed.Contains(connectorName))
             {
-                await PublishFailureAsync(ctx, request,
-                    $"connector '{connectorName}' is not allowed for this role (allowed: {string.Join(", ", allowed)})", ct);
+                await PublishConnectorResultAsync(
+                    ctx,
+                    WorkflowStepIoContinuationMapper.ConnectorFailure(
+                        request,
+                        connectorName,
+                        operation,
+                        $"connector '{connectorName}' is not allowed for this role (allowed: {string.Join(", ", allowed)})",
+                        timeoutMs,
+                        connector.Type),
+                    ct);
                 return;
             }
         }
 
-        // Refactor (iter89/cluster-089-workflow-module-clock-state):
-        //   Old: Connector elapsed metadata used Stopwatch directly inside
-        //        the module.
-        //   New: Connector duration is measured through the workflow context
-        //        monotonic elapsed API.
-        var startedAt = ctx.GetTimestamp();
-        var attempts = Math.Max(1, retry + 1);
-        ConnectorResponse? response = null;
-        Exception? lastError = null;
-
-        for (var attempt = 1; attempt <= attempts; attempt++)
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
-
-            try
-            {
-                var runId = string.IsNullOrEmpty(request.RunId)
-                    ? envelope.Propagation?.CorrelationId ?? string.Empty
-                    : request.RunId;
-                var connectorRequest = new ConnectorRequest
-                {
-                    Metadata = ExtractConnectorMetadata(ctx),
-                    RunId = runId,
-                    StepId = request.StepId,
-                    Connector = connectorName,
-                    Operation = operation,
-                    Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
-                    Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
-                };
-
-                response = await connector.ExecuteAsync(connectorRequest, timeoutCts.Token);
-                if (response.Success) break;
-
-                lastError = new InvalidOperationException(response.Error);
-                if (attempt < attempts)
-                {
-                    ctx.Logger.LogWarning(
-                        "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
-                        request.StepId, connectorName, attempt, attempts, response.Error);
-                }
-            }
-            catch (Exception ex)
-            {
-                lastError = ex;
-                if (attempt < attempts)
-                {
-                    ctx.Logger.LogWarning(
-                        ex,
-                        "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} exception",
-                        request.StepId, connectorName, attempt, attempts);
-                }
-            }
-        }
-
-        var durationMs = ctx.GetElapsedTime(startedAt).TotalMilliseconds;
-        if (response is { Success: true })
-        {
-            var resolvedOutput = response.Output ?? string.Empty;
-            if (!TryAssertResponseOutput(request.Parameters, resolvedOutput, out var assertionError))
-            {
-                await PublishFailureAsync(ctx, request, assertionError, ct);
-                return;
-            }
-
-            if (ParseBool(request.Parameters.GetValueOrDefault("pass_through_input", "false")))
-                resolvedOutput = request.Input ?? string.Empty;
-
-            var ok = new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = resolvedOutput,
-            };
-            AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, durationMs);
-            foreach (var (key, value) in response.Metadata)
-                ok.Annotations[key] = value;
-            await ctx.PublishAsync(ok, TopologyAudience.Self, ct);
-            return;
-        }
-
-        var errorText = response?.Error;
-        if (string.IsNullOrWhiteSpace(errorText))
-            errorText = lastError?.Message ?? "connector call failed";
-
-        if (string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase))
-        {
-            ctx.Logger.LogWarning(
-                "ConnectorCall: step={StepId} connector={Connector} failed but continue: {Error}",
-                request.StepId, connectorName, errorText);
-
-            var continued = new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = request.Input,
-            };
-            AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, durationMs);
-            continued.Annotations["connector.continued_on_error"] = "true";
-            continued.Annotations["connector.error"] = errorText ?? "";
-            await ctx.PublishAsync(continued, TopologyAudience.Self, ct);
-            return;
-        }
-
-        var failed = new StepCompletedEvent
+        var runId = string.IsNullOrEmpty(request.RunId)
+            ? envelope.Propagation?.CorrelationId ?? string.Empty
+            : request.RunId;
+        var intent = new ConnectorCallIntentEvent
         {
             StepId = request.StepId,
             RunId = request.RunId,
-            Success = false,
-            Error = errorText ?? "connector call failed",
+            ExecutionId = request.ExecutionId,
+            ConnectorRequestRunId = runId,
+            ConnectorName = connectorName,
+            Operation = operation,
+            Input = request.Input ?? string.Empty,
+            Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
+            RetryCount = retry,
+            TimeoutMs = timeoutMs,
+            Optional = optional,
+            OnMissing = onMissing,
+            OnError = onError,
         };
-        AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, durationMs);
-        await ctx.PublishAsync(failed, TopologyAudience.Self, ct);
+        foreach (var (key, value) in request.Parameters)
+            intent.Parameters[key] = value;
+        foreach (var (key, value) in WorkflowStepIoContinuationMapper.ExtractConnectorHeaders(ctx))
+            intent.Headers[key] = value;
+
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
+        await WorkflowStepIoExecutorDispatcher.DispatchConnectorCallAsync(ctx, intent, ct);
     }
 
-    private static async Task PublishFailureAsync(
+    private static async Task PublishConnectorResultAsync(
         IWorkflowExecutionContext ctx,
-        StepRequestEvent request,
-        string error,
+        ConnectorCallContinuationResultEvent result,
         CancellationToken ct)
     {
-        await ctx.PublishAsync(new StepCompletedEvent
-        {
-            StepId = request.StepId,
-            RunId = request.RunId,
-            Success = false,
-            Error = error,
-        }, TopologyAudience.Self, ct);
+        await ctx.PublishAsync(result, TopologyAudience.Self, ct);
     }
 
-    private static async Task PublishSkippedAsync(
-        IWorkflowExecutionContext ctx,
-        StepRequestEvent request,
-        string connectorName,
-        string operation,
-        string reason,
-        int timeoutMs,
-        CancellationToken ct)
+    private static bool ParseBool(string raw) =>
+        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
+
+    private static int ParseBoundedInt(string raw, int min, int max, int fallback)
     {
-        var skipped = new StepCompletedEvent
-        {
-            StepId = request.StepId,
-            RunId = request.RunId,
-            Success = true,
-            Output = request.Input,
-        };
-        skipped.Annotations["connector.skipped"] = "true";
-        skipped.Annotations["connector.skip_reason"] = reason;
-        skipped.Annotations["connector.name"] = connectorName;
-        skipped.Annotations["connector.operation"] = operation;
-        skipped.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
-        await ctx.PublishAsync(skipped, TopologyAudience.Self, ct);
+        if (!int.TryParse(raw, out var parsed)) return fallback;
+        if (parsed < min) return min;
+        if (parsed > max) return max;
+        return parsed;
     }
+
+    private static string NormalizeSecureVariableName(string? variable) =>
+        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
+
+    [GeneratedRegex(@"\[\[secure:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecurePlaceholderPattern();
+
+    [GeneratedRegex(@"\[\[secure_json:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecureJsonPlaceholderPattern();
 
     private string? ResolvePayload(
         StepRequestEvent request,
@@ -343,6 +277,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
     }
 
+    // Refactor (iter110/cluster-1): Old pattern: secure connector payloads were resolved immediately before inline connector IO.  New principle: module resolves secure payload into the typed connector intent, then executor handles IO separately.
     private static string ResolveSecureTemplate(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -363,153 +298,5 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var variable = match.Groups[1].Value;
             return ResolveSecureVariable(ctx, runId, variable);
         });
-    }
-
-    private static string NormalizeSecureVariableName(string? variable) =>
-        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
-
-    [GeneratedRegex(@"\[\[secure:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
-    private static partial Regex SecurePlaceholderPattern();
-
-    [GeneratedRegex(@"\[\[secure_json:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
-    private static partial Regex SecureJsonPlaceholderPattern();
-
-    private static void AppendBaseMetadata(
-        StepCompletedEvent evt,
-        IConnector connector,
-        string connectorName,
-        string operation,
-        int attempts,
-        int timeoutMs,
-        double durationMs)
-    {
-        evt.Annotations["connector.name"] = connectorName;
-        evt.Annotations["connector.type"] = connector.Type;
-        evt.Annotations["connector.operation"] = operation;
-        evt.Annotations["connector.attempts"] = attempts.ToString();
-        evt.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
-        evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
-    }
-
-    private static bool TryAssertResponseOutput(
-        IReadOnlyDictionary<string, string> parameters,
-        string responseOutput,
-        out string error)
-    {
-        error = string.Empty;
-        var responsePath = WorkflowParameterValueParser.GetString(
-            parameters,
-            string.Empty,
-            "assert_response_path");
-        if (string.IsNullOrWhiteSpace(responsePath))
-            return true;
-
-        if (string.IsNullOrWhiteSpace(responseOutput))
-        {
-            error = $"connector_call assertion failed: response path '{responsePath}' is missing";
-            return false;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(responseOutput);
-            if (!TryResolveJsonPath(document.RootElement, responsePath, out var value))
-            {
-                error = $"connector_call assertion failed: response path '{responsePath}' is missing";
-                return false;
-            }
-
-            if (!IsTruthy(value))
-            {
-                error = $"connector_call assertion failed: response path '{responsePath}' was not truthy";
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException)
-        {
-            error = $"connector_call assertion failed: response output is not valid JSON for path '{responsePath}'";
-            return false;
-        }
-    }
-
-    private static bool TryResolveJsonPath(JsonElement current, string path, out JsonElement value)
-    {
-        var normalizedSegments = path
-            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (normalizedSegments.Length == 0)
-        {
-            value = current;
-            return true;
-        }
-
-        foreach (var segment in normalizedSegments)
-        {
-            if (current.ValueKind == JsonValueKind.Object &&
-                current.TryGetProperty(segment, out var property))
-            {
-                current = property;
-                continue;
-            }
-
-            if (current.ValueKind == JsonValueKind.Array &&
-                int.TryParse(segment, out var index) &&
-                index >= 0 &&
-                index < current.GetArrayLength())
-            {
-                current = current[index];
-                continue;
-            }
-
-            value = default;
-            return false;
-        }
-
-        value = current;
-        return true;
-    }
-
-    private static bool IsTruthy(JsonElement value)
-    {
-        return value.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Number => !string.Equals(value.GetRawText(), "0", StringComparison.Ordinal),
-            JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()) &&
-                                    !string.Equals(value.GetString(), "false", StringComparison.OrdinalIgnoreCase),
-            JsonValueKind.Null => false,
-            JsonValueKind.Undefined => false,
-            _ => true,
-        };
-    }
-
-    private static int ParseBoundedInt(string raw, int min, int max, int fallback)
-    {
-        if (!int.TryParse(raw, out var parsed)) return fallback;
-        if (parsed < min) return min;
-        if (parsed > max) return max;
-        return parsed;
-    }
-
-    private static bool ParseBool(string raw) =>
-        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
-
-    private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
-        IWorkflowExecutionContext ctx)
-    {
-        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
-            !string.IsNullOrWhiteSpace(authorization))
-        {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = authorization.Trim(),
-            };
-        }
-
-        return new Dictionary<string, string>();
     }
 }

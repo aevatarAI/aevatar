@@ -92,6 +92,58 @@ message StepCompletedEvent {
   string assigned_value = 11;
   string execution_id = 12;
 }
+// Refactor (iter110/cluster-1): Old pattern: tool_call steps executed tool IO and emitted StepCompletedEvent inside the module turn.  New principle: tool_call persists a typed intent that a bounded executor consumes outside actor business progression.
+message ToolCallIntentEvent {
+  string step_id = 1;
+  string run_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string arguments_json = 5;
+}
+// Refactor (iter110/cluster-1): Old pattern: tool_call IO failures and results were mapped directly to StepCompletedEvent by the module.  New principle: tool_call returns a typed continuation result that WorkflowRunGAgent reconciles in actor event handling.
+message ToolCallContinuationResultEvent {
+  string step_id = 1;
+  string run_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  bool success = 5;
+  string result_json = 6;
+  string error = 7;
+}
+// Refactor (iter110/cluster-1): Old pattern: connector_call steps executed connector IO, timeout, and retry inside the module turn.  New principle: connector_call persists a typed intent with connector-call semantics for a bounded executor.
+message ConnectorCallIntentEvent {
+  string step_id = 1;
+  string run_id = 2;
+  string execution_id = 3;
+  string connector_request_run_id = 4;
+  string connector_name = 5;
+  string operation = 6;
+  string input = 7;
+  string payload = 8;
+  map<string, string> parameters = 9;
+  int32 retry_count = 10;
+  int32 timeout_ms = 11;
+  bool optional = 12;
+  string on_missing = 13;
+  string on_error = 14;
+  map<string, string> headers = 15;
+}
+// Refactor (iter110/cluster-1): Old pattern: connector_call IO results were converted to StepCompletedEvent by connector modules.  New principle: connector_call returns a connector-specific typed continuation result for WorkflowRunGAgent reconciliation.
+message ConnectorCallContinuationResultEvent {
+  string step_id = 1;
+  string run_id = 2;
+  string execution_id = 3;
+  string connector_name = 4;
+  string connector_type = 5;
+  string operation = 6;
+  bool success = 7;
+  string output = 8;
+  string error = 9;
+  int32 attempts = 10;
+  int32 timeout_ms = 11;
+  double duration_ms = 12;
+  map<string, string> annotations = 13;
+}
 message SubWorkflowInvokeRequestedEvent
 {
   string invocation_id = 1;

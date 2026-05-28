@@ -535,6 +535,29 @@ public sealed class WorkflowRunGAgent
             await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    // Refactor (iter110/cluster-1): Old pattern: tool_call modules emitted StepCompletedEvent after direct external tool IO.  New principle: WorkflowRunGAgent reconciles typed tool continuation results inside actor event handling.
+    public async Task HandleToolCallContinuationResult(ToolCallContinuationResultEvent result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        await PublishAsync(new ToolResultEvent
+        {
+            CallId = result.StepId,
+            Success = result.Success,
+            ResultJson = result.Success ? result.ResultJson : string.Empty,
+            Error = result.Success ? string.Empty : result.Error,
+        }, TopologyAudience.Self);
+        await PublishAsync(WorkflowStepIoContinuationMapper.FromToolResult(result), TopologyAudience.Self);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    // Refactor (iter110/cluster-1): Old pattern: connector_call modules emitted StepCompletedEvent after direct external connector IO.  New principle: WorkflowRunGAgent reconciles typed connector continuation results inside actor event handling.
+    public async Task HandleConnectorCallContinuationResult(ConnectorCallContinuationResultEvent result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        await PublishAsync(WorkflowStepIoContinuationMapper.FromConnectorResult(result), TopologyAudience.Self);
+    }
+
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {
         var roleActorIds = CollectRoleActorIds();

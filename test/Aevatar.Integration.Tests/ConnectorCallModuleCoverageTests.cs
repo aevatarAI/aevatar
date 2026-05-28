@@ -48,7 +48,8 @@ public sealed class ConnectorCallModuleCoverageTests
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var result = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<ConnectorCallContinuationResultEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("missing required parameter: connector");
     }
@@ -72,7 +73,8 @@ public sealed class ConnectorCallModuleCoverageTests
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var result = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<ConnectorCallContinuationResultEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("payload");
         completed.Annotations["connector.skipped"].Should().Be("true");
@@ -86,35 +88,29 @@ public sealed class ConnectorCallModuleCoverageTests
         var connector = new ThrowThenSuccessConnector("retryable");
         await registry.RegisterAsync(ConnectorRegistration.External(connector));
 
-        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
-        var ctx = CreateContext();
-        ctx.SetNextElapsedTime(TimeSpan.FromMilliseconds(1234.56));
-        var request = new StepRequestEvent
+        var executor = CreateExecutor(registry);
+        var result = await executor.ExecuteConnectorCallAsync(new ConnectorCallIntentEvent
         {
             StepId = "s-retry",
-            StepType = "connector_call",
+            ConnectorRequestRunId = "corr-1",
+            ConnectorName = "retryable",
+            Operation = "op",
             Input = "in",
-            Parameters =
-            {
-                ["connector"] = "retryable",
-                ["operation"] = "op",
-                ["retry"] = "1",
-            },
-        };
-
-        await module.HandleAsync(Envelope(request, correlationId: "corr-1"), ctx, CancellationToken.None);
+            RetryCount = 1,
+            TimeoutMs = 30_000,
+        });
 
         connector.Attempts.Should().Be(2);
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.RunId.Should().Be("corr-1");
         connector.LastRequest.StepId.Should().Be("s-retry");
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("ok");
         completed.Annotations["connector.attempts"].Should().Be("2");
         completed.Annotations["connector.name"].Should().Be("retryable");
-        completed.Annotations["connector.duration_ms"].Should().Be("1234.56");
+        completed.Annotations["connector.duration_ms"].Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -122,28 +118,21 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         await registry.RegisterAsync(ConnectorRegistration.External(new DelayConnector("slow")));
-        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        var executor = CreateExecutor(registry);
+        var result = await executor.ExecuteConnectorCallAsync(new ConnectorCallIntentEvent
         {
             StepId = "s-timeout",
-            StepType = "connector_call",
+            ConnectorName = "slow",
             Input = "original",
-            Parameters =
-            {
-                ["connector"] = "slow",
-                ["timeout_ms"] = "1",
-                ["on_error"] = "continue",
-            },
-        };
+            TimeoutMs = 1,
+            OnError = "continue",
+        });
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
-
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("original");
         completed.Annotations["connector.continued_on_error"].Should().Be("true");
-        completed.Annotations["connector.timeout_ms"].Should().Be("100");
+        completed.Annotations["connector.timeout_ms"].Should().Be("1");
         completed.Annotations.Should().ContainKey("connector.error");
     }
 
@@ -155,7 +144,10 @@ public sealed class ConnectorCallModuleCoverageTests
         await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
-        var services = new ServiceCollection().BuildServiceProvider();
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
+            .BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
@@ -186,10 +178,15 @@ public sealed class ConnectorCallModuleCoverageTests
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
+        var intent = ctx.Published.Select(x => x.evt).OfType<ConnectorCallIntentEvent>().Single();
+        intent.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-secure"}""");
+        intent.Payload.Should().NotContain("[[secure:");
+
+        var result = await CreateExecutor(registry).ExecuteConnectorCallAsync(intent);
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-secure"}""");
 
-        var completed = ctx.Published.Last().evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("ok");
         completed.Output.Should().NotContain("sk-secure");
@@ -204,7 +201,10 @@ public sealed class ConnectorCallModuleCoverageTests
         await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
-        var services = new ServiceCollection().BuildServiceProvider();
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
+            .BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
@@ -234,6 +234,9 @@ public sealed class ConnectorCallModuleCoverageTests
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
+        var intent = ctx.Published.Select(x => x.evt).OfType<ConnectorCallIntentEvent>().Single();
+        await CreateExecutor(registry).ExecuteConnectorCallAsync(intent);
+
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
     }
@@ -243,26 +246,24 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":true}""")));
-        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        var executor = CreateExecutor(registry);
+        var result = await executor.ExecuteConnectorCallAsync(new ConnectorCallIntentEvent
         {
             StepId = "s-assert-pass",
-            StepType = "connector_call",
+            ConnectorName = "validator",
             Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Payload = """{"nodes":[{"temp_id":"new_0"}]}""",
+            TimeoutMs = 30_000,
             Parameters =
             {
-                ["connector"] = "validator",
                 ["assert_response_path"] = "valid",
                 ["pass_through_input"] = "true",
             },
-        };
+        });
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
-
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be(request.Input);
+        completed.Output.Should().Be("""{"nodes":[{"temp_id":"new_0"}]}""");
     }
 
     [Fact]
@@ -270,26 +271,64 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":false}""")));
-        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        var executor = CreateExecutor(registry);
+        var result = await executor.ExecuteConnectorCallAsync(new ConnectorCallIntentEvent
         {
             StepId = "s-assert-fail",
-            StepType = "connector_call",
+            ConnectorName = "validator",
             Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Payload = """{"nodes":[{"temp_id":"new_0"}]}""",
+            TimeoutMs = 30_000,
             Parameters =
             {
-                ["connector"] = "validator",
                 ["assert_response_path"] = "valid",
             },
-        };
+        });
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
-
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromConnectorResult(result);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("assertion failed");
         completed.Error.Should().Contain("valid");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenConnectorPresent_ShouldPublishIntentAndEnqueueExternalIo()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        await registry.RegisterAsync(ConnectorRegistration.External(new EchoConnector("intent")));
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
+            .BuildServiceProvider();
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = new TestEventHandlerContext(services, new TestAgent("connector-module-test-agent"), NullLogger.Instance);
+        var request = new StepRequestEvent
+        {
+            StepId = "s-intent",
+            RunId = "run-intent",
+            ExecutionId = "exec-intent",
+            StepType = "connector_call",
+            Input = "in",
+            Parameters =
+            {
+                ["connector"] = "intent",
+                ["operation"] = "op",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request, correlationId: "corr-intent"), ctx, CancellationToken.None);
+
+        var intent = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<ConnectorCallIntentEvent>().Subject;
+        intent.StepId.Should().Be("s-intent");
+        intent.RunId.Should().Be("run-intent");
+        intent.ExecutionId.Should().Be("exec-intent");
+        intent.ConnectorRequestRunId.Should().Be("run-intent");
+        intent.ConnectorName.Should().Be("intent");
+        intent.Operation.Should().Be("op");
+
+        queue.Items.Should().ContainSingle();
+        queue.Items[0].TargetActorId.Should().Be(ctx.AgentId);
+        queue.Items[0].Intent.Should().BeOfType<ConnectorCallIntentEvent>();
     }
 
     private static TestEventHandlerContext CreateContext()
@@ -299,6 +338,12 @@ public sealed class ConnectorCallModuleCoverageTests
             new TestAgent("connector-module-test-agent"),
             NullLogger.Instance);
     }
+
+    private static WorkflowStepIoExecutor CreateExecutor(ConfiguredConnectorRegistry registry) =>
+        new(
+            new ServiceCollection().BuildServiceProvider(),
+            new RegistryBackedWorkflowConnectorResolver(registry),
+            NullLogger<WorkflowStepIoExecutor>.Instance);
 
     private static EventEnvelope Envelope(IMessage evt, string? correlationId = null)
     {

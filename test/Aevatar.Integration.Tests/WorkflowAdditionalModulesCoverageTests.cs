@@ -2066,6 +2066,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
+        var intent = ctx.Published.Select(x => x.evt).OfType<ConnectorCallIntentEvent>().Single();
+        var result = await CreateConnectorExecutor(connector).ExecuteConnectorCallAsync(intent);
+        result.Success.Should().BeTrue();
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Metadata.Should().Contain(
             ConnectorRequest.HttpAuthorizationMetadataKey,
@@ -2104,6 +2107,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             callCtx,
             CancellationToken.None);
 
+        var intent = callCtx.Published.Select(x => x.evt).OfType<ConnectorCallIntentEvent>().Single();
+        var result = await CreateConnectorExecutor(connector).ExecuteConnectorCallAsync(intent);
+        result.Success.Should().BeTrue();
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"apiKey":"sk-state"}""");
     }
@@ -2658,6 +2664,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             return ValueTask.FromResult<IConnector?>(connector);
         }
     }
+
+    private static WorkflowStepIoExecutor CreateConnectorExecutor(IConnector connector) =>
+        new(
+            new ServiceCollection().BuildServiceProvider(),
+            new FixedWorkflowConnectorResolver(connector),
+            NullLogger<WorkflowStepIoExecutor>.Instance);
 
     private sealed class RecordingConnector(string name) : IConnector
     {

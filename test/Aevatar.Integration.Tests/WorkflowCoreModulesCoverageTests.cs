@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -21,7 +23,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_MissingToolParameter_ShouldPublishFailedStepCompleted()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule();
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -34,8 +36,12 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         ctx.Published.Should().ContainSingle();
         ctx.Published[0].direction.Should().Be(TopologyAudience.Self);
-        var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
-        completed.StepId.Should().Be("step-1");
+        var continuation = ctx.Published[0].evt.Should().BeOfType<ToolCallContinuationResultEvent>().Subject;
+        continuation.StepId.Should().Be("step-1");
+        continuation.Success.Should().BeFalse();
+        continuation.Error.Should().Contain("缺少 tool 参数");
+
+        var completed = WorkflowStepIoContinuationMapper.FromToolResult(continuation);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("缺少 tool 参数");
     }
@@ -43,29 +49,18 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_ToolNotFound_ShouldPublishToolFailureEvents()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        var executor = CreateToolExecutor([]);
+        var result = await executor.ExecuteToolCallAsync(new ToolCallIntentEvent
         {
             StepId = "step-2",
-            StepType = "tool_call",
-            Input = """{"x":1}""",
-            Parameters = { ["tool"] = "missing_tool" },
-        };
+            ToolName = "missing_tool",
+            ArgumentsJson = """{"x":1}""",
+        });
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("tool 'missing_tool' execution failed");
 
-        ctx.Published.Should().HaveCount(3);
-        ctx.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
-            typeof(ToolCallEvent),
-            typeof(ToolResultEvent),
-            typeof(StepCompletedEvent));
-
-        var toolResult = ctx.Published[1].evt.Should().BeOfType<ToolResultEvent>().Subject;
-        toolResult.Success.Should().BeFalse();
-        toolResult.Error.Should().Contain("tool 'missing_tool' execution failed");
-
-        var completed = ctx.Published[2].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = WorkflowStepIoContinuationMapper.FromToolResult(result);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("tool 'missing_tool' execution failed");
     }
@@ -78,22 +73,17 @@ public sealed class WorkflowCoreModulesCoverageTests
                 new FakeAgentTool("echo", args => args),
             ]);
         IAgentToolSource[] toolSources = [new ThrowingToolSource(), source];
-        var module = new ToolCallModule(toolSources, NullLogger<ToolCallModule>.Instance);
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        var executor = CreateToolExecutor(toolSources);
+        var result = await executor.ExecuteToolCallAsync(new ToolCallIntentEvent
         {
             StepId = "step-3",
-            StepType = "tool_call",
-            Input = """{"msg":"ok"}""",
-            Parameters = { ["tool"] = "echo" },
-        };
-
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            ToolName = "echo",
+            ArgumentsJson = """{"msg":"ok"}""",
+        });
 
         source.DiscoverCalls.Should().Be(1);
-        var toolResult = ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Single();
-        toolResult.Success.Should().BeTrue();
-        toolResult.ResultJson.Should().Be("""{"msg":"ok"}""");
+        result.Success.Should().BeTrue();
+        result.ResultJson.Should().Be("""{"msg":"ok"}""");
     }
 
     [Fact]
@@ -103,33 +93,27 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("cached_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
-        var ctx = CreateContext();
+        var executor = CreateToolExecutor([source]);
 
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
+        var first = await executor.ExecuteToolCallAsync(
+            new ToolCallIntentEvent
             {
                 StepId = "step-4",
-                StepType = "tool_call",
-                Input = """{"n":1}""",
-                Parameters = { ["tool"] = "cached_echo" },
-            }),
-            ctx,
-            CancellationToken.None);
+                ToolName = "cached_echo",
+                ArgumentsJson = """{"n":1}""",
+            });
 
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
+        var second = await executor.ExecuteToolCallAsync(
+            new ToolCallIntentEvent
             {
                 StepId = "step-5",
-                StepType = "tool_call",
-                Input = """{"n":2}""",
-                Parameters = { ["tool"] = "cached_echo" },
-            }),
-            ctx,
-            CancellationToken.None);
+                ToolName = "cached_echo",
+                ArgumentsJson = """{"n":2}""",
+            });
 
         source.DiscoverCalls.Should().Be(1);
-        ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().OnlyContain(x => x.Success);
+        first.Success.Should().BeTrue();
+        second.Success.Should().BeTrue();
     }
 
     [Fact]
@@ -139,7 +123,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("parallel_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var executor = CreateToolExecutor([source]);
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;
@@ -151,18 +135,13 @@ public sealed class WorkflowCoreModulesCoverageTests
                     ready.TrySetResult(true);
 
                 await start.Task;
-                var ctx = CreateContext();
-                await module.HandleAsync(
-                    Envelope(new StepRequestEvent
+                return await executor.ExecuteToolCallAsync(
+                    new ToolCallIntentEvent
                     {
                         StepId = $"step-parallel-{i}",
-                        StepType = "tool_call",
-                        Input = """{"ok":true}""",
-                        Parameters = { ["tool"] = "parallel_echo" },
-                    }),
-                    ctx,
-                    CancellationToken.None);
-                return ctx;
+                        ToolName = "parallel_echo",
+                        ArgumentsJson = """{"ok":true}""",
+                    });
             }))
             .ToArray();
 
@@ -171,14 +150,10 @@ public sealed class WorkflowCoreModulesCoverageTests
         await source.WaitForFirstDiscoveryAsync();
         source.Release();
 
-        var contexts = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
 
         source.DiscoverCalls.Should().Be(1);
-        contexts.SelectMany(ctx => ctx.Published.Select(x => x.evt))
-            .OfType<ToolResultEvent>()
-            .Should()
-            .HaveCount(32)
-            .And.OnlyContain(x => x.Success);
+        results.Should().HaveCount(32).And.OnlyContain(x => x.Success);
     }
 
     [Fact]
@@ -188,19 +163,16 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("delayed_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
-        var cancelledContext = CreateContext();
+        var executor = CreateToolExecutor([source]);
         using var cts = new CancellationTokenSource();
 
-        var cancelledAttempt = module.HandleAsync(
-            Envelope(new StepRequestEvent
+        var cancelledAttempt = executor.ExecuteToolCallAsync(
+            new ToolCallIntentEvent
             {
                 StepId = "step-cancelled",
-                StepType = "tool_call",
-                Input = """{"msg":"cancel"}""",
-                Parameters = { ["tool"] = "delayed_echo" },
-            }),
-            cancelledContext,
+                ToolName = "delayed_echo",
+                ArgumentsJson = """{"msg":"cancel"}""",
+            },
             cts.Token);
 
         await source.FirstDiscoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -209,21 +181,16 @@ public sealed class WorkflowCoreModulesCoverageTests
         await source.FirstDiscoveryCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledAttempt);
 
-        var retryContext = CreateContext();
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
+        var retryResult = await executor.ExecuteToolCallAsync(
+            new ToolCallIntentEvent
             {
                 StepId = "step-retry",
-                StepType = "tool_call",
-                Input = """{"msg":"retry"}""",
-                Parameters = { ["tool"] = "delayed_echo" },
-            }),
-            retryContext,
-            CancellationToken.None);
+                ToolName = "delayed_echo",
+                ArgumentsJson = """{"msg":"retry"}""",
+            });
 
         source.DiscoverCalls.Should().Be(2);
-        retryContext.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().ContainSingle()
-            .Which.ResultJson.Should().Be("""{"msg":"retry"}""");
+        retryResult.ResultJson.Should().Be("""{"msg":"retry"}""");
     }
 
     [Fact]
@@ -233,22 +200,54 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("explode", _ => throw new InvalidOperationException("boom")),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
-        var ctx = CreateContext();
+        var executor = CreateToolExecutor([source]);
 
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
+        var result = await executor.ExecuteToolCallAsync(
+            new ToolCallIntentEvent
             {
                 StepId = "step-6",
-                StepType = "tool_call",
-                Parameters = { ["tool"] = "explode" },
-            }),
-            ctx,
-            CancellationToken.None);
+                ToolName = "explode",
+                ArgumentsJson = "{}",
+            });
 
-        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Last();
+        var completed = WorkflowStepIoContinuationMapper.FromToolResult(result);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("execution failed: boom");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenToolConfigured_ShouldPublishIntentAndEnqueueExternalIo()
+    {
+        var queue = new RecordingWorkflowStepIoDispatchQueue();
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkflowStepIoDispatchQueue>(queue)
+            .BuildServiceProvider();
+        var module = new ToolCallModule();
+        var ctx = CreateContext(services);
+        var request = new StepRequestEvent
+        {
+            StepId = "step-intent",
+            RunId = "run-intent",
+            ExecutionId = "exec-intent",
+            StepType = "tool_call",
+            Input = """{"x":1}""",
+            Parameters = { ["tool"] = "intent_tool" },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
+            typeof(ToolCallEvent),
+            typeof(ToolCallIntentEvent));
+        var intent = ctx.Published.Select(x => x.evt).OfType<ToolCallIntentEvent>().Single();
+        intent.StepId.Should().Be("step-intent");
+        intent.ExecutionId.Should().Be("exec-intent");
+        intent.ToolName.Should().Be("intent_tool");
+        intent.ArgumentsJson.Should().Be("""{"x":1}""");
+
+        queue.Items.Should().ContainSingle();
+        queue.Items[0].TargetActorId.Should().Be(ctx.AgentId);
+        queue.Items[0].Intent.Should().BeOfType<ToolCallIntentEvent>();
     }
 
     [Fact]
@@ -1484,6 +1483,18 @@ public sealed class WorkflowCoreModulesCoverageTests
             NullLogger.Instance);
     }
 
+    private static WorkflowStepIoExecutor CreateToolExecutor(IEnumerable<IAgentToolSource> toolSources)
+    {
+        var services = new ServiceCollection();
+        foreach (var toolSource in toolSources)
+            services.AddSingleton(toolSource);
+
+        return new WorkflowStepIoExecutor(
+            services.BuildServiceProvider(),
+            new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()),
+            NullLogger<WorkflowStepIoExecutor>.Instance);
+    }
+
     private static EventEnvelope Envelope(IMessage evt, string? publisherId = null)
     {
         return new EventEnvelope
@@ -1575,4 +1586,5 @@ public sealed class WorkflowCoreModulesCoverageTests
         {
         }
     }
+
 }
