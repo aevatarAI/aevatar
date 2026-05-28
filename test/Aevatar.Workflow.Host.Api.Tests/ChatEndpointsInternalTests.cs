@@ -37,7 +37,7 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
 
         service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.WorkflowName.Should().Be("direct");
+        service.LastCommand!.Source.WorkflowName.Should().Be("direct");
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         body.Should().Contain("cmd-1");
         body.Should().Contain("corr-1");
@@ -115,7 +115,7 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         body.Should().Contain("WORKFLOW_NOT_FOUND");
         service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.WorkflowName.Should().Be("missing");
+        service.LastCommand!.Source.WorkflowName.Should().Be("missing");
     }
 
     [Fact]

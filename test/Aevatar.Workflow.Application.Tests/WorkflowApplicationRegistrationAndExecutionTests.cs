@@ -151,13 +151,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         options.DirectFallbackWorkflowWhitelist.Should().ContainSingle().Which.Should().Be("analysis");
         options.DirectFallbackExceptionWhitelist.Should().ContainSingle().Which.Should().Be(typeof(TimeoutException));
 
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new TimeoutException("timeout"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new TimeoutException("timeout"))
             .Should().BeTrue();
         policy.ShouldFallback(
-                new WorkflowChatRunRequest("hello", "analysis", null),
+                new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")),
                 new WorkflowDirectFallbackTriggerException("boom"))
             .Should().BeFalse();
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new InvalidOperationException("boom"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new InvalidOperationException("boom"))
             .Should().BeFalse();
     }
 
@@ -283,8 +283,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             });
         var command = new WorkflowChatRunRequest(
             "hello",
-            "direct",
-            "actor-1",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
             SessionId: "session-42",
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -318,8 +317,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
         var command = new WorkflowChatRunRequest(
             "describe this",
-            null,
-            "actor-1",
+            WorkflowChatSource.DefinitionActor("actor-1"),
             InputParts:
             [
                 new WorkflowChatInputPart
@@ -361,7 +359,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
-        var command = new WorkflowChatRunRequest("hello", null, null);
+        var command = new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct());
 
         var noMetadata = factory.CreateEnvelope(command, new CommandContext(
             "actor-2",
@@ -370,7 +368,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",

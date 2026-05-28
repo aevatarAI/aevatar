@@ -6,6 +6,7 @@ namespace Aevatar.Workflow.Application.Runs;
 /// <summary>
 /// Decides whether a failed workflow run should be retried against the direct workflow.
 /// </summary>
+// Refactor (iter112/cluster-3): Old pattern: fallback policy treated legacy request mirrors as the command source. New principle: fallback decisions are derived from typed WorkflowChatSource only.
 public sealed class WorkflowDirectFallbackPolicy
     : ICommandFallbackPolicy<WorkflowChatRunRequest>
 {
@@ -21,13 +22,14 @@ public sealed class WorkflowDirectFallbackPolicy
     /// </summary>
     public bool ShouldFallback(WorkflowChatRunRequest request, Exception ex)
     {
+        // Refactor (iter112/cluster-3): Old pattern: fallback policy inspected legacy WorkflowName/WorkflowYamls mirrors. New principle: fallback reads only the typed WorkflowChatSource.
         if (!_behaviorOptions.EnableDirectFallback)
             return false;
         if (ex is OperationCanceledException)
             return false;
         if (!IsWhitelistedException(ex))
             return false;
-        if (request.WorkflowYamls is { Count: > 0 })
+        if (request.Source.WorkflowYamls is { Count: > 0 })
             return false;
 
         var workflowName = ResolveEffectiveWorkflowName(request);
@@ -67,9 +69,10 @@ public sealed class WorkflowDirectFallbackPolicy
 
     private string ResolveEffectiveWorkflowName(WorkflowChatRunRequest request)
     {
+        // Refactor (iter112/cluster-3): Old pattern: effective workflow resolution read WorkflowName directly. New principle: workflow identity is read through WorkflowChatSource.
         ArgumentNullException.ThrowIfNull(request);
 
-        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
+        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.Source.WorkflowName);
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
             return requestedWorkflowName;
 
@@ -82,12 +85,12 @@ public sealed class WorkflowDirectFallbackPolicy
             : configuredDefault;
     }
 
-    public WorkflowChatRunRequest ToFallbackRequest(WorkflowChatRunRequest request) =>
-        request with
+    public WorkflowChatRunRequest ToFallbackRequest(WorkflowChatRunRequest request)
+    {
+        // Refactor (iter112/cluster-3): Old pattern: fallback rewrote mirror fields individually. New principle: fallback replaces the typed source atomically.
+        return request with
         {
-            WorkflowName = WorkflowRunBehaviorOptions.DirectWorkflowName,
-            ActorId = null,
-            WorkflowYamls = null,
             Source = WorkflowChatSource.CatalogWorkflow(WorkflowRunBehaviorOptions.DirectWorkflowName),
         };
+    }
 }

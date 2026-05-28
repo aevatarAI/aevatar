@@ -312,7 +312,7 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("aevatar.run.context");
         body.Should().Contain("\"delta\": \"hello\"");
         interactionService.LastRequest.Should().NotBeNull();
-        interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
+        interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.SessionId.Should().Be("session-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
         interactionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
@@ -406,7 +406,7 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"textMessageContent\": { \"messageId\": \"msg-1\", \"delta\": \"hello\" }");
         body.Should().Contain("\"humanInputRequest\": { \"stepId\": \"approve\"");
         interactionService.LastRequest.Should().NotBeNull();
-        interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
+        interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
