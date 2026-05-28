@@ -172,4 +172,67 @@ PROMPT
 
 run_dry_expect_exit "${case7_prompt}" "${case7_stdout}" "${case7_stderr}" 0
 
+case8_dir="${TMP_DIR}/case8-state"
+case8_prompt="${TMP_DIR}/role-dry-run-marker.md"
+case8_stdout="${TMP_DIR}/case8.stdout"
+case8_stderr="${TMP_DIR}/case8.stderr"
+case8_log="${case8_dir}/logs/dry-run-marker.log"
+mkdir -p "${case8_dir}/logs"
+cat >"${case8_prompt}" <<'PROMPT'
+# Dry run marker
+
+No marker should be written.
+PROMPT
+
+"${SPAWN_CODEX}" \
+  --cd "${TMP_DIR}" \
+  --prompt "${case8_prompt}" \
+  --log "${case8_log}" \
+  --timeout 3600 \
+  --dry-run \
+  >"${case8_stdout}" \
+  2>"${case8_stderr}"
+[[ ! -e "${case8_dir}/markers/dry-run-marker.running.json" ]] || fail "case 8 dry-run wrote running marker"
+[[ ! -e "${case8_dir}/markers/dry-run-marker.done.json" ]] || fail "case 8 dry-run wrote done marker"
+
+case9_dir="${TMP_DIR}/case9-state"
+case9_bin="${TMP_DIR}/case9-bin"
+case9_prompt="${TMP_DIR}/role-fake-codex.md"
+case9_stdout="${TMP_DIR}/case9.stdout"
+case9_stderr="${TMP_DIR}/case9.stderr"
+case9_log="${case9_dir}/logs/fake-spawn.log"
+mkdir -p "${case9_dir}/logs" "${case9_bin}"
+cat >"${case9_prompt}" <<'PROMPT'
+# Fake codex
+
+Write a verdict marker.
+PROMPT
+cat >"${case9_bin}/codex" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+echo "fake codex started"
+echo "IMPLEMENT_DONE:markers-event-design:ok"
+exit 0
+SH
+chmod +x "${case9_bin}/codex"
+
+PATH="${case9_bin}:${PATH}" "${SPAWN_CODEX}" \
+  --cd "${TMP_DIR}" \
+  --prompt "${case9_prompt}" \
+  --log "${case9_log}" \
+  --timeout 3600 \
+  >"${case9_stdout}" \
+  2>"${case9_stderr}"
+
+case9_done="${case9_dir}/markers/fake-spawn.done.json"
+[[ -f "${case9_done}" ]] || fail "case 9 done marker missing"
+[[ ! -e "${case9_dir}/markers/fake-spawn.running.json" ]] || fail "case 9 running marker should have been renamed"
+[[ "$(jq -r '.state' "${case9_done}")" = "done" ]] || fail "case 9 state was not done"
+[[ "$(jq -r '.base' "${case9_done}")" = "fake-spawn" ]] || fail "case 9 base mismatch"
+[[ "$(jq -r '.log_path' "${case9_done}")" = "${case9_log}" ]] || fail "case 9 log_path mismatch"
+[[ "$(jq -r '.exit_code' "${case9_done}")" = "0" ]] || fail "case 9 exit_code mismatch"
+[[ "$(jq -r '.verdict' "${case9_done}")" = "IMPLEMENT_DONE:markers-event-design:ok" ]] || fail "case 9 verdict mismatch"
+assert_contains "${case9_log}" "EXIT=0"
+assert_contains "${case9_log}" "DONE_AT="
+
 echo "spawn-codex regression tests passed."

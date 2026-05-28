@@ -20,7 +20,7 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 | Reflector 决议 | META_RESOLVED:<kind> | `## 🤖 meta-reflector decision: <kind>` post + label 转 |
 | Escalate human | label 加 🆘 | banner 说"✅ 需要 maintainer 决策:具体什么决策" |
 | Phase transition | controller route | label sync(`🔍`→`✅`→`🛠️`→`🚀`→`👀`→`🔧`→`⚙️`→`🎉`) |
-| Stuck 4h timeout | controller sweep | banner 说"等了 4h 自动派 reflector 重新评估" |
+| Stuck 3h timeout | controller sweep | banner 说"等了 3h 自动派 reflector / triage 重新评估"(per Auric 2026-05-29 从 4h 收紧到 3h) |
 | iter 完成 | last cluster merged | rollup PR banner + 派 next iter audit |
 | Bug 修复 | skill commit | commit 内容 push 到 auto-refact-dev,maintainer 可看 commit diff |
 
@@ -1584,9 +1584,11 @@ ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 - ❌ controller 处理完 events 但不缩 wakeup → 下次再来评论 → 又 25 min gap
 - ❌ controller 不更新 LAST_PROCESSED offset → 每 wakeup 重复处理同 events
 
-### Stuck label 4h 超时自动新一轮 meta-reflect(强制,per Auric 2026-05-20 "如果人长期不介入,比如四小时以上,则尝试进入新一轮元解决轮次,这样就不会积攒了")
+### Stuck issue 3h 超时自动重新处理(强制,per Auric 2026-05-29 "超过3小时没处理的issues就要重新处理";原 4h per Auric 2026-05-20,2026-05-29 收紧到 3h)
 
-每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
+每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后):
+
+**A. Escalated issue(stuck label 类)**对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
 
 ```bash
 last_human_at=$(gh issue view <N> --json comments --jq '[.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .createdAt][-1] // .createdAt' | tr -d '"')
@@ -1596,19 +1598,40 @@ last_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$last_human_at" +%s 2>/dev/null
 delta_h=$(( (now_epoch - last_epoch) / 3600 ))
 
 # 防重复:有 in-flight reflector(meta-reflect-issue<N>*.log mtime < 30min)→ 跳过
-if (( delta_h >= 4 )) && [ -z "$(find .refactor-loop/logs/meta-reflect-issue<N>*.log -mmin -30 2>/dev/null)" ]; then
+if (( delta_h >= 3 )) && [ -z "$(find .refactor-loop/logs/meta-reflect-issue<N>*.log -mmin -30 2>/dev/null)" ]; then
   # 派 fresh reflector,suffix -rN+1 防 overwrite 历史 reflector log
   spawn-reflector <N>
 fi
 ```
 
-意图:防 escalated issue 在"等 maintainer"无限堆积。4h 后**自动**派 fresh reflector,让 AI 反思能否重新框架到共识路径(narrow scope / drop / re-cluster),不积攒。
+**B. Any open issue(non-escalated)未处理 3h+ 触发 re-triage**(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills"):
+
+```bash
+# 全 open issue sweep,non-bot author,未在任何 phase label,non-merged
+gh issue list --state open --json number,author,updatedAt,labels --jq '
+  .[] | select(
+    (.author.login | endswith("[bot]") | not)
+    and ([.labels[].name] | (contains(["🎉 phase:merged"]) or contains(["auto-loop-triage"]) or contains(["🔍 phase:design-solving"]) or contains(["🛠️ phase:implementing"]) or contains(["🚀 phase:pr-open"]) or contains(["phase11-not-eligible"])) | not)
+  ) | "\(.number) \(.updatedAt)"
+' | while read num updated; do
+  # 3h+ 未 update → 加 auto-loop-triage label,daemon 自动接 triage codex
+  age_h=$(( ($(date -u +%s) - $(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$updated" +%s 2>/dev/null || date -u -d "$updated" +%s)) / 3600 ))
+  if (( age_h >= 3 )); then
+    gh issue edit "$num" --add-label "auto-loop-triage"
+  fi
+done
+```
+
+意图:**任何** open issue(escalated 或 untouched)>3h 没动 → controller 必须主动 action,不积攒。
+- escalated → 派 reflector
+- untouched → triage daemon 接(标 `auto-loop-triage`)
 
 **反面禁止**:
 - ❌ 见 stuck label 就跳过,不计算 delta
 - ❌ 用 `author=loning` 判真人评论时间(deprecated,见 sentinel 节)
-- ❌ 4h 内重复派 reflector 浪费 codex
+- ❌ 3h 内重复派 reflector 浪费 codex(in-flight log mtime < 30min 即 skip)
 - ❌ reflector 完成但忘清 stuck label → 下次 sweep 仍误判为 stuck
+- ❌ 优先 skill self-improve > 处理 existing issue(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills")— 即使 skill 看上去能改进,**先把 open issue 池清干净**才能花资源改 skill
 
 ### 任何 concrete-plan 都必须走 multi-solver consensus(per Auric 2026-05-19 "核心流程是都需要达成共识")
 
@@ -1912,20 +1935,25 @@ Concretely, this means:
 | `>= 5` | 不抢资源,保持现状 |
 | `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
 
-**填 floor 优先级**(从高到低):
+**填 floor 优先级**(从高到低,per Auric 2026-05-29 "优先处理已经存在的issues而不是skills"):
 
-1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
-2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
-3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
-4. **.claude/skills/codex-refactor-loop/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
-5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
-6. **CI guard completeness codex** — 检查 `tools/ci/*_guard.sh` 是否覆盖所有 CLAUDE 条款
+1. **未处理 / 长期未动 open issue**(>3h 未 update):batch `auto-loop-triage` label,daemon spawn triage codex — **最高优先级**
+2. **stuck label 3h+** issue:派 fresh reflector(per "## Stuck issue 3h 超时" 节)
+3. **现有 phase9 / phase8 in-flight**:派下一步 codex(solver / judge / reviewer / fix)
+4. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)
+5. **next-next iter audit**(N+2,speculative parallel)
+6. **Phase 10 advisory review**(eligible open PR 池)
+7. **Phase 11 triage**(eligible open issue 池,5-10 oldest 一批 label)
+8. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue 漏 follow-up
+9. **`.claude/skills/codex-refactor-loop/scripts` self-audit codex** — 仅当 open issue 池**已清** + open auto-loop PR **全 in-flight** 时才允许;否则跳过(per Auric 2026-05-29 "skill 不优先")
+10. **docs sync codex** / **CI guard completeness codex** — 同上,issue 池清后才允许
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
 - ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+- ❌ **open issue 池有 untouched / stale issue 时派 skill self-audit**(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills")→ issue 池清后才允许 skill 自审
 
 **判定脚本**(controller wakeup step 1.5):
 
