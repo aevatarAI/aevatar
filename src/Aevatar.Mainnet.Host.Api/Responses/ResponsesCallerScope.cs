@@ -13,10 +13,14 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
         _currentUserResolver = currentUserResolver ?? throw new ArgumentNullException(nameof(currentUserResolver));
     }
 
+    // Refactor (iter159/cluster-640-first): Old: ResolveAsync(string bearer)  New: ResolveAsync(ResponsesCallerScopeResolutionContext)
     public async Task<ResponsesCallerScope> ResolveAsync(
-        string nyxIdAccessToken,
+        ResponsesCallerScopeResolutionContext context,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var nyxIdAccessToken = context.InboundBearerToken;
         if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
             throw new ResponsesCallerScopeUnavailableException("NyxID access token is required.");
 
