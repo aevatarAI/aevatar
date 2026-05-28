@@ -26,7 +26,11 @@
    {"rule_id":"<clause id>","path":"<file>","line":1,"evidence":"<snippet>","verdict":"accept|reject","reject_reason":"<if reject>","prior_cluster_overlap":"<cluster-id|none>"}
    ```
    `candidate_count >= 25`，除非 analyzer 全 0 且有证据。
-4. 从 `accept` candidates 形成 cluster。要求：文件交集 ≤5%；单 cluster 估计 ≤30 文件（小重构 ≤15）；不新增功能；明确 old/new pattern；深层协议/actor/proto 迁移标 `requires_design: true`，不要拒绝。
+4. 从 `accept` candidates 形成 cluster。要求：文件交集 ≤5%；每个 cluster 只能表达一个 implementation concern；`rule_ids` 数量 ≤2（优选 1）；`files_touched_estimate` 严格上限 6 文件，超过必须拆分；不新增功能；明确 old/new pattern；深层协议/actor/proto 迁移标 `requires_design: true`，不要拒绝。
+   - Single-concern cluster rule：多条规则命中同一段代码时，仍按可独立修复的 concern 拆成多个 cluster，可以共享 evidence file，但不能把多个 sub-concern 合并成一个 PR。
+   - Sub-concern detection：emit cluster 前自问 implementer 能否一次 PR 修完这个问题；如果能想到 ≥2 个实现步骤、≥2 个 sub-rule、≥2 个业务决策，或需要同时改两个独立协议/边界，就拆成更小 cluster。
+   - Estimate cap：`files_touched_estimate` 的最大值不得超过 6；若初步估计是 `4-12`、`8-18` 等范围，必须在输出前拆到每个子 cluster 的上限 ≤6。
+   - Pre-check：每个 cluster 输出前执行自检：`if rule_ids.length > 2 OR files_touched_estimate.max > 6 => split into sub-clusters`。未通过自检禁止 emit。
 5. 每个 cluster 输出：
    ```yaml
    id: cluster-NNN-<slug>
