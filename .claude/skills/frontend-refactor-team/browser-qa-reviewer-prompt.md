@@ -36,22 +36,66 @@ If the report is missing the information needed to find or exercise the feature,
 - If dependencies are missing or the app fails to compile/start, return `BLOCKED_LAUNCH` with the first relevant error lines.
 - Save screenshots/log artifacts, when your browser tool supports it, under `docs/audit-scorecard/frontend-browser-qa/YYYY-MM-DD/<issue-id-or-slug>/`.
 
+## Auth Injection Protocol
+
+This app stores auth session in `localStorage` under key `aevatar-console:nyxid:session`. The session contains OAuth2 tokens from NyxID (`https://nyx.chrono-ai.fun`).
+
+**Before navigating to any protected route**, inject a valid session:
+
+1. Read `NYXID_REFRESH_TOKEN` from `apps/aevatar-console-web/.env.local`. If missing, return `BLOCKED` with `blocked_reason: "BLOCKED_AUTH"` and `next_action: "Set NYXID_REFRESH_TOKEN in apps/aevatar-console-web/.env.local. Get it from: JSON.parse(localStorage.getItem('aevatar-console:nyxid:session')).tokens.refreshToken in a logged-in browser."`.
+
+2. Refresh the access token:
+```bash
+curl -s -X POST "https://nyx.chrono-ai.fun/oauth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=refresh_token&refresh_token=$REFRESH_TOKEN"
+```
+If this fails (401/400), the refresh token is expired. Return `BLOCKED` with `blocked_reason: "BLOCKED_AUTH"`.
+
+3. Fetch user info:
+```bash
+curl -s "https://nyx.chrono-ai.fun/oauth/userinfo" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+4. Navigate to the app URL first (e.g. `http://localhost:5173`), then inject via browser JavaScript:
+```javascript
+const session = {
+  tokens: {
+    accessToken: "<access_token>",
+    tokenType: "Bearer",
+    expiresIn: <expires_in>,
+    expiresAt: <now_ms + expires_in * 1000>,
+    refreshToken: "<new_or_original_refresh_token>",
+    idToken: null,
+    scope: null
+  },
+  user: <user_info_json>
+};
+localStorage.setItem('aevatar-console:nyxid:session', JSON.stringify(session));
+```
+
+5. Reload the page. Verify the app entered authenticated state (URL should not redirect to `/login` or NyxID authorize page).
+
+If auth injection fails after 2 attempts, return `BLOCKED` with `blocked_reason: "BLOCKED_AUTH"`.
+
 ## Process
 
 1. Read the issue, diff, changed files, and implementer report.
 2. Identify every changed user-visible route, component entrypoint, or workflow.
 3. Start the frontend app if it is not already running, following the Dev Server Protocol.
-4. Open the app in a real browser automation environment available to you, such as Playwright, Chrome automation, or the in-app browser.
-5. Exercise each changed flow as a user:
+4. **Authenticate the browser session.** This app uses NyxID OAuth2 with localStorage-based session storage. Follow the Auth Injection Protocol below before navigating to any protected route.
+5. Open the app in a real browser automation environment available to you, such as Playwright, Chrome automation, or the in-app browser.
+6. Exercise each changed flow as a user:
    - Navigate to the changed route or open the changed entrypoint
    - Click primary and secondary actions
    - Fill inputs with realistic values
    - Submit, cancel, retry, refresh, and switch tabs where relevant
    - Trigger loading, empty, error, disabled, and stale states when practical
-6. Test at desktop and mobile-sized viewports for layout breakage.
-7. Check browser console errors and failed network requests.
-8. Capture evidence: tested routes, viewport sizes, screenshots if the tool supports them, console/network findings, and exact reproduction steps for failures.
-9. Redact secrets and sensitive user data from artifacts. If redaction is not possible, do not save the raw screenshot/log; summarize the evidence instead.
+7. Test at desktop and mobile-sized viewports for layout breakage.
+8. Check browser console errors and failed network requests.
+9. Capture evidence: tested routes, viewport sizes, screenshots if the tool supports them, console/network findings, and exact reproduction steps for failures.
+10. Redact secrets and sensitive user data from artifacts. If redaction is not possible, do not save the raw screenshot/log; summarize the evidence instead.
 
 ## Verification Rules
 
