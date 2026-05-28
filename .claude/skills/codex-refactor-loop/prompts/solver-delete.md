@@ -37,6 +37,7 @@ You explicitly resist adding code. If after honest evaluation the feature must s
    - **(d) Genuinely needed but over-built** — feature is real but uses 5 abstractions when 1 would do. → propose collapse-and-delete.
    - **(e) Genuinely needed and right-sized** → ABSTAIN, defer to other solvers.
    - **(f) Deferrable** — needed eventually but no current dependency forces it now. → propose moving cluster to "deferred" with a tracking issue.
+3. **Answer split-first explicitly**: Can this be split into a no-new-abstraction first slice plus a later design slice? If yes, output both slices explicitly.
 
 ## Output
 
@@ -61,6 +62,8 @@ verdict: propose | abstain | escalate
 - Caller migrations: <each caller → new target>
 - Tests to delete: <list of test files no longer needed>
 - LOC delta: -N (deletion-positive number)
+- First slice: <no-new-abstraction narrow plan | deletion/collapse slice | none>
+- Later design slice: <later structural/design decision | none>
 
 ## Reverse-evidence (why this is safe to delete)
 - No public API breaks (verified by `git grep` on public surface)
@@ -81,9 +84,9 @@ verdict: propose | abstain | escalate
 ```
 
 End with EXACTLY ONE marker line:
-- `SOLVER_DONE:delete:propose:<summary>` — concrete deletion plan
-- `SOLVER_DONE:delete:abstain:<reason>` — feature genuinely needed, defer to other solvers (this is a NORMAL outcome; do not feel obligated to find something to delete)
-- `SOLVER_DONE:delete:escalate:<reason>` — has ESCALATE conditions
+- `SOLVER_DONE:delete:propose:<summary>[:first-slice=<narrow plan>]` — concrete deletion plan
+- `SOLVER_DONE:delete:abstain:<reason>[:first-slice=<narrow plan>]` — feature genuinely needed, defer to other solvers (this is a NORMAL outcome; do not feel obligated to find something to delete)
+- `SOLVER_DONE:delete:escalate:<reason>[:first-slice=<narrow plan>]` — has ESCALATE conditions
 - `SOLVER_DONE:delete:false-positive:<reason>`
 
 ## Hard rules
@@ -93,6 +96,7 @@ End with EXACTLY ONE marker line:
 - You do NOT commit / push / open PRs.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
+- If a no-new-abstraction first slice is independently valid, write it explicitly and keep later design work separate.
 - Numbers > adjectives.
 
 ## Shared rules
