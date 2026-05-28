@@ -44,11 +44,13 @@ public sealed class WorkflowRunFallbackCoverageTests
         var policy = new WorkflowDirectFallbackPolicy(options);
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
-            WorkflowName: workflowName,
-            ActorId: null,
+            Source: hasInlineYamls
+                ? WorkflowChatSource.InlineYamlBundle(["name: inline"], workflowName)
+                : string.IsNullOrWhiteSpace(workflowName)
+                    ? WorkflowChatSource.Direct()
+                    : WorkflowChatSource.CatalogWorkflow(workflowName),
             SessionId: null,
-            InputParts: null,
-            WorkflowYamls: hasInlineYamls ? ["name: inline"] : null);
+            InputParts: null);
         Exception exception = operationCanceled
             ? new OperationCanceledException("cancelled")
             : whitelistedException
@@ -66,17 +68,14 @@ public sealed class WorkflowRunFallbackCoverageTests
         var policy = new WorkflowDirectFallbackPolicy();
         var request = new WorkflowChatRunRequest(
             "hello",
-            "auto",
-            "actor-1",
+            WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1"),
             SessionId: "session-1",
-            WorkflowYamls: ["name: inline"]);
+            Metadata: null);
 
         var fallback = policy.ToFallbackRequest(request);
 
-        fallback.WorkflowName.Should().Be(WorkflowRunBehaviorOptions.DirectWorkflowName);
-        fallback.WorkflowYamls.Should().BeNull();
+        fallback.Source.Should().BeEquivalentTo(WorkflowChatSource.CatalogWorkflow(WorkflowRunBehaviorOptions.DirectWorkflowName));
         fallback.Prompt.Should().Be(request.Prompt);
-        fallback.ActorId.Should().BeNull();
         fallback.SessionId.Should().Be(request.SessionId);
     }
 
@@ -96,7 +95,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         var policy = new WorkflowDirectFallbackPolicy(options);
 
         var shouldFallback = policy.ShouldFallback(
-            new WorkflowChatRunRequest("hello", WorkflowName: null, ActorId: "actor-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-1")),
             new WorkflowDirectFallbackTriggerException("fallback"));
 
         shouldFallback.Should().BeTrue();
@@ -145,13 +144,13 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
-        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
+        pipeline.Requests.Select(static x => x.Source.WorkflowName).Should().Equal("auto", "direct");
+        pipeline.Requests.Select(static x => x.Source.ActorId).Should().Equal("actor-requested", null);
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -169,12 +168,12 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.DispatchAsync(
-            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto")),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        dispatchService.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
-        dispatchService.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
+        dispatchService.Requests.Select(static x => x.Source.WorkflowName).Should().Equal("auto", "direct");
+        dispatchService.Requests.Select(static x => x.Source.ActorId).Should().Equal("actor-requested", null);
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(

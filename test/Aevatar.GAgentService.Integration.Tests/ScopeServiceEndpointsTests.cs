@@ -1302,8 +1302,8 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.WorkflowYamls.Should().NotBeNull();
-        host.InteractionService.LastRequest.WorkflowYamls.Should().HaveCount(2);
+        host.InteractionService.LastRequest.Source.WorkflowYamls.Should().NotBeNull();
+        host.InteractionService.LastRequest.Source.WorkflowYamls.Should().HaveCount(2);
     }
 
     [Fact]
@@ -1352,7 +1352,7 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("\"humanInputRequest\"");
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.WorkflowYamls.Should().HaveCount(1);
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
     }
 
     [Fact]
@@ -1471,7 +1471,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         // Service-run registry receives the actual workflow run actor id as the run id, so
@@ -2136,7 +2136,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
@@ -2219,7 +2219,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
     }
@@ -2308,7 +2308,7 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
     }
@@ -2436,7 +2436,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
