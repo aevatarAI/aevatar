@@ -152,7 +152,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             Url: "https://example.com",
             Query: string.Empty,
             CacheHit: false,
-            ResultJson: """{"content":"x"}""");
+            Result: ResponsesJsonValues.ParseBoundaryPayload("""{"content":"x"}"""));
 
         var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
 
@@ -174,7 +174,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             Url: string.Empty,
             Query: "weather",
             CacheHit: true,
-            ResultJson: string.Empty);
+            Result: ResponsesJsonValues.ParseBoundaryPayload(string.Empty));
 
         var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
 
