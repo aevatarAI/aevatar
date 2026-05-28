@@ -295,6 +295,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         envelope.Route.IsDirect().Should().BeTrue();
@@ -305,6 +306,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
     }
