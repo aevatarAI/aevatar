@@ -17,12 +17,13 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Refactor (iter20/cluster-004):
 ///   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 ///   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+/// Refactor (iter149/issue1132): Old pattern: streaming reply sink waited on handled-dispatch for chunk delivery.  New principle: sink emits accepted-only chunk commands; conversation actor state/projection own completion visibility.
 /// </remarks>
 public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {
     private const string PublisherActorId = "channel-runtime.streaming-reply";
 
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly string _targetActorId;
     private readonly string _correlationId;
     private readonly string _registrationId;
@@ -35,7 +36,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private bool _disposed;
 
     public TurnStreamingReplySink(
-        IActorHandledDispatchPort actorDispatchPort,
+        IActorDispatchPort actorDispatchPort,
         string targetActorId,
         string correlationId,
         string registrationId,
@@ -111,7 +112,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
         try
         {
-            await _actorDispatchPort.DispatchAndWaitHandledAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
+            await _actorDispatchPort.DispatchAsync(_targetActorId, envelope, ct).ConfigureAwait(false);
             ChunksEmitted++;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

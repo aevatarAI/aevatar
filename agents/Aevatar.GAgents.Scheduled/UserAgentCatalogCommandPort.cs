@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Production implementation of <see cref="IUserAgentCatalogCommandPort"/>.
-/// Routes catalog upsert / tombstone through <see cref="IActorHandledDispatchPort"/>.
+/// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>.
 ///
 /// Issue #466: this is an internal infrastructure port (not user-facing). It
 /// dispatches by id; ownership semantics live on the public
@@ -25,17 +25,19 @@ namespace Aevatar.GAgents.Scheduled;
 /// Refactor (iter23/cluster-002):
 ///   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
 ///   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+///
+/// Refactor (iter149/issue1132): Old pattern: catalog mutations used handled-dispatch as a stronger synchronous ACK.  New principle: catalog command port uses accepted-only dispatch; catalog read model observes committed state later.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {
     private const string PublisherActorId = "scheduled.user-agent-catalog";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorHandledDispatchPort _actorDispatchPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
 
     public UserAgentCatalogCommandPort(
         IActorRuntime actorRuntime,
-        IActorHandledDispatchPort actorDispatchPort)
+        IActorDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -61,7 +63,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Payload = Any.Pack(command),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
-        await _actorDispatchPort.DispatchAndWaitHandledAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
     // Refactor (iter23/cluster-002):
@@ -83,7 +85,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Payload = Any.Pack(new UserAgentCatalogTombstoneCommand { AgentId = agentId }),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
-        await _actorDispatchPort.DispatchAndWaitHandledAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
     private async Task EnsureCatalogActorAsync(CancellationToken ct)

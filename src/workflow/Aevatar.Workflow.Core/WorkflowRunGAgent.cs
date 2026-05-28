@@ -27,6 +27,7 @@ namespace Aevatar.Workflow.Core;
 //                process-local runtime context.
 //   New principle: durable control/security facts live in typed WorkflowRunState;
 //                  runtime context carries only same-turn passthrough metadata.
+// Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
@@ -46,7 +47,6 @@ public sealed class WorkflowRunGAgent
     private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IActorHandledDispatchPort? _handledDispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
@@ -60,12 +60,10 @@ public sealed class WorkflowRunGAgent
         IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
-        IActorHandledDispatchPort? handledDispatchPort = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _handledDispatchPort = handledDispatchPort ?? dispatchPort as IActorHandledDispatchPort;
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _ = workflowDefinitionResolver;
@@ -608,13 +606,8 @@ public sealed class WorkflowRunGAgent
         Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
     }
 
-    private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope)
-    {
-        if (_handledDispatchPort != null)
-            return _handledDispatchPort.DispatchAndWaitHandledAsync(actorId, envelope);
-
-        return _dispatchPort.DispatchAsync(actorId, envelope);
-    }
+    private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
+        _dispatchPort.DispatchAsync(actorId, envelope);
 
     // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
     //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
