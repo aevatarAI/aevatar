@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
-using Aevatar.AI.ToolProviders.Web;
+using System.Net;
+using System.Net.Sockets;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Google.Protobuf.WellKnownTypes;
@@ -11,19 +12,16 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 {
     private readonly IResponsesAgentToolStateCommandPort _commandPort;
     private readonly IResponsesAgentToolStateQueryPort _queryPort;
-    private readonly IWebApiClient _webClient;
-    private readonly WebToolOptions _webOptions;
+    private readonly IResponsesWebSubstituteBackend _backend;
 
     public ResponsesWebSubstituteToolExecutionService(
         IResponsesAgentToolStateCommandPort commandPort,
         IResponsesAgentToolStateQueryPort queryPort,
-        IWebApiClient webClient,
-        WebToolOptions webOptions)
+        IResponsesWebSubstituteBackend backend)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
-        _webClient = webClient ?? throw new ArgumentNullException(nameof(webClient));
-        _webOptions = webOptions ?? throw new ArgumentNullException(nameof(webOptions));
+        _backend = backend ?? throw new ArgumentNullException(nameof(backend));
     }
 
     public async Task<ResponsesWebSubstituteToolExecutionResult> ExecuteAsync(
@@ -47,7 +45,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         ResponsesWebSubstituteToolExecutionRequest request,
         CancellationToken ct)
     {
-        var validation = WebFetchUrlGuard.Validate(NormalizeUrl(request.Fetch?.Url));
+        var validation = ResponsesWebFetchUrlGuard.Validate(NormalizeUrl(request.Fetch?.Url));
         if (!validation.IsAllowed)
         {
             return Error(validation.RejectionCode ?? "url_rejected");
@@ -77,18 +75,20 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             };
         }
 
-        // The URL came from LLM-controlled input. Never forward the caller's
-        // NyxID bearer to an arbitrary fetch target.
-        var result = await _webClient.FetchUrlAsync(token: string.Empty, url, ct).ConfigureAwait(false);
-        var output = new ResponsesWebFetchToolOutput
+        var output = await _backend.ExecuteWebFetchAsync(
+            new ResponsesWebFetchBoundaryInput(
+                url,
+                request.Fetch?.ExtractHint ?? string.Empty),
+            ct).ConfigureAwait(false);
+        var protoOutput = new ResponsesWebFetchToolOutput
         {
-            Url = result.OriginalUrl,
-            StatusCode = result.StatusCode,
-            ContentType = result.ContentType,
-            Content = result.Body ?? string.Empty,
-            RedirectUrl = result.RedirectUrl ?? string.Empty,
+            Url = output.Url,
+            StatusCode = output.StatusCode,
+            ContentType = output.ContentType,
+            Content = output.Content,
+            RedirectUrl = output.RedirectUrl,
         };
-        var outputValue = ToValue(output);
+        var outputValue = ToValue(protoOutput);
         await RecordTraceAsync(
             request,
             cacheKey,
@@ -97,7 +97,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             cacheHit: false,
             outputValue,
             ct).ConfigureAwait(false);
-        return new ResponsesWebSubstituteToolExecutionResult { Fetch = output };
+        return new ResponsesWebSubstituteToolExecutionResult { Fetch = protoOutput };
     }
 
     private async Task<ResponsesWebSubstituteToolExecutionResult> ExecuteSearchAsync(
@@ -108,7 +108,9 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         if (string.IsNullOrWhiteSpace(query))
             return Error("'query' is required");
 
-        var maxResults = request.Search?.MaxResults > 0 ? request.Search.MaxResults : _webOptions.MaxSearchResults;
+        var maxResults = request.Search?.MaxResults > 0
+            ? request.Search.MaxResults
+            : _backend.DefaultMaxSearchResults;
         maxResults = Math.Clamp(maxResults, 1, 20);
         var cacheValue = $"{query.Trim()}\n{maxResults}";
         var cacheKey = ComputeCacheKey(request.ToolName, cacheValue);
@@ -135,7 +137,12 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
         var searchResult = string.IsNullOrWhiteSpace(request.NyxIdAccessToken)
             ? ErrorValue("No NyxID access token available. User must be authenticated.")
-            : await _webClient.SearchAsync(request.NyxIdAccessToken, query.Trim(), maxResults, ct).ConfigureAwait(false);
+            : (await _backend.ExecuteWebSearchAsync(
+                new ResponsesWebSearchBoundaryInput(
+                    query.Trim(),
+                    maxResults,
+                    request.NyxIdAccessToken),
+                ct).ConfigureAwait(false)).Value;
         await RecordTraceAsync(
             request,
             cacheKey,
@@ -217,5 +224,91 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         if (!string.IsNullOrWhiteSpace(output.RedirectUrl))
             value.StructValue.Fields["redirect_url"] = Value.ForString(output.RedirectUrl);
         return value;
+    }
+
+    private static class ResponsesWebFetchUrlGuard
+    {
+        public static ResponsesWebFetchValidationResult Validate(string? candidate)
+        {
+            var trimmed = candidate?.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                return ResponsesWebFetchValidationResult.Reject("empty_url");
+
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+                return ResponsesWebFetchValidationResult.Reject("invalid_url");
+
+            if (uri.Scheme is not ("http" or "https"))
+                return ResponsesWebFetchValidationResult.Reject("unsupported_scheme");
+
+            if (string.IsNullOrEmpty(uri.Host))
+                return ResponsesWebFetchValidationResult.Reject("missing_host");
+
+            if (IsHostLiteralIp(uri.Host, out var address) && IsBlockedAddress(address))
+                return ResponsesWebFetchValidationResult.Reject("blocked_private_address");
+
+            if (IsLoopbackHostname(uri.Host))
+                return ResponsesWebFetchValidationResult.Reject("blocked_loopback_hostname");
+
+            return ResponsesWebFetchValidationResult.Accept(uri.ToString());
+        }
+
+        private static bool IsHostLiteralIp(string host, out IPAddress address)
+        {
+            var stripped = host.StartsWith('[') && host.EndsWith(']')
+                ? host[1..^1]
+                : host;
+            return IPAddress.TryParse(stripped, out address!);
+        }
+
+        private static bool IsBlockedAddress(IPAddress address)
+        {
+            if (IPAddress.IsLoopback(address))
+                return true;
+
+            if (address.AddressFamily == AddressFamily.InterNetwork)
+                return IsBlockedIpv4(address.GetAddressBytes());
+
+            if (address.AddressFamily != AddressFamily.InterNetworkV6)
+                return false;
+
+            if (address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6UniqueLocal)
+                return true;
+
+            return address.IsIPv4MappedToIPv6 && IsBlockedIpv4(address.MapToIPv4().GetAddressBytes());
+        }
+
+        private static bool IsBlockedIpv4(byte[] octets)
+        {
+            if (octets.Length != 4)
+                return false;
+
+            return octets[0] == 10
+                   || octets[0] == 127
+                   || (octets[0] == 169 && octets[1] == 254)
+                   || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
+                   || (octets[0] == 192 && octets[1] == 168)
+                   || (octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127)
+                   || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                   || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                   || octets[0] == 0
+                   || octets[0] >= 224;
+        }
+
+        private static bool IsLoopbackHostname(string host) =>
+            string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "ip6-localhost", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private readonly record struct ResponsesWebFetchValidationResult(
+        bool IsAllowed,
+        string? NormalizedUrl,
+        string? RejectionCode)
+    {
+        public static ResponsesWebFetchValidationResult Accept(string normalizedUrl) =>
+            new(true, normalizedUrl, null);
+
+        public static ResponsesWebFetchValidationResult Reject(string code) =>
+            new(false, null, code);
     }
 }

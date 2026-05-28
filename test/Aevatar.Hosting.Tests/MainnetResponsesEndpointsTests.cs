@@ -2891,9 +2891,41 @@ public sealed class MainnetResponsesEndpointsTests
         var service = new ResponsesWebSubstituteToolExecutionService(
             port,
             port,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+            new StubResponsesWebSubstituteBackend());
         return new ResponsesAevatarToolProvider(port, service);
+    }
+
+    private sealed class StubResponsesWebSubstituteBackend : IResponsesWebSubstituteBackend
+    {
+        public int DefaultMaxSearchResults => 10;
+
+        public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
+            ResponsesWebFetchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebFetchBoundaryResult(
+                input.Url,
+                200,
+                "text/plain",
+                "body",
+                string.Empty));
+
+        public Task<ResponsesWebSearchBoundaryResult> ExecuteWebSearchAsync(
+            ResponsesWebSearchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebSearchBoundaryResult(
+                new Google.Protobuf.WellKnownTypes.Value
+                {
+                    StructValue = new Struct
+                    {
+                        Fields =
+                        {
+                            ["results"] = new Google.Protobuf.WellKnownTypes.Value
+                            {
+                                ListValue = new ListValue(),
+                            },
+                        },
+                    },
+                }));
     }
 
     private sealed class StubAgentTool : IAgentTool

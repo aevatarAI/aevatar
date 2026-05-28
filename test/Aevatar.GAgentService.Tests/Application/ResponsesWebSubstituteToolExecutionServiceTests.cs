@@ -1,4 +1,3 @@
-using Aevatar.AI.ToolProviders.Web;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -21,15 +20,15 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             "WebFetch",
             "https://example.com/docs",
             """{"url":"https://example.com/docs","content":"cached"}""");
-        var webClient = new RecordingWebApiClient();
-        var service = CreateService(state, webClient);
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
 
         var result = await service.ExecuteAsync(CreateRequest(
             "WebFetch",
             """{"url":"http://example.com/docs"}"""));
 
         result.Cached.StructValue.Fields["content"].StringValue.Should().Be("cached");
-        webClient.FetchCalls.Should().BeEmpty();
+        backend.FetchCalls.Should().BeEmpty();
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheKey.Should().Be(cacheKey);
         state.WebTraces[0].Trace.Url.Should().Be("https://example.com/docs");
@@ -40,16 +39,16 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
     public async Task ExecuteAsync_ShouldFetchWithoutForwardingNyxIdTokenAndRecordTrace()
     {
         var state = new RecordingResponsesAgentToolStatePort();
-        var webClient = new RecordingWebApiClient
+        var backend = new RecordingResponsesWebSubstituteBackend
         {
-            FetchResult = new FetchResult(
+            FetchResult = new ResponsesWebFetchBoundaryResult(
+                "https://example.com/docs",
                 200,
                 "text/plain",
                 "fresh body",
-                null,
-                "https://example.com/docs"),
+                string.Empty),
         };
-        var service = CreateService(state, webClient);
+        var service = CreateService(state, backend);
 
         var result = await service.ExecuteAsync(CreateRequest(
             "WebFetch",
@@ -57,8 +56,8 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             token: "secret-token"));
 
         result.Fetch.Content.Should().Contain("fresh body");
-        webClient.FetchCalls.Should().ContainSingle();
-        webClient.FetchCalls[0].Token.Should().BeEmpty();
+        backend.FetchCalls.Should().ContainSingle();
+        backend.FetchCalls[0].Url.Should().Be("https://example.com/docs");
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
     }
@@ -67,15 +66,15 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
     public async Task ExecuteAsync_ShouldRejectInvalidFetchUrlBeforeCallingWebClient()
     {
         var state = new RecordingResponsesAgentToolStatePort();
-        var webClient = new RecordingWebApiClient();
-        var service = CreateService(state, webClient);
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
 
         var result = await service.ExecuteAsync(CreateRequest(
             "WebFetch",
             """{"url":"http://127.0.0.1/admin"}"""));
 
         result.Error.StructValue.Fields["error"].StringValue.Should().Be("blocked_private_address");
-        webClient.FetchCalls.Should().BeEmpty();
+        backend.FetchCalls.Should().BeEmpty();
         state.WebTraces.Should().BeEmpty();
     }
 
@@ -83,11 +82,12 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
     public async Task ExecuteAsync_ShouldSearchWithClampedMaxResultsAndRecordTrace()
     {
         var state = new RecordingResponsesAgentToolStatePort();
-        var webClient = new RecordingWebApiClient
+        var backend = new RecordingResponsesWebSubstituteBackend
         {
-            SearchResult = StructValue(("results", ListValueValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
+            SearchResult = new ResponsesWebSearchBoundaryResult(
+                StructValue(("results", ListValueValue(StructValue(("title", ProtoValue.ForString("fresh"))))))),
         };
-        var service = CreateService(state, webClient);
+        var service = CreateService(state, backend);
 
         var result = await service.ExecuteAsync(CreateRequest(
             "WebSearch",
@@ -97,10 +97,10 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         result.Search.StructValue.Fields["results"].ListValue.Values[0].StructValue.Fields["title"].StringValue
             .Should()
             .Be("fresh");
-        webClient.SearchCalls.Should().ContainSingle();
-        webClient.SearchCalls[0].Token.Should().Be("secret-token");
-        webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
-        webClient.SearchCalls[0].MaxResults.Should().Be(20);
+        backend.SearchCalls.Should().ContainSingle();
+        backend.SearchCalls[0].NyxIdAccessToken.Should().Be("secret-token");
+        backend.SearchCalls[0].Query.Should().Be("aevatar docs");
+        backend.SearchCalls[0].MaxResults.Should().Be(20);
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
@@ -110,8 +110,8 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
     public async Task ExecuteAsync_ShouldReturnSearchAuthErrorAndRecordTraceWhenTokenMissing()
     {
         var state = new RecordingResponsesAgentToolStatePort();
-        var webClient = new RecordingWebApiClient();
-        var service = CreateService(state, webClient);
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
 
         var result = await service.ExecuteAsync(CreateRequest(
             "WebSearch",
@@ -121,9 +121,23 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         result.Search.StructValue.Fields["error"].StringValue
             .Should()
             .Be("No NyxID access token available. User must be authenticated.");
-        webClient.SearchCalls.Should().BeEmpty();
+        backend.SearchCalls.Should().BeEmpty();
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldDependOnlyOnResponsesOwnedBackendBoundary()
+    {
+        var state = new RecordingResponsesAgentToolStatePort();
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
+
+        await service.ExecuteAsync(CreateRequest(
+            "WebSearch",
+            """{"query":"aevatar docs"}"""));
+
+        backend.SearchCalls.Should().ContainSingle();
     }
 
     [Fact]
@@ -142,10 +156,23 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             .NotContain(["ResultJson"]);
     }
 
+    [Fact]
+    public void ApplicationProject_ShouldNotReferenceConcreteWebToolProvider()
+    {
+        var projectPath = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../../src/platform/Aevatar.GAgentService.Application/Aevatar.GAgentService.Application.csproj"));
+
+        File.ReadAllText(projectPath)
+            .Should()
+            .NotContain("Aevatar.AI.ToolProviders.Web");
+    }
+
     private static ResponsesWebSubstituteToolExecutionService CreateService(
         RecordingResponsesAgentToolStatePort state,
-        RecordingWebApiClient webClient) =>
-        new(state, state, webClient, new WebToolOptions { MaxSearchResults = 3 });
+        RecordingResponsesWebSubstituteBackend backend) =>
+        new(state, state, backend);
 
     private static ResponsesWebSubstituteToolExecutionRequest CreateRequest(
         string toolName,
@@ -194,30 +221,37 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         };
     }
 
-    private sealed class RecordingWebApiClient : IWebApiClient
+    private sealed class RecordingResponsesWebSubstituteBackend : IResponsesWebSubstituteBackend
     {
-        public List<(string Token, string Query, int MaxResults)> SearchCalls { get; } = [];
+        public List<ResponsesWebSearchBoundaryInput> SearchCalls { get; } = [];
 
-        public List<(string Token, string Url)> FetchCalls { get; } = [];
+        public List<ResponsesWebFetchBoundaryInput> FetchCalls { get; } = [];
 
-        public ProtoValue SearchResult { get; init; } = StructValue(("results", ListValueValue()));
+        public ResponsesWebSearchBoundaryResult SearchResult { get; init; } =
+            new(StructValue(("results", ListValueValue())));
 
-        public FetchResult FetchResult { get; init; } = new(
+        public ResponsesWebFetchBoundaryResult FetchResult { get; init; } = new(
+            "https://example.com",
             200,
             "text/plain",
             "body",
-            null,
-            "https://example.com");
+            string.Empty);
 
-        public Task<ProtoValue> SearchAsync(string token, string query, int maxResults, CancellationToken ct)
+        public int DefaultMaxSearchResults { get; init; } = 3;
+
+        public Task<ResponsesWebSearchBoundaryResult> ExecuteWebSearchAsync(
+            ResponsesWebSearchBoundaryInput input,
+            CancellationToken ct)
         {
-            SearchCalls.Add((token, query, maxResults));
-            return Task.FromResult(SearchResult.Clone());
+            SearchCalls.Add(input);
+            return Task.FromResult(new ResponsesWebSearchBoundaryResult(SearchResult.Value.Clone()));
         }
 
-        public Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
+        public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
+            ResponsesWebFetchBoundaryInput input,
+            CancellationToken ct)
         {
-            FetchCalls.Add((token, url));
+            FetchCalls.Add(input);
             return Task.FromResult(FetchResult);
         }
     }
