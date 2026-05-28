@@ -445,24 +445,6 @@ public sealed class ConnectorCallModuleCoverageTests
         }
     }
 
-    private sealed class DelayConnector(string name) : IConnector
-    {
-        public string Name { get; } = name;
-        public string Type => "test";
-
-        public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            await pending.Task.WaitAsync(ct);
-            return new ConnectorResponse
-            {
-                Success = true,
-                Output = "late",
-            };
-        }
-    }
-
     private sealed class ManualConnector(string name) : IConnector
     {
         private readonly TaskCompletionSource<ConnectorResponse> _completion =
