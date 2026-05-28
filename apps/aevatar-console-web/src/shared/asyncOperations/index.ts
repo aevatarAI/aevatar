@@ -1,3 +1,9 @@
+// Refactor (iter160/cluster-1200):
+//   Old pattern: Studio member binding run + Script save observation each kept
+//                page-local fixed wait/status mapping; timing and normalized state diverged.
+//   New principle: shared helper unifies accepted receipt / observation result /
+//                  query freshness / terminal failure / stale-pending normalized states;
+//                  injectable scheduler keeps tests deterministic without backend contracts.
 export type AsyncOperationStatus =
   | 'accepted'
   | 'pending'

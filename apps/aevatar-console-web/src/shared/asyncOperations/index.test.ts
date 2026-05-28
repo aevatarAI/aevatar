@@ -99,4 +99,47 @@ describe('async operation state helper', () => {
     expect(result.exhausted).toBe(false);
     expect(waitForNextAttempt).toHaveBeenCalledTimes(1);
   });
+
+  it('returns retryable probe errors after attempts are exhausted', async () => {
+    const probeError = new Error('Read model is not visible yet.');
+    const read = jest.fn(async () => {
+      throw probeError;
+    });
+    const waitForNextAttempt = jest.fn().mockResolvedValue(undefined);
+
+    const result = await probeAsyncOperation<{ readonly status: 'pending' }>({
+      maxAttempts: 3,
+      read,
+      isTerminal: (observation) => observation.status !== 'pending',
+      canRetryError: () => true,
+      waitForNextAttempt,
+    });
+
+    expect(result.observation).toBeNull();
+    expect(result.error).toBe(probeError);
+    expect(result.exhausted).toBe(true);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(waitForNextAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the latest pending observation when attempts are exhausted', async () => {
+    type ProbeObservation = { readonly status: 'pending' };
+    const read = jest.fn(
+      async (): Promise<ProbeObservation> => ({ status: 'pending' }),
+    );
+    const waitForNextAttempt = jest.fn().mockResolvedValue(undefined);
+
+    const result = await probeAsyncOperation<ProbeObservation>({
+      maxAttempts: 2,
+      read,
+      isTerminal: () => false,
+      waitForNextAttempt,
+    });
+
+    expect(result.observation).toEqual({ status: 'pending' });
+    expect(result.error).toBeNull();
+    expect(result.exhausted).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(waitForNextAttempt).toHaveBeenCalledTimes(1);
+  });
 });

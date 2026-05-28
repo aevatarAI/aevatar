@@ -653,6 +653,10 @@ function buildSaveObservationRequest(
   };
 }
 
+// Refactor (iter160/cluster-1200): script save observation uses shared
+//   probeAsyncOperation normalized states instead of duplicated page-local
+//   status mapping. The fixed timeout remains pre-refactor page-local pacing;
+//   the shared helper accepts an injectable scheduler for deterministic tests.
 function waitForAsyncOperationProbeTick(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 250));
 }
