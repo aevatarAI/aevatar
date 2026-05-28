@@ -49,20 +49,17 @@ public sealed record WorkflowChatSource(
         new(WorkflowChatSourceKind.Direct, ActorId: actorId);
 }
 
+// Refactor (iter112/cluster-3): Old pattern: application commands carried typed source plus legacy mirror fields. New principle: Application owns one typed WorkflowChatSource representation.
 public sealed record WorkflowChatRunRequest(
     string Prompt,
-    string? WorkflowName,
-    string? ActorId,
+    WorkflowChatSource Source,
     string? SessionId = null,
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
-    // Inline workflow YAML bundle; first item is the entry workflow.
-    IReadOnlyList<string>? WorkflowYamls = null,
     IReadOnlyDictionary<string, string>? Metadata = null,
     // Refactor (iter15/cluster-029):
     //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
-    WorkflowChatSource? Source = null,
     LLMControlContext? LlmControl = null);
 
 public enum WorkflowChatRunStartError

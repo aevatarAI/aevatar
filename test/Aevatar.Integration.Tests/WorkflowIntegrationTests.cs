@@ -14,6 +14,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
@@ -283,17 +284,23 @@ public class WorkflowIntegrationTests
         children.Should().Contain(reviewerActorId);
         children.Should().Contain(writerActorId);
 
-        // 验证每个 RoleGAgent 的配置
-        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+        // 验证每个 RoleGAgent 的初始化事件已作为 child actor 自身的 committed fact 可见。
+        var eventStore = sp.GetRequiredService<IEventStore>();
+        var researcherInitialized = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
             async _ =>
             {
-                var researcherActor = await runtime.GetAsync(researcherActorId);
-                return researcherActor?.Agent as RoleGAgent;
+                var events = await eventStore.GetEventsAsync(researcherActorId);
+                return events
+                    .Where(e => e.EventData?.Is(InitializeRoleAgentEvent.Descriptor) == true)
+                    .Select(e => e.EventData!.Unpack<InitializeRoleAgentEvent>())
+                    .FirstOrDefault();
             },
-            agent => agent?.RoleName == "Researcher",
+            evt => evt?.RoleName == "Researcher",
             $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
             CancellationToken.None);
-        researcher!.RoleName.Should().Be("Researcher");
+        researcherInitialized!.RoleId.Should().Be("researcher");
+        researcherInitialized.RoleName.Should().Be("Researcher");
+        researcherInitialized.SystemPrompt.Should().Contain("researcher");
     }
 
     private static async Task WaitForActorAsync(IActorRuntime runtime, string actorId)

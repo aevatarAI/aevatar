@@ -94,6 +94,7 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
 | META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
+| META_JUDGE_DONE:split | close current issue + open 2 sub-issues(first implement, later design-pending) |
 | META_JUDGE_DONE:escalate:stalled | reflector(per Phase 9 路由表) |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Phase 8 reviewer × 3 |
@@ -457,7 +458,9 @@ EOF
    - `phase9-issueN-rK-{minimal,delete,structural}.log` 全有 `EXIT=0` 且 `phase9-issueN-rK-judge.log` 不存在 → **派 r-K meta-judge**
    - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:consensus:...` → 派 implement,加 `auto-loop-resume` label
    - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:converge:round-K+1:...` → 派 r-K+1 三 solver
-   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:...` → label `🆘 human:卡死` + PushNotification
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:split:...` → close 当前 issue + open 2 sub-issue(first implement, later design-pending)
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:stalled:...` → 派 reflector(per Phase 9 路由表)
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:<其他>:...` → 按 Phase 9 路由表处理
 
 5. **Per-PR Phase 8 进展判定**:从 log marker 推断:
    - 三 reviewer 全 `REVIEW_DONE:` + 全 approve → auto-merge
@@ -1449,7 +1452,7 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ## Phase 9 — Multi-solver design consensus (alternative to manual maintainer decisions)
 
-Runs when a `state.design_pending[i]` cluster has been open for one full Phase 7 sweep with no maintainer answer, OR when the operator manually sets `design_pending[i].auto_solve = true`. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous → auto-dispatch implement** (skip maintainer decision); split or philosophy-touching → escalate to maintainer.
+Runs when a `state.design_pending[i]` cluster has been open for one full Phase 7 sweep with no maintainer answer, OR when the operator manually sets `design_pending[i].auto_solve = true`. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous → auto-dispatch implement** (skip maintainer decision); split → close current issue + open first-slice implement issue and later-slice design-pending issue; philosophy-touching → escalation routing table.
 
 Per Auric's policy (2026-05-19): **3/3 unanimous required** — "早暴露问题比晚暴露问题好" — anything less goes through convergence (max 2 rounds) or escalation.
 
@@ -1479,7 +1482,7 @@ for role in minimal structural delete; do
 done
 ```
 
-All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 done, dispatch meta-judge:
+All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>[:first-slice=<narrow plan>]`. When all 3 done, dispatch meta-judge:
 
 ```bash
 envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
@@ -1497,6 +1500,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action") |
 | `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt) |
+| `split:<first-slice>:<later-slice>` | no-new-core first slice + later design slice | close 当前 issue + open 2 sub-issue；first 进 implement，later 进 design-pending |
 | `escalate:philosophy:<...>` | architecture-philosophy hardcoded trigger | **直接** label `🆘 human:卡死` + `auto-loop-stuck` + PushNotification |
 | `escalate:stalled:<...>` | 3+ round 无 maintainer input 且 solver verdict 无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人 |
 | `escalate:<其他 category>` | conflict / budget-exhausted 等 | 派 reflector + 同时 PushNotification |
@@ -1707,9 +1711,10 @@ Every Phase 9 action posts a bilingual comment to the issue. **Humans must be ab
 | Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | Bilingual: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output (already bilingual). One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output (bilingual). |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|split\|escalate>\``. Body = verbatim judge output (bilingual). |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
+| Meta-judge → split | Same as above + close current issue + open 2 sub-issues; first enters implement, later enters design-pending |
 | Meta-judge → escalate | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment laying out the exact human action needed + PushNotification |
 | Hardcoded escalation trigger fired | Post meta-judge output + summary "architecture-philosophy trigger — escalating to human" + label `auto-loop-stuck`. Trigger fires on architecture-philosophy categories ONLY (see below); convergence-only splits do NOT escalate, they keep iterating. |
 
