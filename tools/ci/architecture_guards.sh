@@ -37,6 +37,42 @@ fi
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
+# Refactor (iter158/cluster-001): stream-RPC outcome abstractions were deleted in PR #1165.
+# Do not reintroduce stream subscribe + first-outcome wait abstractions as an RPC reply path.
+set +e
+stream_rpc_report="$(
+  rg -n "StreamActorOutcomeChannel|DefaultCommandOutcomeDispatchService|class.*OutcomeChannel.*: Subscription|Outcome\.WaitAsync\(ct\)" \
+    src \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!*.g.cs' \
+    -g '!*.Designer.cs' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+)"
+stream_rpc_status=$?
+set -e
+
+if [[ ${stream_rpc_status} -ne 0 && ${stream_rpc_status} -ne 1 ]]; then
+  echo "Stream-RPC regression guard execution failed."
+  exit "${stream_rpc_status}"
+fi
+
+if [ -n "${stream_rpc_report}" ]; then
+  echo "ERROR: stream-RPC abstraction reintroduced (forbidden per PR #1165 / issue #1161)"
+  echo "${stream_rpc_report}"
+  exit 1
+fi
+
 if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   echo "Solution must not include legacy host projects."
   exit 1
