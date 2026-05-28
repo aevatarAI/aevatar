@@ -32,6 +32,9 @@ public sealed class ResponsesWebSubstituteToolExecutionService
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Refactor (iter159/cluster-624):
+        //   Old pattern: Host 层 ResponsesAevatarToolProvider 直接编排 WebFetch/WebSearch 工具调用
+        //   New principle: 编排下沉到 Application/AI 边界;Host 只做协议适配
         return request.ToolName switch
         {
             "WebFetch" or "web_fetch" => await ExecuteFetchAsync(request, ct).ConfigureAwait(false),
@@ -74,9 +77,6 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             };
         }
 
-        // Refactor (iter159/cluster-624-first):
-        //   Old pattern: Host provider owned WebFetch/WebSearch execution, cache lookup, and trace recording.
-        //   New principle: Application service owns web execution/tracing; Host only adapts tool JSON and composition.
         // The URL came from LLM-controlled input. Never forward the caller's
         // NyxID bearer to an arbitrary fetch target.
         var result = await _webClient.FetchUrlAsync(token: string.Empty, url, ct).ConfigureAwait(false);

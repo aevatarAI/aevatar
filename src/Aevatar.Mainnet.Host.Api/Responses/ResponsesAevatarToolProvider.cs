@@ -27,9 +27,9 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
         ValueTask.FromResult<IReadOnlyList<IAgentTool>>(
         [
             new TodoWriteTool(_commandPort),
-            // Refactor (iter159/cluster-623-first):
-            //   Old pattern: fake Task substitute synthesized child_actor_id, returned accepted, recorded parent trace only
-            //   New principle: removed active substitute path; TodoWrite remains the only real substitute
+            // Refactor (iter159/cluster-624):
+            //   Old pattern: Host layer owned WebFetch/WebSearch execution, cache lookup, and trace recording
+            //   New principle: Host registers TodoWrite plus WebFetch/WebSearch substitutes and delegates Web orchestration to Application
             new WebFetchTool("WebFetch", _webExecution),
             new WebFetchTool("web_fetch", _webExecution),
             new WebSearchTool("WebSearch", _webExecution),
