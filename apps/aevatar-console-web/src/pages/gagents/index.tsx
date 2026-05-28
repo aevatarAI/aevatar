@@ -1342,17 +1342,17 @@ const GAgentsPage: React.FC = () => {
   const rail = (
     <div style={cliRailShellStyle}>
       <div style={cliRailSectionStyle}>
-        <div style={cliCardLabelStyle}>Workspace Context</div>
+        <div style={cliCardLabelStyle}>工作区上下文</div>
         <Input
-          aria-label="Workspace ID"
+          aria-label="工作区 ID"
           onChange={(event) => setScopeId(event.target.value)}
-          placeholder="Workspace ID"
+          placeholder="工作区 ID"
           value={scopeId}
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved workspace: ${resolvedScope.scopeId}`
-            : 'No workspace was resolved from the current session.'}
+            ? `NyxID 已解析工作区：${resolvedScope.scopeId}`
+            : '当前会话还没有解析到工作区。'}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1403,20 +1403,20 @@ const GAgentsPage: React.FC = () => {
               justifyContent: 'space-between',
             }}
           >
-            <div style={cliCardLabelStyle}>GAgent Types</div>
+            <div style={cliCardLabelStyle}>GAgent 类型</div>
             <Button
               icon={<ReloadOutlined />}
               onClick={() => void gAgentTypesQuery.refetch()}
               size="small"
               type="text"
             >
-              Refresh
+              刷新
             </Button>
           </div>
           <Input
-            aria-label="Filter GAgent types"
+            aria-label="筛选 GAgent 类型"
             onChange={(event) => setTypeFilter(event.target.value)}
-            placeholder="Filter GAgent types"
+            placeholder="筛选 GAgent 类型"
             value={typeFilter}
           />
           {gAgentTypesQuery.error ? (
@@ -1648,22 +1648,22 @@ const GAgentsPage: React.FC = () => {
 
   const runOutputPanel = (
     <WorkbenchCard
-      description="Transcript and runtime events from the most recent draft run."
-      eyebrow="Run Output"
+      description="最近一次草稿运行的回复和运行时事件。"
+      eyebrow="运行输出"
       extra={
         <Space size={[8, 8]} wrap>
           {runState.actorId ? <Tag>{runState.actorId}</Tag> : null}
           {runState.commandId ? <Tag>{runState.commandId}</Tag> : null}
         </Space>
       }
-      title={runState.runId ? `Run ${runState.runId}` : 'Run Output'}
+      title={runState.runId ? `Run ${runState.runId}` : '运行输出'}
     >
       <Tabs
         activeKey={activeRunOutputTab}
         items={[
           {
             key: 'transcript',
-            label: 'Transcript',
+            label: '回复',
             children: runState.assistantText.trim() ? (
               <Typography.Paragraph
                 style={{
@@ -1677,15 +1677,15 @@ const GAgentsPage: React.FC = () => {
                 {runState.assistantText}
               </Typography.Paragraph>
             ) : (
-              <AevatarInspectorEmpty description="Run a draft prompt to watch the streamed GAgent response here." />
+              <AevatarInspectorEmpty description="运行草稿提示词后，会在这里看到流式 GAgent 回复。" />
             ),
           },
           {
             key: 'events',
-            label: `Event Feed (${runState.events.length})`,
+            label: `事件流 (${runState.events.length})`,
             children:
               runState.events.length === 0 ? (
-                <AevatarInspectorEmpty description="No events captured yet." />
+                <AevatarInspectorEmpty description="还没有捕获到事件。" />
               ) : (
                 <div style={{ ...scrollColumnStyle, maxHeight: 360 }}>
                   {runState.events.slice(-12).map((event, index) => (
@@ -2541,15 +2541,15 @@ const GAgentsPage: React.FC = () => {
 
   const draftRunPanel = (
     <WorkbenchCard
-      description="Test the selected GAgent type before publishing."
-      eyebrow="Draft Run"
+      description="发布前先测试选中的 GAgent 类型。"
+      eyebrow="草稿运行"
       extra={
         <Space size={[8, 8]} wrap>
           <AevatarStatusTag domain="run" status={runState.status} />
           {runState.runId ? <Tag>{runState.runId}</Tag> : null}
         </Space>
       }
-      title={selectedType ? selectedType.typeName : 'GAgent Draft Run'}
+      title={selectedType ? selectedType.typeName : 'GAgent 草稿运行'}
     >
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {selectedType ? (
@@ -2561,34 +2561,34 @@ const GAgentsPage: React.FC = () => {
             }}
           >
             <div>
-              <Typography.Text type="secondary">Type</Typography.Text>
+              <Typography.Text type="secondary">类型</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {selectedType.fullName}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Saved actors</Typography.Text>
+              <Typography.Text type="secondary">已保存 Actor</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {savedActorIds.length}
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Observed actor</Typography.Text>
+              <Typography.Text type="secondary">观察到的 Actor</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
                 {runState.actorId || 'n/a'}
               </Typography.Paragraph>
             </div>
           </div>
         ) : (
-          <AevatarInspectorEmpty description="Select a discovered GAgent type before drafting a direct run." />
+          <AevatarInspectorEmpty description="先选择已发现的 GAgent 类型，再创建草稿运行。" />
         )}
 
         <Select
-          aria-label="Actor reuse mode"
+          aria-label="Actor 复用模式"
           onChange={(value) => setActorReuseMode(value)}
           options={[
-            { label: 'Create new actor', value: 'new' },
-            { label: 'Reuse existing actor', value: 'existing' },
+            { label: '创建新 Actor', value: 'new' },
+            { label: '复用已有 Actor', value: 'existing' },
           ]}
           value={actorReuseMode}
         />
@@ -2606,8 +2606,8 @@ const GAgentsPage: React.FC = () => {
               }))}
               placeholder={
                 gAgentActorsQuery.isLoading
-                  ? 'Loading saved actors'
-                  : 'Reuse a saved actor (optional)'
+                  ? '正在加载已保存 Actor'
+                  : '复用已保存 Actor（可选）'
               }
               showSearch
               style={{ width: '100%' }}
@@ -2627,23 +2627,21 @@ const GAgentsPage: React.FC = () => {
               />
             ) : (
               <Typography.Text type="secondary">
-                Leave the saved actor selector empty if you want to type a known
-                actor id manually.
+                如果要手动输入已知 actor id，可以留空上面的已保存 Actor 选择器。
               </Typography.Text>
             )}
           </Space>
         ) : (
           <Typography.Text type="secondary">
-            New actor mode lets the runtime allocate a fresh actor and persist
-            it for future reuse.
+            创建新 Actor 模式会让 runtime 分配一个新的 actor，并持久化以便后续复用。
           </Typography.Text>
         )}
 
         <Input.TextArea
-          aria-label="Draft prompt"
+          aria-label="草稿提示词"
           autoSize={{ minRows: 4, maxRows: 8 }}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Enter a direct prompt for the selected GAgent type"
+          placeholder="输入要直接发送给所选 GAgent 类型的提示词"
           value={prompt}
         />
 
@@ -2654,7 +2652,7 @@ const GAgentsPage: React.FC = () => {
             onClick={() => void handleRun()}
             type="primary"
           >
-            Run draft prompt
+            运行草稿提示词
           </Button>
           <Button
             danger
@@ -2662,14 +2660,14 @@ const GAgentsPage: React.FC = () => {
             icon={<StopOutlined />}
             onClick={handleStop}
           >
-            Stop run
+            停止运行
           </Button>
           <Button
             disabled={runState.events.length === 0}
             icon={<EyeOutlined />}
             onClick={handleOpenRuns}
           >
-            Continue in Runs
+            在 Runs 中继续
           </Button>
         </Space>
 
@@ -2683,7 +2681,7 @@ const GAgentsPage: React.FC = () => {
   const workbenchTabs = [
     {
       key: 'draft',
-      label: 'Draft Run',
+      label: '草稿运行',
       children: (
         <div style={workbenchColumnStyle}>
           {draftRunPanel}

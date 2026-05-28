@@ -258,6 +258,14 @@ describe("GAgentsPage", () => {
     expect(
       (await screen.findAllByText("OrdersGAgent (Tests)")).length
     ).toBeGreaterThan(0);
+    expect(screen.getByText("工作区上下文")).toBeInTheDocument();
+    expect(screen.getByLabelText("工作区 ID")).toHaveValue("scope-a");
+    expect(screen.getByText("NyxID 已解析工作区：scope-a")).toBeInTheDocument();
+    expect(screen.getByText("GAgent 类型")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+    expect(screen.getByLabelText("筛选 GAgent 类型")).toBeInTheDocument();
+    expect(screen.queryByText("Workspace Context")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.listActors).toHaveBeenCalledWith("scope-a");
     });
@@ -320,11 +328,23 @@ describe("GAgentsPage", () => {
     expect(
       (await screen.findAllByText("OrdersGAgent (Tests)")).length
     ).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("tab", { name: "Draft Run" }));
-    fireEvent.change(screen.getByLabelText("Draft prompt"), {
+    fireEvent.click(screen.getByRole("tab", { name: "草稿运行" }));
+    expect(screen.getByText("发布前先测试选中的 GAgent 类型。")).toBeInTheDocument();
+    expect(screen.getByText("创建新 Actor")).toBeInTheDocument();
+    expect(screen.getAllByText("运行输出").length).toBeGreaterThan(0);
+    expect(screen.getByText("回复")).toBeInTheDocument();
+    expect(screen.getByText("事件流 (0)")).toBeInTheDocument();
+    expect(
+      screen.getByText("运行草稿提示词后，会在这里看到流式 GAgent 回复。")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Draft Run")).toBeNull();
+    expect(screen.queryByText("Run Output")).toBeNull();
+    expect(screen.queryByText("Transcript")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("草稿提示词"), {
       target: { value: "hello agent" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Run draft prompt/i }));
+    fireEvent.click(screen.getByRole("button", { name: "运行草稿提示词" }));
 
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.streamDraftRun).toHaveBeenCalledWith(
@@ -340,7 +360,7 @@ describe("GAgentsPage", () => {
     });
 
     expect((await screen.findAllByText("hello from gagent")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /Continue in Runs/i }));
+    fireEvent.click(screen.getByRole("button", { name: "在 Runs 中继续" }));
 
     expect(window.location.pathname).toBe("/runtime/runs");
     const draftKey = new URLSearchParams(window.location.search).get("draftKey");
