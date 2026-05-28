@@ -1,37 +1,21 @@
 #!/usr/bin/env python3
+"""dev_sync_daemon.py — 通用双向 PR 同步 daemon.
+
+每 TICK 周期处理两方向(forward: SOURCE→TARGET, reverse: TARGET→SOURCE):
+  1. count_ahead == 0 → skip
+  2. 没 open sync PR → 推 sync branch + 开 PR base=对方 + enable auto-merge
+  3. 有 open sync PR + mergeStateStatus:
+       - DIRTY  → 派 codex 在独立 worktree 解冲突,push 回 PR head
+       - BEHIND → gh api update-branch(GitHub 自动 merge base into PR head)
+       - 任意 CI fail → 派 codex 在独立 worktree 修 CI errors,push 回 PR head
+       - clean    → 等 GitHub auto-merge
+
+冲突解决与 CI 修复都是同 codex,差别在 prompt action(resolve-conflict / fix-ci)。
+daemon 不参与 admin bypass / direct push;一切走 PR。
 """
-dev_sync_daemon.py — 双向 sync daemon
+from __future__ import annotations
 
-Per Auric 2026-05-20 "改这个 daemon 在一个独立 worktree 工作, 改用 python 写吧"
-Per Auric 2026-05-27 "能够让codex处理所有复杂情况,并且监测如果dev分支与本地分支差
-18小时以上,则从本地分支切出一个分支向dev分支提pr,该新pr绿了后自动merge且删分支"
-
-设计:
-- 独立 worktree:
-  - /Users/auric/aevatar-wt-dev-sync (dev → integration sync)
-  - /Users/auric/aevatar-wt-dev-rollup (integration → dev rollup)
-- 600s 周期 tick
-- branch protection enforce_admins=true → 所有 push 必走 PR + auto-merge
-  (repo allow_auto_merge=true,GitHub 自动 squash merge + delete branch)
-
-工作流:
-1. sync_dev_to_integration:dev → auto-refact-dev
-   - 在 sync worktree fetch + try merge
-   - 冲突 → spawn 升级版 codex(带 rule 10/11 full slnx test)resolve
-   - 成功 → push 到 chore/dev-sync-auto-<ts> branch + 开 PR + enable auto-merge
-2. rollup_integration_to_dev:auto-refact-dev → dev
-   - 检查 origin/dev..origin/auto-refact-dev 最早 commit 距今 hours
-   - >= 18h 且无 open rollup PR → 开 PR + auto-merge
-3. 防重复:check open PR 池(`gh pr list --base <X> --search "chore/<prefix>"`)
-
-启动:
-  nohup python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py \
-    >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
-  disown
-
-⟦AI:AUTO-LOOP⟧
-"""
-
+import fcntl
 import json
 import os
 import subprocess
@@ -40,666 +24,317 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-INTERVAL = int(os.environ.get("INTERVAL", "600"))
-MAIN_REPO = Path(os.environ.get("REPO_ROOT", "/Users/auric/aevatar"))
-SYNC_WORKTREE = Path(os.environ.get("WORKTREE", "/Users/auric/aevatar-wt-dev-sync"))
-ROLLUP_WORKTREE = Path(os.environ.get("ROLLUP_WORKTREE", "/Users/auric/aevatar-wt-dev-rollup"))
-INTEGRATION = os.environ.get("INTEGRATION", "auto-refact-dev")
-REVIEW_BASE = os.environ.get("REVIEW_BASE", "dev")
-ROLLUP_HOURS_THRESHOLD = int(os.environ.get("ROLLUP_HOURS_THRESHOLD", "18"))
-SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
-SYNC_BRANCH_PREFIX = "chore/dev-sync-auto-"
-ROLLUP_BRANCH_PREFIX = "chore/auto-refact-dev-rollup-"
+# ===== config =====
 
+MAIN_REPO = Path(os.environ.get("REPO_ROOT", "/Users/auric/aevatar"))
+TICK = int(os.environ.get("TICK", "120"))
+SOURCE = os.environ.get("SOURCE", "dev")
+TARGET = os.environ.get("TARGET", "auto-refact-dev")
+REPO_FULL = os.environ.get("REPO_FULL", "aevatarAI/aevatar")
+
+FORWARD_PREFIX = "chore/sync-dev-to-trunk-"
+REVERSE_PREFIX = "chore/sync-trunk-to-dev-"
+FORWARD_WT = Path(os.environ.get("FORWARD_WT", "/Users/auric/aevatar-wt-sync-forward"))
+REVERSE_WT = Path(os.environ.get("REVERSE_WT", "/Users/auric/aevatar-wt-sync-reverse"))
+
+SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
+LOGS_DIR = MAIN_REPO / ".refactor-loop" / "logs"
+PROMPTS_DIR = MAIN_REPO / ".refactor-loop" / "prompts"
+LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
+
+# ===== utils =====
 
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{ts}] {msg}", flush=True)
+    sys.stdout.flush()
 
 
-def run(
-    cmd: list[str],
-    cwd: Path | None = None,
-    check: bool = False,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
-    merged_env = {**os.environ, **env} if env else None
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=check,
-        env=merged_env,
-    )
+def run(cmd: list[str], cwd: Path | None = None, timeout: int = 60):
+    return subprocess.run(cmd, cwd=str(cwd) if cwd else None,
+                          capture_output=True, text=True, timeout=timeout)
 
 
-def git_dir(cwd: Path) -> Path:
-    """Return real .git dir even for worktrees (where .git is a file)."""
-    r = run(["git", "rev-parse", "--git-dir"], cwd=cwd)
-    if r.returncode != 0:
-        return cwd / ".git"
-    raw = r.stdout.strip()
-    return Path(raw) if Path(raw).is_absolute() else cwd / raw
-
-
-def merge_in_progress(cwd: Path) -> bool:
-    """Fixed: use git rev-parse --git-dir to find real MERGE_HEAD path
-    (secondary worktree .git is a file pointing to main repo's worktree dir).
-    Per 2026-05-27 PR1105 retro:之前硬编码 cwd/.git/MERGE_HEAD 永远 False。"""
-    gd = git_dir(cwd)
-    return (gd / "MERGE_HEAD").exists() or (gd / "MERGE_MSG").exists()
-
-
-def working_tree_dirty(cwd: Path) -> bool:
-    r = run(["git", "status", "--porcelain"], cwd=cwd)
-    return r.returncode != 0 or bool(r.stdout.strip())
-
-
-def ensure_worktree(wt: Path, base_branch: str) -> bool:
-    """Ensure detached HEAD worktree off origin/<base_branch>."""
-    if not wt.exists():
-        log(f"creating worktree {wt} (detached off origin/{base_branch})")
-        run(["git", "fetch", "origin", "--quiet"], cwd=MAIN_REPO)
-        r = run(["git", "worktree", "add", "--detach", str(wt),
-                 f"origin/{base_branch}"], cwd=MAIN_REPO)
-        if r.returncode != 0:
-            log(f"FATAL: git worktree add {wt} failed: {r.stderr.strip()}")
-            return False
-    return True
-
-
-def reset_to_remote(cwd: Path, branch: str) -> bool:
+def fetch(cwd: Path = MAIN_REPO) -> None:
     run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
-    r = run(["git", "reset", "--hard", f"origin/{branch}"], cwd=cwd)
-    if r.returncode != 0:
-        log(f"FAIL reset to origin/{branch}: {r.stderr.strip()[:120]}")
-        return False
-    return True
 
 
-def latest_sync_codex_marker(cwd: Path) -> tuple[str, float]:
-    """Return the latest sync codex terminal marker and log age in seconds."""
-    del cwd
-    logs_dir = MAIN_REPO / ".refactor-loop" / "logs"
-    logs = list(logs_dir.glob("dev-sync-codex-sync-*.log"))
-    if not logs:
-        return "", float("inf")
-
-    latest = max(logs, key=lambda p: p.stat().st_mtime)
-    age_seconds = max(0.0, time.time() - latest.stat().st_mtime)
+def count_ahead(base: str, head: str, cwd: Path = MAIN_REPO) -> int:
+    r = run(["git", "rev-list", "--count", f"{base}..{head}"], cwd=cwd)
     try:
-        lines = latest.read_text(errors="replace").splitlines()
-    except OSError as e:
-        log(f"WARN cannot read sync codex log {latest.name}: {e}")
-        return "", age_seconds
-
-    terminal_markers = []
-    for line in lines:
-        for marker_prefix in ["DEV_SYNC_RESOLVED:", "DEV_SYNC_BLOCKED:"]:
-            marker_pos = line.find(marker_prefix)
-            if marker_pos >= 0:
-                terminal_markers.append(line[marker_pos:].strip())
-    if terminal_markers:
-        return terminal_markers[-1], age_seconds
-
-    exit_markers = [line.strip() for line in lines if "EXIT=" in line]
-    if exit_markers:
-        return exit_markers[-1], age_seconds
-
-    return "", age_seconds
-
-
-def unmerged_file_count(cwd: Path) -> int:
-    r = run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
-    if r.returncode != 0:
-        return 1
-    return len([line for line in r.stdout.splitlines() if line.strip()])
-
-
-def merge_marker_age_seconds(cwd: Path) -> float:
-    gd = git_dir(cwd)
-    merge_files = [p for p in [gd / "MERGE_HEAD", gd / "MERGE_MSG"] if p.exists()]
-    if not merge_files:
-        return 0.0
-    newest_mtime = max(p.stat().st_mtime for p in merge_files)
-    return max(0.0, time.time() - newest_mtime)
-
-
-def try_finalize_codex_merge(cwd: Path) -> bool:
-    """Continue a codex-resolved merge when conflicts are staged but not committed."""
-    if not merge_in_progress(cwd):
-        return False
-
-    marker, marker_age = latest_sync_codex_marker(cwd)
-    if not marker.startswith("DEV_SYNC_RESOLVED:"):
-        log(f"sync: merge in progress but latest codex marker is not resolved: {marker or '<none>'}")
-        return False
-
-    merge_age = merge_marker_age_seconds(cwd)
-    if marker_age > merge_age + 5:
-        log("sync: ignore stale codex resolved marker older than current merge")
-        return False
-
-    unresolved = unmerged_file_count(cwd)
-    if unresolved != 0:
-        log(f"sync: merge still has {unresolved} unmerged files, dispatching codex")
-        return False
-
-    r = run(["git", "merge", "--continue"], cwd=cwd, env={"GIT_EDITOR": "true"})
-    if r.returncode != 0:
-        log(f"sync: git merge --continue failed: {r.stderr.strip()[:200]}")
-        return False
-
-    log("sync: finalized codex-staged merge with git merge --continue")
-    return True
-
-
-def count_ahead(base: str, head: str, cwd: Path = None) -> int:
-    r = run(["git", "rev-list", "--count", f"{base}..{head}"], cwd=cwd or MAIN_REPO)
-    try:
-        return int(r.stdout.strip())
+        return int(r.stdout.strip() or "0")
     except ValueError:
         return 0
 
 
-def earliest_ahead_age_hours(base: str, head: str, cwd: Path = None) -> float:
-    """Return age in hours of the earliest commit in base..head (oldest ahead commit)."""
-    r = run(["git", "log", "--reverse", "--format=%ct", f"{base}..{head}"], cwd=cwd or MAIN_REPO)
-    if r.returncode != 0 or not r.stdout.strip():
-        return 0.0
-    first_line = r.stdout.strip().split("\n")[0]
-    try:
-        earliest_ts = int(first_line)
-    except ValueError:
-        return 0.0
-    now_ts = int(time.time())
-    return (now_ts - earliest_ts) / 3600.0
-
-
-def codex_in_flight(tag: str) -> bool:
-    """Check if a codex with given tag is still running (process scan)."""
-    r = run(["pgrep", "-f", f"dev-sync-codex-{tag}-"])
-    return r.returncode == 0
-
-
-def has_open_pr(base: str, head_prefix: str = None) -> tuple[bool, str]:
-    """Check if open PR exists base=<base> head startswith head_prefix.
-    Returns (exists, pr_number_or_empty)."""
-    args = ["gh", "pr", "list", "--base", base, "--state", "open",
-            "--json", "number,headRefName"]
-    r = run(args, cwd=MAIN_REPO)
+def find_open_pr(base: str, head_prefix: str) -> tuple[int | None, str | None]:
+    r = run(["gh", "pr", "list", "--state", "open", "--base", base,
+             "--json", "number,headRefName"], cwd=MAIN_REPO)
     if r.returncode != 0:
-        log(f"FAIL gh pr list: {r.stderr.strip()[:120]}")
-        return False, ""
+        return None, None
     try:
         prs = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return False, ""
-    for pr in prs:
-        if head_prefix is None or pr["headRefName"].startswith(head_prefix):
-            return True, str(pr["number"])
-    return False, ""
+        return None, None
+    for p in prs:
+        if p.get("headRefName", "").startswith(head_prefix):
+            return p["number"], p["headRefName"]
+    return None, None
 
 
-def open_pr_details(base: str, head_prefix: str) -> dict | None:
-    args = [
-        "gh", "pr", "list",
-        "--base", base,
-        "--state", "open",
-        "--json", "number,headRefName,headRefOid,createdAt,mergeStateStatus,statusCheckRollup",
-    ]
-    r = run(args, cwd=MAIN_REPO)
+def pr_state(pr_num: int) -> dict:
+    r = run(["gh", "pr", "view", str(pr_num), "--json",
+             "number,headRefName,mergeStateStatus,mergeable,statusCheckRollup"],
+            cwd=MAIN_REPO)
     if r.returncode != 0:
-        log(f"FAIL gh pr list details: {r.stderr.strip()[:120]}")
-        return None
+        return {}
     try:
-        prs = json.loads(r.stdout)
+        return json.loads(r.stdout)
     except json.JSONDecodeError:
-        return None
-    for pr in prs:
-        if pr["headRefName"].startswith(head_prefix):
-            return pr
-    return None
+        return {}
 
 
-def pr_created_age_hours(pr: dict) -> float:
-    raw = pr.get("createdAt", "")
-    try:
-        updated_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
-    return (datetime.now(timezone.utc) - updated_at).total_seconds() / 3600.0
-
-
-def pr_checks_dirty(pr: dict) -> bool:
-    if pr.get("mergeStateStatus") == "DIRTY":
-        return True
-
-    rollup = pr.get("statusCheckRollup") or []
-    dirty_states = {"ACTION_REQUIRED", "CANCELLED", "FAILURE", "SKIPPED", "STALE", "STARTUP_FAILURE", "TIMED_OUT"}
-    for check in rollup:
-        conclusion = check.get("conclusion")
-        state = check.get("state") or check.get("status")
-        if conclusion in dirty_states or state in dirty_states:
+def has_failing_check(state: dict) -> bool:
+    for c in state.get("statusCheckRollup") or []:
+        if (c.get("conclusion") or c.get("state") or "").upper() in {"FAILURE", "CANCELLED", "TIMED_OUT"}:
             return True
     return False
 
 
-def remote_ref_sha(ref: str, cwd: Path = MAIN_REPO) -> str:
-    r = run(["git", "rev-parse", ref], cwd=cwd)
-    return r.stdout.strip() if r.returncode == 0 else ""
-
-
-def head_commit_age_seconds(cwd: Path) -> float:
-    r = run(["git", "log", "-1", "--format=%ct"], cwd=cwd)
+def codex_in_flight(label: str) -> bool:
+    """label = 'forward' / 'reverse'. ps grep worktree path(codex -C <wt> 在命令行可见)."""
+    wt = FORWARD_WT if label == "forward" else REVERSE_WT
+    r = run(["bash", "-c",
+             f"ps -ef | grep 'codex exec' | grep -- '-C {wt}' | grep -v grep | wc -l"])
     try:
-        head_ts = int(r.stdout.strip())
+        return int(r.stdout.strip()) > 0
     except ValueError:
-        return float("inf")
-    return max(0.0, time.time() - head_ts)
-
-
-def codex_resolved_head_ready_to_push(cwd: Path) -> bool:
-    if merge_in_progress(cwd) or working_tree_dirty(cwd):
         return False
 
-    marker, marker_age = latest_sync_codex_marker(cwd)
-    if not marker.startswith("DEV_SYNC_RESOLVED:"):
-        return False
 
-    if marker_age > head_commit_age_seconds(cwd) + 60:
-        log("sync: ignore stale codex resolved marker older than current HEAD")
-        return False
-
-    behind_dev = count_ahead("HEAD", f"origin/{REVIEW_BASE}", cwd=cwd)
-    if behind_dev != 0:
-        log(f"sync: codex resolved marker found but HEAD is still behind origin/{REVIEW_BASE} by {behind_dev}")
-        return False
-
-    ahead_integration = count_ahead(f"origin/{INTEGRATION}", "HEAD", cwd=cwd)
-    if ahead_integration <= 0:
-        log(f"sync: codex resolved marker found but HEAD is not ahead of origin/{INTEGRATION}")
-        return False
-
-    log(f"sync: codex resolved result ready to push (age={marker_age:.0f}s, ahead={ahead_integration})")
+def ensure_worktree(wt: Path, branch: str) -> bool:
+    """Ensure worktree exists at wt, on `branch` (tracking origin/<branch> if exists)."""
+    if not wt.exists():
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        r = run(["git", "worktree", "add", str(wt), branch], cwd=MAIN_REPO)
+        if r.returncode != 0:
+            r = run(["git", "worktree", "add", "-b", branch, str(wt), f"origin/{branch}"], cwd=MAIN_REPO)
+            if r.returncode != 0:
+                log(f"FAIL ensure_worktree {wt} on {branch}: {r.stderr.strip()[:200]}")
+                return False
+    # ensure on the right branch
+    cur = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=wt)
+    if cur.stdout.strip() != branch:
+        run(["git", "fetch", "origin", "--quiet"], cwd=wt)
+        r = run(["git", "checkout", branch], cwd=wt)
+        if r.returncode != 0:
+            r = run(["git", "checkout", "-B", branch, f"origin/{branch}"], cwd=wt)
+            if r.returncode != 0:
+                log(f"FAIL checkout {branch} in {wt}: {r.stderr.strip()[:200]}")
+                return False
+    run(["git", "fetch", "origin", "--quiet"], cwd=wt)
+    run(["git", "reset", "--hard", f"origin/{branch}"], cwd=wt)
     return True
 
+# ===== core =====
 
-def force_update_rollup_branch(branch: str) -> bool:
-    run(["git", "fetch", "origin", "--quiet"], cwd=MAIN_REPO)
-    r = run([
-        "git", "push", "--force-with-lease", "origin",
-        f"refs/remotes/origin/{INTEGRATION}:refs/heads/{branch}",
-    ], cwd=MAIN_REPO)
+def create_sync_pr(source: str, target: str, branch_prefix: str, ahead: int, label: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    new_branch = f"{branch_prefix}{ts}"
+    r = run(["git", "push", "origin",
+             f"refs/remotes/origin/{source}:refs/heads/{new_branch}"], cwd=MAIN_REPO)
     if r.returncode != 0:
-        log(f"FAIL force update rollup branch {branch}: {r.stderr.strip()[:200]}")
-        return False
-    log(f"rollup: force-updated {branch} to origin/{INTEGRATION}")
-    return True
-
-
-def dispatch_codex_resolve(cwd: Path, kind: str, sync_branch: str = "") -> None:
-    """Spawn codex to resolve merge conflict + verify per rule 10/11."""
-    ts = int(time.time())
-    prompt_file = MAIN_REPO / ".refactor-loop" / "prompts" / f"dev-sync-codex-{kind}-{ts}.md"
-    log_file = MAIN_REPO / ".refactor-loop" / "logs" / f"dev-sync-codex-{kind}-{ts}.log"
-    prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    if kind == "sync":
-        prompt_body = _sync_codex_prompt(cwd, sync_branch)
-    elif kind == "rollup":
-        prompt_body = _rollup_codex_prompt(cwd, sync_branch)
-    else:
-        log(f"FATAL: unknown codex kind {kind}")
+        log(f"{label}: FAIL push sync branch {new_branch}: {r.stderr.strip()[:200]}")
         return
-    prompt_file.write_text(prompt_body)
-    log(f"dispatching codex ({kind}): prompt={prompt_file.name} log={log_file.name}")
-    subprocess.Popen(
-        ["nohup", str(SPAWN_CODEX),
-         "--cd", str(cwd),
-         "--add-dir", str(MAIN_REPO),
-         "--prompt", str(prompt_file),
-         "--log", str(log_file),
-         "--timeout", "5400"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    log(f"{label}: pushed {new_branch} ({ahead} commits)")
+    body = (f"daemon 双向同步 `{source}` → `{target}` 共 {ahead} commits。"
+            f"CI 绿后 GitHub auto-merge。冲突或 CI fail 由 daemon 派 codex 在独立 worktree 解决。"
+            f"\n\n⟦AI:AUTO-LOOP⟧\n")
+    r = run(["gh", "pr", "create", "--base", target, "--head", new_branch,
+             "--title", f"chore: {source} → {target} 自动同步 ({ahead} commits)",
+             "--body", body], cwd=MAIN_REPO)
+    if r.returncode != 0:
+        log(f"{label}: FAIL pr create: {r.stderr.strip()[:200]}")
+        return
+    pr_url = r.stdout.strip()
+    pr_num = pr_url.rsplit("/", 1)[-1]
+    log(f"{label}: opened PR {pr_url}")
+    run(["gh", "pr", "edit", pr_num, "--add-label", "auto-loop"], cwd=MAIN_REPO)
+    # forward(dev→trunk): enable auto-merge,CI 绿即合
+    # reverse(trunk→dev): 不 enable auto-merge,等 maintainer review(per loning 2026-05-27)
+    if label == "forward":
+        r = run(["gh", "pr", "merge", pr_num, "--merge", "--delete-branch", "--auto"], cwd=MAIN_REPO)
+        if r.returncode == 0:
+            log(f"{label}: enabled auto-merge PR #{pr_num}")
+        else:
+            log(f"{label}: WARN enable auto-merge fail: {r.stderr.strip()[:120]}")
+    else:
+        log(f"{label}: PR #{pr_num} 不 enable auto-merge,等 maintainer review")
 
 
-def _sync_codex_prompt(cwd: Path, sync_branch: str) -> str:
-    return f"""# dev → {INTEGRATION} sync codex(daemon spawn)
+def dispatch_codex(wt: Path, pr_num: int, sync_branch: str, source: str, target: str,
+                   action: str, label: str) -> None:
+    """action: 'resolve-conflict' | 'fix-ci'. 派 codex 在 wt 上 work + push 回 sync_branch."""
+    if not ensure_worktree(wt, sync_branch):
+        return
+    ts = int(time.time())
+    PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    prompt_file = PROMPTS_DIR / f"sync-{label}-{action}-{ts}.md"
+    log_file = LOGS_DIR / f"sync-{label}-codex-{action}-{ts}.log"
 
-## 任务
+    if action == "resolve-conflict":
+        body = f"""# {label} sync — 解冲突 PR #{pr_num}
 
-在 worktree `{cwd}` resolve dev → {INTEGRATION} merge conflict + 全场景适配 +
-verify per SKILL rule 10/11(本地 full slnx test pass 才出 marker)。
-
-## 工作流
-
-1. `cd {cwd}`
-2. `git status` 看 conflict 文件
-3. 读每个冲突 file,理解 origin/{REVIEW_BASE} 改动 vs {INTEGRATION} 改动
-4. 合并(保留两者实质改动:tests / new files / docs / production code / proto)
-5. `git add <files>` 已 resolve 的
-6. `git merge --continue`(default merge message)
-7. **本地 full scenario verify**(per skill rule 10/11):
-   ```bash
-   dotnet build aevatar.slnx --nologo
-   dotnet test aevatar.slnx --nologo --no-build --no-restore
-   ```
-   build 错 → 修;test 错 → 适配 test fixture(不动 production)
-   **必跑 full slnx test(不要 --filter)**,full pass 才出 DONE marker
-
-## 复杂场景处理(PR1106 retro)
-
-- **test fixture missing DI**:dev 新加 service(e.g. `IActorDispatchPort`),test fixture
-  builder pattern 未 register → 加 stub/fake to `services.AddSingleton<>`,不动 production
-- **API rename**:dev 改方法名 / 参数 sig → test 用旧 API → 改 test 用新 API(read dev 端
-  production 看新 sig)
-- **Proto field rename**:dev 改 proto field → test 直接构造 message 失败 → test 用新 field 名
-- **Behavioral change**:dev 改 behavior 但 test 期望旧 → test 期望调整 OR marker
-  `DEV_SYNC_BLOCKED:behavioral-change:<file>:<test>` 让 daemon 决策
-- **Namespace add**:dev 加新 namespace / project → check `aevatar.slnx` 是否包含 + test
-  project 是否 reference 新 dep
-- **跨多 module 同根因**:r1 修一个 module fail 不够 → 必须 full slnx test verify catch
-  其他 module(per PR1106 r1→r3 lesson:filter verify 漏 module)
-
-## 完成 marker
-
-- 成功:`DEV_SYNC_RESOLVED:files=<N>:tests=pass`
-- 阻塞:`DEV_SYNC_BLOCKED:<reason>:<short>`(proto-schema-conflict / behavioral-change / build-broken)
-
-## 硬约束
-
-- ❌ 禁止 `git push` / `git merge --abort` / `git reset --hard`(daemon 控)
-- ❌ 禁止 commit before `git merge --continue`(merge 自动 commit)
-- ❌ 禁止 `[Skip]` / disabled 测试换绿
-- ❌ 禁止 `Task.Delay`-based test pacing
-- ❌ 禁止动外部 repo(NyxID / chrono-*)
-- ❌ 禁止动 main repo `{MAIN_REPO}` worktree(只动当前 worktree)
-- ❌ **禁止 `--filter` 作为最终 verify**(per rule 10) — filter 只用 iterative debug
-- ❌ 严禁写 `Auric` / `@auric` / `@Auric`
-
-所有 AI 生成的对外内容(GitHub comment / commit message / runs/*.md artifact)必须末尾独立一行加
-sentinel `⟦AI:AUTO-LOOP⟧`。
-"""
-
-
-def _rollup_codex_prompt(cwd: Path, rollup_branch: str) -> str:
-    return f"""# {INTEGRATION} → {REVIEW_BASE} rollup codex(daemon spawn)
-
-## Context
-
-Daemon detect `{INTEGRATION}` 与 `{REVIEW_BASE}` 差 >= {ROLLUP_HOURS_THRESHOLD} hours
-(earliest divergent commit age),自动 rollup。
-
-worktree:`{cwd}`(detached HEAD off `origin/{INTEGRATION}`)
-target branch:`{rollup_branch}`
+worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
+sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 
 ## 任务
 
-在 worktree:
-1. `git status` 确认 clean
-2. `git checkout -b {rollup_branch}`
-3. `git push origin {rollup_branch}` — push 新 branch
-4. **daemon 后续会 `gh pr create --base {REVIEW_BASE} --head {rollup_branch}` + auto-merge**
-5. 你不需要做 build / test verify(rollup 内容已是 trunk 上 verified content,只走 dev CI)
+1. `git fetch origin && git merge origin/{target}`(把 target tip merge 进 PR head)
+2. 解所有冲突(prefer 业务正确而非机械合并;若不确定保 source 端)
+3. `dotnet build aevatar.slnx --nologo` 确认编译过
+4. `git add -A && git commit -m "resolve conflict {source} ↔ {target}\\n\\n⟦AI:AUTO-LOOP⟧"`
+5. `git push origin HEAD:{sync_branch}`(更新 PR head)
 
-## 完成 marker
+## 红线
 
-- 成功:`DEV_ROLLUP_BRANCH_PUSHED:{rollup_branch}`
-- 失败:`DEV_ROLLUP_BLOCKED:<reason>`
-
-## 硬约束
-
-- ❌ 禁止 `gh pr create / gh pr merge / gh pr edit`(daemon 控 PR lifecycle)
-- ❌ 禁止动 main repo
+- ❌ 禁止改 sync 范围外文件(只解冲突 + 必要 build fix)
+- ❌ 禁止 force push / git branch / gh pr 操作
+- ❌ 禁止动外部 repo
 - ❌ 严禁写 `Auric` / `@auric` / `@Auric`
+
+## 完成 marker(末行 echo)
+
+- `SYNC_RESOLVE_DONE:{pr_num}:files=<N>`
+- `SYNC_RESOLVE_BLOCKED:{pr_num}:<reason>`
 
 所有 AI 生成的对外内容必须末尾独立一行加 sentinel `⟦AI:AUTO-LOOP⟧`。
 """
+    else:  # fix-ci
+        body = f"""# {label} sync — 修 CI fail PR #{pr_num}
 
+worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
+sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 
-def push_sync_pr(cwd: Path) -> bool:
-    """After codex resolves + verifies full slnx test, push as sync branch + open PR + auto-merge."""
-    run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
-    ahead_count = count_ahead(f"origin/{INTEGRATION}", "HEAD", cwd=cwd)
-    if ahead_count <= 0:
-        log(f"sync: HEAD is not ahead of origin/{INTEGRATION}, skip empty sync push")
-        return False
+## 任务
 
-    ts = int(time.time())
-    sync_branch = f"{SYNC_BRANCH_PREFIX}{ts}"
-    # push HEAD to new branch
-    r = run(["git", "push", "origin", f"HEAD:refs/heads/{sync_branch}"], cwd=cwd)
-    if r.returncode != 0:
-        log(f"FAIL push sync branch {sync_branch}: {r.stderr.strip()[:200]}")
-        return False
-    log(f"pushed sync branch {sync_branch}")
-    # open PR
-    body = f"""## 摘要
+1. `gh pr checks {pr_num}` 查 fail 的 check
+2. `gh run view <run-id> --log-failed` 看具体 fail 原因
+3. 修代码(build / test / lint / coverage / guard)
+4. `dotnet build aevatar.slnx --nologo && dotnet test aevatar.slnx --nologo --no-build --no-restore` verify
+5. `git add -A && git commit -m "fix CI: <short>\\n\\n⟦AI:AUTO-LOOP⟧"`
+6. `git push origin HEAD:{sync_branch}`
 
-dev_sync_daemon 自动 sync `origin/{REVIEW_BASE}` → `{INTEGRATION}`,merge commit 已 in branch。
+## 红线
 
-- ahead origin/{INTEGRATION}: ~{ahead_count} commits
-- codex 已本地 verify full slnx test pass(rule 10/11)
+- ❌ 禁止 `[Skip]` / disable 测试换绿
+- ❌ 禁止 `Task.Delay`-based test pacing
+- ❌ 禁止改无关代码
+- ❌ 禁止 force push / git branch / gh pr 操作
+- ❌ 禁止动外部 repo
+- ❌ 严禁写 `Auric` / `@auric` / `@Auric`
 
-## 自动流程
+## 完成 marker(末行 echo)
 
-CI 全 8 required 绿后,daemon 已 enable auto-merge(squash + delete branch)。
+- `SYNC_FIX_CI_DONE:{pr_num}:checks=<N>`
+- `SYNC_FIX_CI_BLOCKED:{pr_num}:<reason>`
 
-⟦AI:AUTO-LOOP⟧
+所有 AI 生成的对外内容必须末尾独立一行加 sentinel `⟦AI:AUTO-LOOP⟧`。
 """
-    body_file = MAIN_REPO / ".refactor-loop" / "runs" / f"pr-body-sync-{ts}.md"
-    body_file.parent.mkdir(parents=True, exist_ok=True)
-    body_file.write_text(body)
-    r = run(["gh", "pr", "create", "--base", INTEGRATION, "--head", sync_branch,
-             "--title", f"chore: dev → {INTEGRATION} 自动 sync ({ahead_count} commits)",
-             "--body-file", str(body_file)], cwd=MAIN_REPO)
-    if r.returncode != 0:
-        log(f"FAIL gh pr create sync: {r.stderr.strip()[:200]}")
-        return False
-    pr_url = r.stdout.strip()
-    log(f"opened sync PR: {pr_url}")
-    pr_num = pr_url.rsplit("/", 1)[-1]
-    # add auto-loop label
-    run(["gh", "pr", "edit", pr_num, "--add-label", "auto-loop"], cwd=MAIN_REPO)
-    # enable auto-merge
-    r = run(["gh", "pr", "merge", pr_num, "--squash", "--delete-branch", "--auto"],
-            cwd=MAIN_REPO)
-    if r.returncode != 0:
-        log(f"WARN enable auto-merge failed: {r.stderr.strip()[:120]}")
-    else:
-        log(f"enabled auto-merge on sync PR #{pr_num}")
-    return True
+    prompt_file.write_text(body)
+    log(f"{label}: dispatch codex({action}) PR #{pr_num} wt={wt} prompt={prompt_file.name}")
+    subprocess.Popen(
+        ["bash", "-lc",
+         f"nohup {SPAWN_CODEX} --cd {wt} --add-dir {MAIN_REPO} "
+         f"--prompt {prompt_file} --log {log_file} --timeout 5400 "
+         f">/dev/null 2>&1 & disown"],
+        cwd=str(MAIN_REPO))
 
 
-def push_rollup_pr() -> bool:
-    """Create rollup branch from origin/<INTEGRATION>, open PR base=<REVIEW_BASE>, enable auto-merge."""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    rollup_branch = f"{ROLLUP_BRANCH_PREFIX}{ts}"
-    # push directly from refs/remotes/origin/<INTEGRATION> as new branch
-    r = run(["git", "push", "origin",
-             f"refs/remotes/origin/{INTEGRATION}:refs/heads/{rollup_branch}"], cwd=MAIN_REPO)
-    if r.returncode != 0:
-        log(f"FAIL push rollup branch {rollup_branch}: {r.stderr.strip()[:200]}")
-        return False
-    log(f"pushed rollup branch {rollup_branch}")
-    # PR body
-    ahead = count_ahead(f"origin/{REVIEW_BASE}", f"origin/{INTEGRATION}")
-    age_h = earliest_ahead_age_hours(f"origin/{REVIEW_BASE}", f"origin/{INTEGRATION}")
-    body = f"""## 摘要
-
-dev_sync_daemon 自动 rollup `{INTEGRATION}` → `{REVIEW_BASE}`,触发条件 earliest divergent
-commit age >= {ROLLUP_HOURS_THRESHOLD} hours。
-
-- {INTEGRATION} ahead {REVIEW_BASE}: **{ahead} commits**
-- earliest divergent commit age: **{age_h:.1f} hours**
-- trunk content 已是 auto-refact-dev verified state(不重新 build/test verify)
-
-## 自动流程
-
-CI 全 required check 绿后,daemon 已 enable auto-merge(squash + delete branch),trunk 即推
-到 `{REVIEW_BASE}`。
-
-⟦AI:AUTO-LOOP⟧
-"""
-    body_file = MAIN_REPO / ".refactor-loop" / "runs" / f"pr-body-rollup-{ts}.md"
-    body_file.parent.mkdir(parents=True, exist_ok=True)
-    body_file.write_text(body)
-    r = run(["gh", "pr", "create", "--base", REVIEW_BASE, "--head", rollup_branch,
-             "--title", f"chore: {INTEGRATION} → {REVIEW_BASE} rollup({ahead} commits, {age_h:.0f}h stale)",
-             "--body-file", str(body_file)], cwd=MAIN_REPO)
-    if r.returncode != 0:
-        log(f"FAIL gh pr create rollup: {r.stderr.strip()[:200]}")
-        return False
-    pr_url = r.stdout.strip()
-    log(f"opened rollup PR: {pr_url}")
-    pr_num = pr_url.rsplit("/", 1)[-1]
-    run(["gh", "pr", "edit", pr_num, "--add-label", "auto-loop"], cwd=MAIN_REPO)
-    r = run(["gh", "pr", "merge", pr_num, "--squash", "--delete-branch", "--auto"],
-            cwd=MAIN_REPO)
-    if r.returncode != 0:
-        log(f"WARN enable auto-merge on rollup PR failed: {r.stderr.strip()[:120]}")
-    else:
-        log(f"enabled auto-merge on rollup PR #{pr_num}")
-    return True
-
-
-def sync_dev_to_integration() -> None:
-    """Try ff/no-ff merge in sync worktree; on success open PR + auto-merge;
-    on conflict spawn codex (which also verifies full slnx test per rule 10/11)."""
-    cwd = SYNC_WORKTREE
-    if not ensure_worktree(cwd, INTEGRATION):
-        return
-
-    run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
-
-    # check if a sync PR is already open before publishing another branch
-    existing, pr_num = has_open_pr(INTEGRATION, SYNC_BRANCH_PREFIX)
-    if existing:
-        log(f"sync: open sync PR #{pr_num} already exists, waiting auto-merge")
-        return
-
-    if codex_resolved_head_ready_to_push(cwd):
-        push_sync_pr(cwd)
-        return
-
-    if merge_in_progress(cwd):
-        if codex_in_flight("sync"):
-            log("sync: merge in progress + codex resolving, skip")
-        elif try_finalize_codex_merge(cwd):
-            push_sync_pr(cwd)
-        else:
-            log("WARN sync: merge in progress but no codex — dispatching")
-            dispatch_codex_resolve(cwd, "sync")
-        return
-
-    if working_tree_dirty(cwd):
-        log("sync: worktree dirty (codex amend or other) — skip")
-        return
-
-    behind = count_ahead("HEAD", f"origin/{REVIEW_BASE}", cwd=cwd)
-    if behind == 0:
-        log(f"sync: up-to-date with origin/{REVIEW_BASE}")
-        return
-
-    if not reset_to_remote(cwd, INTEGRATION):
-        return
-
-    behind = count_ahead("HEAD", f"origin/{REVIEW_BASE}", cwd=cwd)
-    if behind == 0:
-        log(f"sync: up-to-date with origin/{REVIEW_BASE}")
-        return
-
-    log(f"sync: behind origin/{REVIEW_BASE} by {behind} commits")
-
-    # try ff first
-    r = run(["git", "merge", "--ff-only", f"origin/{REVIEW_BASE}"], cwd=cwd)
-    if r.returncode == 0 and ("Fast-forward" in r.stdout or "Already up to date" in r.stdout):
-        log(f"sync: ff-merged with origin/{REVIEW_BASE} (+{behind})")
-        push_sync_pr(cwd)
-        return
-
-    # ff failed → no-ff merge attempt
-    log("sync: ff not possible, attempting no-ff merge")
-    r = run(["git", "merge", "--no-ff", "-m",
-             f"Sync {INTEGRATION} with {REVIEW_BASE} (auto by dev_sync_daemon)",
-             f"origin/{REVIEW_BASE}"], cwd=cwd)
+def trigger_update_branch(pr_num: int, label: str) -> None:
+    r = run(["gh", "api", "-X", "PUT",
+             f"repos/{REPO_FULL}/pulls/{pr_num}/update-branch"], cwd=MAIN_REPO)
     if r.returncode == 0:
-        log(f"sync: no-ff merge-committed +{behind} commits")
-        # 不直接 push — 派 codex 跑 full slnx test verify per rule 10/11
-        # 即使 merge auto OK,test 也可能 fail(API rename, fixture missing 等)
-        # codex 完成后 daemon next tick 检测 status clean + tests-pass marker → push PR
-        # 当前简化:no-ff merge clean 就 push(若 test fail 让 CI catch)
-        # TODO: 嵌入 codex verify step before push
-        push_sync_pr(cwd)
-        return
-
-    # conflict
-    if merge_in_progress(cwd):
-        log("sync: CONFLICT detected (merge in progress)")
-        if not codex_in_flight("sync"):
-            dispatch_codex_resolve(cwd, "sync")
-        else:
-            log("sync: codex already resolving, skip")
+        log(f"{label}: PR #{pr_num} BEHIND → update-branch triggered")
     else:
-        log(f"sync: FAIL merge but no MERGE_HEAD: {r.stderr.strip()[:120]}")
+        log(f"{label}: WARN update-branch PR #{pr_num} fail: {r.stderr.strip()[:120]}")
 
 
-def rollup_integration_to_dev() -> None:
-    """Per Auric: if INTEGRATION ahead REVIEW_BASE earliest commit age >= 18h, create rollup PR."""
-    # fetch first
-    run(["git", "fetch", "origin", "--quiet"], cwd=MAIN_REPO)
-
-    existing = open_pr_details(REVIEW_BASE, ROLLUP_BRANCH_PREFIX)
-    if existing:
-        head_ref = existing.get("headRefName", "")
-        head_sha = existing.get("headRefOid", "")
-        integration_sha = remote_ref_sha(f"origin/{INTEGRATION}")
-        age_h = pr_created_age_hours(existing)
-        dirty = pr_checks_dirty(existing)
-        stale_head = bool(integration_sha and head_sha != integration_sha)
-        if stale_head or (dirty and age_h > 1.0):
-            reason = "head-stale" if stale_head else f"dirty-for-{age_h:.1f}h"
-            log(f"rollup: open PR #{existing['number']} needs branch update ({reason})")
-            force_update_rollup_branch(head_ref)
-        else:
-            log(f"rollup: open rollup PR #{existing['number']} already exists, skip")
-        return
-
-    ahead = count_ahead(f"origin/{REVIEW_BASE}", f"origin/{INTEGRATION}")
+def sync_direction(source: str, target: str, wt: Path, branch_prefix: str, label: str) -> None:
+    fetch()
+    ahead = count_ahead(f"origin/{target}", f"origin/{source}")
     if ahead == 0:
-        log(f"rollup: {INTEGRATION} not ahead of {REVIEW_BASE}, skip")
         return
 
-    age_h = earliest_ahead_age_hours(f"origin/{REVIEW_BASE}", f"origin/{INTEGRATION}")
-    if age_h < ROLLUP_HOURS_THRESHOLD:
-        log(f"rollup: ahead {ahead} commits, earliest age {age_h:.1f}h < threshold {ROLLUP_HOURS_THRESHOLD}h, skip")
+    pr_num, sync_branch = find_open_pr(target, branch_prefix)
+
+    if pr_num is None:
+        create_sync_pr(source, target, branch_prefix, ahead, label)
         return
 
-    log(f"rollup: TRIGGER ahead={ahead} commits earliest_age={age_h:.1f}h >= {ROLLUP_HOURS_THRESHOLD}h")
-    push_rollup_pr()
+    state = pr_state(pr_num)
+    mss = (state.get("mergeStateStatus") or "").upper()
+
+    if mss == "DIRTY":
+        if not codex_in_flight(label):
+            dispatch_codex(wt, pr_num, sync_branch or "", source, target, "resolve-conflict", label)
+        else:
+            log(f"{label}: PR #{pr_num} DIRTY + codex in-flight,等")
+        return
+
+    if mss == "BEHIND":
+        trigger_update_branch(pr_num, label)
+        return
+
+    if has_failing_check(state):
+        if not codex_in_flight(label):
+            dispatch_codex(wt, pr_num, sync_branch or "", source, target, "fix-ci", label)
+        else:
+            log(f"{label}: PR #{pr_num} CI fail + codex in-flight,等")
+        return
+
+    wait_what = "GitHub auto-merge" if label == "forward" else "maintainer review + merge"
+    log(f"{label}: PR #{pr_num} clean(mss={mss or 'UNKNOWN'}),等 {wait_what}")
 
 
 def tick() -> None:
-    sync_dev_to_integration()
-    rollup_integration_to_dev()
+    # forward 总跑(dev → trunk)
+    sync_direction(SOURCE, TARGET, FORWARD_WT, FORWARD_PREFIX, "forward")
+    # reverse 仅当 trunk 完全包含 dev(trunk 没落后 dev 任何 commit)时才开 PR
+    # per loning: 先保证 dev → trunk OK,trunk superset of dev 时,才开 rollup 回 dev
+    fetch()
+    trunk_behind_dev = count_ahead(f"origin/{TARGET}", f"origin/{SOURCE}")
+    if trunk_behind_dev == 0:
+        sync_direction(TARGET, SOURCE, REVERSE_WT, REVERSE_PREFIX, "reverse")
+    else:
+        log(f"reverse: gate — trunk 落后 dev {trunk_behind_dev} commits,reverse 暂停直到 forward 完")
+
+
+def acquire_singleton_lock():
+    """fcntl exclusive lock — 第二实例启动时获取失败 → 立即 exit。"""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fp = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log(f"dev_sync_daemon already running (lock held on {LOCK_FILE}), exit")
+        sys.exit(0)
+    fp.write(f"{os.getpid()}\n")
+    fp.flush()
+    return fp  # keep ref alive — lock 随 fp close 释放
 
 
 def main() -> None:
-    log(f"dev_sync_daemon (Python) started: interval={INTERVAL}s sync_wt={SYNC_WORKTREE} "
-        f"{REVIEW_BASE} ↔ {INTEGRATION} rollup_threshold={ROLLUP_HOURS_THRESHOLD}h")
-    if not ensure_worktree(SYNC_WORKTREE, INTEGRATION):
-        log("FATAL: cannot ensure sync worktree, exiting")
-        sys.exit(1)
+    lock_fp = acquire_singleton_lock()  # noqa: F841 — keep ref to hold lock
+    log(f"dev_sync_daemon started: TICK={TICK}s SOURCE={SOURCE} TARGET={TARGET} "
+        f"forward_wt={FORWARD_WT} reverse_wt={REVERSE_WT} lock={LOCK_FILE}")
     while True:
         try:
             tick()
         except Exception as e:
-            log(f"EXCEPTION in tick: {e!r}")
-        time.sleep(INTERVAL)
+            log(f"ERROR tick: {e}")
+        time.sleep(TICK)
 
 
 if __name__ == "__main__":
