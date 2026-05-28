@@ -47,11 +47,8 @@ verdict: propose | abstain | escalate
 ## CLAUDE clause violated (quoted verbatim)
 > <exact CLAUDE.md text>
 
-## Recommended framing (English)
-<one paragraph: what new structure, where, why it eliminates the violation by construction (not by exception)>
-
-## Recommended framing (中文)
-<same content, independently complete per SKILL.md Bilingual rule>
+## Recommended framing
+<中文一段：新增/调整什么结构，放哪里，为什么它从结构上消除违规而非靠例外>
 
 ## Concrete plan
 - New abstractions (if any): <Name + interface + which Layer + which Project>
@@ -85,30 +82,10 @@ End with EXACTLY ONE marker line:
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see `_github-post-rules.md`).
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
-- Bilingual EN+ZH per SKILL.md.
 - No filler. Numbers > adjectives.
 
-## GitHub post (强制 — per maintainer 2026-05-19 "各角色直接调用gh")
+## Shared rules
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
-
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
-
-
----
-
-## AI 内容标识符(强制)
-
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
-
-    ⟦AI:AUTO-LOOP⟧
-
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+见 `prompts/_shared.md`；需要 GitHub 发帖时再读 `prompts/_github-post-rules.md`。

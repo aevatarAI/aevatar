@@ -6,11 +6,11 @@
 #
 # Usage:
 #   spawn-codex.sh --cd <dir> --prompt <prompt-file> --log <log-file> --timeout <seconds>
-#                  [--model <model>] [--add-dir <dir>] [--prompt-text "..."]
+#                  [--model <model>] [--add-dir <dir>] [--prompt-text "..."] [--dry-run]
 #
 # Required flags: --cd, --prompt OR --prompt-text, --log, --timeout.
 #
-# File-based contract (mandatory per Auric 2026-05-19 "提示词直接写到一个临时文件就可以,
+# File-based contract (mandatory per maintainer 2026-05-19 "提示词直接写到一个临时文件就可以,
 # 输出也输出到一个临时文件, 方便debug"):
 #   - Prompt is read from --prompt <file>, OR --prompt-text "..." writes a /tmp temp file.
 #   - Output is written to --log <file>. Caller chooses path (typically .refactor-loop/logs/).
@@ -32,6 +32,7 @@ LOG=""
 TIMEOUT=""
 MODEL=""
 ADD_DIRS=()
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --timeout)     TIMEOUT="$2"; shift 2;;
     --model)       MODEL="$2"; shift 2;;
     --add-dir)     ADD_DIRS+=("$2"); shift 2;;
+    --dry-run)     DRY_RUN=1; shift;;
     *)             echo "unknown flag: $1" >&2; exit 2;;
   esac
 done
@@ -70,6 +72,25 @@ if [[ ! -f "$PROMPT" ]]; then
   exit 2
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHARED_PROMPT="$SCRIPT_DIR/../prompts/_shared.md"
+RENDERED_PROMPT="$PROMPT"
+
+if [[ ! -f "$SHARED_PROMPT" ]]; then
+  echo "shared prompt not found: $SHARED_PROMPT" >&2
+  exit 2
+fi
+
+# Refactor (#1148): Old pattern: prompt inline repeated hard rules. New principle: shared _shared.md prepend via spawn-codex.
+if ! head -5 "$PROMPT" | grep -q '^# Shared hard rules$'; then
+  RENDERED_PROMPT=$(mktemp /tmp/codex-prompt-rendered.XXXXXXXX)
+  {
+    cat "$SHARED_PROMPT"
+    printf '\n---\n\n'
+    cat "$PROMPT"
+  } > "$RENDERED_PROMPT"
+fi
+
 # Project-wide minimum codex timeout: 3600s (1 hour). See CLAUDE.md
 # "Codex CLI 调用规范". Shorter timeouts cause codex to truncate
 # deep-scan / multi-file refactor work and inflate the controller's
@@ -83,9 +104,15 @@ fi
 
 mkdir -p "$(dirname "$LOG")"
 
-# Debug banner — caller / `tail` sees exact paths immediately (per Auric 2026-05-19).
+if (( DRY_RUN == 1 )); then
+  echo "SPAWN: prompt=$RENDERED_PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL} dry-run=1" >&2
+  head -5 "$RENDERED_PROMPT"
+  exit 0
+fi
+
+# Debug banner — caller / `tail` sees exact paths immediately (per maintainer 2026-05-19).
 # Both prompt + log are real files on disk; debug by `cat <prompt-path>` and `cat <log-path>`.
-echo "SPAWN: prompt=$PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL}" >&2
+echo "SPAWN: prompt=$RENDERED_PROMPT source_prompt=$PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL}" >&2
 
 # Standard args:
 # - --dangerously-bypass-approvals-and-sandbox: required for unattended mode (caller-supplied authorization).
@@ -112,7 +139,7 @@ ARGS+=(-)
 # Run with a hard wall-clock timeout. The harness watches the process; codex exits naturally
 # on completion. Append EXIT/DONE_AT footers so controller can post-mortem from log alone.
 set +e
-timeout "$TIMEOUT" codex "${ARGS[@]}" < "$PROMPT" > "$LOG" 2>&1
+timeout "$TIMEOUT" codex "${ARGS[@]}" < "$RENDERED_PROMPT" > "$LOG" 2>&1
 EXIT=$?
 set -e
 
@@ -121,6 +148,6 @@ set -e
   echo "DONE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >> "$LOG"
 
-echo "DONE: log=$LOG exit=$EXIT prompt=$PROMPT" >&2
+echo "DONE: log=$LOG exit=$EXIT prompt=$RENDERED_PROMPT source_prompt=$PROMPT" >&2
 
 exit "$EXIT"
