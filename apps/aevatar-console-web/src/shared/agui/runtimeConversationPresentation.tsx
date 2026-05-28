@@ -451,9 +451,9 @@ export function RuntimeAssistantOutput({
         <div
           style={{
             alignItems: "center",
-            background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+            background: "var(--ant-color-primary)",
             borderRadius: 999,
-            boxShadow: "0 10px 25px rgba(99, 102, 241, 0.18)",
+            boxShadow: "0 10px 25px var(--ant-color-primary-bg)",
             color: "#ffffff",
             display: "flex",
             flexShrink: 0,
@@ -737,7 +737,7 @@ export function RuntimeEventPreviewPanel({
                         : event.type.startsWith("RUN")
                           ? "#22c55e"
                           : event.type.startsWith("TOOL")
-                            ? "#8b5cf6"
+                            ? "var(--ant-color-primary)"
                             : "#6b7280",
                 flexShrink: 0,
                 fontWeight: 700,

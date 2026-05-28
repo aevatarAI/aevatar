@@ -1401,7 +1401,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 onClick={() => setEditingRoleKey(role.key)}
                 style={catalogCardStyle}
               >
-                <TeamOutlined style={{ color: '#8b5cf6', fontSize: 18 }} />
+                <TeamOutlined style={{ color: 'var(--ant-color-primary)', fontSize: 18 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: '#1f2937', fontSize: 14, fontWeight: 600 }}>
                     {role.name || role.id || 'Role'}

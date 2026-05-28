@@ -195,7 +195,7 @@ function renderYamlValue(value: string | undefined): React.ReactNode {
   }
 
   if (/^-?\d+(\.\d+)?$/.test(value.trim())) {
-    return <span style={{ color: '#7c3aed' }}>{value}</span>;
+    return <span style={{ color: 'var(--ant-color-primary)' }}>{value}</span>;
   }
 
   if (/[{}[\]]/.test(value)) {

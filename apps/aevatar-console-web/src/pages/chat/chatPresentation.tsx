@@ -1213,9 +1213,9 @@ export function ChatMessageBubble({
       <div
         style={{
           alignItems: "center",
-          background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+          background: "var(--ant-color-primary)",
           borderRadius: 999,
-          boxShadow: "0 10px 25px rgba(99, 102, 241, 0.18)",
+          boxShadow: "0 10px 25px var(--ant-color-primary-bg)",
           color: "#ffffff",
           display: "flex",
           flexShrink: 0,
