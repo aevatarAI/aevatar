@@ -152,7 +152,7 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
     }
 
     [Fact]
-    public async Task GetWorkflowRunCurrentStateAsync_WhenNotFound_ShouldReturnNull()
+    public async Task GetWorkflowActorCurrentStateAsync_WhenNotFound_ShouldReturnNull()
     {
         var client = CreateClient((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
@@ -160,7 +160,7 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
                 Content = new StringContent("""{"error":"missing"}""", Encoding.UTF8, "application/json"),
             }));
 
-        var snapshot = await client.GetWorkflowRunCurrentStateAsync("missing-actor", CancellationToken.None);
+        var snapshot = await client.GetWorkflowActorCurrentStateAsync("missing-actor", CancellationToken.None);
         snapshot.Should().BeNull();
     }
 

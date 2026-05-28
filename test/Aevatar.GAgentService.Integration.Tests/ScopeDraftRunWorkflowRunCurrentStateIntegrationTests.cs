@@ -31,12 +31,12 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
-public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
+public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
     [Fact]
-    public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowRunCurrentStateViaWorkflowRunCurrentState()
+    public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
     {
-        await using var host = await DraftRunWorkflowRunCurrentStateHost.StartAsync();
+        await using var host = await DraftRunWorkflowActorCurrentStateHost.StartAsync();
         using var response = await host.Client.PostAsJsonAsync($"/api/scopes/{host.ScopeId}/workflow/draft-run", new
         {
             prompt = "  z\nz\ny  ",
@@ -50,12 +50,12 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-runs/{Uri.EscapeDataString(actorId!)}/current-state");
-        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowRunCurrentStateHttpResponse>();
+        using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-actors/{Uri.EscapeDataString(actorId!)}/current-state");
+        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>();
 
         snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         snapshot.Should().NotBeNull();
-        snapshot!.WorkflowRunId.Should().Be(actorId);
+        snapshot!.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("y\nz");
@@ -93,11 +93,11 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
         return null;
     }
 
-    private sealed class DraftRunWorkflowRunCurrentStateHost : IAsyncDisposable
+    private sealed class DraftRunWorkflowActorCurrentStateHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
 
-        private DraftRunWorkflowRunCurrentStateHost(WebApplication app, HttpClient client, string repoRoot, string scopeId)
+        private DraftRunWorkflowActorCurrentStateHost(WebApplication app, HttpClient client, string repoRoot, string scopeId)
         {
             _app = app;
             Client = client;
@@ -111,7 +111,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
 
         public string ScopeId { get; }
 
-        public static async Task<DraftRunWorkflowRunCurrentStateHost> StartAsync()
+        public static async Task<DraftRunWorkflowActorCurrentStateHost> StartAsync()
         {
             var repoRoot = FindRepoRoot();
             const string scopeId = "scope-a";
@@ -133,7 +133,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
             });
             builder.AddAevatarDefaultHost(options =>
             {
-                options.ServiceName = "Aevatar.ScopeDraftRunWorkflowRunCurrentState.Tests";
+                options.ServiceName = "Aevatar.ScopeDraftRunWorkflowActorCurrentState.Tests";
                 options.EnableConnectorBootstrap = false;
                 options.EnableHealthEndpoints = false;
                 options.MapRootHealthEndpoint = false;
@@ -148,7 +148,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
-            builder.Services.AddSingleton<ITeamEntryMemberResolver, DraftRunWorkflowRunCurrentStateTeamEntryMemberResolver>();
+            builder.Services.AddSingleton<ITeamEntryMemberResolver, DraftRunWorkflowActorCurrentStateTeamEntryMemberResolver>();
             DraftRunProjectionActivationServiceCollectionExtensions.AddWorkflowRunProjectionActivatingInteractionService(
                 builder.Services);
             builder.Services.AddAuthentication("Test")
@@ -177,7 +177,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
                 BaseAddress = new Uri(addressFeature.Addresses.Single()),
             };
 
-            return new DraftRunWorkflowRunCurrentStateHost(app, client, repoRoot, scopeId);
+            return new DraftRunWorkflowActorCurrentStateHost(app, client, repoRoot, scopeId);
         }
 
         public async ValueTask DisposeAsync()
@@ -202,7 +202,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
         }
     }
 
-    private sealed class DraftRunWorkflowRunCurrentStateTeamEntryMemberResolver : ITeamEntryMemberResolver
+    private sealed class DraftRunWorkflowActorCurrentStateTeamEntryMemberResolver : ITeamEntryMemberResolver
     {
         public Task<TeamEntryMemberResolution> ResolveAsync(
             string scopeId,
@@ -212,7 +212,7 @@ public sealed class ScopeDraftRunWorkflowRunCurrentStateIntegrationTests
                 TeamEntryMemberErrorCodes.TeamNotFound,
                 scopeId,
                 teamId,
-                $"team '{teamId}' is not configured for the draft-run workflow-run current-state query fixture.");
+                $"team '{teamId}' is not configured for the draft-run workflow actor current-state query fixture.");
     }
 
     private static class DraftRunProjectionActivationServiceCollectionExtensions

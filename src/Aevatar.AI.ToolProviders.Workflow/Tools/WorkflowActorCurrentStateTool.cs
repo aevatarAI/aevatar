@@ -5,15 +5,15 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 namespace Aevatar.AI.ToolProviders.Workflow.Tools;
 
 /// <summary>
-/// Reads workflow-run current state via committed projections (readmodel).
+/// Reads workflow actor current state via committed projections (readmodel).
 /// Never reads actor internals directly.
 /// </summary>
-public sealed class WorkflowRunCurrentStateTool : IAgentTool
+public sealed class WorkflowActorCurrentStateTool : IAgentTool
 {
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
     private readonly WorkflowToolOptions _options;
 
-    public WorkflowRunCurrentStateTool(
+    public WorkflowActorCurrentStateTool(
         IWorkflowExecutionQueryApplicationService queryService,
         WorkflowToolOptions options)
     {
@@ -21,14 +21,14 @@ public sealed class WorkflowRunCurrentStateTool : IAgentTool
         _options = options;
     }
 
-    public string Name => "workflow_run_current_state";
+    public string Name => "workflow_actor_current_state";
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: workflow tooling exposed actor_inspect with actor_id snapshot semantics.
-    //   New principle: workflow tooling exposes workflow-run current-state readmodel semantics by workflow_run_id.
+    //   New principle: workflow tooling exposes workflow actor current-state readmodel semantics by actor_id.
     public string Description =>
-        "Read workflow-run current state via the projection readmodel. " +
-        "Shows workflow-run status, output, step counts, and registered agents. " +
+        "Read workflow actor current state via the projection readmodel. " +
+        "Shows workflow actor status, output, step counts, and registered agents. " +
         "All data is from committed projections, not live actor internals.";
 
     public string ParametersSchema => """
@@ -38,11 +38,11 @@ public sealed class WorkflowRunCurrentStateTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["snapshot", "list", "agents"],
-              "description": "Action: 'snapshot' (default) workflow-run current state, 'list' all workflow runs, 'agents' registered agents"
+              "description": "Action: 'snapshot' (default) workflow actor current state, 'list' all workflow actors, 'agents' registered agents"
             },
-            "workflow_run_id": {
+            "actor_id": {
               "type": "string",
-              "description": "Workflow run ID (required for 'snapshot')"
+              "description": "Workflow actor ID (required for 'snapshot')"
             },
             "take": {
               "type": "integer",
@@ -62,8 +62,8 @@ public sealed class WorkflowRunCurrentStateTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        if (!_queryService.WorkflowRunCurrentStateQueryEnabled)
-            return """{"error":"Workflow-run current-state query is not enabled on this deployment."}""";
+        if (!_queryService.WorkflowActorCurrentStateQueryEnabled)
+            return """{"error":"Workflow actor current-state query is not enabled on this deployment."}""";
 
         try
         {
@@ -74,7 +74,7 @@ public sealed class WorkflowRunCurrentStateTool : IAgentTool
             {
                 "list" or "agents" => await ListAgentsAsync(ct),
                 "snapshot" => await GetSnapshotAsync(args, ct),
-                _ => JsonSerializer.Serialize(new { error = $"Unsupported workflow_run_current_state action '{action}'" }),
+                _ => JsonSerializer.Serialize(new { error = $"Unsupported workflow_actor_current_state action '{action}'" }),
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -86,17 +86,17 @@ public sealed class WorkflowRunCurrentStateTool : IAgentTool
 
     private async Task<string> GetSnapshotAsync(ToolArgs args, CancellationToken ct)
     {
-        var workflowRunId = args.Str("workflow_run_id");
-        if (string.IsNullOrWhiteSpace(workflowRunId))
-            return """{"error":"'workflow_run_id' is required. Use action='list' to find workflow runs."}""";
+        var actorId = args.Str("actor_id");
+        if (string.IsNullOrWhiteSpace(actorId))
+            return """{"error":"'actor_id' is required. Use action='list' to find workflow actors."}""";
 
-        var snapshot = await _queryService.GetWorkflowRunCurrentStateAsync(workflowRunId, ct);
+        var snapshot = await _queryService.GetWorkflowActorCurrentStateAsync(actorId, ct);
         if (snapshot == null)
-            return JsonSerializer.Serialize(new { error = $"No current state found for workflow run '{workflowRunId}'" });
+            return JsonSerializer.Serialize(new { error = $"No current state found for workflow actor '{actorId}'" });
 
         return JsonSerializer.Serialize(new
         {
-            workflow_run_id = snapshot.ActorId, workflow_name = snapshot.WorkflowName,
+            actor_id = snapshot.ActorId, workflow_name = snapshot.WorkflowName,
             status = snapshot.CompletionStatus.ToString(), state_version = snapshot.StateVersion,
             last_command_id = snapshot.LastCommandId, last_event_id = snapshot.LastEventId,
             last_updated_at = snapshot.LastUpdatedAt, last_success = snapshot.LastSuccess,

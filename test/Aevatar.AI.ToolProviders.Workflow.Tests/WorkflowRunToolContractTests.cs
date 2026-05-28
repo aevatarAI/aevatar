@@ -228,7 +228,7 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
-    public async Task WorkflowStatusTool_WhenWorkflowRunIdMissing_ShouldReturnNewErrors()
+    public async Task WorkflowStatusTool_WhenActorIdMissing_ShouldReturnNewErrors()
     {
         var query = new RecordingWorkflowExecutionQueryService();
         var tool = new WorkflowStatusTool(query, new WorkflowToolOptions());
@@ -242,7 +242,7 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
-    public async Task WorkflowRunCurrentStateTool_DefaultSnapshot_ShouldUseWorkflowRunId()
+    public async Task WorkflowActorCurrentStateTool_DefaultSnapshot_ShouldUseActorId()
     {
         var query = new RecordingWorkflowExecutionQueryService
         {
@@ -263,57 +263,57 @@ public sealed class WorkflowRunToolContractTests
                 RoleReplyCount = 2,
             },
         };
-        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions());
+        var tool = new WorkflowActorCurrentStateTool(query, new WorkflowToolOptions());
 
-        var result = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+        var result = await tool.ExecuteAsync("""{"actor_id":"run-1"}""");
 
         using var document = JsonDocument.Parse(result);
         var root = document.RootElement;
-        root.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        root.GetProperty("actor_id").GetString().Should().Be("run-1");
         root.GetProperty("workflow_name").GetString().Should().Be("demo");
         root.GetProperty("status").GetString().Should().Be("Completed");
         root.GetProperty("state_version").GetInt64().Should().Be(42);
         root.GetProperty("steps").GetProperty("role_replies").GetInt32().Should().Be(2);
-        query.Calls.Should().Equal("GetWorkflowRunCurrentState:run-1");
+        query.Calls.Should().Equal("GetWorkflowActorCurrentState:run-1");
     }
 
     [Theory]
     [InlineData("{}")]
-    [InlineData("""{"workflow_run_id":""}""")]
-    [InlineData("""{"workflow_run_id":"   "}""")]
-    public async Task WorkflowRunCurrentStateTool_WhenWorkflowRunIdMissingOrBlank_ShouldNotCallQueryService(
+    [InlineData("""{"actor_id":""}""")]
+    [InlineData("""{"actor_id":"   "}""")]
+    public async Task WorkflowActorCurrentStateTool_WhenActorIdMissingOrBlank_ShouldNotCallQueryService(
         string argumentsJson)
     {
         var query = new RecordingWorkflowExecutionQueryService();
-        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions());
+        var tool = new WorkflowActorCurrentStateTool(query, new WorkflowToolOptions());
 
         var result = await tool.ExecuteAsync(argumentsJson);
 
-        result.Should().Contain("'workflow_run_id' is required");
+        result.Should().Contain("'actor_id' is required");
         query.Calls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task WorkflowRunCurrentStateTool_WhenCurrentStateQueryDisabled_ShouldReturnDeploymentDisabledError()
+    public async Task WorkflowActorCurrentStateTool_WhenCurrentStateQueryDisabled_ShouldReturnDeploymentDisabledError()
     {
         var query = new RecordingWorkflowExecutionQueryService
         {
-            WorkflowRunCurrentStateQueryEnabled = false,
+            WorkflowActorCurrentStateQueryEnabled = false,
         };
-        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions());
+        var tool = new WorkflowActorCurrentStateTool(query, new WorkflowToolOptions());
 
-        var result = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+        var result = await tool.ExecuteAsync("""{"actor_id":"run-1"}""");
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString()
-            .Should().Be("Workflow-run current-state query is not enabled on this deployment.");
+            .Should().Be("Workflow actor current-state query is not enabled on this deployment.");
         query.Calls.Should().BeEmpty();
     }
 
     [Theory]
     [InlineData("list")]
     [InlineData("agents")]
-    public async Task WorkflowRunCurrentStateTool_ListAndAgents_ShouldReturnRegisteredAgents(string action)
+    public async Task WorkflowActorCurrentStateTool_ListAndAgents_ShouldReturnRegisteredAgents(string action)
     {
         var query = new RecordingWorkflowExecutionQueryService
         {
@@ -323,7 +323,7 @@ public sealed class WorkflowRunToolContractTests
                 new WorkflowAgentSummary("agent-2", "worker", "Worker agent"),
             ],
         };
-        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions());
+        var tool = new WorkflowActorCurrentStateTool(query, new WorkflowToolOptions());
 
         var result = await tool.ExecuteAsync($$"""{"action":"{{action}}"}""");
 
@@ -337,15 +337,15 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
-    public async Task WorkflowRunCurrentStateTool_Graph_ShouldNotExposeWorkflowArtifactSubgraph()
+    public async Task WorkflowActorCurrentStateTool_Graph_ShouldNotExposeWorkflowArtifactSubgraph()
     {
         var query = new RecordingWorkflowExecutionQueryService();
-        var tool = new WorkflowRunCurrentStateTool(query, new WorkflowToolOptions { MaxGraphDepth = 2 });
+        var tool = new WorkflowActorCurrentStateTool(query, new WorkflowToolOptions { MaxGraphDepth = 2 });
 
-        var result = await tool.ExecuteAsync("""{"action":"graph","workflow_run_id":"run-1","graph_depth":4,"take":11}""");
+        var result = await tool.ExecuteAsync("""{"action":"graph","actor_id":"run-1","graph_depth":4,"take":11}""");
 
         using var document = JsonDocument.Parse(result);
-        document.RootElement.GetProperty("error").GetString().Should().Be("Unsupported workflow_run_current_state action 'graph'");
+        document.RootElement.GetProperty("error").GetString().Should().Be("Unsupported workflow_actor_current_state action 'graph'");
         tool.ParametersSchema.Should().NotContain("\"graph\"");
         tool.ParametersSchema.Should().NotContain("\"graph_depth\"");
         query.Calls.Should().BeEmpty();
@@ -427,7 +427,7 @@ public sealed class WorkflowRunToolContractTests
 
     private sealed class RecordingWorkflowExecutionQueryService : IWorkflowExecutionQueryApplicationService
     {
-        public bool WorkflowRunCurrentStateQueryEnabled { get; init; } = true;
+        public bool WorkflowActorCurrentStateQueryEnabled { get; init; } = true;
         public List<string> Calls { get; } = [];
         public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowCatalogItem> Catalog { get; init; } = [];
@@ -463,45 +463,45 @@ public sealed class WorkflowRunToolContractTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string workflowRunId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetWorkflowRunCurrentState:{workflowRunId}");
+            Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(CurrentState);
         }
 
-        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetWorkflowRunReportArtifact:{workflowRunId}");
+            Calls.Add($"GetWorkflowRunReportArtifact:{actorId}");
             return Task.FromResult(Report);
         }
 
         public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
-            string workflowRunId,
+            string actorId,
             int take = 200,
             CancellationToken ct = default)
         {
-            Calls.Add($"ListWorkflowRunTimelineExport:{workflowRunId}:{take}");
+            Calls.Add($"ListWorkflowRunTimelineExport:{actorId}:{take}");
             return Task.FromResult(Timeline);
         }
 
         public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
-            string workflowRunId,
+            string actorId,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,
             CancellationToken ct = default)
         {
-            Calls.Add($"ListWorkflowRunGraphExportEdges:{workflowRunId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
+            Calls.Add($"ListWorkflowRunGraphExportEdges:{actorId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphEdges);
         }
 
         public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
-            string workflowRunId,
+            string actorId,
             int depth = 2,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,
             CancellationToken ct = default)
         {
-            Calls.Add($"GetWorkflowRunGraphExportSubgraph:{workflowRunId}:{depth}:{take}");
+            Calls.Add($"GetWorkflowRunGraphExportSubgraph:{actorId}:{depth}:{take}");
             return Task.FromResult(GraphSubgraph);
         }
     }

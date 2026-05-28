@@ -22,29 +22,29 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
     {
         _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        _workflowRunCurrentStateQueryEnabled = options == null || (options.Enabled && options.WorkflowRunCurrentStateQueryEnabled);
+        _workflowRunCurrentStateQueryEnabled = options == null || (options.Enabled && options.WorkflowActorCurrentStateQueryEnabled);
     }
 
-    public bool WorkflowRunCurrentStateQueryEnabled => _workflowRunCurrentStateQueryEnabled;
+    public bool WorkflowActorCurrentStateQueryEnabled => _workflowRunCurrentStateQueryEnabled;
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: projection port exposed actor snapshot lookup by actorId.
-    //   New principle: projection port exposes workflow-run current-state lookup while still reading the actor-scoped document key.
-    public async Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(
-        string workflowRunId,
+    //   New principle: projection port exposes workflow actor current-state lookup while still reading the actor-scoped document key.
+    public async Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
+        string actorId,
         CancellationToken ct = default)
     {
-        if (!_workflowRunCurrentStateQueryEnabled || string.IsNullOrWhiteSpace(workflowRunId))
+        if (!_workflowRunCurrentStateQueryEnabled || string.IsNullOrWhiteSpace(actorId))
             return null;
 
-        var currentState = await _currentStateReader.GetAsync(workflowRunId, ct);
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
         if (currentState == null)
             return null;
 
         return _mapper.ToActorSnapshot(currentState);
     }
 
-    public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(
+    public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         int take = 200,
         CancellationToken ct = default)
     {
@@ -67,14 +67,14 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
         return snapshots;
     }
 
-    public async Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(
-        string workflowRunId,
+    public async Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
+        string actorId,
         CancellationToken ct = default)
     {
-        if (!_workflowRunCurrentStateQueryEnabled || string.IsNullOrWhiteSpace(workflowRunId))
+        if (!_workflowRunCurrentStateQueryEnabled || string.IsNullOrWhiteSpace(actorId))
             return null;
 
-        var currentState = await _currentStateReader.GetAsync(workflowRunId, ct);
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
         return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
     }
 }

@@ -488,19 +488,19 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     {
         public WorkflowActorSnapshot? Snapshot { get; set; }
         public List<string> ActorIds { get; } = [];
-        public bool WorkflowRunCurrentStateQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ActorIds.Add(actorId);
             return Task.FromResult(Snapshot);
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

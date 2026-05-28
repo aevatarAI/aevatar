@@ -29,7 +29,7 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
-        group.MapGet("/workflow-runs/{workflowRunId}/current-state", GetWorkflowRunCurrentState)
+        group.MapGet("/workflow-actors/{actorId}/current-state", GetWorkflowActorCurrentState)
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
@@ -112,13 +112,13 @@ public static class ChatQueryEndpoints
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: HTTP query exposed /actors/{actorId} as actor snapshot inspection.
-    //   New principle: HTTP query exposes /workflow-runs/{workflowRunId}/current-state as a readmodel resource.
-    internal static async Task<IResult> GetWorkflowRunCurrentState(
-        string workflowRunId,
+    //   New principle: HTTP query exposes /workflow-actors/{actorId}/current-state as a readmodel resource.
+    internal static async Task<IResult> GetWorkflowActorCurrentState(
+        string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var currentState = await queryService.GetWorkflowRunCurrentStateAsync(workflowRunId, ct);
+        var currentState = await queryService.GetWorkflowActorCurrentStateAsync(actorId, ct);
         return currentState == null ? Results.NotFound() : Results.Ok(MapCurrentState(currentState));
     }
 
@@ -158,13 +158,9 @@ public static class ChatQueryEndpoints
         string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
-        var snapshot = await queryService.GetWorkflowRunCurrentStateAsync(workflowRunId, ct);
-        if (snapshot == null)
-            return Results.NotFound();
-
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
         var subgraph = await queryService.GetWorkflowRunGraphExportSubgraphAsync(workflowRunId, depth, take, graphOptions, ct);
-        return Results.Ok(new WorkflowRunGraphExportEnrichedHttpResponse(MapCurrentState(snapshot), MapGraphSubgraph(subgraph)));
+        return Results.Ok(MapGraphSubgraph(subgraph));
     }
 
     internal static async Task<IResult> GetWorkflowRunGraphExportSubgraph(
@@ -214,7 +210,7 @@ public static class ChatQueryEndpoints
             .ToArray();
     }
 
-    private static WorkflowRunCurrentStateHttpResponse MapCurrentState(WorkflowActorSnapshot snapshot) =>
+    private static WorkflowActorCurrentStateHttpResponse MapCurrentState(WorkflowActorSnapshot snapshot) =>
         new(
             snapshot.ActorId,
             snapshot.WorkflowName,
@@ -298,9 +294,9 @@ public static class ChatQueryEndpoints
 
 // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
 //   Old pattern: HTTP response was named WorkflowActorSnapshotHttpResponse and serialized actorId.
-//   New principle: HTTP response is workflow-run current-state shaped and serializes workflowRunId.
-public sealed record WorkflowRunCurrentStateHttpResponse(
-    string WorkflowRunId,
+//   New principle: HTTP response is workflow actor current-state shaped and serializes actorId.
+public sealed record WorkflowActorCurrentStateHttpResponse(
+    string ActorId,
     string WorkflowName,
     string LastCommandId,
     WorkflowRunCompletionStatus CompletionStatus,
@@ -355,13 +351,6 @@ public sealed record WorkflowRunGraphExportSubgraphHttpResponse(
     string RootNodeId,
     List<WorkflowRunGraphExportNodeHttpResponse> Nodes,
     List<WorkflowRunGraphExportEdgeHttpResponse> Edges);
-
-// Refactor (iter29/cluster-029-workflow-history-artifact):
-//   Old pattern: enriched HTTP graph responses mixed actor current-state naming with graph artifacts.
-//   New principle: enriched HTTP graph responses are workflow-run graph export artifacts plus the current snapshot.
-public sealed record WorkflowRunGraphExportEnrichedHttpResponse(
-    WorkflowRunCurrentStateHttpResponse CurrentState,
-    WorkflowRunGraphExportSubgraphHttpResponse Subgraph);
 
 public sealed record WorkflowPrimitiveParameterDescriptorHttpResponse(
     string Name,

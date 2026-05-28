@@ -10,10 +10,10 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExecutionQueryApplicationServiceTests
 {
     [Fact]
-    public async Task QueryMethods_ShouldShortCircuit_WhenWorkflowRunCurrentStateQueryDisabled()
+    public async Task QueryMethods_ShouldShortCircuit_WhenWorkflowActorCurrentStateQueryDisabled()
     {
         var calls = new List<string>();
-        var currentStatePort = new FakeCurrentStateQueryPort(calls) { WorkflowRunCurrentStateQueryEnabled = false };
+        var currentStatePort = new FakeCurrentStateQueryPort(calls) { WorkflowActorCurrentStateQueryEnabled = false };
         var artifactPort = new FakeArtifactQueryPort(calls) { WorkflowArtifactQueryEnabled = false };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog(["direct", "auto"]),
@@ -22,9 +22,9 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
 
-        service.WorkflowRunCurrentStateQueryEnabled.Should().BeFalse();
+        service.WorkflowActorCurrentStateQueryEnabled.Should().BeFalse();
         (await service.ListAgentsAsync()).Should().BeEmpty();
-        (await service.GetWorkflowRunCurrentStateAsync("run-1")).Should().BeNull();
+        (await service.GetWorkflowActorCurrentStateAsync("run-1")).Should().BeNull();
         (await service.ListWorkflowRunTimelineExportAsync("run-1")).Should().BeEmpty();
         (await service.ListWorkflowRunGraphExportEdgesAsync("run-1")).Should().BeEmpty();
         var subgraph = await service.GetWorkflowRunGraphExportSubgraphAsync("run-1");
@@ -34,10 +34,10 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     }
 
     [Fact]
-    public async Task GraphQueries_ShouldShortCircuit_WhenWorkflowRunIdBlank()
+    public async Task GraphQueries_ShouldShortCircuit_WhenActorIdBlank()
     {
         var calls = new List<string>();
-        var currentStatePort = new FakeCurrentStateQueryPort(calls) { WorkflowRunCurrentStateQueryEnabled = true };
+        var currentStatePort = new FakeCurrentStateQueryPort(calls) { WorkflowActorCurrentStateQueryEnabled = true };
         var artifactPort = new FakeArtifactQueryPort(calls) { WorkflowArtifactQueryEnabled = true };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog([]),
@@ -52,7 +52,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     }
 
     [Fact]
-    public async Task QueryMethods_ShouldDelegate_WhenWorkflowRunCurrentStateQueryEnabled()
+    public async Task QueryMethods_ShouldDelegate_WhenWorkflowActorCurrentStateQueryEnabled()
     {
         var snapshot = new WorkflowActorSnapshot
         {
@@ -85,7 +85,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var calls = new List<string>();
         var currentStatePort = new FakeCurrentStateQueryPort(calls)
         {
-            WorkflowRunCurrentStateQueryEnabled = true,
+            WorkflowActorCurrentStateQueryEnabled = true,
             Snapshots = [snapshot],
             SingleSnapshot = snapshot,
         };
@@ -109,7 +109,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             new StaticWorkflowCapabilitiesPort());
 
         var agents = await service.ListAgentsAsync();
-        var currentState = await service.GetWorkflowRunCurrentStateAsync("run-1");
+        var currentState = await service.GetWorkflowActorCurrentStateAsync("run-1");
         var queriedTimeline = await service.ListWorkflowRunTimelineExportAsync("run-1", 5);
         var queriedEdges = await service.ListWorkflowRunGraphExportEdgesAsync("run-1", 7, options);
         var queriedSubgraph = await service.GetWorkflowRunGraphExportSubgraphAsync("run-1", 3, 9, options);
@@ -120,8 +120,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         queriedEdges.Should().Equal(edges);
         queriedSubgraph.Should().BeSameAs(subgraph);
         calls.Should().ContainInOrder(
-            "ListWorkflowRunCurrentStates:200",
-            "GetWorkflowRunCurrentState:run-1",
+            "ListWorkflowActorCurrentStates:200",
+            "GetWorkflowActorCurrentState:run-1",
             "ListWorkflowRunTimelineExport:run-1:5",
             "GetWorkflowRunGraphExportEdges:run-1:7:Outbound:child",
             "GetWorkflowRunGraphExportSubgraph:run-1:3:9:Outbound:child");
@@ -132,7 +132,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     {
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionCatalog([]),
-            new FakeCurrentStateQueryPort([]) { WorkflowRunCurrentStateQueryEnabled = false },
+            new FakeCurrentStateQueryPort([]) { WorkflowActorCurrentStateQueryEnabled = false },
             new FakeArtifactQueryPort([]) { WorkflowArtifactQueryEnabled = false },
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
@@ -301,25 +301,25 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
     private sealed class FakeCurrentStateQueryPort(List<string> calls) : IWorkflowExecutionCurrentStateQueryPort
     {
-        public bool WorkflowRunCurrentStateQueryEnabled { get; set; }
+        public bool WorkflowActorCurrentStateQueryEnabled { get; set; }
         public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorSnapshot? SingleSnapshot { get; init; }
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string workflowRunId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
-            calls.Add($"GetWorkflowRunCurrentState:{workflowRunId}");
+            calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(SingleSnapshot);
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(int take = 200, CancellationToken ct = default)
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default)
         {
-            calls.Add($"ListWorkflowRunCurrentStates:{take}");
+            calls.Add($"ListWorkflowActorCurrentStates:{take}");
             return Task.FromResult(Snapshots);
         }
 
-        public Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(string workflowRunId, CancellationToken ct = default)
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default)
         {
-            calls.Add($"GetWorkflowRunProjectionState:{workflowRunId}");
+            calls.Add($"GetWorkflowActorProjectionState:{actorId}");
             return Task.FromResult<WorkflowActorProjectionState?>(null);
         }
     }

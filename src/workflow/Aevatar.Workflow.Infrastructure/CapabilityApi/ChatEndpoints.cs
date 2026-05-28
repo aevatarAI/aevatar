@@ -207,7 +207,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Resume dispatch only proves inbox admission for the workflow actor, not applied continuation state.
-            //   The workflow-run current-state read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -271,7 +271,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Signal dispatch only proves inbox admission for the workflow actor, not applied signal handling.
-            //   The workflow-run current-state read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -332,7 +332,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Stop dispatch only proves inbox admission for the workflow actor, not terminal run state.
-            //   The workflow-run current-state read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -361,9 +361,9 @@ public static class WorkflowCapabilityEndpoints
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: accepted status links pointed at /api/actors/{actorId}.
-    //   New principle: accepted status links point at the workflow-run current-state readmodel resource.
-    private static string BuildWorkflowRunStatusUrl(string workflowRunId) =>
-        $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/current-state";
+    //   New principle: accepted status links point at the workflow actor current-state readmodel resource.
+    private static string BuildWorkflowRunStatusUrl(string actorId) =>
+        $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
 
     private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()

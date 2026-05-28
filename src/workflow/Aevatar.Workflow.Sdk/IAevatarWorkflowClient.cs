@@ -33,9 +33,9 @@ public interface IAevatarWorkflowClient
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: SDK exposed actor snapshot lookup by actorId.
-    //   New principle: SDK exposes workflow-run current-state lookup by workflowRunId.
-    Task<JsonElement?> GetWorkflowRunCurrentStateAsync(
-        string workflowRunId,
+    //   New principle: SDK exposes workflow actor current-state lookup by actorId.
+    Task<JsonElement?> GetWorkflowActorCurrentStateAsync(
+        string actorId,
         CancellationToken cancellationToken = default);
 
     // Refactor (iter29/cluster-029-workflow-history-artifact):

@@ -469,10 +469,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
     private sealed class CompletingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
-        public bool WorkflowRunCurrentStateQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public List<string> ActorIds { get; } = [];
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ActorIds.Add(actorId);
@@ -480,10 +480,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Completed });
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

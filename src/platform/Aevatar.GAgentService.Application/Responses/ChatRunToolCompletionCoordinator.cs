@@ -219,7 +219,7 @@ public sealed class ChatRunToolCompletionCoordinator
     {
         if (!string.IsNullOrWhiteSpace(dispatch.ActorId))
         {
-            var snapshot = await _workflowQueryService.GetWorkflowRunCurrentStateAsync(dispatch.ActorId, ct);
+            var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(dispatch.ActorId, ct);
             if (snapshot != null &&
                 string.Equals(snapshot.LastCommandId, dispatch.RunId, StringComparison.Ordinal) &&
                 IsTerminalWorkflowStatus(snapshot.CompletionStatus))

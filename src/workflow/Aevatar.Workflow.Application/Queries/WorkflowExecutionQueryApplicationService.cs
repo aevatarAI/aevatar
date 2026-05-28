@@ -26,7 +26,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         _workflowCapabilitiesPort = workflowCapabilitiesPort ?? throw new ArgumentNullException(nameof(workflowCapabilitiesPort));
     }
 
-    public bool WorkflowRunCurrentStateQueryEnabled => _currentStateQueryPort.WorkflowRunCurrentStateQueryEnabled;
+    public bool WorkflowActorCurrentStateQueryEnabled => _currentStateQueryPort.WorkflowActorCurrentStateQueryEnabled;
 
     // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
     //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
@@ -35,10 +35,10 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (!WorkflowRunCurrentStateQueryEnabled)
+        if (!WorkflowActorCurrentStateQueryEnabled)
             return [];
 
-        var snapshots = await _currentStateQueryPort.ListWorkflowRunCurrentStatesAsync(ct: ct);
+        var snapshots = await _currentStateQueryPort.ListWorkflowActorCurrentStatesAsync(ct: ct);
         return snapshots
             .Select(snapshot => new WorkflowAgentSummary(
                 snapshot.ActorId,
@@ -67,13 +67,13 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: application service exposed GetActorSnapshotAsync(actorId) as an actor inspection query.
-    //   New principle: application service exposes GetWorkflowRunCurrentStateAsync(workflowRunId) over the current-state readmodel.
-    public async Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(string workflowRunId, CancellationToken ct = default)
+    //   New principle: application service exposes GetWorkflowActorCurrentStateAsync(actorId) over the current-state readmodel.
+    public async Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
     {
-        if (!WorkflowRunCurrentStateQueryEnabled)
+        if (!WorkflowActorCurrentStateQueryEnabled)
             return null;
 
-        return await _currentStateQueryPort.GetWorkflowRunCurrentStateAsync(workflowRunId, ct);
+        return await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(actorId, ct);
     }
 
     public async Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)

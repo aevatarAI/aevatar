@@ -539,13 +539,13 @@ if [ -n "${forbidden_web_api_port_report}" ]; then
 fi
 
 # Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
-#   Old: actor query endpoints could be mapped without auth, exposing readmodel
-#   by raw actor id.
-#   New: workflow-run current-state readmodel endpoints must carry the same
-#   explicit .RequireAuthorization() or security-allowlist protection.
-workflow_run_current_state_endpoint_files=()
+#   Old: workflow-run current-state endpoints presented actor-scoped
+#   readmodels as run-scoped resources.
+#   New: actor-scoped current-state readmodel endpoints must be honestly named
+#   and protected by explicit .RequireAuthorization() or security-allowlist.
+workflow_actor_current_state_endpoint_files=()
 while IFS= read -r endpoint_file; do
-  workflow_run_current_state_endpoint_files+=("${endpoint_file}")
+  workflow_actor_current_state_endpoint_files+=("${endpoint_file}")
 done < <(
   find src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi \
     -type f \
@@ -553,9 +553,9 @@ done < <(
     | sort
 )
 
-if [ "${#workflow_run_current_state_endpoint_files[@]}" -gt 0 ]; then
+if [ "${#workflow_actor_current_state_endpoint_files[@]}" -gt 0 ]; then
   set +e
-  workflow_run_current_state_authz_report="$(
+  workflow_actor_current_state_authz_report="$(
     awk '
 function trim(value) {
   sub(/^[[:space:]]+/, "", value);
@@ -582,8 +582,14 @@ FNR == 1 {
 {
   line = $0;
 
+  if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-runs\/\{[^}]+}\/current-state"/) {
+    print FILENAME ":" FNR ":" trim(line);
+    print "Workflow current-state endpoints must not be exposed under workflow-runs until a real run-id readmodel exists.";
+    exit 2;
+  }
+
   if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?agents"/ ||
-      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-runs\/\{[^}]+}\/current-state"/) {
+      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?workflow-actors\/\{[^}]+}\/current-state"/) {
     record_if_unprotected();
     in_endpoint = 1;
     endpoint_file = FILENAME;
@@ -609,19 +615,19 @@ FNR == 1 {
 END {
   record_if_unprotected();
 }
-' "${workflow_run_current_state_endpoint_files[@]}"
+' "${workflow_actor_current_state_endpoint_files[@]}"
   )"
-  workflow_run_current_state_authz_status=$?
+  workflow_actor_current_state_authz_status=$?
   set -e
 
-  if [[ ${workflow_run_current_state_authz_status} -ne 0 ]]; then
-    echo "Workflow run current-state authorization guard execution failed."
-    exit "${workflow_run_current_state_authz_status}"
+  if [[ ${workflow_actor_current_state_authz_status} -ne 0 ]]; then
+    echo "Workflow actor current-state authorization guard execution failed."
+    exit "${workflow_actor_current_state_authz_status}"
   fi
 
-  if [ -n "${workflow_run_current_state_authz_report}" ]; then
-    echo "${workflow_run_current_state_authz_report}"
-    echo "Workflow run current-state endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
+  if [ -n "${workflow_actor_current_state_authz_report}" ]; then
+    echo "${workflow_actor_current_state_authz_report}"
+    echo "Workflow actor current-state endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
     exit 1
   fi
 fi

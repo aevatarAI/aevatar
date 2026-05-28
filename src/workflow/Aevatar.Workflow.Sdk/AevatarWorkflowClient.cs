@@ -248,16 +248,16 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
 
     // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
     //   Old pattern: SDK called /api/actors/{actorId} and named the result an actor snapshot.
-    //   New principle: SDK calls the workflow-run current-state readmodel endpoint by workflowRunId.
-    public async Task<JsonElement?> GetWorkflowRunCurrentStateAsync(
-        string workflowRunId,
+    //   New principle: SDK calls the workflow actor current-state readmodel endpoint by actorId.
+    public async Task<JsonElement?> GetWorkflowActorCurrentStateAsync(
+        string actorId,
         CancellationToken cancellationToken = default)
     {
-        EnsureNotBlank(workflowRunId, nameof(workflowRunId));
+        EnsureNotBlank(actorId, nameof(actorId));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/current-state");
+            $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state");
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
@@ -268,7 +268,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             throw WorkflowSdkJson.BuildHttpException(
                 response.StatusCode,
                 rawPayload,
-                $"Workflow-run current-state request failed with HTTP {(int)response.StatusCode}.");
+                $"Workflow actor current-state request failed with HTTP {(int)response.StatusCode}.");
         }
 
         if (string.IsNullOrWhiteSpace(rawPayload))
@@ -282,7 +282,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse workflow-run current-state response payload.",
+                "Failed to parse workflow actor current-state response payload.",
                 rawPayload,
                 ex);
         }

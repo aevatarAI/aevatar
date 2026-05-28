@@ -5,9 +5,9 @@ namespace Aevatar.Workflow.Application.Tests;
 
 internal sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
 {
-    public bool WorkflowRunCurrentStateQueryEnabled => true;
+    public bool WorkflowActorCurrentStateQueryEnabled => true;
 
-    public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(
+    public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
         string actorId,
         CancellationToken ct = default)
     {
@@ -16,7 +16,7 @@ internal sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentState
         return Task.FromResult<WorkflowActorSnapshot?>(null);
     }
 
-    public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowRunCurrentStatesAsync(
+    public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         int take = 200,
         CancellationToken ct = default)
     {
@@ -25,7 +25,7 @@ internal sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentState
         return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
     }
 
-    public Task<WorkflowActorProjectionState?> GetWorkflowRunProjectionStateAsync(
+    public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
         string actorId,
         CancellationToken ct = default)
     {
