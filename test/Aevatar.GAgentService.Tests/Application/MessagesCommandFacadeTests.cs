@@ -20,7 +20,7 @@ public sealed class MessagesCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
@@ -42,7 +42,7 @@ public sealed class MessagesCommandFacadeTests
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessions);
 
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
 
         sessions.RecordedCompletions.Should().BeEmpty();
         result.Completed.Should().BeNull();
@@ -56,7 +56,7 @@ public sealed class MessagesCommandFacadeTests
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessions);
 
-        var result = await facade.CreateAsync(BuildRequest("anthropic/claude", stream: true), "token");
+        var result = await facade.CreateAsync(BuildRequest("anthropic/claude", stream: true), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.StreamPlan.Should().NotBeNull();
@@ -119,6 +119,9 @@ public sealed class MessagesCommandFacadeTests
             NullLogger<MessagesCommandFacade>.Instance);
     }
 
+    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
+        new(bearerToken, null, null);
+
     private static MessagesCreateCommandPlan BuildStreamPlan() =>
         new(
             new NormalizedMessagesRequest(
@@ -148,7 +151,9 @@ public sealed class MessagesCommandFacadeTests
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
     }
 

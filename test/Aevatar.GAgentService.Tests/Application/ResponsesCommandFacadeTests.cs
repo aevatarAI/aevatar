@@ -36,7 +36,7 @@ public sealed class ResponsesCommandFacadeTests
             null,
             0.4,
             64,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
@@ -71,7 +71,7 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         sessions.Registered.Should().ContainSingle();
@@ -122,7 +122,7 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
@@ -144,7 +144,7 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             401,
@@ -162,13 +162,13 @@ public sealed class ResponsesCommandFacadeTests
         var sessionPort = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var invisible = await facade.CancelAsync("resp_1", "token");
+        var invisible = await facade.CancelAsync("resp_1", CallerScopeContext("token"));
 
         invisible.Error!.Code.Should().Be("response_scope_mismatch");
         sessionPort.UpdatedStatuses.Should().BeEmpty();
 
         queryPort.Snapshot = BuildSnapshot("resp_1", scopeId: "scope-1");
-        var cancelled = await facade.CancelAsync("resp_1", "token");
+        var cancelled = await facade.CancelAsync("resp_1", CallerScopeContext("token"));
 
         cancelled.Error.Should().BeNull();
         cancelled.ResponseId.Should().Be("resp_1");
@@ -185,7 +185,7 @@ public sealed class ResponsesCommandFacadeTests
         var sessionPort = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var result = await facade.CancelAsync("resp_expired", "token");
+        var result = await facade.CancelAsync("resp_expired", CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             400,
@@ -207,7 +207,7 @@ public sealed class ResponsesCommandFacadeTests
         };
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var result = await facade.CancelAsync("resp_active", "token");
+        var result = await facade.CancelAsync("resp_active", CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             400,
@@ -309,6 +309,9 @@ public sealed class ResponsesCommandFacadeTests
             NullLogger<ResponsesCommandFacade>.Instance);
     }
 
+    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
+        new(bearerToken, null, null);
+
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>
         new(
             new NormalizedResponsesRequest(
@@ -379,13 +382,17 @@ public sealed class ResponsesCommandFacadeTests
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
     }
 
     private sealed class ThrowingCallerScopeResolver : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
             throw new ResponsesCallerScopeUnavailableException("access token is invalid");
     }
 

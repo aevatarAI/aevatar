@@ -65,6 +65,8 @@ public sealed class MainnetResponsesEndpointsTests
             """),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -118,6 +120,14 @@ public sealed class MainnetResponsesEndpointsTests
         // Tool providers read the bearer from AgentToolRequestContext (separate path).
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -1212,6 +1222,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_previous/cancel");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -1225,6 +1237,14 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
         provider.LastRequest.Should().BeNull();
     }
 
@@ -2461,14 +2481,14 @@ public sealed class MainnetResponsesEndpointsTests
     {
         public async Task<ResponsesCreateCommandResult> CreateAsync(
             ResponsesCommandRequest request,
-            string bearerToken,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
             CancellationToken ct = default)
         {
             if (request.Stream == true)
-                return await inner.CreateAsync(request, bearerToken, ct);
+                return await inner.CreateAsync(request, callerScopeContext, ct);
 
             var planRequest = request with { Stream = true };
-            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            var result = await inner.CreateAsync(planRequest, callerScopeContext, ct);
             if (result.Error is not null || result.StreamPlan is null)
                 return result;
 
@@ -2498,9 +2518,9 @@ public sealed class MainnetResponsesEndpointsTests
 
         public Task<ResponsesCancelCommandResult> CancelAsync(
             string responseId,
-            string bearerToken,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
             CancellationToken ct = default) =>
-            inner.CancelAsync(responseId, bearerToken, ct);
+            inner.CancelAsync(responseId, callerScopeContext, ct);
 
         public async Task<ResponsesStreamCommandResult> StreamAsync(
             ResponsesCreateCommandPlan plan,
@@ -2832,10 +2852,15 @@ public sealed class MainnetResponsesEndpointsTests
             _scope = new ResponsesCallerScope(scopeId, ownerSubject, originKind);
         }
 
+        public ResponsesCallerScopeResolutionContext? LastContext { get; private set; }
+
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
-            CancellationToken ct = default) =>
-            Task.FromResult(_scope);
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            LastContext = context;
+            return Task.FromResult(_scope);
+        }
     }
 
     private sealed class RecordingResponsesToolProvider : IResponsesToolProvider

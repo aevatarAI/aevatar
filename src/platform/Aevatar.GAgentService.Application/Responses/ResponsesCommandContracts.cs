@@ -15,13 +15,21 @@ public sealed record ResponsesCallerScope(
     string OwnerSubject,
     LlmSessionOriginKind OriginKind);
 
+// Refactor (iter159/cluster-640-first): Old: ResolveAsync(string bearer)  New: ResolveAsync(ResponsesCallerScopeResolutionContext)
+//   Old pattern: caller-scope resolution received only the inbound bearer string, so NyxID proxy assertions could not travel through the shared admission seam.
+//   New principle: Host adapters carry all inbound caller evidence as typed Application input while the resolver decides the authoritative scope.
+public sealed record ResponsesCallerScopeResolutionContext(
+    string InboundBearerToken,
+    string? NyxIdIdentityToken,
+    string? NyxIdDelegationToken);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Each endpoint resolved NyxID bearer tokens directly before continuing its inline command flow.
 //   New principle: Token-to-caller-scope resolution is a narrow Application port; Host composes the concrete adapter and command facades consume the typed result.
 public interface IResponsesCallerScopeResolver
 {
     Task<ResponsesCallerScope> ResolveAsync(
-        string nyxIdAccessToken,
+        ResponsesCallerScopeResolutionContext context,
         CancellationToken ct = default);
 }
 
@@ -308,12 +316,12 @@ public interface IResponsesCommandFacade
 {
     Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesCancelCommandResult> CancelAsync(
         string responseId,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesStreamCommandResult> StreamAsync(
@@ -329,7 +337,7 @@ public interface IMessagesCommandFacade
 {
     Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesStreamCommandResult> StreamAsync(
