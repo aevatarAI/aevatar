@@ -89,22 +89,17 @@ public sealed partial class WorkflowCatalogStepReadModel
 
 [ProjectionExempt(
     Category = ProjectionExemptionCategory.StartupBootstrap,
-    Reason = "Workflow capabilities are startup artifacts materialized by WorkflowCapabilitiesStartupMaterializer from module and connector capability sources.")]
-public sealed partial class WorkflowCapabilitiesStartupArtifact : IProjectionReadModel<WorkflowCapabilitiesStartupArtifact>
+    Reason = "Workflow capabilities are startup artifacts derived from module and connector capability sources outside projection stores.")]
+// Refactor (iter161/cluster-001-first):
+//   Old pattern: WorkflowCapabilitiesStartupArtifact marked ProjectionExempt yet implemented IProjectionReadModel with synthetic StateVersion=0 / LastEventId=""
+//   New principle: capabilities DTO 来自窄 provider(IWorkflowModulePack + connector config + current-state catalog readmodel),不进 projection store
+public sealed partial class WorkflowCapabilitiesStartupArtifact
 {
-    string IProjectionReadModel.ActorId => Id;
-
-    long IProjectionReadModel.StateVersion => 0;
-
-    string IProjectionReadModel.LastEventId => string.Empty;
-
     public DateTimeOffset GeneratedAtUtc
     {
         get => GeneratedAtUtcValue == null ? default : GeneratedAtUtcValue.ToDateTimeOffset();
         set => GeneratedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
     }
-
-    public DateTimeOffset UpdatedAt => GeneratedAtUtc;
 
     public IList<WorkflowPrimitiveCapabilityReadModel> Primitives
     {

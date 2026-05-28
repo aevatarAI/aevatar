@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -45,11 +46,11 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<WorkflowDefinitionFileLoader>();
         services.Replace(ServiceDescriptor.Singleton<FileBackedWorkflowCatalogPort, FileBackedWorkflowCatalogPort>());
-        services.TryAddSingleton<WorkflowCapabilitiesStartupMaterializer>();
         services.Replace(ServiceDescriptor.Singleton<IWorkflowCatalogPort>(sp =>
             sp.GetRequiredService<WorkflowCatalogReadModelQueryPort>()));
+        services.TryAddSingleton<WorkflowInfrastructureCapabilitiesProvider>();
         services.Replace(ServiceDescriptor.Singleton<IWorkflowCapabilitiesPort>(sp =>
-            sp.GetRequiredService<WorkflowCatalogReadModelQueryPort>()));
+            sp.GetRequiredService<WorkflowInfrastructureCapabilitiesProvider>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowDefinitionBootstrapHostedService>());
         return services;
     }
