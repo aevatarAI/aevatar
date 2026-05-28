@@ -4,20 +4,16 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Workflows;
 
-public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IWorkflowCapabilitiesPort
+public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort
 {
-    private const string CapabilitiesArtifactId = "workflow-capabilities";
     private readonly IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string> _catalogReader;
-    private readonly IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string> _capabilitiesReader;
     private readonly WorkflowCatalogReadModelMapper _mapper;
 
     public WorkflowCatalogReadModelQueryPort(
         IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string> catalogReader,
-        IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string> capabilitiesReader,
         WorkflowCatalogReadModelMapper mapper)
     {
         _catalogReader = catalogReader ?? throw new ArgumentNullException(nameof(catalogReader));
-        _capabilitiesReader = capabilitiesReader ?? throw new ArgumentNullException(nameof(capabilitiesReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
     }
 
@@ -48,18 +44,7 @@ public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort, IW
             : _mapper.ToCatalogItemDetail(document);
     }
 
-    public async Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
-    {
-        var capabilities = await _capabilitiesReader.GetAsync(CapabilitiesArtifactId, ct)
-            ?? new WorkflowCapabilitiesStartupArtifact
-            {
-                Id = CapabilitiesArtifactId,
-                SchemaVersion = "capabilities.v1",
-            };
-        return _mapper.ToCapabilitiesDocument(capabilities, await QueryCatalogDocumentsAsync(ct));
-    }
-
-    private async Task<IReadOnlyList<WorkflowCatalogCurrentStateDocument>> QueryCatalogDocumentsAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<WorkflowCatalogCurrentStateDocument>> QueryCatalogDocumentsAsync(CancellationToken ct)
     {
         var result = await _catalogReader.QueryAsync(new ProjectionDocumentQuery
         {

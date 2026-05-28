@@ -76,60 +76,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 BuildCatalogDocument("alpha", updatedAt, sortOrder: 1),
             ],
         };
-        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>
-        {
-            Item = new WorkflowCapabilitiesStartupArtifact
-            {
-                Id = "workflow-capabilities",
-                GeneratedAtUtc = updatedAt.AddMinutes(2),
-                SchemaVersion = "capabilities.v1",
-                Primitives =
-                [
-                    new WorkflowPrimitiveCapabilityReadModel
-                    {
-                        Name = "assign",
-                        Aliases = ["assign"],
-                        Category = "data",
-                        Description = "Assigns a value.",
-                        RuntimeModule = "AssignModule",
-                        Parameters =
-                        [
-                            new WorkflowPrimitiveParameterCapabilityReadModel
-                            {
-                                Name = "target",
-                                Type = "string",
-                                Required = true,
-                                Description = "Target variable.",
-                                DefaultValue = "result",
-                                Enum = ["result"],
-                            },
-                        ],
-                    },
-                ],
-                Connectors =
-                [
-                    new WorkflowConnectorCapabilityReadModel
-                    {
-                        Name = "aevatar_cli",
-                        Type = "cli",
-                        Enabled = true,
-                        TimeoutMs = 1000,
-                        Retry = 1,
-                        AllowedInputKeys = ["prompt"],
-                        AllowedOperations = ["run"],
-                        FixedArguments = ["--json"],
-                    },
-                ],
-            },
-        };
         var port = new WorkflowCatalogReadModelQueryPort(
             catalogReader,
-            capabilitiesReader,
             new WorkflowCatalogReadModelMapper());
 
         var catalog = await port.ListWorkflowCatalogAsync();
         var detail = await port.GetWorkflowDetailAsync("alpha");
-        var capabilities = await port.GetCapabilitiesAsync();
 
         catalog.Select(x => x.Name).Should().Equal("alpha", "beta");
         catalog[0].AuthorityStateVersion.Should().Be(11);
@@ -140,49 +92,31 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         detail.Definition.Roles[0].EventModules.Should().Equal("audit", "trace");
         detail.Definition.Steps[0].Children.Should().ContainSingle(child => child.Id == "child");
         detail.Edges.Should().ContainSingle(edge => edge.From == "start" && edge.To == "child" && edge.Label == "child");
-        capabilities.Workflows.Should().HaveCount(2);
         typeof(WorkflowCapabilitiesDocument)
             .GetProperty("AuthorityStateVersion")
             .Should()
             .BeNull();
-        capabilities.GeneratedAtUtc.Should().Be(updatedAt.AddMinutes(2));
-        capabilities.ProjectionWatermark.Should().Be(updatedAt.AddMinutes(2));
-        capabilities.Primitives.Should().ContainSingle(primitive =>
-            primitive.Name == "assign" &&
-            primitive.Parameters.Single().Default == "result");
-        capabilities.Connectors.Should().ContainSingle(connector =>
-            connector.Name == "aevatar_cli" &&
-            connector.FixedArguments.Single() == "--json");
-        catalogReader.QueryCalls.Should().Be(2);
+        catalogReader.QueryCalls.Should().Be(1);
         catalogReader.GetCalls.Should().Be(1);
-        capabilitiesReader.GetCalls.Should().Be(1);
-        capabilitiesReader.QueryCalls.Should().Be(0);
     }
 
     [Fact]
     public async Task WorkflowCatalogReadModelQueryPort_WhenReadModelsAreMissing_ShouldReturnHonestDefaults()
     {
         var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>();
-        var capabilitiesReader = new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>();
         var port = new WorkflowCatalogReadModelQueryPort(
             catalogReader,
-            capabilitiesReader,
             new WorkflowCatalogReadModelMapper());
 
         (await port.GetWorkflowDetailAsync("   ")).Should().BeNull();
         (await port.GetWorkflowDetailAsync("missing")).Should().BeNull();
-        var capabilities = await port.GetCapabilitiesAsync();
 
-        capabilities.SchemaVersion.Should().Be("capabilities.v1");
         typeof(WorkflowCapabilitiesDocument)
             .GetProperty("AuthorityStateVersion")
             .Should()
             .BeNull();
-        capabilities.ProjectionWatermark.Should().Be(default);
-        capabilities.Workflows.Should().BeEmpty();
         catalogReader.GetCalls.Should().Be(1);
-        catalogReader.QueryCalls.Should().Be(1);
-        capabilitiesReader.GetCalls.Should().Be(1);
+        catalogReader.QueryCalls.Should().Be(0);
     }
 
     [Fact]
@@ -193,7 +127,6 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             [BuildCatalogDocument("alpha", updatedAt)]);
         var port = new WorkflowCatalogReadModelQueryPort(
             catalogReader,
-            new RecordingDocumentReader<WorkflowCapabilitiesStartupArtifact>(),
             new WorkflowCatalogReadModelMapper());
 
         var catalogTask = port.ListWorkflowCatalogAsync();
