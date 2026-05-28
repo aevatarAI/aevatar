@@ -48,16 +48,7 @@ public class DeviceEventEndpointsTests
             motion = true,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            message_id = "nxmsg-55",
-            platform = "device",
-            agent = new { api_key_id = "key-1", name = "home-agent" },
-            conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
-            sender = new { platform_id = "device-42", display_name = "sensor-hub" },
-            content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
-            timestamp = "2026-04-09T10:00:00Z",
-        });
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-42");
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
@@ -86,11 +77,7 @@ public class DeviceEventEndpointsTests
             detected = true,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { id = "legacy-device-1" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "legacy-device-1");
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
@@ -141,28 +128,29 @@ public class DeviceEventEndpointsTests
         act.Should().Throw<JsonException>();
     }
 
-    [Fact]
-    public void ParseCallbackPayload_camera_scene_returns_camera_scene_payload()
+    [Theory]
+    [InlineData("person_detected")]
+    [InlineData("scene_summary")]
+    [InlineData("camera_scene")]
+    public void ParseCallbackPayload_camera_aliases_return_camera_scene_payload(string eventType)
     {
         var innerEvent = JsonSerializer.Serialize(new
         {
-            event_id = "evt-camera",
+            event_id = $"evt-{eventType}",
             source = "camera-analyzer",
-            event_type = "camera_scene",
+            event_type = eventType,
             description = "Two people sitting in the living room",
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { id = "device-7" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "device-7");
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        inbound.EventId.Should().Be("evt-camera");
+        inbound.EventId.Should().Be($"evt-{eventType}");
         inbound.Source.Should().Be("camera-analyzer");
+        inbound.EventType.Should().Be(eventType);
+        inbound.DeviceId.Should().Be("device-7");
         inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.CameraScene);
         inbound.CameraScene.Description.Should().Be("Two people sitting in the living room");
     }
@@ -177,11 +165,7 @@ public class DeviceEventEndpointsTests
             text = "Turn on the lights",
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { platform_id = "microphone-1" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "microphone-1");
 
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
@@ -199,11 +183,7 @@ public class DeviceEventEndpointsTests
             detected = false,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { platform_id = "motion-1" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "motion-1");
 
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
@@ -221,11 +201,7 @@ public class DeviceEventEndpointsTests
             value = 42,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { platform_id = "device-1" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-1");
 
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
@@ -243,11 +219,7 @@ public class DeviceEventEndpointsTests
             temperature = "hot",
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { platform_id = "device-1" },
-        });
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-1");
 
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
@@ -263,6 +235,27 @@ public class DeviceEventEndpointsTests
         HmacKey = hmacKey,
         CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
+
+    private static string EncodeCallbackPayload(
+        string innerEvent,
+        string? senderPlatformId = null,
+        string? legacySenderId = null)
+    {
+        object sender = legacySenderId is not null
+            ? new { id = legacySenderId }
+            : new { platform_id = senderPlatformId ?? "device-1", display_name = "sensor-hub" };
+
+        return JsonSerializer.Serialize(new
+        {
+            message_id = "nxmsg-55",
+            platform = "device",
+            agent = new { api_key_id = "key-1", name = "home-agent" },
+            conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
+            sender,
+            content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
+            timestamp = "2026-04-09T10:00:00Z",
+        });
+    }
 
     private static (HttpContext context, byte[] bodyBytes) CreateContextWithSignature(
         string body, string hmacKey)

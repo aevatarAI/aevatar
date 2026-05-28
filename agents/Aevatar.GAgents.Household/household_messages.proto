@@ -153,6 +153,8 @@ message MotionPayload {
 // Defined in Household domain because it's the inbound contract for
 // HouseholdEntity; DeviceEventEndpoints (boundary layer) references
 // this project, keeping dependency direction correct (Host → Domain).
+// Refactor (iter162/cluster-001-first): Old pattern: DeviceInbound carried raw payload_json into actor logic.
+// New principle: DeviceInbound carries typed payload oneof; JSON is parsed only at the adapter boundary.
 message DeviceInbound {
   string event_id = 1;       // NyxID event envelope's event_id
   string source = 2;         // "camera-analyzer", "temperature-sensor", etc.

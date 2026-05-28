@@ -193,7 +193,7 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
         try
         {
             // Refactor (iter162/cluster-001-first):
-            //   Old pattern: actor branched on EventType then JsonDocument.Parse(evt.PayloadJson).
+            //   Old pattern: actor branched on EventType then parsed a raw JSON payload field.
             //   New principle: actor switches on PayloadCase and reads typed proto fields directly;
             //                  no JSON parsing inside business logic.
             switch (evt.PayloadCase)

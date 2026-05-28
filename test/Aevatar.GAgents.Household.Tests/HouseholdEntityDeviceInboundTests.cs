@@ -161,6 +161,18 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         reasoningEvents[0].Reasoning.Should().Contain("no intervention needed.");
     }
 
+    [Fact]
+    public void HouseholdEntity_DoesNotReintroducePayloadJsonOrJsonDocumentParse()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../agents/Aevatar.GAgents.Household/HouseholdEntity.cs"));
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("evt.PayloadJson");
+        source.Should().NotContain("JsonDocument.Parse(evt.PayloadJson)");
+    }
+
     // ─── Test doubles ───
 
     private sealed class InMemoryEventStoreForHouseholdTests : IEventStore
