@@ -65,7 +65,6 @@ type BuildRuntimeSnapshotInput = {
 const COMPLETION_STATUS = {
   completed: 1,
   failed: 3,
-  stopped: 4,
 } as const;
 
 const BLOCKING_TIMELINE_STAGES = new Set(['signal.waiting', 'workflow.suspended']);
@@ -528,24 +527,12 @@ function completionStatusToRunStatus(
   session: MissionSessionLike,
   intervention?: MissionInterventionState,
 ): MissionRunStatus {
-  if (intervention?.kind === 'waiting_signal') {
-    return 'waiting_signal';
-  }
-
-  if (intervention?.kind === 'human_input') {
-    return 'human_input';
-  }
-
-  if (intervention?.kind === 'human_approval') {
-    return 'waiting_approval';
+  if (intervention?.required) {
+    return 'paused';
   }
 
   if (session.status === 'error' || completionStatusValue === COMPLETION_STATUS.failed) {
     return 'failed';
-  }
-
-  if (completionStatusValue === COMPLETION_STATUS.stopped) {
-    return 'stopped';
   }
 
   if (completionStatusValue === COMPLETION_STATUS.completed || session.status === 'finished') {
@@ -563,7 +550,7 @@ function nodeStatusFromRuntime(
   intervention?: MissionInterventionState,
 ): MissionNodeStatus {
   if (intervention?.nodeId === node.nodeId) {
-    return 'waiting';
+    return 'paused';
   }
 
   if (runStatus === 'completed') {
@@ -581,10 +568,10 @@ function nodeStatusFromRuntime(
 
   const activityAt = activityMap.get(node.nodeId);
   if (activityAt && nowMs - activityAt <= 8_000) {
-    return 'active';
+    return 'running';
   }
 
-  return node.nodeType === 'WorkflowStep' ? 'idle' : 'active';
+  return node.nodeType === 'WorkflowStep' ? 'idle' : 'running';
 }
 
 function buildReasoningChain(
@@ -1011,7 +998,7 @@ export function buildMissionSnapshotFromRuntime(
       activeStageLabel: buildActiveStageLabel(
         artifacts.timeline,
         intervention,
-        nodes.find((node) => node.status === 'active')?.label || artifacts.graph.snapshot.workflowName,
+        nodes.find((node) => node.status === 'running')?.label || artifacts.graph.snapshot.workflowName,
       ),
       definitionActorId: artifacts.graph.snapshot.actorId,
       observationStatus: observationStatusFromAge(

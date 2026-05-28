@@ -227,7 +227,7 @@ describe('Mission Control runtimeAdapter', () => {
       },
     });
 
-    expect(snapshot.summary.status).toBe('waiting_approval');
+    expect(snapshot.summary.status).toBe('paused');
     expect(snapshot.summary.observationStatus).toBe('streaming');
     expect(snapshot.summary.activeStageLabel).toBe('Waiting for approval');
     expect(snapshot.summary.scriptEvolutionStatus).toBeUndefined();
@@ -248,7 +248,7 @@ describe('Mission Control runtimeAdapter', () => {
     const approvalStep = snapshot.nodes.find(
       (node) => node.id === 'step:root-actor:run-1:approval',
     );
-    expect(approvalStep?.status).toBe('waiting');
+    expect(approvalStep?.status).toBe('paused');
     expect(approvalStep?.reasoningChain[0]).toMatchObject({
       title: 'Workflow suspended',
     });

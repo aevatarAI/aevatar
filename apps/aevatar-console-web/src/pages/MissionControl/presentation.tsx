@@ -24,38 +24,35 @@ import type {
 export type MissionThemeToken = ReturnType<typeof theme.useToken>['token'];
 
 const missionLabelMap: Record<string, string> = {
-  active: 'Active',
+  accepted: 'Accepted',
   build_requested: 'Build In Progress',
   completed: 'Completed',
   connecting: 'Connecting',
   delayed: 'Delayed',
   degraded: 'Fallback Sync',
   disconnected: 'Disconnected',
-  draft: 'Draft',
   failed: 'Failed',
   human_approval: 'Approval Required',
   human_input: 'Input Required',
   idle: 'Detached',
+  localDraft: 'Local Draft',
+  observed: 'Observed',
+  paused: 'Paused',
   pending: 'Pending',
   promoted: 'Promoted',
   promotion_failed: 'Promotion Failed',
   proposed: 'Proposed',
   projection_settled: 'Projection Settled',
-  published: 'Published',
   rejected: 'Rejected',
   rollback_requested: 'Rollback Requested',
   rolled_back: 'Rolled Back',
   running: 'Running',
   snapshot_available: 'Snapshot Available',
-  stopped: 'Stopped',
+  stillProcessing: 'Still Processing',
   streaming: 'Streaming',
-  suspended: 'Suspended',
   unavailable: 'Unavailable',
   validated: 'Validated',
   validation_failed: 'Validation Failed',
-  waiting: 'Waiting',
-  waiting_approval: 'Approval Required',
-  waiting_signal: 'Waiting for Signal',
   workflow_completed: 'Workflow Completed',
   workflow_resumed: 'Workflow Resumed',
   workflow_role_actor_linked: 'Role Linked',
@@ -87,29 +84,23 @@ export function resolveMissionStatusTone(
   token: MissionThemeToken,
   status: MissionRunStatus | MissionNodeStatus,
 ) {
-  if (status === 'idle') {
+  if (status === 'idle' || status === 'localDraft') {
     return token.colorTextTertiary;
   }
 
-  if (status === 'completed') {
+  if (status === 'completed' || status === 'observed') {
     return token.colorSuccess;
   }
 
-  if (status === 'failed' || status === 'stopped') {
+  if (status === 'failed') {
     return token.colorError;
   }
 
-  if (
-    status === 'waiting' ||
-    status === 'waiting_signal' ||
-    status === 'human_input' ||
-    status === 'waiting_approval' ||
-    status === 'suspended'
-  ) {
+  if (status === 'paused' || status === 'stillProcessing') {
     return token.colorWarning;
   }
 
-  if (status === 'active' || status === 'running') {
+  if (status === 'running' || status === 'streaming' || status === 'accepted') {
     return token.colorPrimary;
   }
 

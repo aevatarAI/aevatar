@@ -1,3 +1,5 @@
+import type { CqrsNodeStatus, CqrsRunStatus } from '@/shared/models/cqrsState';
+
 export const workflowExecutionEventTypes = [
   'workflow_run_execution_started',
   'step_requested',
@@ -31,18 +33,7 @@ export const scriptEvolutionStatuses = [
 
 export type ScriptEvolutionStatus = (typeof scriptEvolutionStatuses)[number];
 
-export type MissionRunStatus =
-  | 'idle'
-  | 'draft'
-  | 'published'
-  | 'running'
-  | 'waiting_signal'
-  | 'human_input'
-  | 'waiting_approval'
-  | 'suspended'
-  | 'completed'
-  | 'failed'
-  | 'stopped';
+export type MissionRunStatus = CqrsRunStatus | 'idle';
 
 export type MissionObservationStatus =
   | 'unavailable'
@@ -51,12 +42,7 @@ export type MissionObservationStatus =
   | 'projection_settled'
   | 'delayed';
 
-export type MissionNodeStatus =
-  | 'idle'
-  | 'active'
-  | 'waiting'
-  | 'completed'
-  | 'failed';
+export type MissionNodeStatus = CqrsNodeStatus;
 
 export type MissionTopologyNodeKind =
   | 'entrypoint'

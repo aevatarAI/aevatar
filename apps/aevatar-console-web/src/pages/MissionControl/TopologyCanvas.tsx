@@ -372,7 +372,7 @@ function buildNodes(
     data: {
       node,
       shouldPulse:
-        runStatus === 'waiting_approval' &&
+        runStatus === 'paused' &&
         snapshot.intervention?.nodeId === node.id,
     },
     draggable: false,
