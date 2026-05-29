@@ -90,17 +90,8 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
         command.Rules.Should().ContainSingle(rule => rule.RuleId == "keep-chat")
             .Which.Action.ForwardToModel.ModelName.Should().Be("kept-model");
-        var voiceRule = command.Rules.Should().ContainSingle(rule => rule.RuleId == "voice-demo").Subject;
-        voiceRule.Priority.Should().Be(1000);
-        voiceRule.Match.SourceKind.Should().Be(ChatSourceKind.Voice);
-        voiceRule.Action.ForwardToModel.ToolSetRef.Name.Should().Be("voice.realtime");
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_invoke_gagent");
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
-            .Should()
-            .Be(demoActorId);
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["voice_module_name"].StringValue
-            .Should()
-            .Be("voice_presence_openai");
+        command.Rules.Should().NotContain(rule => rule.RuleId == "voice-demo",
+            "Refactor (issue1321-first): bootstrap removes the stale route that used tool_choice_hint as actor addressing");
     }
 
     private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()

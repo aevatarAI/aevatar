@@ -223,11 +223,10 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_WhenChatRouteForwardsToGAgent_ShouldUseTargetActorWithoutCreatingDefaultActor()
+    public async Task HandleCreateConversationAsync_WhenRouteHasGAgentToolHint_ShouldCreateDefaultActor()
     {
         var actorStore = new StubGAgentActorStore();
         var runtime = new StubActorRuntime();
-        runtime.Actors["existing-agent-1"] = new StubActor("existing-agent-1");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             GAgentToolHintAction("existing-agent-1"),
             []));
@@ -247,15 +246,20 @@ public class NyxIdChatEndpointsCoverageTests
         response.Location.Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         using var doc = JsonDocument.Parse(response.Body);
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("actorId").GetString().Should().Be("existing-agent-1");
+        var createdActorId = doc.RootElement.GetProperty("actorId").GetString();
+        createdActorId.Should().NotBeNullOrWhiteSpace();
+        createdActorId.Should().NotBe("existing-agent-1",
+            "Refactor (issue1321-first): tool_choice_hint is tool prefill, not actor addressing");
         doc.RootElement.GetProperty("acceptedCommandId").GetString().Should().NotBeNullOrWhiteSpace();
         doc.RootElement.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "existing-agent-1");
-        runtime.CreateCalls.Should().BeEmpty();
-        await AssertSingleCreationAcceptedEventAsync(runtime, "existing-agent-1");
+            entry.ActorId == createdActorId);
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Id == createdActorId);
+        await AssertSingleCreationAcceptedEventAsync(runtime, createdActorId!);
     }
 
     [Fact]
@@ -472,14 +476,13 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_WhenForwardedTargetRegistrationNotAdmissionVisible_ShouldReturnAcceptedAck_AndNotDestroyForwardedActor()
+    public async Task HandleCreateConversationAsync_WhenGAgentToolHintAndRegistrationNotAdmissionVisible_ShouldRollbackCreatedActor()
     {
         var actorStore = new StubGAgentActorStore
         {
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var runtime = new StubActorRuntime();
-        runtime.Actors["existing-agent-1"] = new StubActor("existing-agent-1");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             GAgentToolHintAction("existing-agent-1"),
             []));
@@ -496,25 +499,27 @@ public class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        AssertAcceptedCreateAck(response, "scope-a").Should().Be("existing-agent-1");
+        var actorId = AssertAcceptedCreateAck(response, "scope-a");
+        actorId.Should().NotBe("existing-agent-1",
+            "Refactor (issue1321-first): tool_choice_hint is tool prefill, not actor addressing");
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "existing-agent-1");
-        runtime.DestroyCalls.Should().BeEmpty(
-            "GAgent tool hint reuses an existing actor; rollback in this request must not destroy it");
-        runtime.CreateCalls.Should().BeEmpty();
+            entry.ActorId == actorId);
+        runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Id == actorId);
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_WhenForwardedTargetRegistrationThrows_ShouldReturnAcceptedAck_AndNotDestroyForwardedActor()
+    public async Task HandleCreateConversationAsync_WhenGAgentToolHintAndRegistrationThrows_ShouldRollbackCreatedActor()
     {
         var actorStore = new StubGAgentActorStore
         {
             AddActorExceptionAfterCommit = new OperationCanceledException("cancelled during admission verification"),
         };
         var runtime = new StubActorRuntime();
-        runtime.Actors["existing-agent-2"] = new StubActor("existing-agent-2");
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             GAgentToolHintAction("existing-agent-2"),
             []));
@@ -531,14 +536,17 @@ public class NyxIdChatEndpointsCoverageTests
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        AssertAcceptedCreateAck(response, "scope-a").Should().Be("existing-agent-2");
+        var actorId = AssertAcceptedCreateAck(response, "scope-a");
+        actorId.Should().NotBe("existing-agent-2",
+            "Refactor (issue1321-first): tool_choice_hint is tool prefill, not actor addressing");
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
-            entry.ActorId == "existing-agent-2");
-        runtime.DestroyCalls.Should().BeEmpty(
-            "GAgent tool hint reuses an existing actor; even a thrown-rollback path must not destroy it");
-        runtime.CreateCalls.Should().BeEmpty();
+            entry.ActorId == actorId);
+        runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Id == actorId);
     }
 
     [Fact]
