@@ -649,10 +649,6 @@ function buildSaveObservationRequest(
   };
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function catalogMatchesPromotion(
   catalog: ScriptCatalogSnapshot | null | undefined,
   decision: ScriptPromotionDecision,
@@ -1603,70 +1599,48 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     accepted: ScopeScriptUpsertAcceptedResponse,
   ): Promise<ScopeScriptSaveObservationResult> => {
     const request = buildSaveObservationRequest(accepted);
-    let lastObservation: ScopeScriptSaveObservationResult | null = null;
-    let lastError: unknown = null;
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const observation = await scriptsApi.observeSaveScript(
-          resolvedScopeId,
-          accepted.acceptedScript.scriptId,
-          request,
-        );
-        lastObservation = observation;
-        lastError = null;
-        if (observation.isTerminal) {
-          return observation;
-        }
-      } catch (error) {
-        lastError = error;
-      }
-
-      await wait(250);
+    try {
+      // Refactor (iter160-cluster-001 #1261-first):
+      // Old pattern: the save path retried observation with fixed timer waits
+      // until the catalog read model looked applied.
+      // New principle: use the existing observation surface once and preserve
+      // pending/stale read-model freshness instead of manufacturing completion.
+      return await scriptsApi.observeSaveScript(
+        resolvedScopeId,
+        accepted.acceptedScript.scriptId,
+        request,
+      );
+    } catch (error) {
+      return {
+        scopeId: accepted.acceptedScript.scopeId,
+        scriptId: accepted.acceptedScript.scriptId,
+        status: 'pending',
+        message:
+          error instanceof Error
+            ? `Save accepted for ${accepted.acceptedScript.scriptId}; observation is not available yet. ${error.message}`
+            : `Save accepted for ${accepted.acceptedScript.scriptId}; observation is not available yet.`,
+        currentScript: null,
+        isTerminal: false,
+      };
     }
-
-    if (lastObservation != null) {
-      return lastObservation;
-    }
-
-    if (lastError != null) {
-      throw lastError;
-    }
-
-    return lastObservation ?? {
-      scopeId: accepted.acceptedScript.scopeId,
-      scriptId: accepted.acceptedScript.scriptId,
-      status: 'pending',
-      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
-      currentScript: null,
-      isTerminal: false,
-    };
   }, [resolvedScopeId]);
 
-  const waitForPromotionCatalog = React.useCallback(async (
+  const readPromotionCatalogOnce = React.useCallback(async (
     decision: ScriptPromotionDecision,
   ): Promise<ScriptCatalogSnapshot | null> => {
     if (!decision.accepted) {
       return null;
     }
 
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const catalog = await scriptsApi.getScriptCatalog(
-          resolvedScopeId,
-          decision.scriptId,
-        );
-        if (catalogMatchesPromotion(catalog, decision)) {
-          return catalog;
-        }
-      } catch {
-        // Ignore transient query failures while the catalog is catching up.
-      }
-
-      await wait(250);
+    try {
+      const catalog = await scriptsApi.getScriptCatalog(
+        resolvedScopeId,
+        decision.scriptId,
+      );
+      return catalogMatchesPromotion(catalog, decision) ? catalog : null;
+    } catch {
+      return null;
     }
-
-    return null;
   }, [resolvedScopeId]);
 
   const handleSave = React.useCallback(async () => {
@@ -1676,7 +1650,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const accepted = await saveCurrentDraftToScope();
       setNotice({
         type: 'info',
-        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Refresh the workspace catalog if the read model is still pending.`,
       });
       const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
@@ -1724,7 +1698,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     } finally {
       setSavePending(false);
     }
-  }, [observeAcceptedSave, openWorkspaceSection, refreshScopeScripts, resolvedScopeId, saveCurrentDraftToScope, updateSelectedDraft]);
+  }, [
+    observeAcceptedSave,
+    openWorkspaceSection,
+    refreshScopeScripts,
+    resolvedScopeId,
+    saveCurrentDraftToScope,
+    updateSelectedDraft,
+  ]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -1937,7 +1918,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setActiveResultTab('promotion');
       openWorkspaceSection('activity');
       const observedCatalog = response.accepted
-        ? await waitForPromotionCatalog(response)
+        ? await readPromotionCatalogOnce(response)
         : null;
       if (observedCatalog) {
         const detail = await scriptsApi.getScript(
@@ -1978,7 +1959,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message: response.accepted
           ? observedCatalog
             ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
-            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Waiting for the catalog read model to catch up.`
+            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Refresh the workspace catalog if the read model is still pending.`
           : response.failureReason || 'Promotion proposal was rejected.',
       });
     } catch (error) {
@@ -2001,7 +1982,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     scopeBacked,
     selectedDraft,
     updateSelectedDraft,
-    waitForPromotionCatalog,
+    readPromotionCatalogOnce,
   ]);
 
   const resetAskAiOutput = React.useCallback(() => {

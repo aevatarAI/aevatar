@@ -312,25 +312,10 @@ describe('ScriptsWorkbenchPage', () => {
     });
   });
 
-  it('retries transient save-observation failures before surfacing an error', async () => {
-    mockedScriptsApi.observeSaveScript
-      .mockRejectedValueOnce(new Error('temporary timeout'))
-      .mockResolvedValueOnce({
-        scopeId: 'scope-1',
-        scriptId: 'script-1',
-        status: 'applied',
-        message: 'Revision active.',
-        currentScript: {
-          scopeId: 'scope-1',
-          scriptId: 'script-1',
-          catalogActorId: 'catalog-1',
-          definitionActorId: 'definition-1',
-          activeRevision: 'rev-1',
-          activeSourceHash: 'hash-1',
-          updatedAt: '2026-03-24T00:00:00Z',
-        },
-        isTerminal: true,
-      });
+  it('keeps save observation pending when the read model is not visible yet', async () => {
+    mockedScriptsApi.observeSaveScript.mockRejectedValueOnce(
+      new Error('temporary timeout'),
+    );
 
     renderPage();
 
@@ -338,11 +323,14 @@ describe('ScriptsWorkbenchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
     });
     expect(
-      await screen.findByText('Saved script-1 into workspace scope-1.'),
+      await screen.findByText(
+        /Save accepted for script-1; observation is not available yet./,
+      ),
     ).toBeTruthy();
+    expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
   });
 
   it('boots a fresh draft with the app script starter contract', async () => {
