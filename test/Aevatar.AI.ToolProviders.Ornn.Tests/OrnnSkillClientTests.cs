@@ -130,6 +130,40 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_LiftsWorkflowYamlFilesIntoTypedDescriptorWithFrontmatterEntryOverride()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\ndescription: Use workflow skill\nworkflow: custom-entry\n---\nRun it.",
+                  "workflows/z-child.yml": " name: z-child\nsteps: []\n ",
+                  "workflows/a-main.yaml": "name: a-main\nsteps: []\n",
+                  "workflows/empty.yaml": "   ",
+                  "docs/workflows/ignored.yaml": "name: ignored\nsteps: []\n",
+                  "assets/readme.md": "reference"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        skill!.Workflows.Should().ContainSingle();
+        var workflow = skill.Workflows.Single();
+        workflow.WorkflowId.Should().Be("custom-entry");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: a-main\nsteps: []",
+            "name: z-child\nsteps: []");
+        skill.AssociatedFiles.Should().NotBeNull();
+        skill.AssociatedFiles!.Keys.Should().Contain("workflows/a-main.yaml");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(

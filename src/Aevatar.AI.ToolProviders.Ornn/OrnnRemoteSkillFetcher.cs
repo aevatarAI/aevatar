@@ -13,6 +13,7 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
 {
     private readonly OrnnSkillClient _client;
+    private static readonly char[] PathSeparators = ['/', '\\'];
 
     public OrnnRemoteSkillFetcher(OrnnSkillClient client) => _client = client;
 
@@ -43,6 +44,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         // 尝试从 instructions 解析 frontmatter
         var parser = new SkillFrontmatterParser();
         var parsed = parser.Parse(instructions);
+        var workflows = DiscoverWorkflows(skill.Files, parsed.WorkflowEntry);
 
         return new SkillDefinition
         {
@@ -56,6 +58,55 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
             AssociatedFiles = associatedFiles,
+            Workflows = workflows,
         };
+    }
+
+    private static IReadOnlyList<SkillWorkflowDescriptor> DiscoverWorkflows(
+        IReadOnlyDictionary<string, string>? files,
+        string? workflowEntry)
+    {
+        if (files is not { Count: > 0 })
+            return [];
+
+        // Refactor (issue1259-first):
+        //   Old pattern: Ornn workflow YAML files stayed in AssociatedFiles as untyped text, so the model had to infer tool handoff from generic attachments.
+        //   New principle: Keep the existing Ornn Files surface, but lift non-empty workflows/*.yaml|*.yml files into a typed skill workflow descriptor for aevatar_start_workflow.
+        var workflowFiles = files
+            .Where(static file => IsWorkflowYamlPath(file.Key) && !string.IsNullOrWhiteSpace(file.Value))
+            .OrderBy(static file => file.Key, StringComparer.Ordinal)
+            .ToArray();
+
+        if (workflowFiles.Length == 0)
+            return [];
+
+        var defaultWorkflowId = Path.GetFileNameWithoutExtension(workflowFiles[0].Key);
+        var workflowId = string.IsNullOrWhiteSpace(workflowEntry)
+            ? defaultWorkflowId
+            : Path.GetFileNameWithoutExtension(workflowEntry.Trim());
+
+        return
+        [
+            new SkillWorkflowDescriptor
+            {
+                WorkflowId = workflowId,
+                WorkflowYamls = workflowFiles.Select(static file => file.Value.Trim()).ToArray(),
+            }
+        ];
+    }
+
+    private static bool IsWorkflowYamlPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var normalized = path.Replace('\\', '/');
+        if (!normalized.StartsWith("workflows/", StringComparison.Ordinal))
+            return false;
+
+        var fileName = normalized.Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return fileName is not null &&
+               (fileName.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".yml", StringComparison.OrdinalIgnoreCase));
     }
 }
