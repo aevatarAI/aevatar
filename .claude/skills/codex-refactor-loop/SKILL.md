@@ -1935,11 +1935,17 @@ Concretely, this means:
 | `>= 5` | 不抢资源,保持现状 |
 | `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
 
-**填 floor 优先级**(从高到低,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计"):
+**填 floor 优先级**(从高到低,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计" + "增加目标 issues, milestone 标签明确一个时期的主要任务"):
 
-**铁律:audit 是 backfill,不是默认动作**。floor < 5 时**必须**先穷尽下列 1-8 的所有 actionable 工作,**全部空**才允许派 audit(优先级 9)。
+**铁律:audit 是 backfill,不是默认动作**。floor < 5 时**必须**先穷尽下列 1-9 的所有 actionable 工作,**全部空**才允许派 audit(优先级 10)。
 
-1. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 >30min 但未开 PR / 未切 reviewer):**最高优先级**,controller 必须接 IMPLEMENT_DONE marker(commit/push/open PR + 派 Phase 8 reviewer × 3)— 之前 marker 漏处理累积是头号 bug
+**优先级 0(强制最高,新增)— Milestone 任务**:
+- 当存在带 `milestone:<name>` label 的 open issue 时,**所有相关任务**(直接的 milestone issue 本身 + 引用它的 PR + 它依赖/blocks 的 issue)优先级压过下面 1-13。
+- 多个 milestone 同时存在时按 milestone label 内嵌优先级(`milestone:p0:*` > `milestone:p1:*` > 无前缀)处理。
+- 一个 wakeup 内 milestone 任务**未推进过一次**(无 codex 派出 / 无 label 切换 / 无 banner)就**禁止**派 1-13 中任何其他任务,直到 milestone 池清空或全部 in-flight。
+- 详见下方 "## Milestone 机制" 节。
+
+1. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 >30min 但未开 PR / 未切 reviewer):controller 必须接 IMPLEMENT_DONE marker(commit/push/open PR + 派 Phase 8 reviewer × 3)— 之前 marker 漏处理累积是头号 bug
 2. **stale `🚀 phase:pr-open` + `👀 phase:reviewing` PR**:扫 reviewer log,有 REVIEW_DONE × 3 + reject → 派 fix r+1;有 FIX_DONE → 派 reviewer r+1;all-approve + CI 绿 → merge
 3. **CI 红 PR**(`gh pr checks` bucket=fail):立即拉 fail log + 派 fix codex(per "CI 监控即时推进")
 4. **stuck label 3h+ issue**(`auto-loop-stuck` / `🆘 human:卡死` / `👤 human:需-maintainer-决策`):派 fresh reflector(per "Stuck issue 3h 超时" 节)
@@ -1964,6 +1970,17 @@ Concretely, this means:
 
 **强制 sweep 顺序**(每 wakeup):
 ```bash
+# Step 0(强制最高):milestone 任务扫描
+MS=$(gh issue list --state open --json number,labels --jq '
+  .[] | select(.labels | map(.name) | any(startswith("milestone:")))
+  | "\(.number) \(.labels | map(.name) | join(","))"
+')
+if [ -n "$MS" ]; then
+  echo "MILESTONE active: $MS" | head -20
+  # 对每个 milestone issue:看是否需要 controller 推进(implementing 接 / reviewing 接 / etc)
+  # 本 wakeup 至少派出 1 个 milestone-related codex 才允许后续 Step A-F
+fi
+
 # Step A: 扫 implementing issue,接 IMPLEMENT_DONE marker
 for n in $(gh issue list --label "🛠️ phase:implementing" --state open --json number --jq '.[].number'); do
   log=".refactor-loop/logs/implement-issue${n}.log"
@@ -2008,7 +2025,89 @@ if (( ACTIVE <= 2 )) && [ -f ".refactor-loop/runs/audit-iter-${LAST_ITER}.md" ] 
 fi
 ```
 
-**反面禁止**:
+## Milestone 机制 — 强制(per Auric 2026-05-29 "增加目标 issues, 加 milestone 标签明确一个时期的主要任务, 存在 milestone 时优先处理相关任务")
+
+**目标**:让 maintainer 用 GitHub label 直接给 controller "一个时期的主要任务"。controller 自动把该任务的 actionable 工作压在所有其他工作之上,直到 milestone 清空。
+
+### Label 规范
+
+- **基础**:`milestone:<slug>`(e.g. `milestone:ship-rollup-1167`、`milestone:cleanup-implementing-backlog`、`milestone:nyxid-signed-assertion`)
+- **优先级前缀(可选)**:`milestone:p0:<slug>` / `milestone:p1:<slug>`,无前缀默认 p1
+- **stamp**:maintainer 直接 `gh issue edit <N> --add-label "milestone:<slug>"` 给目标 issue 加 label。多个 issue 共享同一 milestone slug 即组成本期任务集合。
+- **关联范围**(controller 自动扩张):
+  - milestone issue 本身
+  - 任何 PR body 含 `closes #<milestone issue N>` 或 `refs #<N>` 的 PR
+  - milestone issue body / 评论里出现的 `#<N>` 引用 issue / PR
+  - 由 milestone issue 衍生的 design-philosophy later-slice / first-slice 子 issue
+
+### Controller 每 wakeup Milestone Sweep(强制 Step 0)
+
+```bash
+# 1. 列当前 milestone(p0 优先)
+M_LABELS=$(gh label list --json name --jq '.[].name' | grep -E "^milestone:" | sort)
+[ -z "$M_LABELS" ] && return  # 无 milestone,走默认优先级
+
+# 2. p0 milestone 优先
+for ml in $(echo "$M_LABELS" | grep "^milestone:p0:") $(echo "$M_LABELS" | grep -v "^milestone:p0:"); do
+  ISSUES=$(gh issue list --state open --label "$ml" --json number --jq '.[].number')
+  [ -z "$ISSUES" ] && continue
+  echo "MILESTONE active: $ml issues=$ISSUES"
+  break  # 一个 wakeup 只主推一个 milestone
+done
+
+# 3. 对 milestone 的 issue 集合 + 关联 PR 集合执行 Step A-D(implementing 接 / reviewing 接 / CI 红 / stuck 反馈),如果有 actionable 必须先做
+# 4. milestone 全部 in-flight 或全 escalate(等人)才允许往下 Step A-F 默认流程
+```
+
+### 优先级压力 vs 其他工作
+
+| 当前 milestone 状态 | 默认 1-13 优先级表 |
+|---|---|
+| 无 milestone label | 走默认 1-13 |
+| 有 milestone,本 wakeup 未推进过任何 milestone-related codex | **禁止**派 1-13 中任何 codex,优先 milestone |
+| 有 milestone,milestone 全 in-flight / 等人 | 允许往下 1-13 填 floor |
+| 多个 p0 milestone | 按 label 字典序处理(maintainer 用 slug 前缀 `milestone:p0:01-...` / `milestone:p0:02-...` 排序) |
+
+### Banner / 通知
+
+- maintainer 加 milestone label → controller 下次 wakeup 在 milestone issue 上 post:
+  ```
+  ## 📊 当前状态 — milestone:<slug>(❌ 不需要人介入)
+
+  | 维度 | 值 |
+  |---|---|
+  | Milestone | <slug>(优先级 p0/p1) |
+  | 集合规模 | N 个 issue / M 个关联 PR |
+  | 本 wakeup 计划 | <implementing 接 / reviewer 派出 / fix 派出 ...> |
+
+  **下一步**:<具体 file:line>
+
+  🤖 controller status banner
+
+  ⟦AI:AUTO-LOOP⟧
+  ```
+- milestone 推进事件(issue 切 phase / PR merge)→ 在 milestone label 关联的 **每个 issue** 都贴一次 status banner(集合可见)
+
+### 关闭 milestone
+
+- maintainer `gh label delete milestone:<slug>` 或在 issue 上 `gh issue edit --remove-label` 即解除 milestone 压力
+- controller 下次 wakeup 检测到 milestone label 移除 / 删除 → post "milestone:<slug> 已结束,转入默认优先级流程" 横幅
+
+### 反面(❌ 禁止)
+
+- ❌ 见 milestone label 但本 wakeup 不动 milestone 直接派 audit / Phase 11 → 违背 maintainer 优先意图
+- ❌ milestone issue 处于 `🆘 human:卡死` 不算 actionable → 不阻塞默认优先级 (跳过 milestone 走 1-13)
+- ❌ 自己 stamp `milestone:*` label → 只 maintainer 可以 stamp;controller 仅消费
+- ❌ 删 maintainer 添加的 milestone label → controller 只能 remove 自己派生的 sub-issue label
+
+### 状态 cache(可选)
+
+`.refactor-loop/.current-milestone.txt` 存当前主推 milestone slug,debug 用。controller 决策**不依赖**该文件,实时从 `gh label list` 派生。
+
+---
+
+## (旧节回到)反面禁止
+
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派 audit 提升并发
 - ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
 - ❌ "iter N 还没完"作为不派 N+1 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
