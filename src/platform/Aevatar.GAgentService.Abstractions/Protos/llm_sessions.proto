@@ -581,7 +581,11 @@ message ResponsesWebSubstituteToolExecutionResult {
 }
 
 message ResponsesAgentToolState {
-  // Refactor (issue1183/first-slice): Old pattern: ResponsesTaskTrace dead trace surface. New principle: deleted/reserved per Phase 9 consensus, no consumer found.
+  // Refactor (issue1183/first-slice):
+  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
+  //                readmodel surface 无 consumer,占用 proto field number。
+  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
+  //                  structural/delete), proto field number reserved 防重新占用。
   reserved 5;
   reserved "task_traces";
   ResponsesAgentToolStateRecord record = 1;
