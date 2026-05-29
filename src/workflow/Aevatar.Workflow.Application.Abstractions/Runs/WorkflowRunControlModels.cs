@@ -69,7 +69,7 @@ public abstract record WorkflowRunControlCommandBase(
     string ActorId,
     string RunId,
     string? CommandId,
-    // Refactor (issue1326): Keep workflow control correlation explicit so command identity is not reused as run/session trace identity.
+    // Refactor (issue1326): Old pattern: Workflow control commands reused command identity as the run/session trace identity. New principle: Keep workflow control correlation explicit and separate from command identity.
     string? CorrelationId = null) : IWorkflowRunControlCommand
 {
     public IReadOnlyDictionary<string, string>? Headers => null;

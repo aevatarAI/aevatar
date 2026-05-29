@@ -94,7 +94,7 @@ public sealed class RunSessionTracker
             UserInput = userInput,
             EditedContent = editedContent,
             Feedback = feedback,
-            // Refactor (issue1326): Resume control commands must use a fresh server id unless the caller supplies an explicit id.
+            // Refactor (issue1326): Old pattern: Resume requests inherited the tracked start-run command id from the session. New principle: Resume control commands use a fresh server id unless the caller supplies an explicit id.
             CommandId = commandId,
             Metadata = metadata,
         };
@@ -129,7 +129,7 @@ public sealed class RunSessionTracker
             SignalName = resolvedSignalName!,
             StepId = resolvedStepId,
             Payload = payload,
-            // Refactor (issue1326): Signal control commands must not inherit the start run command id from session tracking.
+            // Refactor (issue1326): Old pattern: Signal requests inherited the tracked start-run command id from the session. New principle: Signal control commands use a fresh server id unless the caller supplies an explicit id.
             CommandId = commandId,
         };
     }
