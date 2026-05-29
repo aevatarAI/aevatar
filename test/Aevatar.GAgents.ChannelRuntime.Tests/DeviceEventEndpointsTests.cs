@@ -184,6 +184,21 @@ public class DeviceEventEndpointsTests
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
         act.Should().Throw<JsonException>();
+        Aevatar.GAgents.Household.DeviceInbound.Descriptor.FindFieldByName("payload_json").Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_inner_json_array_throws_before_dispatch_mapping()
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = "[]" },
+            sender = new { id = "device-7" },
+        });
+
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]

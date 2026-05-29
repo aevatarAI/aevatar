@@ -192,9 +192,10 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            // Refactor (iter162-cluster-001 #1255-first):
-            //   Old pattern: actor parsed DeviceInbound.PayloadJson based on event_type.
-            //   New principle: actor consumes typed DeviceInbound payload cases only.
+            // Refactor (issue1281/first-slice): Old pattern: actor parsed DeviceInbound.PayloadJson by event_type.
+            // New principle: Host/Adapter owns JSON parsing and allowlist admission.
+            // HouseholdEntity consumes only typed Protobuf payload cases and ignores missing payloads.
+            // This keeps actor control flow independent of external callback JSON shape.
             switch (evt.PayloadCase)
             {
                 case DeviceInbound.PayloadOneofCase.Sensor:

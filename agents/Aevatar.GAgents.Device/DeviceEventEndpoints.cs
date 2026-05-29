@@ -192,11 +192,14 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Refactor (iter162-cluster-001 #1255-first):
-        //   Old pattern: pass content.text through as DeviceInbound.PayloadJson.
-        //   New principle: terminate JSON here and map known events to typed Protobuf payloads.
+        // Refactor (issue1281/first-slice): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
+        // Known device events are allowlisted and mapped to typed Protobuf payload cases.
+        // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
+        if (inner.ValueKind != JsonValueKind.Object)
+            throw new JsonException("content.text must contain a device event object");
 
         var eventId = inner.TryGetProperty("event_id", out var eid) ? eid.GetString() ?? string.Empty : string.Empty;
         var source = inner.TryGetProperty("source", out var src) ? src.GetString() ?? string.Empty : string.Empty;
