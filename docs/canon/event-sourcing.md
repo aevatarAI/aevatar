@@ -28,31 +28,9 @@ owner: eanzhao
 
 ## 2.2 Actor Evolution Matrix
 
-Actor 演进先按事实归属判定，而不是先设计新的迁移框架。默认选择如下：
+Actor 演进的统一判定树见 [actor-evolution.md](actor-evolution.md)。
 
-| 演进场景 | 权威事实是否仍属同一 actor | 推荐机制 | 禁止替代 |
-|---|---|---|---|
-| 同一 actor 内部 state schema 调整 | 是 | Lazy state migration | 新 actor、projection bootstrap、query-time replay |
-| 字段重命名、默认值补齐、枚举值规范化 | 是 | Lazy state migration | 把版本字段塞进业务 state proto |
-| Actor 拆分为多个事实拥有者 | 否 | Projection-driven bootstrap + redirect / retire cleanup | 在旧 actor 状态里临时拼新 actor 事实 |
-| 多个 actor 合并为一个事实拥有者 | 否 | Projection-driven bootstrap + retire cleanup | 查询时读取多个 actor event stream 临时聚合 |
-| Actor identity / key 改写 | 否 | Re-key redirect + projection-driven bootstrap | 把 commandId/correlationId 当 actorId 复用 |
-| 仅新增 readmodel / index / search view | 否，事实不变 | Projection materialization | 修改 write-side state 只为查询服务 |
-
-Lazy state migration 的适用边界：
-
-1. 只处理同一 actor、同一事实拥有者、同一 actor identity 下的内部 state schema 演进。
-2. 迁移输入只能是历史 state 与 runtime envelope 上的 `state_schema_version`。
-3. 迁移输出仍是同一 actor 的当前 state；不得创建其他 actor、写 projection store、发外部请求或读取 readmodel。
-4. 迁移必须保持 replay 同态：历史 `StateEvent` 仍可按原事件流恢复到等价当前 state。
-5. 迁移接口仍 deferred；本 canon 只定义判定矩阵与约束，不新增 actor、proto field、envelope kind 或 pipeline phase。
-
-Projection-driven 演进的适用边界：
-
-1. 只用于事实拥有者发生变化的 split / merge / re-key。
-2. 新事实必须由新 actor 自己提交的 domain event 成为权威事实；projection 只负责从旧 committed fact materialize bootstrap 输入。
-3. 旧 actor 的清理通过 retire cleanup 明确完成，不能依赖查询路径隐式忽略旧数据。
-4. 读侧切换以 projection/readmodel 可见版本为准，不把 accepted ACK 冒充为新事实已可查。
+Event Sourcing 侧只保留一个内聚结论：同一 actor、同一 identity、同一事实拥有者内的 state schema 演进使用 lazy state migration；事实拥有者变化的 split / merge / re-key / replace 不属于 EventStore replay 或 query-time rebuild 问题，必须走 projection-driven bootstrap 与新 owner 自提交事实。
 
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`

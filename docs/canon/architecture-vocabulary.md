@@ -48,6 +48,7 @@ owner: eanzhao
 | Projection-driven bootstrap | split / merge / re-key 时，从旧 actor 已提交事实或 committed state publication 物化新 actor bootstrap 输入的流程。bootstrap 输入不是新事实；新 actor 提交自己的 domain event 后才成为权威事实。 |
 | Retire cleanup | actor 演进完成后，对旧 actor、旧 readmodel、旧索引或旧路由的显式退役清理。它是演进协议的一部分，不是 query path 的临时兼容判断。 |
 | Re-key redirect | actor identity/key 改写时，旧 key 到新 key 的显式重定向事实。它用于目标解析与清理窗口，不允许调用方解析 actorId 字符串，也不允许用 commandId/correlationId 代替 actorId。 |
+| Actor replace | 旧 actor owner 被新 actor owner 替换，语义不再是同一 actor 内演进。新 owner 必须提交自己的 domain event；旧 owner 通过 retire cleanup 退出，不能保留双事实源或空壳兼容。 |
 
 ## 2. 关键原则（与 CLAUDE.md 已有规则的映射）
 
