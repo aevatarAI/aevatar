@@ -20,6 +20,7 @@ namespace Aevatar.GAgents.Household.Tests;
 public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
 {
     private HouseholdEntity _entity = null!;
+    private RecordingLLMProvider _llmProvider = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
@@ -33,7 +34,8 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
 
         _serviceProvider = services.BuildServiceProvider();
 
-        _entity = new HouseholdEntity(new StubLLMProviderFactory())
+        _llmProvider = new RecordingLLMProvider("default");
+        _entity = new HouseholdEntity(new StubLLMProviderFactory(_llmProvider))
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
@@ -135,8 +137,11 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_TypedSpeech_DoesNotThrow()
+    public async Task HandleDeviceInbound_TypedSpeech_ForwardsTextToReasoning()
     {
+        var previousReasoningCount = _entity.State.ReasoningCountToday;
+        var previousLastReasoningTs = _entity.State.LastReasoningTs;
+
         var evt = new DeviceInbound
         {
             EventId = "evt-6",
@@ -145,11 +150,38 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             Speech = new SpeechDeviceInboundPayload { Text = "Turn on the lights" },
         };
 
-        // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatStreamAsync.
-        // With the stub LLM provider, ChatStreamAsync returns "NO_ACTION" (no tool calls).
-        // The handler should complete without throwing.
-        var act = () => _entity.HandleDeviceInbound(evt);
-        await act.Should().NotThrowAsync();
+        await _entity.HandleDeviceInbound(evt);
+
+        _llmProvider.CallCount.Should().Be(1);
+        _llmProvider.LastRequest.Should().NotBeNull();
+        _llmProvider.LastRequest!.Messages.Should().Contain(message =>
+            string.Equals(message.Role, "user", StringComparison.Ordinal) &&
+            message.Content != null &&
+            message.Content.Contains("Message from user: Turn on the lights", StringComparison.Ordinal));
+        _entity.State.ReasoningCountToday.Should().Be(previousReasoningCount + 1);
+        _entity.State.LastReasoningTs.Should().BeGreaterThan(previousLastReasoningTs);
+    }
+
+    [Fact]
+    public async Task HandleDeviceInbound_TypedSpeech_WhenTextBlank_SkipsReasoning()
+    {
+        var previousReasoningCount = _entity.State.ReasoningCountToday;
+        var previousLastReasoningTs = _entity.State.LastReasoningTs;
+
+        var evt = new DeviceInbound
+        {
+            EventId = "evt-7",
+            Source = "microphone",
+            EventType = "speech_detected",
+            Speech = new SpeechDeviceInboundPayload { Text = "   " },
+        };
+
+        await _entity.HandleDeviceInbound(evt);
+
+        _llmProvider.CallCount.Should().Be(0);
+        _llmProvider.LastRequest.Should().BeNull();
+        _entity.State.ReasoningCountToday.Should().Be(previousReasoningCount);
+        _entity.State.LastReasoningTs.Should().Be(previousLastReasoningTs);
     }
 
     // ─── Test doubles ───
@@ -222,22 +254,26 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         }
     }
 
-    private sealed class StubLLMProviderFactory : ILLMProviderFactory
+    private sealed class StubLLMProviderFactory(RecordingLLMProvider provider) : ILLMProviderFactory
     {
-        public ILLMProvider GetProvider(string name) => new StubLLMProvider(name);
-        public ILLMProvider GetDefault() => new StubLLMProvider("default");
+        public ILLMProvider GetProvider(string name) => provider;
+        public ILLMProvider GetDefault() => provider;
         public IReadOnlyList<string> GetAvailableProviders() => ["default"];
     }
 
-    private sealed class StubLLMProvider(string name) : ILLMProvider
+    private sealed class RecordingLLMProvider(string name) : ILLMProvider
     {
         public string Name => name;
+        public int CallCount { get; private set; }
+        public LLMRequest? LastRequest { get; private set; }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            CallCount++;
+            LastRequest = request;
             await Task.CompletedTask;
             yield return new LLMStreamChunk { DeltaContent = "NO_ACTION — no intervention needed." };
             yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
