@@ -38,8 +38,12 @@ done
 # ============================================================================
 echo ""
 echo "=== FLOOR ==="
-CODEX_LINES=$(ps -ef | grep "codex exec" | grep -v grep)
-ACTIVE=$(echo "$CODEX_LINES" | grep -c "codex exec" | tr -d ' \n')
+# Each codex spawn creates 3 ps rows: `timeout NNNN codex exec` (parent wrapper) +
+# `node .../codex exec` (Node host) + native `codex` binary. Counting all three
+# inflates ACTIVE 3x. Filter to the wrapper line only — it carries the --log path
+# used for categorization too.
+CODEX_LINES=$(ps -ef | grep -E "timeout (3600|5400) codex exec" | grep -v grep)
+ACTIVE=$(echo "$CODEX_LINES" | grep -cE "timeout (3600|5400) codex exec" | tr -d ' \n')
 [ -z "$CODEX_LINES" ] && ACTIVE=0
 AUDIT=$(echo "$CODEX_LINES" | grep -c "audit-iter" | tr -d ' \n')
 IMPL=$(echo "$CODEX_LINES" | grep -c "implement" | tr -d ' \n')
