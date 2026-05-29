@@ -31,10 +31,10 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var p = envelope.Payload;
+        // Refactor (issue1247-first): Old: live TextMessageEndEvent/ChatResponseEvent frames completed evaluate steps. New: only committed WorkflowRoleReplyRecordedEvent completes pending evaluate steps.
         return p != null &&
                (p.Is(StepRequestEvent.Descriptor) ||
-                p.Is(TextMessageEndEvent.Descriptor) ||
-                p.Is(ChatResponseEvent.Descriptor));
+                p.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -149,28 +149,19 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sid = null;
+        if (!payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+            return;
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content; sid = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content; sid = evt.SessionId;
-        }
-
-        if (sid == null)
+        var evt = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
+        var sid = evt.SessionId;
+        if (string.IsNullOrWhiteSpace(sid))
             return;
 
         var stateForCompletion = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
         if (!stateForCompletion.PendingBySessionId.TryGetValue(sid, out var evalCtx))
             return;
 
-        var score = ParseScore(content ?? "");
+        var score = ParseScore(evt.Content ?? "");
         var passed = score >= evalCtx.Threshold;
 
         ctx.Logger.LogInformation("Evaluate {StepId}: score={Score} threshold={Threshold} passed={Passed}",

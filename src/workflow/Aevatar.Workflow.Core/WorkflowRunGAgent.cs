@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions;
@@ -13,6 +14,7 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 
@@ -533,8 +535,23 @@ public sealed class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
-            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+        if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+            return;
+
+        await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+
+        if (artifactFact is not WorkflowRoleReplyRecordedEvent)
+            return;
+
+        // Refactor (issue1247-first): Old: live role frames were the module completion fallback. New: the existing committed role reply fact is re-entered through the actor-owned module pipeline.
+        await HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(artifactFact),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
+            Propagation = envelope.Propagation?.Clone(),
+        });
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -548,6 +565,7 @@ public sealed class WorkflowRunGAgent
         {
             try
             {
+                await UnlinkRoleCommittedFactsFromWorkflowAsync(childActorId, ct);
                 await _runtime.UnlinkAsync(childActorId, ct);
                 await _runtime.DestroyAsync(childActorId, ct);
             }
@@ -592,6 +610,7 @@ public sealed class WorkflowRunGAgent
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
+            await LinkRoleCommittedFactsToWorkflowAsync(actor.Id, CancellationToken.None);
 
             await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
             _childAgentIds.Add(actor.Id);
@@ -610,6 +629,42 @@ public sealed class WorkflowRunGAgent
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
         _dispatchPort.DispatchAsync(actorId, envelope);
+
+    private async Task LinkRoleCommittedFactsToWorkflowAsync(string roleActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Id))
+            return;
+
+        var streamProvider = Services.GetService<IStreamProvider>();
+        if (streamProvider == null)
+            return;
+
+        // Refactor (issue1247-first): Old: workflow modules used live role frames as the completion fallback. New: role committed facts are observed through the existing stream forwarding contract and re-enter the actor-owned module pipeline.
+        var binding = new StreamForwardingBinding
+        {
+            SourceStreamId = roleActorId,
+            TargetStreamId = Id,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [],
+            EventTypeFilter =
+            {
+                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
+            },
+        };
+
+        await streamProvider.GetStream(roleActorId).UpsertRelayAsync(binding, ct);
+    }
+
+    private Task UnlinkRoleCommittedFactsFromWorkflowAsync(string roleActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Id))
+            return Task.CompletedTask;
+
+        var streamProvider = Services.GetService<IStreamProvider>();
+        return streamProvider == null
+            ? Task.CompletedTask
+            : streamProvider.GetStream(roleActorId).RemoveRelayAsync(Id, ct);
+    }
 
     // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
     //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle

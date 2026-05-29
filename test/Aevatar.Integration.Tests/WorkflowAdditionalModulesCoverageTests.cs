@@ -1010,7 +1010,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
         var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         await llmCall.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = llmSessionId,
                 Content = sensitiveLlmOutput,
@@ -1076,7 +1076,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldRedactNonStreamingChatResponseInInformationLogs()
+    public async Task LlmCallModule_ShouldRedactCommittedRoleReplyInInformationLogs()
     {
         const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
         const string sensitiveLlmOutput = "customer secret llm non streaming output";
@@ -1098,7 +1098,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = sessionId,
                 Content = sensitiveLlmOutput,
@@ -1108,7 +1108,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
         messages.Should().Contain(message =>
-            message.Contains("status=completed_non_streaming", StringComparison.Ordinal) &&
+            message.Contains("status=completed", StringComparison.Ordinal) &&
             message.Contains("output_redacted=true", StringComparison.Ordinal) &&
             message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
         messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
@@ -1906,7 +1906,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = firstSessionId,
                 Content = "score: 3.5",
@@ -1936,7 +1936,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = secondSessionId,
                 Content = "5",
@@ -1979,7 +1979,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         chatRequest.Metadata.Should().NotContainKey("llm_timeout_ms");
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = chatRequest.SessionId,
                 Content = "telegram-ack",
@@ -2133,7 +2133,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = evaluateChat.SessionId,
                 Content = "3",
@@ -2165,7 +2165,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await reflect.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = reflectChat.SessionId,
                 Content = "PASS",
@@ -2197,7 +2197,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = firstCritiqueSession,
                 Content = "PASS",
@@ -2227,7 +2227,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = critiqueSession0,
                 Content = "Needs improvement",
@@ -2238,7 +2238,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = improveSession,
                 Content = "draft-2-better",
@@ -2249,7 +2249,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = critiqueSession1,
                 Content = "still not good",
@@ -2300,7 +2300,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = sessionB,
                 Content = "PASS",
@@ -2314,7 +2314,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = sessionA,
                 Content = "PASS",

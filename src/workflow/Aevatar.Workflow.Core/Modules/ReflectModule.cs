@@ -30,10 +30,10 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (issue1247-first): Old: live TextMessageEndEvent/ChatResponseEvent frames advanced reflect phases. New: only committed WorkflowRoleReplyRecordedEvent advances pending reflect phases.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -98,21 +98,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
+        if (!payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+            return;
 
+        var evt = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
+        var content = evt.Content;
+        var sessionId = evt.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId))
             return;
 

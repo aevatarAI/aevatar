@@ -41,10 +41,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (issue1247-first): Old: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps. New: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor) ||
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
                 payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
@@ -60,15 +60,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
         {
-            await HandleTextMessageEndAsync(payload.Unpack<TextMessageEndEvent>(), envelope, ctx, ct);
-            return;
-        }
-
-        if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            await HandleChatResponseAsync(payload.Unpack<ChatResponseEvent>(), ctx, ct);
+            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), envelope, ctx, ct);
             return;
         }
 
@@ -162,8 +156,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task HandleTextMessageEndAsync(
-        TextMessageEndEvent evt,
+    private async Task HandleRoleReplyRecordedAsync(
+        WorkflowRoleReplyRecordedEvent evt,
         EventEnvelope envelope,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
@@ -177,7 +171,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
+        var publisherActorId = !string.IsNullOrWhiteSpace(evt.RoleActorId)
+            ? evt.RoleActorId
+            : envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
             await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
@@ -200,48 +196,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = true,
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
-            },
-            TopologyAudience.Self,
-            ct);
-        await RemovePendingAsync(sessionId, pending, ctx, ct);
-    }
-
-    private async Task HandleChatResponseAsync(
-        ChatResponseEvent evt,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        var sessionId = evt.SessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
-            return;
-
-        await StopWatchdogAsync(pending, ctx, ct);
-        if (TryExtractLlmFailure(evt.Content, out var error))
-        {
-            await PublishFailedCompletionAsync(pending, error, ctx.AgentId, ctx, ct);
-            await RemovePendingAsync(sessionId, pending, ctx, ct);
-            return;
-        }
-
-        ctx.Logger.LogInformation(
-            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed_non_streaming output_len={OutputLen} output_redacted=true",
-            pending.RunId,
-            pending.StepId,
-            sessionId,
-            evt.Content?.Length ?? 0);
-
-        await ctx.PublishAsync(
-            new StepCompletedEvent
-            {
-                StepId = pending.StepId,
-                RunId = pending.RunId,
-                Success = true,
-                Output = evt.Content ?? string.Empty,
-                WorkerId = ctx.AgentId,
             },
             TopologyAudience.Self,
             ct);
