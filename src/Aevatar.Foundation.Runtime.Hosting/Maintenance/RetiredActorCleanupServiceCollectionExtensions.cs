@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Aevatar.Foundation.Core.TypeSystem;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 
@@ -17,6 +18,9 @@ public static class RetiredActorCleanupServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<IRetiredActorCleanupCoordinatorPort, RetiredActorCleanupCoordinatorPort>();
+        services.AddAevatarAgentKindRegistry(
+            builder => builder.Register<RetiredActorCleanupCoordinatorGAgent>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, RetiredActorCleanupHostedService>());
         return services;

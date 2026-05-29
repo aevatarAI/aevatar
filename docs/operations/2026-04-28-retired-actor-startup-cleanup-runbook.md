@@ -37,7 +37,7 @@ Each retired module ships its own `IRetiredActorSpec` implementation alongside i
 DI extension (`AddChannelRuntime`, `AddDeviceRegistration`, `AddScheduledAgents`).
 A spec declares:
 
-- `SpecId` — stable identifier used as the marker stream namespace.
+- `SpecId` — stable identifier used as the coordinator lease key.
 - `Targets` — well-known retired actor ids and the CLR type name tokens that
   identify them as retired.
 - `DiscoverDynamicTargetsAsync` — optional. The Scheduled spec uses this to read
@@ -54,21 +54,25 @@ A spec declares:
 
 For each spec the service:
 
-1. Acquires a per-spec lease at `__maintenance:retired-actor-cleanup:{specId}`
-   (waits if another pod holds an in-progress lease, takes over after
-   `InProgressTimeoutSeconds`).
+1. Requests a per-spec lease from `RetiredActorCleanupCoordinatorGAgent`
+   (skips the spec if another pod holds a non-expired active lease, takes over
+   after `InProgressTimeoutSeconds`).
 2. Streams targets from `DiscoverDynamicTargetsAsync` first, then iterates
    `Targets`.
 3. For each target: probes the runtime type via `IActorTypeProbe`. When it
    matches a retired token, removes upstream relays from `SourceStreamId`,
    removes outgoing relays best-effort, deletes module-owned read models
    best-effort, destroys the actor, and resets the event stream.
-4. Releases the lease.
+4. Releases the coordinator lease.
 
 There is no "completed forever" marker. The cleanup runs every startup; targets
 already cleaned by a previous pod are detected as either "no runtime type and no
 event stream" (skip) or "no runtime type but stream still present" (continue
 reset path).
+
+Legacy marker streams named `__maintenance:retired-actor-cleanup:{specId}` are
+not migrated or replayed. They are operational residue from the old hosted
+service-owned lease and are not part of the current cleanup contract.
 
 ## Active Specs
 
@@ -93,7 +97,6 @@ Options:
 - `ResetEventStreams`: default `true`
 - `CleanupReadModels`: default `true`
 - `InProgressTimeoutSeconds`: default `300`
-- `WaitPollMilliseconds`: default `1000`
 
 Use `Enabled=false` only for emergency rollback while manually clearing the
 retired actors. Leaving it disabled means the old activation failure can return
@@ -118,9 +121,11 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 ## Expected Upgrade Behavior
 
 - First pod to start in a deployment wave acquires each spec's lease.
-- Other pods wait while a spec's marker is in progress.
+- Other pods skip that spec while the coordinator reports an active non-expired
+  lease.
 - If the owning pod dies before completion, another pod takes over after
-  `InProgressTimeoutSeconds`.
+  `InProgressTimeoutSeconds`; takeover increments the coordinator epoch and old
+  token/epoch releases are ignored.
 - New projection startup recreates the needed actors using the current runtime
   types and rebuild paths.
 

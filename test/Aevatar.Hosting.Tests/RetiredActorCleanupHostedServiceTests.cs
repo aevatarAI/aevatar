@@ -38,7 +38,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var runtime = new RecordingActorRuntime();
         var streamProvider = new RecordingStreamProvider();
         streamProvider.SeedRelay("channel-bot-registration-store", "stale-child-stream");
-        var service = CreateService(typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
+        var coordinator = new RecordingCleanupCoordinator();
+        var service = CreateService(
+            typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec(), coordinator: coordinator);
 
         await service.StartAsync(CancellationToken.None);
 
@@ -52,6 +54,8 @@ public sealed class RetiredActorCleanupHostedServiceTests
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
         (await eventStore.GetVersionAsync(
             "projection.durable.scope:channel-bot-registration:channel-bot-registration-store")).Should().Be(0);
+        coordinator.AcquiredSpecIds.Should().Contain(CreateChannelRuntimeSpec().SpecId);
+        coordinator.ReleasedSpecIds.Should().Contain(CreateChannelRuntimeSpec().SpecId);
     }
 
     [Fact]
@@ -551,6 +555,51 @@ public sealed class RetiredActorCleanupHostedServiceTests
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
     }
 
+    [Fact]
+    public async Task StartAsync_ShouldSkipSpec_WhenCoordinatorLeaseDenied()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var runtime = new RecordingActorRuntime();
+        var coordinator = new RecordingCleanupCoordinator { GrantAcquire = false };
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateChannelRuntimeSpec(),
+            coordinator: coordinator);
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        coordinator.ReleasedSpecIds.Should().BeEmpty();
+        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
+    }
+
+    [Fact]
+    public void RetiredActorCleanupHostedService_ShouldNotOwnMarkerStreamLease()
+    {
+        // Refactor (issue1056/r3-consensus): Old pattern: hosted service
+        // replayed marker StateEvents for a process-owned cleanup lease.
+        // New principle: hosted service only uses the coordinator lease port.
+        var source = File.ReadAllText(GetRetiredActorCleanupHostedServiceSourcePath());
+        var code = StripLineComments(source);
+
+        code.Should().NotContain("GetEventsAsync");
+        code.Should().NotContain("AppendAsync");
+        code.Should().NotContain("__maintenance:" + "retired-actor-cleanup");
+        code.Should().NotContain("MarkerStreamId");
+        code.Should().NotContain("MarkerSnapshot");
+        code.Should().NotContain("MarkerRecord");
+        code.Should().NotContain("Task.Delay");
+    }
+
     private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
 
     private static IRetiredActorSpec CreateDeviceSpec() => new DeviceRetiredActorSpec();
@@ -563,8 +612,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
         RecordingStreamProvider streamProvider,
         InMemoryEventStore eventStore,
         IRetiredActorSpec spec,
-        IServiceProvider? services = null) =>
-        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services);
+        IServiceProvider? services = null,
+        IRetiredActorCleanupCoordinatorPort? coordinator = null) =>
+        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services, coordinator);
 
     private static RetiredActorCleanupHostedService CreateService(
         IActorTypeProbe typeProbe,
@@ -572,12 +622,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
         RecordingStreamProvider streamProvider,
         InMemoryEventStore eventStore,
         IReadOnlyList<IRetiredActorSpec> specs,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        IRetiredActorCleanupCoordinatorPort? coordinator = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Aevatar:RetiredActorCleanup:WaitPollMilliseconds"] = "1",
                 ["Aevatar:RetiredActorCleanup:InProgressTimeoutSeconds"] = "1",
             })
             .Build();
@@ -591,6 +641,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             streamProvider,
             eventStore,
             eventStore,
+            coordinator ?? new RecordingCleanupCoordinator(),
             resolvedServices,
             configuration,
             NullLogger<RetiredActorCleanupHostedService>.Instance);
@@ -680,6 +731,27 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         throw new FileNotFoundException(
             $"Could not locate ScheduledRetiredActorSpec.cs from {AppContext.BaseDirectory}");
+    }
+
+    private static string GetRetiredActorCleanupHostedServiceSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "Aevatar.Foundation.Runtime.Hosting",
+                "Maintenance",
+                "RetiredActorCleanupHostedService.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate RetiredActorCleanupHostedService.cs from {AppContext.BaseDirectory}");
     }
 
     private sealed class StubActorTypeProbe(IReadOnlyDictionary<string, string?> typeNames) : IActorTypeProbe
@@ -931,5 +1003,58 @@ public sealed class RetiredActorCleanupHostedServiceTests
     {
         public Task<bool> ResetActorStreamPubSubAsync(string actorId, CancellationToken ct = default) =>
             throw new InvalidOperationException("pub/sub state reset failed");
+    }
+
+    private sealed class RecordingCleanupCoordinator : IRetiredActorCleanupCoordinatorPort
+    {
+        public bool GrantAcquire { get; init; } = true;
+        public bool Valid { get; set; } = true;
+        public List<string> AcquiredSpecIds { get; } = [];
+        public List<string> ReleasedSpecIds { get; } = [];
+        public List<string> FailureSpecIds { get; } = [];
+
+        public Task<RetiredActorCleanupLeaseHandle?> TryAcquireAsync(
+            string specId,
+            string ownerId,
+            DateTimeOffset nowUtc,
+            DateTimeOffset expiresAtUtc,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AcquiredSpecIds.Add(specId);
+            if (!GrantAcquire)
+                return Task.FromResult<RetiredActorCleanupLeaseHandle?>(null);
+
+            return Task.FromResult<RetiredActorCleanupLeaseHandle?>(new RetiredActorCleanupLeaseHandle(
+                specId,
+                1,
+                Guid.NewGuid().ToString("N"),
+                ownerId,
+                nowUtc,
+                expiresAtUtc));
+        }
+
+        public Task<bool> CheckAsync(RetiredActorCleanupLeaseHandle lease, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Valid);
+        }
+
+        public Task ReleaseAsync(RetiredActorCleanupLeaseHandle lease, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReleasedSpecIds.Add(lease.SpecId);
+            return Task.CompletedTask;
+        }
+
+        public Task RecordFailureAsync(
+            RetiredActorCleanupLeaseHandle lease,
+            Exception exception,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            FailureSpecIds.Add(lease.SpecId);
+            return Task.CompletedTask;
+        }
     }
 }

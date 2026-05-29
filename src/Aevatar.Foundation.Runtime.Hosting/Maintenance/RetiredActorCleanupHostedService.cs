@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -22,15 +21,12 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 /// work. New retired types take effect on the next pod startup with zero per-spec
 /// completion gating — the spec list itself is the only source of truth.
 ///
-/// Marker stream coordination prevents two pods running the same spec
-/// simultaneously during a startup wave (lease + stale timeout). It does not gate
-/// future runs; the cleanup runs every startup until the spec is removed.
+/// Actor-owned coordinator leases prevent two pods running the same spec
+/// simultaneously during a startup wave (lease + stale timeout). They do not
+/// gate future runs; the cleanup runs every startup until the spec is removed.
 /// </summary>
 public sealed class RetiredActorCleanupHostedService : IHostedService
 {
-    private const int MarkerInProgress = 1;
-    private const int MarkerReleased = 2;
-
     // Stable cleanupReason values for log/metric distinguishing of normal-match
     // vs orphaned-stream recovery paths. Ops dashboards group on these strings.
     private const string CleanupReasonRetiredTypeMatch = "retired-type-match";
@@ -42,6 +38,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
     private readonly IStreamProvider _streamProvider;
     private readonly IEventStore _eventStore;
     private readonly IEventStoreMaintenance _eventStoreMaintenance;
+    private readonly IRetiredActorCleanupCoordinatorPort _coordinator;
     private readonly IStreamPubSubMaintenance? _streamPubSubMaintenance;
     private readonly IServiceProvider _services;
     private readonly RetiredActorCleanupOptions _options;
@@ -54,6 +51,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         IStreamProvider streamProvider,
         IEventStore eventStore,
         IEventStoreMaintenance eventStoreMaintenance,
+        IRetiredActorCleanupCoordinatorPort coordinator,
         IServiceProvider services,
         IConfiguration configuration,
         ILogger<RetiredActorCleanupHostedService> logger)
@@ -64,6 +62,7 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _eventStore = eventStore ?? throw new ArgumentNullException(nameof(eventStore));
         _eventStoreMaintenance = eventStoreMaintenance ?? throw new ArgumentNullException(nameof(eventStoreMaintenance));
+        _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _services = services ?? throw new ArgumentNullException(nameof(services));
         // Pub/sub maintenance is optional — backends without persistent
         // rendezvous state (in-memory streams) don't register an implementation.
@@ -139,6 +138,11 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+        }
+        catch (Exception ex)
+        {
+            await _coordinator.RecordFailureAsync(lease, ex, ct).ConfigureAwait(false);
+            throw;
         }
     }
 
@@ -295,130 +299,41 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
     private async Task<bool> HasEventStreamAsync(string actorId, CancellationToken ct) =>
         await _eventStore.GetVersionAsync(actorId, ct).ConfigureAwait(false) > 0;
 
-    private async Task<CleanupLease?> TryAcquireLeaseAsync(string specId, CancellationToken ct)
+    // Refactor (issue1056/r3-consensus): Old pattern: this hosted service owned
+    // marker stream replay/append lease state. New principle: hosted cleanup is
+    // only the executor; per-spec ownership is checked through the coordinator.
+    private Task<RetiredActorCleanupLeaseHandle?> TryAcquireLeaseAsync(string specId, CancellationToken ct)
     {
-        var markerStreamId = MarkerStreamId(specId);
-        var timeout = TimeSpan.FromSeconds(_options.InProgressTimeoutSeconds);
-        var pollDelay = TimeSpan.FromMilliseconds(_options.WaitPollMilliseconds);
-
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-            var marker = await ReadMarkerAsync(markerStreamId, ct).ConfigureAwait(false);
-            if (marker.Latest is { Status: MarkerInProgress } latest && !IsStale(latest, timeout))
-            {
-                await Task.Delay(pollDelay, ct).ConfigureAwait(false);
-                continue;
-            }
-
-            var lease = new CleanupLease(Guid.NewGuid().ToString("N"));
-            try
-            {
-                await AppendMarkerAsync(
-                    markerStreamId,
-                    MarkerInProgress,
-                    lease.Token,
-                    marker.CurrentVersion,
-                    ct).ConfigureAwait(false);
-                return lease;
-            }
-            catch (EventStoreOptimisticConcurrencyException)
-            {
-                continue;
-            }
-        }
+        var now = DateTimeOffset.UtcNow;
+        return _coordinator.TryAcquireAsync(
+            specId,
+            Environment.MachineName,
+            now,
+            now.AddSeconds(_options.InProgressTimeoutSeconds),
+            ct);
     }
 
-    private async Task<bool> IsLeaseOwnerAsync(string specId, CleanupLease lease, CancellationToken ct)
+    private Task<bool> IsLeaseOwnerAsync(
+        string specId,
+        RetiredActorCleanupLeaseHandle lease,
+        CancellationToken ct)
     {
-        var marker = await ReadMarkerAsync(MarkerStreamId(specId), ct).ConfigureAwait(false);
-        return marker.Latest is { Status: MarkerInProgress } latest &&
-               string.Equals(latest.Token, lease.Token, StringComparison.Ordinal);
+        _ = specId;
+        return _coordinator.CheckAsync(lease, ct);
     }
 
-    private async Task ReleaseLeaseAsync(string specId, CleanupLease lease, CancellationToken ct)
+    private async Task ReleaseLeaseAsync(
+        string specId,
+        RetiredActorCleanupLeaseHandle lease,
+        CancellationToken ct)
     {
-        var markerStreamId = MarkerStreamId(specId);
-        var marker = await ReadMarkerAsync(markerStreamId, ct).ConfigureAwait(false);
-        if (marker.Latest is not { Status: MarkerInProgress } latest ||
-            !string.Equals(latest.Token, lease.Token, StringComparison.Ordinal))
+        _ = specId;
+        if (!await _coordinator.CheckAsync(lease, ct).ConfigureAwait(false))
         {
-            _logger.LogWarning("Retired actor cleanup lease was lost before release for spec {SpecId}.", specId);
+            _logger.LogWarning("Retired actor cleanup lease was lost before release for spec {SpecId}.", lease.SpecId);
             return;
         }
 
-        await AppendMarkerAsync(
-            markerStreamId,
-            MarkerReleased,
-            lease.Token,
-            marker.CurrentVersion,
-            ct).ConfigureAwait(false);
+        await _coordinator.ReleaseAsync(lease, ct).ConfigureAwait(false);
     }
-
-    private async Task<MarkerSnapshot> ReadMarkerAsync(string markerStreamId, CancellationToken ct)
-    {
-        var events = await _eventStore.GetEventsAsync(markerStreamId, ct: ct).ConfigureAwait(false);
-        MarkerRecord? latest = null;
-        foreach (var evt in events)
-        {
-            var parsed = TryParseMarker(evt);
-            if (parsed != null)
-                latest = parsed;
-        }
-
-        var version = events.Count > 0 ? events[^1].Version : 0;
-        return new MarkerSnapshot(version, latest);
-    }
-
-    private async Task AppendMarkerAsync(
-        string markerStreamId,
-        int status,
-        string token,
-        long expectedVersion,
-        CancellationToken ct)
-    {
-        await _eventStore.AppendAsync(
-            markerStreamId,
-            [
-                new StateEvent
-                {
-                    AgentId = markerStreamId,
-                    EventId = token,
-                    EventType = Int32Value.Descriptor.FullName,
-                    EventData = Any.Pack(new Int32Value { Value = status }),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Version = expectedVersion + 1,
-                },
-            ],
-            expectedVersion,
-            ct).ConfigureAwait(false);
-    }
-
-    private static MarkerRecord? TryParseMarker(StateEvent evt)
-    {
-        if (evt.EventData == null || !evt.EventData.TryUnpack<Int32Value>(out var status))
-            return null;
-
-        return new MarkerRecord(
-            status.Value,
-            evt.EventId ?? string.Empty,
-            evt.Timestamp?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-            evt.Version);
-    }
-
-    private static bool IsStale(MarkerRecord marker, TimeSpan timeout) =>
-        DateTimeOffset.UtcNow - marker.Timestamp > timeout;
-
-    private static string MarkerStreamId(string specId) =>
-        $"__maintenance:retired-actor-cleanup:{specId}";
-
-    private sealed record CleanupLease(string Token);
-
-    private sealed record MarkerRecord(
-        int Status,
-        string Token,
-        DateTimeOffset Timestamp,
-        long Version);
-
-    private sealed record MarkerSnapshot(long CurrentVersion, MarkerRecord? Latest);
 }

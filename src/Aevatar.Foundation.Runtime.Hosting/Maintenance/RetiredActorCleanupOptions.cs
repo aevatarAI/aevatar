@@ -17,8 +17,6 @@ public sealed class RetiredActorCleanupOptions
 
     public int InProgressTimeoutSeconds { get; init; } = 300;
 
-    public int WaitPollMilliseconds { get; init; } = 1000;
-
     public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -33,10 +31,6 @@ public sealed class RetiredActorCleanupOptions
                 section,
                 nameof(InProgressTimeoutSeconds),
                 fallback: 300),
-            WaitPollMilliseconds = ResolvePositiveInt(
-                section,
-                nameof(WaitPollMilliseconds),
-                fallback: 1000),
         };
     }
 

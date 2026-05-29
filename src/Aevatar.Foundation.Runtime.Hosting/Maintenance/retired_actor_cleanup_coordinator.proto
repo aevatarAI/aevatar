@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package aevatar.runtime.hosting.maintenance;
+
+option csharp_namespace = "Aevatar.Foundation.Runtime.Hosting.Maintenance";
+
+import "google/protobuf/timestamp.proto";
+
+enum RetiredActorCleanupLeaseStatus {
+  RETIRED_ACTOR_CLEANUP_LEASE_STATUS_UNSPECIFIED = 0;
+  RETIRED_ACTOR_CLEANUP_LEASE_STATUS_ACTIVE = 1;
+  RETIRED_ACTOR_CLEANUP_LEASE_STATUS_RELEASED = 2;
+  RETIRED_ACTOR_CLEANUP_LEASE_STATUS_FAILED = 3;
+}
+
+message RetiredActorCleanupLeaseRecord {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  RetiredActorCleanupLeaseStatus status = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  google.protobuf.Timestamp released_at = 8;
+  string last_error = 9;
+}
+
+message RetiredActorCleanupCoordinatorState {
+  map<string, RetiredActorCleanupLeaseRecord> leases = 1;
+}
+
+message RetiredActorCleanupAcquireCommand {
+  string spec_id = 1;
+  string owner_id = 2;
+  string requested_token = 3;
+  google.protobuf.Timestamp requested_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message RetiredActorCleanupCheckCommand {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp checked_at = 5;
+}
+
+message RetiredActorCleanupReleaseCommand {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp released_at = 5;
+}
+
+message RetiredActorCleanupFailureCommand {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  string error = 5;
+  google.protobuf.Timestamp failed_at = 6;
+}
+
+message RetiredActorCleanupLeaseAcquiredEvent {
+  RetiredActorCleanupLeaseRecord lease = 1;
+  bool stale_takeover = 2;
+}
+
+message RetiredActorCleanupLeaseAcquireRejectedEvent {
+  string spec_id = 1;
+  string owner_id = 2;
+  int64 active_epoch = 3;
+  string active_owner_id = 4;
+  google.protobuf.Timestamp rejected_at = 5;
+}
+
+message RetiredActorCleanupLeaseCheckedEvent {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  bool valid = 5;
+  google.protobuf.Timestamp checked_at = 6;
+}
+
+message RetiredActorCleanupLeaseReleasedEvent {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp released_at = 5;
+}
+
+message RetiredActorCleanupLeaseReleaseIgnoredEvent {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  google.protobuf.Timestamp ignored_at = 5;
+}
+
+message RetiredActorCleanupLeaseFailureRecordedEvent {
+  string spec_id = 1;
+  int64 epoch = 2;
+  string token = 3;
+  string owner_id = 4;
+  string error = 5;
+  google.protobuf.Timestamp failed_at = 6;
+}
