@@ -19,6 +19,61 @@ public sealed class StudioMemberGAgentStateTests
     private readonly StudioMemberStateApplier _agent = new();
 
     [Fact]
+    public async Task HandleEnsureStudioMember_ShouldPersistCreatedEvent_WhenMissing()
+    {
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var eventSourcing = new RecordingEventSourcing(new StudioMemberState());
+        var agent = NewHandlerAgent(new StudioMemberState(), eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Workflow 1",
+            Description = "draft member",
+            RequestedAtUtc = requestedAt,
+        });
+
+        var created = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberCreatedEvent>().Subject;
+        created.MemberId.Should().Be("workflow-1");
+        created.ScopeId.Should().Be("scope-1");
+        created.DisplayName.Should().Be("Workflow 1");
+        created.Description.Should().Be("draft member");
+        created.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
+        created.PublishedServiceId.Should().Be(StudioMemberConventions.BuildPublishedServiceId("workflow-1"));
+        created.CreatedAtUtc.Should().Be(requestedAt);
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleEnsureStudioMember_ShouldNoOp_WhenSameMemberAlreadyExists()
+    {
+        var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Existing",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-workflow-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var eventSourcing = new RecordingEventSourcing(existing);
+        var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Ignored",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public void Created_ShouldPersistPublishedServiceId()
     {
         var initial = new StudioMemberState();

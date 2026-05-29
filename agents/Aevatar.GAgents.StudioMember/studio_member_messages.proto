@@ -214,6 +214,17 @@ message StudioMemberCreatedEvent {
   google.protobuf.Timestamp created_at_utc = 7;
 }
 
+// Idempotent command used by committed workflow draft projection fanout.
+// It creates the member authority if missing and otherwise leaves the
+// existing StudioMemberState untouched.
+message EnsureStudioMember {
+  string member_id = 1;
+  string scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
 message StudioMemberRenamedEvent {
   string display_name = 1;
   string description = 2;

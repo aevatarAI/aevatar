@@ -21,6 +21,36 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 {
     public static string ProjectionKind => "studio-member";
 
+    [EventHandler(EndpointName = "ensureMember")]
+    public async Task HandleEnsureStudioMember(EnsureStudioMember command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!string.IsNullOrEmpty(State.MemberId))
+        {
+            if (!string.Equals(State.MemberId, command.MemberId, StringComparison.Ordinal)
+                || !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"member already initialized as '{State.ScopeId}/{State.MemberId}'.");
+            }
+
+            return;
+        }
+
+        await PersistDomainEventAsync(new StudioMemberCreatedEvent
+        {
+            MemberId = command.MemberId,
+            ScopeId = command.ScopeId,
+            DisplayName = command.DisplayName,
+            Description = command.Description,
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = StudioMemberConventions.BuildPublishedServiceId(command.MemberId),
+            CreatedAtUtc = command.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {
