@@ -210,20 +210,20 @@ done < <(gh issue list --state open --label "🔍 phase:design-solving" --json n
 
 # ============================================================================
 echo ""
-echo "=== STEP G: AUDIT BACKFILL (only if A-F all empty) ==="
+echo "=== STEP G: AUDIT BACKFILL (always available to fill floor — no exemption) ==="
 G_BUSY=$(( A_COUNT + B_COUNT + C_COUNT + D_COUNT + E_COUNT + F_COUNT ))
 LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 LAST_LOG_ITER=$(ls "$LOGDIR"/audit-iter-*.log 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 NEXT_ITER=$((${LAST_LOG_ITER:-${LAST_ITER:-0}} + 1))
 echo "last audit run: iter-${LAST_ITER:-?} (log iter-${LAST_LOG_ITER:-?})"
-if [ "$G_BUSY" -gt 0 ]; then
-    echo "Step A-F has $G_BUSY actionable items — DO NOT dispatch audit until cleared"
+# Per Auric 2026-05-29 "并发数不足无豁免, 直接改skills" — audit backfill is ALWAYS
+# available to fill floor when codex shortfall exists. Previous "DO NOT dispatch until
+# A-F cleared" gate was wrong: P5 label-edit work doesn't fill codex slots, so floor
+# falls below threshold while gate blocks audit. Remove the gate entirely.
+if [ ! -f "$LOGDIR/audit-iter-${NEXT_ITER}.log" ]; then
+    echo "ACTION: spawn audit-iter-${NEXT_ITER} (backfill — no exemption)"
 else
-    if [ ! -f "$LOGDIR/audit-iter-${NEXT_ITER}.log" ]; then
-        echo "Step A-F all empty — ACTION: spawn audit-iter-${NEXT_ITER} (backfill)"
-    else
-        echo "audit-iter-${NEXT_ITER} log already exists — skip"
-    fi
+    echo "audit-iter-${NEXT_ITER} log already exists — try audit-iter-$((NEXT_ITER+1))"
 fi
 
 # ============================================================================
@@ -262,14 +262,14 @@ else
     take "$D_COUNT" "P4 spawn reflector for stuck 3h+ issue"
     take "$E_COUNT" "P5 controller-action: gh issue edit --add-label auto-loop-triage (daemon spawns triage codex)"
     take "$F_COUNT" "P6 spawn judge for Phase 9 issue"
-    if [ "$G_BUSY" -eq 0 ] && [ "$QUEUE_REMAINING" -gt 0 ]; then
-        take "$QUEUE_REMAINING" "P9 spawn audit-iter-${NEXT_ITER} (BACKFILL — only because Step A-F empty)"
-    fi
+    # Per Auric 2026-05-29 "并发数不足无豁免" — audit backfill MUST be available to
+    # absorb remaining gap. Removed the prior gate that blocked audit while A-F had
+    # non-codex work (label edits) queued.
     if [ "$QUEUE_REMAINING" -gt 0 ]; then
-        echo "  UNFILLED=$QUEUE_REMAINING — no actionable work; spawn audit-iter-${NEXT_ITER} or Phase 10/11 backfill"
+        take "$QUEUE_REMAINING" "P9 spawn audit-iter-${NEXT_ITER}+ (BACKFILL — no exemption when floor < $FLOOR_REQUIRED)"
     fi
     echo ""
-    echo "VIOLATION RULE: ending the turn with floor_actual < $FLOOR_REQUIRED AND .auto-stopped absent = P0 BUG."
+    echo "VIOLATION RULE (per Auric 2026-05-29 '并发数不足无豁免'): floor_actual < $FLOOR_REQUIRED AND .auto-stopped absent = P0 BUG. NO exemption — controller MUST spawn audit backfill to fill the gap even when actionable queue is non-codex (label triage / etc)."
 fi
 
 echo ""
