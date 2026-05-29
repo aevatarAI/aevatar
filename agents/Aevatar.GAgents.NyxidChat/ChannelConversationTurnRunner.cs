@@ -975,15 +975,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         Task typingReactionTask,
         CancellationToken ct)
     {
-        AgentBuilderFlowDecision? decision = null;
-        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(
             inboundEvent,
-            out decision);
-        if (!relayDecisionMatched &&
-            ((decision = await AgentBuilderCardFlow.TryResolveAsync(
-                    inboundEvent,
-                    _userConfigQueryPort,
-                    ct)) is null))
+            _userConfigQueryPort,
+            ct);
+        if (decision is null)
         {
             // No slash-command/card flow matched.
         }
@@ -1003,9 +999,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = relayDecisionMatched
-                    ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
-                    : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
+                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
         }
 

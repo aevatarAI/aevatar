@@ -18,6 +18,7 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
     private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
     private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
+    private const string ListAgentsCommand = "/agents";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
     private const string DisableAgentCommand = "/disable-agent";
@@ -56,6 +57,9 @@ public static class AgentBuilderCardFlow
         _ = preferredGithubUsername;
         decision = null;
 
+        if (TryResolveTextCommand(evt, out decision))
+            return true;
+
         if (IsPrivateChatText(evt))
         {
             var normalized = NormalizeText(evt.Text);
@@ -65,9 +69,6 @@ public static class AgentBuilderCardFlow
                 decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
                 return true;
             }
-
-            if (TryResolvePrivateChatCommand(normalized, out decision))
-                return true;
 
             return false;
         }
@@ -153,6 +154,98 @@ public static class AgentBuilderCardFlow
         }
     }
 
+    private static bool TryResolveTextCommand(
+        ChannelInboundEvent evt,
+        out AgentBuilderFlowDecision? decision)
+    {
+        decision = null;
+        if (string.IsNullOrWhiteSpace(evt.Text))
+            return false;
+
+        var trimmedText = evt.Text.TrimStart();
+        if (!trimmedText.StartsWith('/'))
+            return false;
+
+        var tokens = ChannelTextCommandParser.Tokenize(trimmedText);
+        if (tokens.Count == 0)
+            return false;
+
+        var command = tokens[0];
+        if (!IsKnownTextCommand(command))
+            return false;
+
+        // Refactor (issue1305): Agent-builder slash routing now lives in the card flow; unknown
+        // slash commands still fall through to Ornn/LLM handling.
+        if (!IsPrivateChat(evt.ChatType))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
+            return true;
+        }
+
+        return TryResolveKnownTextCommand(command, tokens, out decision);
+    }
+
+    private static bool IsKnownTextCommand(string command) =>
+        string.Equals(command, ListAgentsCommand, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(command, AgentStatusCommand, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(command, RunAgentCommand, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(command, DisableAgentCommand, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(command, EnableAgentCommand, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(command, DeleteAgentCommand, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryResolveKnownTextCommand(
+        string command,
+        IReadOnlyList<string> tokens,
+        out AgentBuilderFlowDecision? decision)
+    {
+        if (string.Equals(command, ListAgentsCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
+            return true;
+        }
+
+        if (string.Equals(command, AgentStatusCommand, StringComparison.OrdinalIgnoreCase))
+            return TryResolveSimpleAgentAction(tokens, AgentStatusAction, $"Usage: {AgentStatusCommand} <agent_id>", out decision);
+
+        if (string.Equals(command, RunAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return TryResolveSimpleAgentAction(tokens, RunAgentAction, $"Usage: {RunAgentCommand} <agent_id>", out decision);
+
+        if (string.Equals(command, DisableAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return TryResolveSimpleAgentAction(tokens, DisableAgentAction, $"Usage: {DisableAgentCommand} <agent_id>", out decision);
+
+        if (string.Equals(command, EnableAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return TryResolveSimpleAgentAction(tokens, EnableAgentAction, $"Usage: {EnableAgentCommand} <agent_id>", out decision);
+
+        if (string.Equals(command, DeleteAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return TryResolveDeleteAgentTextCommand(tokens, out decision);
+
+        decision = null;
+        return false;
+    }
+
+    private static bool TryResolveSimpleAgentAction(
+        IReadOnlyList<string> tokens,
+        string action,
+        string usage,
+        out AgentBuilderFlowDecision? decision)
+    {
+        decision = null;
+        if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply(usage);
+            return true;
+        }
+
+        decision = AgentBuilderFlowDecision.ToolCall(
+            action,
+            JsonSerializer.Serialize(new
+            {
+                action,
+                agent_id = tokens[1].Trim(),
+            }));
+        return true;
+    }
+
     /// <summary>
     /// Formats the tool result for a card-action invocation. Each branch returns a structured
     /// <see cref="MessageContent"/> with <c>Cards</c> and <c>Actions</c> populated; never a Lark
@@ -226,109 +319,15 @@ public static class AgentBuilderCardFlow
         return true;
     }
 
-    private static bool TryResolvePrivateChatCommand(
-        string normalizedText,
-        out AgentBuilderFlowDecision? decision)
-    {
-        decision = null;
-
-        if (TryParseAgentCommand(normalizedText, AgentStatusCommand, out var agentId, out var errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                AgentStatusAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = AgentStatusAction,
-                    agent_id = agentId,
-                }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, RunAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                RunAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = RunAgentAction,
-                    agent_id = agentId,
-            }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, DisableAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                DisableAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = DisableAgentAction,
-                    agent_id = agentId,
-                }));
-            return true;
-        }
-
-        if (TryParseAgentCommand(normalizedText, EnableAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
-
-            decision = AgentBuilderFlowDecision.ToolCall(
-                EnableAgentAction,
-                JsonSerializer.Serialize(new
-                {
-                    action = EnableAgentAction,
-                    agent_id = agentId,
-                }));
-            return true;
-        }
-
-        if (TryResolveDeleteAgentTextCommand(normalizedText, out decision))
-            return true;
-
-        return false;
-    }
-
     /// <summary>
-    /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. The optional <c>confirm</c> trailer
-    /// matches the NyxRelay text contract (and the inline command hint surfaced from the shared
-    /// <c>/agents</c> renderer) so a user who follows the printed hint
-    /// <c>/delete-agent &lt;id&gt; confirm</c> in a direct-webhook chat does not end up with
-    /// <c>"&lt;id&gt; confirm"</c> being treated as a single agent_id by the legacy
-    /// <see cref="TryParseAgentCommand"/> parser. Without the trailing keyword we still surface
-    /// the explicit confirmation card; with it we skip the extra step and dispatch the delete
-    /// directly, mirroring the relay path's semantics.
+    /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. Without the trailing keyword the
+    /// card flow keeps its explicit confirmation card; with it, the command dispatches directly.
     /// </summary>
     private static bool TryResolveDeleteAgentTextCommand(
-        string normalizedText,
+        IReadOnlyList<string> tokens,
         out AgentBuilderFlowDecision? decision)
     {
         decision = null;
-        if (!normalizedText.StartsWith(DeleteAgentCommand, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var tokens = ChannelTextCommandParser.Tokenize(normalizedText);
         if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
         {
             decision = AgentBuilderFlowDecision.DirectReply($"Usage: {DeleteAgentCommand} <agent_id>");
@@ -356,32 +355,6 @@ public static class AgentBuilderCardFlow
         return true;
     }
 
-    private static bool TryParseAgentCommand(
-        string normalizedText,
-        string command,
-        out string? agentId,
-        out string? errorReply)
-    {
-        agentId = null;
-        errorReply = null;
-
-        if (!normalizedText.StartsWith(command, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var rawArgument = normalizedText.Length == command.Length
-            ? string.Empty
-            : normalizedText.Substring(command.Length).Trim();
-
-        if (string.IsNullOrWhiteSpace(rawArgument))
-        {
-            errorReply = $"Usage: {command} <agent_id>";
-            return true;
-        }
-
-        agentId = rawArgument;
-        return true;
-    }
-
     private static bool TryGetRequiredExtra(ChannelInboundEvent evt, string key, out string value)
     {
         value = string.Empty;
@@ -393,10 +366,16 @@ public static class AgentBuilderCardFlow
     }
 
     private static bool IsPrivateChatText(ChannelInboundEvent evt) =>
-        string.Equals(evt.ChatType, PrivateChatType, StringComparison.OrdinalIgnoreCase) &&
+        IsPrivateChat(evt.ChatType) &&
         !string.IsNullOrWhiteSpace(evt.Text);
 
+    private static bool IsPrivateChat(string? chatType) =>
+        string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);
+
     private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
+
+    private static string BuildPrivateChatRestrictionReply(string command) =>
+        $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";
 
     private static string? NormalizeOptional(string? value)
     {
