@@ -16,6 +16,10 @@ import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import {
+  normalizeAsyncOperationState,
+  probeAsyncOperation,
+} from '@/shared/asyncOperations';
+import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   extractRunFinishedOutput,
@@ -229,25 +233,60 @@ type StudioBindingRunOutcome =
       readonly run: StudioMemberBindingRunStatusResponse | null;
     };
 
+const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
+
+// Refactor (iter160/cluster-1200): member binding run waiting uses shared
+//   probeAsyncOperation normalized states instead of duplicated page-local
+//   status mapping. The fixed timeout remains pre-refactor page-local pacing;
+//   the shared helper accepts an injectable scheduler for deterministic tests.
+function waitForAsyncOperationProbeTick(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 900);
+  });
+}
+
+function normalizeStudioMemberBindingRunState(
+  run: StudioMemberBindingRunStatusResponse | null,
+) {
+  return normalizeAsyncOperationState({
+    accepted: true,
+    observation: run,
+    observationStatus:
+      run?.status === 'succeeded'
+        ? 'succeeded'
+        : run?.status === 'failed'
+          ? 'failed'
+          : run?.status === 'rejected'
+            ? 'rejected'
+            : run
+              ? 'pending'
+              : null,
+    stateVersion: run?.stateVersion ?? null,
+    message:
+      run?.failure?.message ||
+      (run?.status === 'rejected'
+        ? 'Binding request was rejected by the member authority.'
+        : run?.status === 'failed'
+          ? 'Binding failed while publishing the member contract.'
+          : ''),
+  });
+}
+
 function buildStudioMemberBindingFailureMessage(
   run: StudioMemberBindingRunStatusResponse,
 ): string {
-  return (
-    run.failure?.message ||
-    (run.status === 'rejected'
-      ? 'Binding request was rejected by the member authority.'
-      : 'Binding failed while publishing the member contract.')
-  );
+  return normalizeStudioMemberBindingRunState(run).message;
 }
 
 function resolveStudioMemberBindingRunOutcome(
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioBindingRunOutcome {
-  if (run?.status === 'failed' || run?.status === 'rejected') {
+  const state = normalizeStudioMemberBindingRunState(run);
+  if (state.status === 'failed' && run) {
     throw new Error(buildStudioMemberBindingFailureMessage(run));
   }
 
-  if (run?.status === 'succeeded') {
+  if (state.status === 'observed' && run) {
     return { kind: 'succeeded', run };
   }
 
@@ -258,11 +297,14 @@ export function buildStudioMemberBindingPendingNotice(
   displayName: string,
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioNotice {
+  const state = normalizeStudioMemberBindingRunState(run);
   const status = run?.status ? ` Current status: ${run.status}.` : '';
   const freshness =
-    typeof run?.stateVersion === 'number'
-      ? ` Read model observed v${run.stateVersion}.`
-      : ' Read model has not materialized this run yet.';
+    state.freshness === 'observed' && state.stateVersion != null
+      ? ` Read model observed v${state.stateVersion}.`
+      : state.freshness === 'accepted-only'
+        ? ' Read model has not materialized this run yet.'
+        : ' Status read model is still catching up.';
   return {
     message: `${displayName} binding request was accepted and is still running.${status}${freshness} Studio will keep refreshing the status before treating it as bound.`,
     type: 'info',
@@ -4653,25 +4695,25 @@ const StudioPage: React.FC = () => {
     async (
       receipt: StudioMemberBindingAcceptedResponse,
     ): Promise<StudioMemberBindingRunStatusResponse | null> => {
-      try {
-        const run = await studioApi.getMemberBindingRun(
-          receipt.scopeId,
-          receipt.memberId,
-          receipt.bindingRunId,
-        );
-        return run;
-      } catch (error) {
-        // Refactor (iter160-cluster-001 #1261-first):
-        // Old pattern: the feature waited on repeated timer ticks until the
-        // read model appeared, which made accepted ACK look like completion.
-        // New principle: query the existing run read model once, then keep the
-        // UI in accepted/pending/stale state until normal query refresh catches up.
-        if (isStudioApiStatus(error, 404)) {
-          return null;
-        }
+      const result = await probeAsyncOperation({
+        maxAttempts: MEMBER_BINDING_RUN_POLL_ATTEMPTS,
+        read: () =>
+          studioApi.getMemberBindingRun(
+            receipt.scopeId,
+            receipt.memberId,
+            receipt.bindingRunId,
+          ),
+        isTerminal: (run) =>
+          normalizeStudioMemberBindingRunState(run).terminal,
+        canRetryError: (error) => {
+          // The run status is read-model backed, so the first request can
+          // legitimately arrive before projection catches up to the accepted ACK.
+          return isStudioApiStatus(error, 404);
+        },
+        waitForNextAttempt: waitForAsyncOperationProbeTick,
+      });
 
-        throw error;
-      }
+      return result.observation;
     },
     [],
   );

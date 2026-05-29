@@ -27,6 +27,10 @@ import type { MenuProps } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
+import {
+  normalizeAsyncOperationState,
+  probeAsyncOperation,
+} from '@/shared/asyncOperations';
 import type { StudioAppContext } from '@/shared/studio/models';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import {
@@ -647,6 +651,35 @@ function buildSaveObservationRequest(
     expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
     acceptedAt: accepted.acceptedScript.acceptedAt,
   };
+}
+
+// Refactor (iter160/cluster-1200): script save observation uses shared
+//   probeAsyncOperation normalized states instead of duplicated page-local
+//   status mapping. The fixed timeout remains pre-refactor page-local pacing;
+//   the shared helper accepts an injectable scheduler for deterministic tests.
+function waitForAsyncOperationProbeTick(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 250));
+}
+
+function normalizeScriptSaveOperationState(
+  observation: ScopeScriptSaveObservationResult | null,
+  stale = false,
+) {
+  return normalizeAsyncOperationState({
+    accepted: true,
+    observation,
+    observationStatus:
+      observation?.status === 'applied'
+        ? 'applied'
+        : observation?.status === 'rejected'
+          ? 'rejected'
+          : observation
+            ? 'pending'
+            : null,
+    terminal: observation?.isTerminal ?? false,
+    stale,
+    message: observation?.message || '',
+  });
 }
 
 function catalogMatchesPromotion(
@@ -1599,51 +1632,65 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     accepted: ScopeScriptUpsertAcceptedResponse,
   ): Promise<ScopeScriptSaveObservationResult> => {
     const request = buildSaveObservationRequest(accepted);
-    try {
-      // Refactor (iter160-cluster-001 #1261-first):
-      // Old pattern: the save path retried observation with fixed timer waits
-      // until the catalog read model looked applied.
-      // New principle: use the existing observation surface once and preserve
-      // pending/stale read-model freshness instead of manufacturing completion.
-      return await scriptsApi.observeSaveScript(
-        resolvedScopeId,
-        accepted.acceptedScript.scriptId,
-        request,
-      );
-    } catch (error) {
-      return {
-        scopeId: accepted.acceptedScript.scopeId,
-        scriptId: accepted.acceptedScript.scriptId,
-        status: 'pending',
-        message:
-          error instanceof Error
-            ? `Save accepted for ${accepted.acceptedScript.scriptId}; observation is not available yet. ${error.message}`
-            : `Save accepted for ${accepted.acceptedScript.scriptId}; observation is not available yet.`,
-        currentScript: null,
-        isTerminal: false,
-      };
+    const result = await probeAsyncOperation({
+      maxAttempts: 8,
+      read: () =>
+        scriptsApi.observeSaveScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+          request,
+        ),
+      isTerminal: (observation) =>
+        normalizeScriptSaveOperationState(observation).terminal,
+      canRetryError: () => true,
+      waitForNextAttempt: waitForAsyncOperationProbeTick,
+    });
+
+    if (result.observation != null) {
+      return result.observation;
     }
+
+    if (result.error != null) {
+      throw result.error;
+    }
+
+    const staleState = normalizeScriptSaveOperationState(null, result.exhausted);
+    return {
+      scopeId: accepted.acceptedScript.scopeId,
+      scriptId: accepted.acceptedScript.scriptId,
+      status: 'pending',
+      message:
+        staleState.message ||
+        `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
+      currentScript: null,
+      isTerminal: false,
+    };
   }, [resolvedScopeId]);
 
-  // Refactor (iter160-cluster-001 #1261-first):
-  //   Old pattern: fixed-time polling with retry sleep.
-  //   New principle: one-shot stale read; return a pending notice when the read model is pending.
-  const readPromotionCatalogOnce = React.useCallback(async (
+  const waitForPromotionCatalog = React.useCallback(async (
     decision: ScriptPromotionDecision,
   ): Promise<ScriptCatalogSnapshot | null> => {
     if (!decision.accepted) {
       return null;
     }
 
-    try {
-      const catalog = await scriptsApi.getScriptCatalog(
-        resolvedScopeId,
-        decision.scriptId,
-      );
-      return catalogMatchesPromotion(catalog, decision) ? catalog : null;
-    } catch {
-      return null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const catalog = await scriptsApi.getScriptCatalog(
+          resolvedScopeId,
+          decision.scriptId,
+        );
+        if (catalogMatchesPromotion(catalog, decision)) {
+          return catalog;
+        }
+      } catch {
+        // Ignore transient query failures while the catalog is catching up.
+      }
+
+      await waitForAsyncOperationProbeTick();
     }
+
+    return null;
   }, [resolvedScopeId]);
 
   const handleSave = React.useCallback(async () => {
@@ -1656,12 +1703,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message: `Save accepted for ${accepted.acceptedScript.scriptId}. Refresh the workspace catalog if the read model is still pending.`,
       });
       const observation = await observeAcceptedSave(accepted);
+      const operationState = normalizeScriptSaveOperationState(
+        observation,
+        observation.status === 'pending',
+      );
       await refreshScopeScripts();
-      if (observation.status === 'rejected') {
+      if (operationState.status === 'failed') {
         throw new Error(observation.message);
       }
 
-      if (observation.status === 'applied') {
+      if (operationState.status === 'observed') {
         const detail = await scriptsApi.getScript(
           resolvedScopeId,
           accepted.acceptedScript.scriptId,
@@ -1688,8 +1739,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
-        type: observation.status === 'applied' ? 'success' : 'warning',
-        message: observation.status === 'applied'
+        type: operationState.status === 'observed' ? 'success' : 'warning',
+        message: operationState.status === 'observed'
           ? `Saved ${accepted.acceptedScript.scriptId} into workspace ${accepted.acceptedScript.scopeId}.`
           : observation.message,
       });
@@ -1921,7 +1972,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setActiveResultTab('promotion');
       openWorkspaceSection('activity');
       const observedCatalog = response.accepted
-        ? await readPromotionCatalogOnce(response)
+        ? await waitForPromotionCatalog(response)
         : null;
       if (observedCatalog) {
         const detail = await scriptsApi.getScript(
@@ -1985,7 +2036,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     scopeBacked,
     selectedDraft,
     updateSelectedDraft,
-    readPromotionCatalogOnce,
+    waitForPromotionCatalog,
   ]);
 
   const resetAskAiOutput = React.useCallback(() => {
