@@ -112,61 +112,6 @@ public sealed class ResponsesAgentToolStateGAgentTests
         actor.State.WebCacheEntries[0].LastHitAt.Should().NotBeNull();
     }
 
-    [Fact]
-    public async Task HandleRecordTaskAsync_ShouldPersistTaskTopologyTrace()
-    {
-        var actor = CreateActor();
-        await RegisterAsync(actor);
-
-        await actor.HandleRecordTaskAsync(new RecordResponsesTaskRequested
-        {
-            SourceResponseId = "resp_1",
-            TaskId = "task_1",
-            ChildActorId = "responses-agent-tools-scope-task-1",
-            Description = "summarize",
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"prompt":"summarize"}"""),
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
-            Status = ResponsesAgentToolTaskStatus.Accepted,
-        });
-
-        actor.State.TaskTraces.Should().ContainSingle();
-        actor.State.TaskTraces[0].ChildActorId.Should().Be("responses-agent-tools-scope-task-1");
-        actor.State.TaskTraces[0].Status.Should().Be(ResponsesAgentToolTaskStatus.Accepted);
-        ResponsesJsonValues.ToBoundaryJson(actor.State.TaskTraces[0].Arguments)
-            .Should().Be("""{"prompt":"summarize"}""");
-        ResponsesJsonValues.ToBoundaryJson(actor.State.TaskTraces[0].Result)
-            .Should().Be("""{"status":"accepted"}""");
-    }
-
-    [Fact]
-    public async Task HandleRecordTaskAsync_ShouldIgnoreDuplicateTaskRecord_AndReusePersistedTrace()
-    {
-        var actor = CreateActor();
-        await RegisterAsync(actor);
-
-        var command = new RecordResponsesTaskRequested
-        {
-            SourceResponseId = "resp_1",
-            TaskId = "task_1",
-            ChildActorId = "responses-agent-tools-scope-task-1",
-            Description = "summarize",
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"prompt":"summarize"}"""),
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
-            Status = ResponsesAgentToolTaskStatus.Accepted,
-            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
-        };
-
-        await actor.HandleRecordTaskAsync(command);
-        var versionAfterFirstRecord = actor.State.LastAppliedEventVersion;
-
-        await actor.HandleRecordTaskAsync(command);
-
-        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstRecord);
-        actor.State.TaskTraces.Should().ContainSingle();
-        actor.State.TaskTraces[0].TaskId.Should().Be("task_1");
-        actor.State.TaskTraces[0].Status.Should().Be(ResponsesAgentToolTaskStatus.Accepted);
-    }
-
     private static ResponsesAgentToolStateGAgent CreateActor() =>
         GAgentServiceTestKit.CreateStatefulAgent<ResponsesAgentToolStateGAgent, ResponsesAgentToolState>(
             new InMemoryEventStore(),

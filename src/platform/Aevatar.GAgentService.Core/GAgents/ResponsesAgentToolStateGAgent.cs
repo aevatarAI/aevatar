@@ -58,38 +58,6 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
     }
 
     [EventHandler]
-    public async Task HandleRecordTaskAsync(RecordResponsesTaskRequested command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        EnsureRegistered();
-
-        var observedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        var task = new ResponsesTaskTrace
-        {
-            TaskId = NormalizeRequired(command.TaskId),
-            SourceResponseId = NormalizeOptional(command.SourceResponseId) ?? string.Empty,
-            ChildActorId = NormalizeRequired(command.ChildActorId),
-            Description = NormalizeOptional(command.Description) ?? string.Empty,
-            Arguments = command.Arguments?.Clone(),
-            Result = command.Result?.Clone(),
-            Status = command.Status == ResponsesAgentToolTaskStatus.Unspecified
-                ? ResponsesAgentToolTaskStatus.Accepted
-                : command.Status,
-            CreatedAt = observedAt,
-            UpdatedAt = observedAt,
-        };
-        ValidateTask(task);
-
-        if (State.TaskTraces.Any(x => string.Equals(x.TaskId, task.TaskId, StringComparison.Ordinal)))
-            return;
-
-        await PersistDomainEventAsync(new ResponsesTaskRecordedEvent
-        {
-            Task = task,
-        });
-    }
-
-    [EventHandler]
     public async Task HandleRecordWebTraceAsync(RecordResponsesWebTraceRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -128,7 +96,6 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             .Match(current, evt)
             .On<ResponsesAgentToolStateRegisteredEvent>(ApplyRegistered)
             .On<ResponsesTodoWriteAppliedEvent>(ApplyTodoWrite)
-            .On<ResponsesTaskRecordedEvent>(ApplyTaskRecorded)
             .On<ResponsesWebTraceRecordedEvent>(ApplyWebTraceRecorded)
             .OrCurrent();
 
@@ -151,18 +118,6 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
         next.TodoItems.AddRange(evt.TodoItems.Select(static x => x.Clone()));
         Touch(next, evt.ObservedAt);
         Bump(next, $"{next.Record?.ScopeId}:todo:{evt.SourceResponseId}");
-        return next;
-    }
-
-    private static ResponsesAgentToolState ApplyTaskRecorded(
-        ResponsesAgentToolState state,
-        ResponsesTaskRecordedEvent evt)
-    {
-        var next = state.Clone();
-        if (evt.Task != null)
-            next.TaskTraces.Add(evt.Task.Clone());
-        Touch(next, evt.Task?.UpdatedAt);
-        Bump(next, $"{next.Record?.ScopeId}:task:{evt.Task?.TaskId}");
         return next;
     }
 
@@ -252,14 +207,6 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             throw new InvalidOperationException("scope_id is required.");
         if (string.IsNullOrWhiteSpace(record.OwnerSubject))
             throw new InvalidOperationException("owner_subject is required.");
-    }
-
-    private static void ValidateTask(ResponsesTaskTrace task)
-    {
-        if (string.IsNullOrWhiteSpace(task.TaskId))
-            throw new InvalidOperationException("task_id is required.");
-        if (string.IsNullOrWhiteSpace(task.ChildActorId))
-            throw new InvalidOperationException("child_actor_id is required.");
     }
 
     private static void ValidateWebTrace(ResponsesWebTrace trace)

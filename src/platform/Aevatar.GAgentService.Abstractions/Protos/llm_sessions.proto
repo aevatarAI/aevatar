@@ -465,12 +465,6 @@ message ChatRunTerminatedEvent {
   google.protobuf.Timestamp observed_at = 2;
 }
 
-enum ResponsesAgentToolTaskStatus {
-  RESPONSES_AGENT_TOOL_TASK_STATUS_UNSPECIFIED = 0;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_ACCEPTED = 1;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_REJECTED = 2;
-}
-
 message ResponsesAgentToolStateRecord {
   string scope_id = 1;
   string owner_subject = 2;
@@ -485,18 +479,6 @@ message ResponsesTodoItem {
   string source_response_id = 4;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
-}
-
-message ResponsesTaskTrace {
-  string task_id = 1;
-  string source_response_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  ResponsesAgentToolTaskStatus status = 5;
-  google.protobuf.Value arguments = 6;
-  google.protobuf.Value result = 7;
-  google.protobuf.Timestamp created_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
 }
 
 message ResponsesWebTrace {
@@ -599,11 +581,17 @@ message ResponsesWebSubstituteToolExecutionResult {
 }
 
 message ResponsesAgentToolState {
+  // Refactor (issue1183/first-slice):
+  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
+  //                readmodel surface 无 consumer,占用 proto field number。
+  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
+  //                  structural/delete), proto field number reserved 防重新占用。
+  reserved 5;
+  reserved "task_traces";
   ResponsesAgentToolStateRecord record = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
   repeated ResponsesTodoItem todo_items = 4;
-  repeated ResponsesTaskTrace task_traces = 5;
   repeated ResponsesWebTrace web_traces = 6;
   repeated ResponsesWebCacheEntry web_cache_entries = 7;
 }
@@ -633,21 +621,6 @@ message ResponsesTodoWriteAppliedEvent {
   google.protobuf.Value arguments = 2;
   repeated ResponsesTodoItem todo_items = 3;
   google.protobuf.Timestamp observed_at = 4;
-}
-
-message RecordResponsesTaskRequested {
-  string source_response_id = 1;
-  string task_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  google.protobuf.Value arguments = 5;
-  google.protobuf.Value result = 6;
-  ResponsesAgentToolTaskStatus status = 7;
-  google.protobuf.Timestamp observed_at = 8;
-}
-
-message ResponsesTaskRecordedEvent {
-  ResponsesTaskTrace task = 1;
 }
 
 message RecordResponsesWebTraceRequested {
