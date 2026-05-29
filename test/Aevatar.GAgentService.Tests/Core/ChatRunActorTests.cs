@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -5,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -320,15 +322,65 @@ public sealed class ChatRunActorTests
         ((ChatRunActor)actor!.Agent).State.ActiveSubRunSubscriptions.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ForwardedCommittedCompletion_ShouldPublishObservedToolResultReady()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = await StartedActorAsync("resp_forwarded_completion", eventStore);
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_forwarded",
+            runId: "run_forwarded",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            streamTopic: "aevatar://actors/role-actor-1/runs/run_forwarded",
+            resultJson: """{"run_id":"run_forwarded","actor_id":"role-actor-1","wait":"complete"}""",
+            actorId: "role-actor-1",
+            llmRound: 3));
+
+        await actor.HandleObservedEnvelopeAsync(BuildForwardedCommittedCompletionEnvelope(
+            sourceActorId: "role-actor-1",
+            targetActorId: actor.Id,
+            runId: "run_forwarded",
+            content: "forwarded done"));
+
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        var folded = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        folded.RunId.Should().Be("run_forwarded");
+        folded.ResultJson.Should().Contain("\"content\":\"forwarded done\"");
+
+        var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(ChatRunSubRunTerminalFoldedEvent.Descriptor))
+            .Select(static payload => payload.Unpack<ChatRunSubRunTerminalFoldedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        foldedEvent.Status.Should().Be(GAgentRunTerminalStatus.TextMessageCompleted.ToString());
+        foldedEvent.ActorId.Should().Be("role-actor-1");
+        foldedEvent.CompletionObserved.Should().BeTrue();
+    }
+
     private static ChatRunActor CreateActor(string responseId) =>
+        CreateActor(responseId, new InMemoryEventStore());
+
+    private static ChatRunActor CreateActor(string responseId, InMemoryEventStore eventStore) =>
         GAgentServiceTestKit.CreateStatefulAgent<ChatRunActor, ChatRunState>(
-            new InMemoryEventStore(),
+            eventStore,
             "chat-run-" + responseId,
             static () => new ChatRunActor());
 
     private static async Task<ChatRunActor> StartedActorAsync(string responseId)
     {
         var actor = CreateActor(responseId);
+        await StartActorAsync(actor, responseId);
+        return actor;
+    }
+
+    private static async Task<ChatRunActor> StartedActorAsync(
+        string responseId,
+        InMemoryEventStore eventStore)
+    {
+        var actor = CreateActor(responseId, eventStore);
         await StartActorAsync(actor, responseId);
         return actor;
     }
@@ -368,13 +420,14 @@ public sealed class ChatRunActorTests
         ChatRunSubRunWaitMode waitMode,
         string streamTopic = "",
         string resultJson = "",
+        string actorId = "actor-1",
         int llmRound = 1)
     {
         streamTopic = string.IsNullOrWhiteSpace(streamTopic)
-            ? $"aevatar://actors/actor-1/runs/{runId}"
+            ? $"aevatar://actors/{actorId}/runs/{runId}"
             : streamTopic;
         resultJson = string.IsNullOrWhiteSpace(resultJson)
-            ? $$"""{"run_id":"{{runId}}","actor_id":"actor-1","stream_topic":"{{streamTopic}}","wait":"{{WaitModeValue(waitMode)}}"}"""
+            ? $$"""{"run_id":"{{runId}}","actor_id":"{{actorId}}","stream_topic":"{{streamTopic}}","wait":"{{WaitModeValue(waitMode)}}"}"""
             : resultJson;
         return new SubmitChatRunToolCallRequested
         {
@@ -384,10 +437,10 @@ public sealed class ChatRunActorTests
             ResultJson = resultJson,
             RunId = runId,
             TargetKind = ChatRunSubRunTargetKind.Gagent,
-            TargetId = "actor-1",
+            TargetId = actorId,
             WaitMode = waitMode,
             StreamTopic = streamTopic,
-            ActorId = "actor-1",
+            ActorId = actorId,
             LlmRound = llmRound,
         };
     }
@@ -428,6 +481,44 @@ public sealed class ChatRunActorTests
             ChatRunSubRunWaitMode.Complete => "complete",
             _ => "stream",
         };
+
+    private static EventEnvelope BuildForwardedCommittedCompletionEnvelope(
+        string sourceActorId,
+        string targetActorId,
+        string runId,
+        string content)
+    {
+        var original = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = sourceActorId,
+                    EventId = Guid.NewGuid().ToString("N"),
+                    EventType = RoleChatSessionCompletedEvent.Descriptor.FullName,
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = 7,
+                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = runId,
+                        Content = content,
+                        ContentEmitted = true,
+                        RoleId = sourceActorId,
+                    }),
+                },
+            }),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(sourceActorId),
+        };
+
+        return StreamForwardingRules.BuildForwardedEnvelope(
+            original,
+            sourceActorId,
+            targetActorId,
+            StreamForwardingMode.HandleThenForward);
+    }
 
     private sealed class RecordingStreamProvider : IStreamProvider
     {

@@ -199,6 +199,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ActorId = pending.ActorId,
             ServiceId = pending.ServiceId,
             EndpointId = pending.EndpointId,
+            CompletionObserved = true,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
