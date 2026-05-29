@@ -547,6 +547,11 @@ body {
   padding: 0 12px;
 }
 
+.scope-chat-llm-route-select:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}
+
 .scope-chat-llm-options {
   flex: 1 1 auto;
   min-height: 0;
@@ -1052,6 +1057,11 @@ ol {
   color: #3c3834;
 }
 
+.search-input:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}
+
 .search-input::placeholder {
   color: var(--studio-placeholder-text);
 }
@@ -1087,6 +1097,12 @@ ol {
   border-color: rgba(var(--accent-rgb), 0.32);
   box-shadow: 0 0 0 3px var(--accent-focus);
   background: #fffdfc;
+}
+
+.panel-input:focus-visible,
+.panel-textarea:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
 }
 
 .solid-action,
@@ -1220,6 +1236,11 @@ ol {
   letter-spacing: -0.02em;
   line-height: 1.2;
   color: #1f2937;
+}
+
+.studio-title-input:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
 }
 
 .studio-title-input::placeholder {
@@ -1439,6 +1460,11 @@ ol {
   color: #1f2937;
 }
 
+.canvas-meta-select:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}
+
 .canvas-overlay-tools {
   position: absolute;
   top: 16px;
@@ -1622,7 +1648,8 @@ ol {
 
 .execution-logs-collapse-action:focus-visible,
 .execution-logs-copy-action:focus-visible {
-  outline: none;
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
   box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.14);
 }
 
