@@ -231,7 +231,7 @@ echo ""
 echo "==================================================================="
 echo "=== HARD GATE — AI MUST DISPATCH BEFORE END-TURN ================="
 echo "==================================================================="
-FLOOR_REQUIRED=5
+FLOOR_REQUIRED=10
 NEEDED=$(( FLOOR_REQUIRED - ACTIVE ))
 if [ -f .refactor-loop/.auto-stopped ]; then
     echo "STOP_ACTIVE=1 — dispatch FORBIDDEN (auto-stopped marker exists)"
