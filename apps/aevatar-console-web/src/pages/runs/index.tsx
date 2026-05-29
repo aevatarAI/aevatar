@@ -34,6 +34,7 @@ import {
 import {
   Button,
   Drawer,
+  Grid,
   Input,
   message,
   Popover,
@@ -265,6 +266,13 @@ const runsChatLayoutStyle: React.CSSProperties = {
   gridTemplateColumns: "minmax(272px, 320px) minmax(0, 1fr)",
   minHeight: 0,
   overflow: "hidden",
+};
+
+const runsChatCompactLayoutStyle: React.CSSProperties = {
+  ...runsChatLayoutStyle,
+  gridTemplateColumns: "minmax(0, 1fr)",
+  overflowX: "hidden",
+  overflowY: "auto",
 };
 
 const runsChatSidebarStyle: React.CSSProperties = {
@@ -502,6 +510,9 @@ function resolveConsoleViewForEndpoint(
 }
 
 const RunsPage: React.FC = () => {
+  const screens = Grid.useBreakpoint();
+  const hasResolvedBreakpoint = Object.values(screens).some(Boolean);
+  const useCompactChatLayout = hasResolvedBreakpoint && screens.md === false;
   const [messageApi, messageContextHolder] = message.useMessage();
   const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
   const draftRunKey = useMemo(() => {
@@ -2104,6 +2115,9 @@ const RunsPage: React.FC = () => {
       }}
     />
   );
+  const chatLayoutStyle = useCompactChatLayout
+    ? runsChatCompactLayoutStyle
+    : runsChatLayoutStyle;
 
   return (
     <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
@@ -2188,7 +2202,7 @@ const RunsPage: React.FC = () => {
           </div>
         </div>
         {isChatConsole ? (
-          <div style={runsChatLayoutStyle}>
+          <div data-testid="runs-chat-layout" style={chatLayoutStyle}>
             <div style={runsChatSidebarStyle}>{launchRailContent}</div>
             <div style={runsChatMainStyle}>
               {hasRunActivity ? (

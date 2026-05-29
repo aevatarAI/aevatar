@@ -58,6 +58,15 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflowToolDescription_ShouldMentionInlineWorkflowYamls()
+    {
+        var tool = await DiscoverSingleAsync(new StartWorkflowToolSource(new Harness().CreateDispatcher()));
+
+        tool.Description.Should().Contain("workflow_yamls");
+        tool.Description.Should().Contain("use_skill");
+    }
+
+    [Fact]
     public async Task QueryReadModelSchema_ShouldExposeClosedReadModelSet()
     {
         var tool = await DiscoverSingleAsync(new QueryReadModelToolSource(new Harness().CreateDispatcher()));
