@@ -229,21 +229,6 @@ type StudioBindingRunOutcome =
       readonly run: StudioMemberBindingRunStatusResponse | null;
     };
 
-const MEMBER_BINDING_RUN_POLL_INTERVAL_MS = 900;
-const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
-
-function waitForStudioMemberBindingRunTick(): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, MEMBER_BINDING_RUN_POLL_INTERVAL_MS);
-  });
-}
-
-function isStudioMemberBindingRunTerminal(
-  run: StudioMemberBindingRunStatusResponse,
-): boolean {
-  return ['succeeded', 'failed', 'rejected'].includes(run.status);
-}
-
 function buildStudioMemberBindingFailureMessage(
   run: StudioMemberBindingRunStatusResponse,
 ): string {
@@ -4664,39 +4649,29 @@ const StudioPage: React.FC = () => {
     selectedWorkflowId,
     studioScopeMembers,
   ]);
-  const waitForMemberBindingRun = useCallback(
+  const observeMemberBindingRunOnce = useCallback(
     async (
       receipt: StudioMemberBindingAcceptedResponse,
     ): Promise<StudioMemberBindingRunStatusResponse | null> => {
-      let latestRun: StudioMemberBindingRunStatusResponse | null = null;
-
-      for (let attempt = 0; attempt < MEMBER_BINDING_RUN_POLL_ATTEMPTS; attempt += 1) {
-        if (attempt > 0) {
-          await waitForStudioMemberBindingRunTick();
+      try {
+        const run = await studioApi.getMemberBindingRun(
+          receipt.scopeId,
+          receipt.memberId,
+          receipt.bindingRunId,
+        );
+        return run;
+      } catch (error) {
+        // Refactor (iter160-cluster-001 #1261-first):
+        // Old pattern: the feature waited on repeated timer ticks until the
+        // read model appeared, which made accepted ACK look like completion.
+        // New principle: query the existing run read model once, then keep the
+        // UI in accepted/pending/stale state until normal query refresh catches up.
+        if (isStudioApiStatus(error, 404)) {
+          return null;
         }
 
-        try {
-          latestRun = await studioApi.getMemberBindingRun(
-            receipt.scopeId,
-            receipt.memberId,
-            receipt.bindingRunId,
-          );
-        } catch (error) {
-          // The run status is read-model backed, so the first request can
-          // legitimately arrive before projection catches up to the accepted ACK.
-          if (isStudioApiStatus(error, 404)) {
-            continue;
-          }
-
-          throw error;
-        }
-
-        if (isStudioMemberBindingRunTerminal(latestRun)) {
-          return latestRun;
-        }
+        throw error;
       }
-
-      return latestRun;
     },
     [],
   );
@@ -4729,7 +4704,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4770,7 +4745,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4813,7 +4788,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -5024,7 +4999,7 @@ const StudioPage: React.FC = () => {
     scopeServicesQuery,
     studioMembersQueryKey,
     studioScopeMembers,
-    waitForMemberBindingRun,
+    observeMemberBindingRunOnce,
   ]);
 
   const openWorkspaceWorkflow = useCallback((workflowId: string) => {
