@@ -3,9 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Hosting.Tests.Responses;
 
@@ -16,7 +14,7 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
     {
         var webClient = new RecordingWebApiClient
         {
-            FetchResult = new FetchResult(
+            FetchResult = new WebFetchResult(
                 200,
                 "text/plain",
                 "fresh body",
@@ -45,12 +43,13 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
     {
         var webClient = new RecordingWebApiClient
         {
-            SearchResult = StructValue((
-                "results",
-                ListValue(StructValue(
-                    ("title", ProtoValue.ForString("fresh")),
-                    ("url", ProtoValue.ForString("https://example.com/fresh")),
-                    ("snippet", ProtoValue.ForString("fresh snippet")))))),
+            SearchResult = new WebSearchResult(
+            [
+                new WebSearchResultItem(
+                    "fresh",
+                    "https://example.com/fresh",
+                    "fresh snippet"),
+            ]),
         };
         var adapter = new ResponsesWebSubstituteBackendAdapter(
             webClient,
@@ -72,8 +71,8 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
 
     [Theory]
     [MemberData(nameof(MalformedSearchResults))]
-    public async Task ExecuteWebSearchAsync_WhenProviderValueHasNoResultsList_ShouldReturnEmptyTypedResults(
-        ProtoValue providerValue)
+    public async Task ExecuteWebSearchAsync_WhenProviderTypedResultHasNoResults_ShouldReturnEmptyTypedResults(
+        WebSearchResult providerValue)
     {
         var webClient = new RecordingWebApiClient
         {
@@ -115,48 +114,34 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
 
         public List<(string Token, string Url)> FetchCalls { get; } = [];
 
-        public ProtoValue SearchResult { get; init; } = StructValue(("results", ListValue()));
+        public WebSearchResult SearchResult { get; init; } = WebSearchResult.Empty;
 
-        public FetchResult FetchResult { get; init; } = new(
+        public WebFetchResult FetchResult { get; init; } = new(
             200,
             "text/plain",
             "body",
             null,
             "https://example.com");
 
-        public Task<ProtoValue> SearchAsync(string token, string query, int maxResults, CancellationToken ct)
+        public Task<WebSearchResult> SearchAsync(string token, string query, int maxResults, CancellationToken ct)
         {
             SearchCalls.Add((token, query, maxResults));
-            return Task.FromResult(SearchResult.Clone());
+            return Task.FromResult(SearchResult);
         }
 
-        public Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
+        public Task<WebFetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
         {
             FetchCalls.Add((token, url));
             return Task.FromResult(FetchResult);
         }
     }
 
-    public static TheoryData<ProtoValue> MalformedSearchResults() =>
+    public static TheoryData<WebSearchResult> MalformedSearchResults() =>
         new()
         {
-            ProtoValue.ForString("bad"),
-            StructValue(("items", ListValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
-            StructValue(("results", ProtoValue.ForString("bad"))),
+            WebSearchResult.Empty,
+            new WebSearchResult(
+                Array.Empty<WebSearchResultItem>(),
+                new WebToolError("unstructured_search_result", "bad")),
         };
-
-    private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
-    {
-        var value = new ProtoValue { StructValue = new Struct() };
-        foreach (var (key, fieldValue) in fields)
-            value.StructValue.Fields[key] = fieldValue;
-        return value;
-    }
-
-    private static ProtoValue ListValue(params ProtoValue[] values)
-    {
-        var value = new ProtoValue { ListValue = new ListValue() };
-        value.ListValue.Values.AddRange(values);
-        return value;
-    }
 }

@@ -15,20 +15,21 @@ public sealed class WebSearchToolExecutionTests
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                """{"results":[{"title":"Aevatar docs","url":"https://docs.example/aevatar"}],"count":1}"""),
+                """{"results":[{"title":"Aevatar docs","url":"https://docs.example/aevatar","snippet":"typed mapper"}],"count":1}"""),
         });
         using var http = new HttpClient(handler);
         var sut = CreateTool(http);
-        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        using var contextScope = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
 
         var result = await sut.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
         using var document = JsonDocument.Parse(result);
         var root = document.RootElement;
-        root.GetProperty("count").GetInt32().Should().Be(1);
+        root.TryGetProperty("count", out _).Should().BeFalse();
         var item = root.GetProperty("results")[0];
         item.GetProperty("title").GetString().Should().Be("Aevatar docs");
         item.GetProperty("url").GetString().Should().Be("https://docs.example/aevatar");
+        item.GetProperty("snippet").GetString().Should().Be("typed mapper");
 
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=3");
@@ -37,7 +38,7 @@ public sealed class WebSearchToolExecutionTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_NonJsonStringPayload_FallbackReturnsExpectedJson()
+    public async Task ExecuteAsync_NonJsonStringPayload_ReturnsTypedErrorJson()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -50,13 +51,44 @@ public sealed class WebSearchToolExecutionTests
         var result = await sut.ExecuteAsync("""{"query":"aevatar docs"}""");
 
         using var document = JsonDocument.Parse(result);
-        document.RootElement.ValueKind.Should().Be(JsonValueKind.String);
-        document.RootElement.GetString().Should().Be("plain text result");
+        document.RootElement.GetProperty("error").GetString().Should().Be("unstructured_search_result");
+        document.RootElement.GetProperty("message").GetString().Should().Be("plain text result");
 
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=aevatar%20docs&limit=9");
         request.Headers.Authorization!.Scheme.Should().Be("Bearer");
         request.Headers.Authorization!.Parameter.Should().Be("token-2");
+    }
+
+    [Fact]
+    public async Task SearchAsync_ShouldRoundTripProviderPayloadThroughTypedDtoAndBoundaryJson()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"results":[{"title":"fresh","url":"https://example.com/fresh","snippet":"fresh snippet","rank":1}]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-3", "fresh docs", 4, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem("fresh", "https://example.com/fresh", "fresh snippet"));
+
+        using var document = JsonDocument.Parse(WebToolResultBoundaryJson.ToBoundaryJson(result));
+        var root = document.RootElement;
+        root.TryGetProperty("rank", out _).Should().BeFalse();
+        var item = root.GetProperty("results")[0];
+        item.GetProperty("title").GetString().Should().Be("fresh");
+        item.GetProperty("url").GetString().Should().Be("https://example.com/fresh");
+        item.GetProperty("snippet").GetString().Should().Be("fresh snippet");
     }
 
     private static WebSearchTool CreateTool(HttpClient http)
