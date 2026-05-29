@@ -243,31 +243,9 @@ const workflowToolbarActionsStyle: React.CSSProperties = {
 const workflowViewSwitchStyle: React.CSSProperties = {
   background: '#f8f3e8',
   border: '1px solid #eadfcd',
-  borderRadius: 8,
+  borderRadius: 999,
   display: 'inline-flex',
-  gap: 2,
-  padding: 3,
-};
-
-const workflowViewSwitchButtonStyle: React.CSSProperties = {
-  background: 'transparent',
-  border: 0,
-  borderRadius: 6,
-  color: '#2b3038',
-  cursor: 'pointer',
-  fontSize: 13,
-  fontWeight: 650,
-  lineHeight: '20px',
-  minHeight: 30,
-  minWidth: 76,
-  padding: '5px 14px',
-};
-
-const workflowViewSwitchButtonActiveStyle: React.CSSProperties = {
-  ...workflowViewSwitchButtonStyle,
-  background: '#1677ff',
-  boxShadow: '0 1px 3px rgba(22, 119, 255, 0.22)',
-  color: '#ffffff',
+  padding: 4,
 };
 
 const workflowCanvasSurfaceStyle: React.CSSProperties = {
@@ -1351,33 +1329,25 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               </Typography.Text>
             </Space>
             <div style={workflowToolbarActionsStyle}>
-              <div aria-label="Workflow view" style={workflowViewSwitchStyle}>
-                <button
-                  aria-pressed={viewMode === 'canvas'}
+              <div style={workflowViewSwitchStyle}>
+                <Button
                   className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                  aria-pressed={viewMode === 'canvas'}
                   onClick={() => setViewMode('canvas')}
-                  style={
-                    viewMode === 'canvas'
-                      ? workflowViewSwitchButtonActiveStyle
-                      : workflowViewSwitchButtonStyle
-                  }
-                  type="button"
+                  size="small"
+                  type={viewMode === 'canvas' ? 'primary' : 'text'}
                 >
                   Canvas
-                </button>
-                <button
-                  aria-pressed={viewMode === 'yaml'}
+                </Button>
+                <Button
                   className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                  aria-pressed={viewMode === 'yaml'}
                   onClick={() => setViewMode('yaml')}
-                  style={
-                    viewMode === 'yaml'
-                      ? workflowViewSwitchButtonActiveStyle
-                      : workflowViewSwitchButtonStyle
-                  }
-                  type="button"
+                  size="small"
+                  type={viewMode === 'yaml' ? 'primary' : 'text'}
                 >
                   YAML
-                </button>
+                </Button>
               </div>
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
