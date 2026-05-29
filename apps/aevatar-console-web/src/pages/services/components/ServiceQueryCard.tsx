@@ -140,7 +140,11 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           <Button onClick={onLoad} type="primary">
             {loadLabel}
           </Button>
-          {onReset ? <Button onClick={onReset}>重置</Button> : null}
+          {onReset ? (
+            <Button aria-label="重置" onClick={onReset}>
+              重置
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -17,6 +17,7 @@ type TeamRosterMemberRow = {
   readonly description: string;
   readonly implementationKind: string;
   readonly isEntryMember?: boolean;
+  readonly isSelectedMember?: boolean;
   readonly key: string;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
@@ -162,11 +163,15 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       alignItems: "center",
                       background: row.isEntryMember
                         ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
+                        : row.isSelectedMember
+                          ? "var(--ant-colorFillQuaternary)"
                         : undefined,
                       borderTop:
                         index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
                       boxShadow: row.isEntryMember
                         ? "inset 4px 0 0 var(--ant-colorPrimary)"
+                        : row.isSelectedMember
+                          ? "inset 4px 0 0 var(--ant-colorInfo)"
                         : undefined,
                       display: "grid",
                       gap: 16,
@@ -194,6 +199,17 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               color: token.colorSuccess,
                             }}
                             text="入口成员"
+                          />
+                        ) : null}
+                        {row.isSelectedMember ? (
+                          <DetailPill
+                            compact
+                            style={{
+                              background: token.colorInfoBg,
+                              border: `1px solid ${token.colorInfoBorder}`,
+                              color: token.colorInfo,
+                            }}
+                            text="当前选中"
                           />
                         ) : null}
                       </div>
