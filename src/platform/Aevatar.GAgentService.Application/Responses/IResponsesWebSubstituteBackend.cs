@@ -1,3 +1,5 @@
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.GAgentService.Application.Responses;
 
 // Refactor (iter159/cluster-1215):
@@ -35,4 +37,4 @@ public sealed record ResponsesWebSearchBoundaryInput(
     string NyxIdAccessToken);
 
 public sealed record ResponsesWebSearchBoundaryResult(
-    Google.Protobuf.WellKnownTypes.Value Value);
+    ResponsesWebSearchToolOutput Output);

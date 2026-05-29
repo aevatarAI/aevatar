@@ -101,7 +101,9 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     Url = NormalizeOptional(trace.Url) ?? string.Empty,
                     Query = NormalizeOptional(trace.Query) ?? string.Empty,
                     CacheHit = trace.CacheHit,
-                    Result = trace.Result.Clone(),
+                    // Refactor (issue1251-first-r2): Old: first slice stopped writing legacy Value. New: keep typed result primary while writing Value as readmodel fallback.
+                    Result = ResponsesWebResultJson.ToLegacyValue(trace.Result),
+                    TypedResult = trace.Result.Clone(),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
                 $"{sourceResponseId}:web:{traceId}"),

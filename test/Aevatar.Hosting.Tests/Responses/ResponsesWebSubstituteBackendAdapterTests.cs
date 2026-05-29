@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
@@ -54,9 +55,8 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
             CancellationToken.None);
 
-        result.Value.StructValue.Fields["results"].ListValue.Values[0].StructValue.Fields["title"].StringValue
-            .Should()
-            .Be("fresh");
+        result.Output.Results.Should().ContainSingle();
+        result.Output.Results[0].Title.Should().Be("fresh");
         webClient.SearchCalls.Should().ContainSingle();
         webClient.SearchCalls[0].Token.Should().Be("secret-token");
         webClient.SearchCalls[0].Query.Should().Be("aevatar docs");

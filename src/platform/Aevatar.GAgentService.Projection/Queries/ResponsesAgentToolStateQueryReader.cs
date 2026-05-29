@@ -78,17 +78,29 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 trace.Url,
                 trace.Query,
                 trace.CacheHit,
-                ResponsesJsonValues.ToBoundaryJson(trace.Result),
+                ResolveWebResult(trace.TypedResult, trace.Result),
+                ResponsesWebResultJson.ToBoundaryJson(ResolveWebResult(trace.TypedResult, trace.Result)),
                 trace.ObservedAt)).ToArray(),
             document.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntrySnapshot(
                 entry.CacheKey,
                 entry.ToolName,
                 entry.Url,
                 entry.Query,
-                entry.Result.Clone(),
+                ResolveWebResult(entry.TypedResult, entry.Result),
                 entry.CachedAt,
                 entry.LastHitAt,
                 entry.HitCount)).ToArray());
+
+    private static ResponsesWebToolResult ResolveWebResult(
+        ResponsesWebToolResult? typedResult,
+        Google.Protobuf.WellKnownTypes.Value? legacyResult)
+    {
+        if (typedResult != null && typedResult.ResultCase != ResponsesWebToolResult.ResultOneofCase.None)
+            return typedResult.Clone();
+
+        // Refactor (issue1251-first): Old: query snapshots exposed legacy Value directly. New: typed result is primary; legacy Value is converted only for old readmodels.
+        return ResponsesWebResultJson.FromLegacyValue(legacyResult);
+    }
 
     private async Task<ResponsesAgentToolStateCurrentStateReadModel?> GetDocumentAsync(
         string scopeId,

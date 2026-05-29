@@ -152,7 +152,11 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             Url: "https://example.com",
             Query: string.Empty,
             CacheHit: false,
-            Result: ResponsesJsonValues.ParseBoundaryPayload("""{"content":"x"}"""));
+            Result: ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            {
+                Url = "https://example.com",
+                Content = "x",
+            }));
 
         var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
 
@@ -160,7 +164,9 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         dispatch.Calls.Should().HaveCount(2);
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be("web_explicit");
-        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("""{"content":"x"}""");
+        packed.TypedResult.Fetch.Content.Should().Be("x");
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be(
+            """{"url":"https://example.com","status_code":0,"content_type":"","content":"x"}""");
     }
 
     [Fact]
@@ -174,7 +180,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             Url: string.Empty,
             Query: "weather",
             CacheHit: true,
-            Result: ResponsesJsonValues.ParseBoundaryPayload(string.Empty));
+            Result: new ResponsesWebToolResult());
 
         var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
 
@@ -182,7 +188,9 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         result.CacheHit.Should().BeTrue();
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be(result.TraceId);
-        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
+        packed.TypedResult.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.None);
+        packed.Result.Should().NotBeNull();
+        packed.Result.KindCase.Should().Be(Google.Protobuf.WellKnownTypes.Value.KindOneofCase.None);
     }
 
     [Fact]

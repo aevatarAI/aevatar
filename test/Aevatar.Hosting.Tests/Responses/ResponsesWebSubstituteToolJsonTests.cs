@@ -52,10 +52,15 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Cached = StructValue(
-                ("url", ProtoValue.ForString("https://example.com/docs")),
-                ("content", ProtoValue.ForString("cached body")),
-                ("status_code", ProtoValue.ForNumber(200))),
+            TypedCached = new ResponsesWebToolResult
+            {
+                Fetch = new ResponsesWebFetchToolOutput
+                {
+                    Url = "https://example.com/docs",
+                    Content = "cached body",
+                    StatusCode = 200,
+                },
+            },
         };
 
         using var document = ParseBoundaryJson(result);
@@ -96,7 +101,10 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Error = StructValue(("error", ProtoValue.ForString("blocked_private_address"))),
+            TypedError = new ResponsesWebToolError
+            {
+                Code = "blocked_private_address",
+            },
         };
 
         using var document = ParseBoundaryJson(result);
@@ -110,7 +118,7 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Search = StructValue(("results", ListValue())),
+            TypedSearch = new ResponsesWebSearchToolOutput(),
         };
 
         using var document = ParseBoundaryJson(result);
@@ -131,7 +139,7 @@ public sealed class ResponsesWebSubstituteToolJsonTests
         var emptyFetch = ResponsesWebSubstituteToolJson.ToBoundaryJson(
             new ResponsesWebSubstituteToolExecutionResult { Fetch = new ResponsesWebFetchToolOutput() });
         var emptySearch = ResponsesWebSubstituteToolJson.ToBoundaryJson(
-            new ResponsesWebSubstituteToolExecutionResult { Search = StructValue(("results", ListValue())) });
+            new ResponsesWebSubstituteToolExecutionResult { TypedSearch = new ResponsesWebSearchToolOutput() });
 
         JsonDocument.Parse(emptyOneof).RootElement.ValueKind.Should().Be(JsonValueKind.Object);
         JsonDocument.Parse(emptyValue).RootElement.ValueKind.Should().Be(JsonValueKind.Object);

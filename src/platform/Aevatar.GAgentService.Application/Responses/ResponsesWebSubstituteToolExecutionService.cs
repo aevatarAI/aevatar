@@ -4,7 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Google.Protobuf.WellKnownTypes;
+using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -53,6 +53,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
         var url = validation.NormalizedUrl!;
         var cacheKey = ComputeCacheKey(request.ToolName, url);
+        // Refactor (issue1251-first): Old: fetch trace/cache result was downgraded to Value before recording. New: trace/cache normal writes carry typed ResponsesWebToolResult.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,
@@ -71,7 +72,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
                 ct).ConfigureAwait(false);
             return new ResponsesWebSubstituteToolExecutionResult
             {
-                Cached = cached.Result.Clone(),
+                TypedCached = cached.Result.Clone(),
             };
         }
 
@@ -88,14 +89,14 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             Content = output.Content,
             RedirectUrl = output.RedirectUrl,
         };
-        var outputValue = ToValue(protoOutput);
+        var typedOutput = ResponsesWebResultJson.FromFetch(protoOutput);
         await RecordTraceAsync(
             request,
             cacheKey,
             url,
             query: string.Empty,
             cacheHit: false,
-            outputValue,
+            typedOutput,
             ct).ConfigureAwait(false);
         return new ResponsesWebSubstituteToolExecutionResult { Fetch = protoOutput };
     }
@@ -114,6 +115,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         maxResults = Math.Clamp(maxResults, 1, 20);
         var cacheValue = $"{query.Trim()}\n{maxResults}";
         var cacheKey = ComputeCacheKey(request.ToolName, cacheValue);
+        // Refactor (issue1251-first): Old: search/error trace/cache results were written as Value. New: typed search/error results are written through the existing command->actor->projection chain.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,
@@ -131,26 +133,40 @@ public sealed class ResponsesWebSubstituteToolExecutionService
                 ct).ConfigureAwait(false);
             return new ResponsesWebSubstituteToolExecutionResult
             {
-                Cached = cached.Result.Clone(),
+                TypedCached = cached.Result.Clone(),
             };
         }
 
-        var searchResult = string.IsNullOrWhiteSpace(request.NyxIdAccessToken)
-            ? ErrorValue("No NyxID access token available. User must be authenticated.")
-            : (await _backend.ExecuteWebSearchAsync(
+        if (string.IsNullOrWhiteSpace(request.NyxIdAccessToken))
+        {
+            var authError = ResponsesWebResultJson.FromError(
+                "auth_required",
+                "No NyxID access token available. User must be authenticated.");
+            await RecordTraceAsync(
+                request,
+                cacheKey,
+                query,
+                cacheHit: false,
+                authError,
+                ct).ConfigureAwait(false);
+            return new ResponsesWebSubstituteToolExecutionResult { TypedError = authError.Error.Clone() };
+        }
+
+        var searchResult = (await _backend.ExecuteWebSearchAsync(
                 new ResponsesWebSearchBoundaryInput(
                     query.Trim(),
                     maxResults,
                     request.NyxIdAccessToken),
-                ct).ConfigureAwait(false)).Value;
+                ct).ConfigureAwait(false)).Output;
+        var typedSearchResult = ResponsesWebResultJson.FromSearch(searchResult);
         await RecordTraceAsync(
             request,
             cacheKey,
             query,
             cacheHit: false,
-            searchResult,
+            typedSearchResult,
             ct).ConfigureAwait(false);
-        return new ResponsesWebSubstituteToolExecutionResult { Search = searchResult };
+        return new ResponsesWebSubstituteToolExecutionResult { TypedSearch = searchResult };
     }
 
     private Task RecordTraceAsync(
@@ -159,7 +175,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         string url,
         string query,
         bool cacheHit,
-        Value result,
+        ResponsesWebToolResult result,
         CancellationToken ct) =>
         _commandPort.RecordWebTraceAsync(
             request.ScopeId,
@@ -180,7 +196,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         string cacheKey,
         string query,
         bool cacheHit,
-        Value result,
+        ResponsesWebToolResult result,
         CancellationToken ct) =>
         RecordTraceAsync(request, cacheKey, url: string.Empty, query, cacheHit, result, ct);
 
@@ -204,26 +220,10 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
     private static ResponsesWebSubstituteToolExecutionResult Error(string code)
     {
-        return new ResponsesWebSubstituteToolExecutionResult { Error = ErrorValue(code) };
-    }
-
-    private static Value ErrorValue(string code)
-    {
-        var error = new Value { StructValue = new Struct() };
-        error.StructValue.Fields["error"] = Value.ForString(code);
-        return error;
-    }
-
-    private static Value ToValue(ResponsesWebFetchToolOutput output)
-    {
-        var value = new Value { StructValue = new Struct() };
-        value.StructValue.Fields["url"] = Value.ForString(output.Url);
-        value.StructValue.Fields["status_code"] = Value.ForNumber(output.StatusCode);
-        value.StructValue.Fields["content_type"] = Value.ForString(output.ContentType);
-        value.StructValue.Fields["content"] = Value.ForString(output.Content);
-        if (!string.IsNullOrWhiteSpace(output.RedirectUrl))
-            value.StructValue.Fields["redirect_url"] = Value.ForString(output.RedirectUrl);
-        return value;
+        return new ResponsesWebSubstituteToolExecutionResult
+        {
+            TypedError = ResponsesWebResultJson.FromError(code).Error,
+        };
     }
 
     private static class ResponsesWebFetchUrlGuard

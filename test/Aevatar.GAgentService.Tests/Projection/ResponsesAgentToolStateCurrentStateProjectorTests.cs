@@ -50,11 +50,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         snapshot.Tasks[0].ArgumentsJson.Should().Be("{}");
         snapshot.Tasks[0].ResultJson.Should().Be("""{"status":"accepted"}""");
         snapshot.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
-        snapshot.WebTraces[0].ResultJson.Should().Be("""{"content":"fresh"}""");
+        snapshot.WebTraces[0].ResultJson.Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
+        snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("fresh");
 
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
-        ResponsesJsonValues.ToBoundaryJson(cache!.Result).Should().Be("""{"content":"fresh"}""");
+        ResponsesWebResultJson.ToBoundaryJson(cache!.Result).Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
     }
 
     [Fact]
@@ -140,7 +141,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
+            TypedResult = ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            {
+                Url = "https://example.com",
+                StatusCode = 200,
+                Content = "fresh",
+            }),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
         state.WebCacheEntries.Add(new ResponsesWebCacheEntry
@@ -148,7 +154,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             CacheKey = "cache-1",
             ToolName = "WebFetch",
             Url = "https://example.com",
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
+            TypedResult = ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            {
+                Url = "https://example.com",
+                StatusCode = 200,
+                Content = "fresh",
+            }),
             CachedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
 

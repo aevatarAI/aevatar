@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -104,7 +105,9 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             Url = NormalizeOptional(command.Url) ?? string.Empty,
             Query = NormalizeOptional(command.Query) ?? string.Empty,
             CacheHit = command.CacheHit,
-            Result = command.Result?.Clone(),
+            // Refactor (issue1251-first-r2): Old: typed result writes left legacy Value empty. New: typed remains primary and Value is retained as readmodel fallback.
+            Result = command.Result?.Clone() ?? ResponsesWebResultJson.ToLegacyValue(command.TypedResult),
+            TypedResult = command.TypedResult?.Clone(),
             ObservedAt = observedAt,
         };
         ValidateWebTrace(trace);
@@ -191,6 +194,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
                 Url = trace.Url,
                 Query = trace.Query,
                 Result = trace.Result?.Clone(),
+                TypedResult = trace.TypedResult?.Clone(),
                 CachedAt = trace.ObservedAt.Clone(),
                 LastHitAt = trace.CacheHit ? trace.ObservedAt.Clone() : null,
                 HitCount = trace.CacheHit ? 1 : 0,
@@ -206,6 +210,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
         }
 
         existing.Result = trace.Result?.Clone();
+        existing.TypedResult = trace.TypedResult?.Clone();
         existing.Url = trace.Url;
         existing.Query = trace.Query;
         existing.CachedAt = trace.ObservedAt.Clone();
