@@ -67,7 +67,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
-        services.TryAddSingleton<IRetiredActorCleanupCoordinatorResultPort, RetiredActorCleanupCoordinatorResultPort>();
+        services.TryAddSingleton<
+            IRetiredActorCleanupCoordinatorContinuationPort,
+            RetiredActorCleanupCoordinatorContinuationPort>();
 
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();

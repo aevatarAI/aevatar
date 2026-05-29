@@ -30,7 +30,6 @@ message RetiredActorCleanupAcquireLeaseCommand {
   string owner_token = 3;
   int64 lease_timeout_seconds = 4;
   google.protobuf.Timestamp requested_at = 5;
-  string result_stream_id = 6;
 }
 
 message RetiredActorCleanupCheckLeaseCommand {
@@ -38,7 +37,6 @@ message RetiredActorCleanupCheckLeaseCommand {
   string spec_id = 2;
   string owner_token = 3;
   google.protobuf.Timestamp checked_at = 4;
-  string result_stream_id = 5;
 }
 
 message RetiredActorCleanupReleaseLeaseCommand {
@@ -46,7 +44,6 @@ message RetiredActorCleanupReleaseLeaseCommand {
   string spec_id = 2;
   string owner_token = 3;
   google.protobuf.Timestamp released_at = 4;
-  string result_stream_id = 5;
 }
 
 message RetiredActorCleanupRecordFailureCommand {
@@ -55,7 +52,6 @@ message RetiredActorCleanupRecordFailureCommand {
   string owner_token = 3;
   string reason = 4;
   google.protobuf.Timestamp occurred_at = 5;
-  string result_stream_id = 6;
 }
 
 enum RetiredActorCleanupAcquireLeaseStatus {
@@ -126,12 +122,28 @@ message RetiredActorCleanupRecordFailureResult {
   string message = 7;
 }
 
-message RetiredActorCleanupCoordinatorCommandResult {
-  oneof result {
-    RetiredActorCleanupAcquireLeaseResult acquire_lease = 1;
-    RetiredActorCleanupCheckLeaseResult check_lease = 2;
-    RetiredActorCleanupReleaseLeaseResult release_lease = 3;
-    RetiredActorCleanupRecordFailureResult record_failure = 4;
+message RetiredActorCleanupAcquireLeaseContinuation {
+  RetiredActorCleanupAcquireLeaseResult result = 1;
+}
+
+message RetiredActorCleanupCheckLeaseContinuation {
+  RetiredActorCleanupCheckLeaseResult result = 1;
+}
+
+message RetiredActorCleanupReleaseLeaseContinuation {
+  RetiredActorCleanupReleaseLeaseResult result = 1;
+}
+
+message RetiredActorCleanupRecordFailureContinuation {
+  RetiredActorCleanupRecordFailureResult result = 1;
+}
+
+message RetiredActorCleanupCoordinatorContinuation {
+  oneof continuation {
+    RetiredActorCleanupAcquireLeaseContinuation acquire_lease = 1;
+    RetiredActorCleanupCheckLeaseContinuation check_lease = 2;
+    RetiredActorCleanupReleaseLeaseContinuation release_lease = 3;
+    RetiredActorCleanupRecordFailureContinuation record_failure = 4;
   }
 }
 

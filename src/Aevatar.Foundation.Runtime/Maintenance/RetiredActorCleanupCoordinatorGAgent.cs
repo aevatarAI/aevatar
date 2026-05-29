@@ -14,11 +14,8 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
     public const string Kind = "foundation.retired-actor-cleanup-coordinator";
     public const string ActorId = "foundation.retired-actor-cleanup-coordinator";
 
-    private readonly IRetiredActorCleanupCoordinatorResultPort _resultPort;
-
-    public RetiredActorCleanupCoordinatorGAgent(IRetiredActorCleanupCoordinatorResultPort resultPort)
+    public RetiredActorCleanupCoordinatorGAgent()
     {
-        _resultPort = resultPort ?? throw new ArgumentNullException(nameof(resultPort));
         InitializeId();
     }
 
@@ -29,7 +26,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
 
         var now = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         RetiredActorCleanupAcquireLeaseResult result;
-        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, command.ResultStreamId, out var invalidReason))
+        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, out var invalidReason))
         {
             result = new RetiredActorCleanupAcquireLeaseResult
             {
@@ -77,10 +74,10 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
             };
         }
 
-        await PublishResultAsync(command.ResultStreamId, new RetiredActorCleanupCoordinatorCommandResult
+        await PublishAsync(new RetiredActorCleanupAcquireLeaseContinuation
         {
-            AcquireLease = result,
-        }).ConfigureAwait(false);
+            Result = result,
+        }, TopologyAudience.Self).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -90,7 +87,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
 
         var now = command.CheckedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         RetiredActorCleanupCheckLeaseResult result;
-        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, command.ResultStreamId, out var invalidReason))
+        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, out var invalidReason))
         {
             result = new RetiredActorCleanupCheckLeaseResult
             {
@@ -134,10 +131,10 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
             };
         }
 
-        await PublishResultAsync(command.ResultStreamId, new RetiredActorCleanupCoordinatorCommandResult
+        await PublishAsync(new RetiredActorCleanupCheckLeaseContinuation
         {
-            CheckLease = result,
-        }).ConfigureAwait(false);
+            Result = result,
+        }, TopologyAudience.Self).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -147,7 +144,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
 
         var now = command.ReleasedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         RetiredActorCleanupReleaseLeaseResult result;
-        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, command.ResultStreamId, out var invalidReason))
+        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, out var invalidReason))
         {
             result = new RetiredActorCleanupReleaseLeaseResult
             {
@@ -188,10 +185,10 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
             };
         }
 
-        await PublishResultAsync(command.ResultStreamId, new RetiredActorCleanupCoordinatorCommandResult
+        await PublishAsync(new RetiredActorCleanupReleaseLeaseContinuation
         {
-            ReleaseLease = result,
-        }).ConfigureAwait(false);
+            Result = result,
+        }, TopologyAudience.Self).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -201,7 +198,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
 
         var now = command.OccurredAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         RetiredActorCleanupRecordFailureResult result;
-        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, command.ResultStreamId, out var invalidReason))
+        if (!ValidateCommand(command.CommandId, command.SpecId, command.OwnerToken, out var invalidReason))
         {
             result = new RetiredActorCleanupRecordFailureResult
             {
@@ -246,10 +243,10 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
             };
         }
 
-        await PublishResultAsync(command.ResultStreamId, new RetiredActorCleanupCoordinatorCommandResult
+        await PublishAsync(new RetiredActorCleanupRecordFailureContinuation
         {
-            RecordFailure = result,
-        }).ConfigureAwait(false);
+            Result = result,
+        }, TopologyAudience.Self).ConfigureAwait(false);
     }
 
     protected override RetiredActorCleanupCoordinatorState TransitionState(
@@ -349,7 +346,6 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
         string commandId,
         string specId,
         string ownerToken,
-        string resultStreamId,
         out string reason)
     {
         if (string.IsNullOrWhiteSpace(commandId))
@@ -370,20 +366,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgent : GAgentBase<RetiredAct
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(resultStreamId))
-        {
-            reason = "result_stream_id is required.";
-            return false;
-        }
-
         reason = string.Empty;
         return true;
     }
-
-    private Task PublishResultAsync(
-        string resultStreamId,
-        RetiredActorCleanupCoordinatorCommandResult result) =>
-        string.IsNullOrWhiteSpace(resultStreamId)
-            ? Task.CompletedTask
-            : _resultPort.PublishAsync(resultStreamId, result, CancellationToken.None);
 }

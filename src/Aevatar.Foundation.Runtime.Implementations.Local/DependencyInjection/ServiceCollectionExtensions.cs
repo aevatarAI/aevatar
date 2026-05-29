@@ -86,7 +86,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
-        services.TryAddSingleton<IRetiredActorCleanupCoordinatorResultPort, RetiredActorCleanupCoordinatorResultPort>();
+        services.TryAddSingleton<
+            IRetiredActorCleanupCoordinatorContinuationPort,
+            RetiredActorCleanupCoordinatorContinuationPort>();
 
         // Deduplication
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();

@@ -9,6 +9,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -567,7 +568,6 @@ public sealed class RetiredActorCleanupHostedServiceTests
         });
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new CoordinatedCleanupDispatchPort();
-        var resultPort = dispatchPort.ResultPort;
         var service = CreateService(
             typeProbe,
             runtime,
@@ -575,7 +575,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             eventStore,
             CreateChannelRuntimeSpec(),
             dispatchPort: dispatchPort,
-            resultPort: resultPort);
+            continuationPort: dispatchPort.ContinuationPort);
 
         await service.StartAsync(CancellationToken.None);
 
@@ -595,11 +595,11 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
-    public async Task CoordinatorGAgent_ShouldGrantDenyCheckRelease_AndRecordFailureWithTypedResults()
+    public async Task CoordinatorGAgent_ShouldGrantDenyCheckRelease_AndRecordFailureWithContinuations()
     {
         // Refactor (issue1056/impl): Old pattern: hosted-service EventStore marker replay/write. New principle: actor-owned cleanup lease via IActorDispatchPort + EventEnvelope + narrow command-result contract (Phase 9 r6 consensus).
-        var resultPort = new RecordingCleanupResultPort();
-        var agent = CreateCoordinatorAgent(resultPort);
+        var publisher = new RecordingCoordinatorContinuationPublisher();
+        var agent = CreateCoordinatorAgent(publisher);
         await agent.ActivateAsync(CancellationToken.None);
 
         await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
@@ -609,10 +609,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
             OwnerToken = "owner-a",
             LeaseTimeoutSeconds = 300,
             RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ResultStreamId = "result-a",
         }));
 
-        resultPort.AcquireResults.Single().Status.Should()
+        publisher.AcquireContinuations.Single().Result.Status.Should()
             .Be(RetiredActorCleanupAcquireLeaseStatus.Granted);
 
         await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
@@ -622,10 +621,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
             OwnerToken = "owner-b",
             LeaseTimeoutSeconds = 300,
             RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ResultStreamId = "result-b",
         }));
 
-        resultPort.AcquireResults.Last().Status.Should()
+        publisher.AcquireContinuations.Last().Result.Status.Should()
             .Be(RetiredActorCleanupAcquireLeaseStatus.Denied);
 
         await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupCheckLeaseCommand
@@ -634,10 +632,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
             SpecId = "spec-a",
             OwnerToken = "owner-a",
             CheckedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ResultStreamId = "result-check",
         }));
 
-        resultPort.CheckResults.Single().Status.Should()
+        publisher.CheckContinuations.Single().Result.Status.Should()
             .Be(RetiredActorCleanupCheckLeaseStatus.StillOwner);
 
         await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupRecordFailureCommand
@@ -647,12 +644,11 @@ public sealed class RetiredActorCleanupHostedServiceTests
             OwnerToken = "owner-a",
             Reason = "cleanup failed",
             OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ResultStreamId = "result-failure",
         }));
 
-        resultPort.RecordFailureResults.Single().Status.Should()
+        publisher.RecordFailureContinuations.Single().Result.Status.Should()
             .Be(RetiredActorCleanupRecordFailureStatus.Recorded);
-        resultPort.RecordFailureResults.Single().FailureCount.Should().Be(1);
+        publisher.RecordFailureContinuations.Single().Result.FailureCount.Should().Be(1);
 
         await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupReleaseLeaseCommand
         {
@@ -660,12 +656,152 @@ public sealed class RetiredActorCleanupHostedServiceTests
             SpecId = "spec-a",
             OwnerToken = "owner-a",
             ReleasedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ResultStreamId = "result-release",
         }));
 
-        resultPort.ReleaseResults.Single().Status.Should()
+        publisher.ReleaseContinuations.Single().Result.Status.Should()
             .Be(RetiredActorCleanupReleaseLeaseStatus.Released);
         agent.State.Leases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CoordinatorGAgent_ShouldEmitInvalidAcquireContinuation_WhenCommandIsInvalid()
+    {
+        var publisher = new RecordingCoordinatorContinuationPublisher();
+        var agent = CreateCoordinatorAgent(publisher);
+        await agent.ActivateAsync(CancellationToken.None);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = string.Empty,
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            LeaseTimeoutSeconds = 300,
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        var result = publisher.AcquireContinuations.Single().Result;
+        result.Status.Should().Be(RetiredActorCleanupAcquireLeaseStatus.Invalid);
+        result.Message.Should().Be("command_id is required.");
+        agent.State.Leases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CoordinatorGAgent_ShouldAllowExpiredLeaseReacquire()
+    {
+        var publisher = new RecordingCoordinatorContinuationPublisher();
+        var agent = CreateCoordinatorAgent(publisher);
+        await agent.ActivateAsync(CancellationToken.None);
+        var acquiredAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-10));
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = "cmd-acquire-old",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            LeaseTimeoutSeconds = 60,
+            RequestedAt = acquiredAt,
+        }));
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = "cmd-acquire-new",
+            SpecId = "spec-a",
+            OwnerToken = "owner-b",
+            LeaseTimeoutSeconds = 60,
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        publisher.AcquireContinuations.Should().HaveCount(2);
+        publisher.AcquireContinuations.Last().Result.Status.Should()
+            .Be(RetiredActorCleanupAcquireLeaseStatus.Granted);
+        agent.State.Leases["spec-a"].OwnerToken.Should().Be("owner-b");
+    }
+
+    [Fact]
+    public async Task CoordinatorGAgent_ShouldEmitNotOwnerAndIgnoredContinuations()
+    {
+        var publisher = new RecordingCoordinatorContinuationPublisher();
+        var agent = CreateCoordinatorAgent(publisher);
+        await agent.ActivateAsync(CancellationToken.None);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = "cmd-acquire-a",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            LeaseTimeoutSeconds = 300,
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupCheckLeaseCommand
+        {
+            CommandId = "cmd-check-b",
+            SpecId = "spec-a",
+            OwnerToken = "owner-b",
+            CheckedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupReleaseLeaseCommand
+        {
+            CommandId = "cmd-release-b",
+            SpecId = "spec-a",
+            OwnerToken = "owner-b",
+            ReleasedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupRecordFailureCommand
+        {
+            CommandId = "cmd-failure-b",
+            SpecId = "spec-a",
+            OwnerToken = "owner-b",
+            Reason = "not owner",
+            OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }));
+
+        publisher.CheckContinuations.Single().Result.Status.Should()
+            .Be(RetiredActorCleanupCheckLeaseStatus.NotOwner);
+        publisher.ReleaseContinuations.Single().Result.Status.Should()
+            .Be(RetiredActorCleanupReleaseLeaseStatus.NotOwner);
+        publisher.RecordFailureContinuations.Single().Result.Status.Should()
+            .Be(RetiredActorCleanupRecordFailureStatus.Ignored);
+        agent.State.Leases["spec-a"].OwnerToken.Should().Be("owner-a");
+    }
+
+    [Fact]
+    public async Task ContinuationPort_ShouldSubscribeToCoordinatorStream_AndIgnoreOtherPayloads()
+    {
+        var streams = new InMemoryStreamProvider();
+        var port = new RetiredActorCleanupCoordinatorContinuationPort(streams);
+        var received = new List<RetiredActorCleanupCoordinatorContinuation>();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var subscription = await port.SubscribeAsync(continuation =>
+        {
+            received.Add(continuation);
+            completed.SetResult();
+            return Task.CompletedTask;
+        });
+
+        await streams
+            .GetStream(RetiredActorCleanupCoordinatorGAgent.ActorId)
+            .ProduceAsync(new StringValue { Value = "ignored" });
+
+        await streams
+            .GetStream(RetiredActorCleanupCoordinatorGAgent.ActorId)
+            .ProduceAsync(new RetiredActorCleanupAcquireLeaseContinuation
+            {
+                Result = new RetiredActorCleanupAcquireLeaseResult
+                {
+                    CommandId = "cmd-a",
+                    SpecId = "spec-a",
+                    OwnerToken = "owner-a",
+                    Status = RetiredActorCleanupAcquireLeaseStatus.Granted,
+                },
+            });
+
+        await completed.Task;
+        received.Should().ContainSingle();
+        received.Single().AcquireLease.Result.CommandId.Should().Be("cmd-a");
     }
 
     private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
@@ -682,8 +818,8 @@ public sealed class RetiredActorCleanupHostedServiceTests
         IRetiredActorSpec spec,
         IServiceProvider? services = null,
         IActorDispatchPort? dispatchPort = null,
-        IRetiredActorCleanupCoordinatorResultPort? resultPort = null) =>
-        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services, dispatchPort, resultPort);
+        IRetiredActorCleanupCoordinatorContinuationPort? continuationPort = null) =>
+        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services, dispatchPort, continuationPort);
 
     private static RetiredActorCleanupHostedService CreateService(
         IActorTypeProbe typeProbe,
@@ -693,7 +829,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         IReadOnlyList<IRetiredActorSpec> specs,
         IServiceProvider? services = null,
         IActorDispatchPort? dispatchPort = null,
-        IRetiredActorCleanupCoordinatorResultPort? resultPort = null)
+        IRetiredActorCleanupCoordinatorContinuationPort? continuationPort = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -705,16 +841,16 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         var resolvedServices = services ?? BuildSpecServices(eventStore, typeProbe);
         var resolvedDispatchPort = dispatchPort ?? new CoordinatedCleanupDispatchPort();
-        var resolvedResultPort = resultPort ??
-                                 (resolvedDispatchPort as CoordinatedCleanupDispatchPort)?.ResultPort ??
-                                 new RecordingCleanupResultPort();
+        var resolvedContinuationPort = continuationPort ??
+                                       (resolvedDispatchPort as CoordinatedCleanupDispatchPort)?.ContinuationPort ??
+                                       new RecordingCleanupContinuationPort();
 
         return new RetiredActorCleanupHostedService(
             specs,
             typeProbe,
             runtime,
             resolvedDispatchPort,
-            resolvedResultPort,
+            resolvedContinuationPort,
             streamProvider,
             eventStore,
             eventStore,
@@ -886,13 +1022,14 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     private static RetiredActorCleanupCoordinatorGAgent CreateCoordinatorAgent(
-        RecordingCleanupResultPort resultPort)
+        RecordingCoordinatorContinuationPublisher publisher)
     {
         var eventStore = new InMemoryEventStore();
-        return new RetiredActorCleanupCoordinatorGAgent(resultPort)
+        return new RetiredActorCleanupCoordinatorGAgent
         {
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<RetiredActorCleanupCoordinatorState>(eventStore),
+            EventPublisher = publisher,
             Services = new ServiceCollection()
                 .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
                 .BuildServiceProvider(),
@@ -910,7 +1047,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
     private sealed class CoordinatedCleanupDispatchPort : IActorDispatchPort
     {
-        public RecordingCleanupResultPort ResultPort { get; } = new();
+        public RecordingCleanupContinuationPort ContinuationPort { get; } = new();
 
         public List<IMessage> Payloads { get; } = [];
 
@@ -923,139 +1060,190 @@ public sealed class RetiredActorCleanupHostedServiceTests
             if (envelope.Payload!.TryUnpack<RetiredActorCleanupAcquireLeaseCommand>(out var acquire))
             {
                 Payloads.Add(acquire);
-                ResultPort.Complete(acquire.CommandId, new RetiredActorCleanupAcquireLeaseResult
-                {
-                    CommandId = acquire.CommandId,
-                    SpecId = acquire.SpecId,
-                    OwnerToken = acquire.OwnerToken,
-                    Status = RetiredActorCleanupAcquireLeaseStatus.Granted,
-                    CurrentOwnerToken = acquire.OwnerToken,
-                });
+                return CompleteAsync(
+                    actorId,
+                    envelope,
+                    new RetiredActorCleanupCoordinatorContinuation
+                    {
+                        AcquireLease = new RetiredActorCleanupAcquireLeaseContinuation
+                        {
+                            Result = new RetiredActorCleanupAcquireLeaseResult
+                            {
+                                CommandId = acquire.CommandId,
+                                SpecId = acquire.SpecId,
+                                OwnerToken = acquire.OwnerToken,
+                                Status = RetiredActorCleanupAcquireLeaseStatus.Granted,
+                                CurrentOwnerToken = acquire.OwnerToken,
+                            },
+                        },
+                    },
+                    ct);
             }
-            else if (envelope.Payload.TryUnpack<RetiredActorCleanupCheckLeaseCommand>(out var check))
+
+            if (envelope.Payload.TryUnpack<RetiredActorCleanupCheckLeaseCommand>(out var check))
             {
                 Payloads.Add(check);
-                ResultPort.Complete(check.CommandId, new RetiredActorCleanupCheckLeaseResult
-                {
-                    CommandId = check.CommandId,
-                    SpecId = check.SpecId,
-                    OwnerToken = check.OwnerToken,
-                    Status = RetiredActorCleanupCheckLeaseStatus.StillOwner,
-                    CurrentOwnerToken = check.OwnerToken,
-                });
+                return CompleteAsync(
+                    actorId,
+                    envelope,
+                    new RetiredActorCleanupCoordinatorContinuation
+                    {
+                        CheckLease = new RetiredActorCleanupCheckLeaseContinuation
+                        {
+                            Result = new RetiredActorCleanupCheckLeaseResult
+                            {
+                                CommandId = check.CommandId,
+                                SpecId = check.SpecId,
+                                OwnerToken = check.OwnerToken,
+                                Status = RetiredActorCleanupCheckLeaseStatus.StillOwner,
+                                CurrentOwnerToken = check.OwnerToken,
+                            },
+                        },
+                    },
+                    ct);
             }
-            else if (envelope.Payload.TryUnpack<RetiredActorCleanupReleaseLeaseCommand>(out var release))
+
+            if (envelope.Payload.TryUnpack<RetiredActorCleanupReleaseLeaseCommand>(out var release))
             {
                 Payloads.Add(release);
-                ResultPort.Complete(release.CommandId, new RetiredActorCleanupReleaseLeaseResult
-                {
-                    CommandId = release.CommandId,
-                    SpecId = release.SpecId,
-                    OwnerToken = release.OwnerToken,
-                    Status = RetiredActorCleanupReleaseLeaseStatus.Released,
-                });
+                return CompleteAsync(
+                    actorId,
+                    envelope,
+                    new RetiredActorCleanupCoordinatorContinuation
+                    {
+                        ReleaseLease = new RetiredActorCleanupReleaseLeaseContinuation
+                        {
+                            Result = new RetiredActorCleanupReleaseLeaseResult
+                            {
+                                CommandId = release.CommandId,
+                                SpecId = release.SpecId,
+                                OwnerToken = release.OwnerToken,
+                                Status = RetiredActorCleanupReleaseLeaseStatus.Released,
+                            },
+                        },
+                    },
+                    ct);
             }
-            else if (envelope.Payload.TryUnpack<RetiredActorCleanupRecordFailureCommand>(out var failure))
+
+            if (envelope.Payload.TryUnpack<RetiredActorCleanupRecordFailureCommand>(out var failure))
             {
                 Payloads.Add(failure);
-                ResultPort.Complete(failure.CommandId, new RetiredActorCleanupRecordFailureResult
-                {
-                    CommandId = failure.CommandId,
-                    SpecId = failure.SpecId,
-                    OwnerToken = failure.OwnerToken,
-                    Status = RetiredActorCleanupRecordFailureStatus.Recorded,
-                    CurrentOwnerToken = failure.OwnerToken,
-                    FailureCount = 1,
-                });
+                return CompleteAsync(
+                    actorId,
+                    envelope,
+                    new RetiredActorCleanupCoordinatorContinuation
+                    {
+                        RecordFailure = new RetiredActorCleanupRecordFailureContinuation
+                        {
+                            Result = new RetiredActorCleanupRecordFailureResult
+                            {
+                                CommandId = failure.CommandId,
+                                SpecId = failure.SpecId,
+                                OwnerToken = failure.OwnerToken,
+                                Status = RetiredActorCleanupRecordFailureStatus.Recorded,
+                                CurrentOwnerToken = failure.OwnerToken,
+                                FailureCount = 1,
+                            },
+                        },
+                    },
+                    ct);
             }
 
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+
+        private async Task<DispatchAdmission> CompleteAsync(
+            string actorId,
+            EventEnvelope envelope,
+            RetiredActorCleanupCoordinatorContinuation continuation,
+            CancellationToken ct)
+        {
+            await ContinuationPort.PublishAsync(continuation, ct).ConfigureAwait(false);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
     }
 
-    private sealed class RecordingCleanupResultPort : IRetiredActorCleanupCoordinatorResultPort
+    private sealed class RecordingCleanupContinuationPort : IRetiredActorCleanupCoordinatorContinuationPort
     {
-        private readonly Dictionary<string, IMessage> _completed = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, TaskCompletionSource<IMessage>> _waiters = new(StringComparer.Ordinal);
+        private Func<RetiredActorCleanupCoordinatorContinuation, Task>? _handler;
 
-        public List<RetiredActorCleanupAcquireLeaseResult> AcquireResults { get; } = [];
-
-        public List<RetiredActorCleanupCheckLeaseResult> CheckResults { get; } = [];
-
-        public List<RetiredActorCleanupReleaseLeaseResult> ReleaseResults { get; } = [];
-
-        public List<RetiredActorCleanupRecordFailureResult> RecordFailureResults { get; } = [];
-
-        public string CreateResultStreamId(string commandId) => $"test-result:{commandId}";
-
-        public async Task<T> AwaitResultAsync<T>(string commandId, string resultStreamId, CancellationToken ct)
-            where T : class, IMessage<T>, new()
-        {
-            _ = resultStreamId;
-            ct.ThrowIfCancellationRequested();
-            if (_completed.TryGetValue(commandId, out var completed))
-                return (T)completed;
-
-            if (!_waiters.TryGetValue(commandId, out var waiter))
-            {
-                waiter = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _waiters[commandId] = waiter;
-            }
-
-            await using var registration = ct.UnsafeRegister(
-                static state => ((TaskCompletionSource<IMessage>)state!).TrySetCanceled(),
-                waiter);
-
-            return (T)await waiter.Task.ConfigureAwait(false);
-        }
-
-        public Task PublishAsync(
-            string resultStreamId,
-            RetiredActorCleanupCoordinatorCommandResult result,
+        public Task<IAsyncDisposable> SubscribeAsync(
+            Func<RetiredActorCleanupCoordinatorContinuation, Task> handler,
             CancellationToken ct = default)
         {
-            _ = resultStreamId;
             ct.ThrowIfCancellationRequested();
-            switch (result.ResultCase)
-            {
-                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.AcquireLease:
-                    Complete(result.AcquireLease.CommandId, result.AcquireLease);
-                    break;
-                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.CheckLease:
-                    Complete(result.CheckLease.CommandId, result.CheckLease);
-                    break;
-                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.ReleaseLease:
-                    Complete(result.ReleaseLease.CommandId, result.ReleaseLease);
-                    break;
-                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.RecordFailure:
-                    Complete(result.RecordFailure.CommandId, result.RecordFailure);
-                    break;
-            }
+            _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+            return Task.FromResult<IAsyncDisposable>(new Subscription(() => _handler = null));
+        }
 
+        public Task PublishAsync(RetiredActorCleanupCoordinatorContinuation continuation, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return _handler?.Invoke(continuation) ?? Task.CompletedTask;
+        }
+
+        private sealed class Subscription(Action dispose) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    private sealed class RecordingCoordinatorContinuationPublisher : IEventPublisher
+    {
+        public List<RetiredActorCleanupAcquireLeaseContinuation> AcquireContinuations { get; } = [];
+
+        public List<RetiredActorCleanupCheckLeaseContinuation> CheckContinuations { get; } = [];
+
+        public List<RetiredActorCleanupReleaseLeaseContinuation> ReleaseContinuations { get; } = [];
+
+        public List<RetiredActorCleanupRecordFailureContinuation> RecordFailureContinuations { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            audience.Should().Be(TopologyAudience.Self);
+            Record(evt);
             return Task.CompletedTask;
         }
 
-        public void Complete(string commandId, IMessage result)
-        {
-            _completed[commandId] = result;
-            switch (result)
-            {
-                case RetiredActorCleanupAcquireLeaseResult acquire:
-                    AcquireResults.Add(acquire);
-                    break;
-                case RetiredActorCleanupCheckLeaseResult check:
-                    CheckResults.Add(check);
-                    break;
-                case RetiredActorCleanupReleaseLeaseResult release:
-                    ReleaseResults.Add(release);
-                    break;
-                case RetiredActorCleanupRecordFailureResult failure:
-                    RecordFailureResults.Add(failure);
-                    break;
-            }
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            throw new NotSupportedException();
 
-            if (_waiters.TryGetValue(commandId, out var waiter))
-                waiter.TrySetResult(result);
+        private void Record(IMessage evt)
+        {
+            switch (evt)
+            {
+                case RetiredActorCleanupAcquireLeaseContinuation acquire:
+                    AcquireContinuations.Add(acquire);
+                    break;
+                case RetiredActorCleanupCheckLeaseContinuation check:
+                    CheckContinuations.Add(check);
+                    break;
+                case RetiredActorCleanupReleaseLeaseContinuation release:
+                    ReleaseContinuations.Add(release);
+                    break;
+                case RetiredActorCleanupRecordFailureContinuation failure:
+                    RecordFailureContinuations.Add(failure);
+                    break;
+                default:
+                    throw new NotSupportedException(evt.GetType().FullName);
+            }
         }
     }
 
