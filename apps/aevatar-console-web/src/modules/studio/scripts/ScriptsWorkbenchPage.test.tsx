@@ -612,12 +612,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
   });
 
   it('shows the simplified header layout with compact context chips', async () => {
-    const longScopeIdForHeaderTest =
-      'scope-with-a-very-long-readable-identifier-for-script-header';
-
     const { container } = renderPage({
       mode: 'embedded',
-      scopeId: longScopeIdForHeaderTest,
+      scopeId: '1626c177-917b-4fcc-a5ee-aa74a171b0d6',
     });
 
     await screen.findByLabelText('Script ID');
@@ -628,7 +625,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     const headerScope = within(header as HTMLElement);
     expect(headerScope.getByText('not saved')).toBeTruthy();
     expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
-    expect(headerScope.getByText('Workspace scope-wi…ader')).toBeTruthy();
+    expect(headerScope.getByText('Workspace 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
     expect(

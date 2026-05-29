@@ -956,8 +956,7 @@ describe("TeamDetailPage", () => {
   });
 
   it("demotes machine-generated long scope ids into compact team metadata", async () => {
-    const longScopeId =
-      "scope-with-a-very-long-readable-identifier-for-team-metadata";
+    const longScopeId = "1626c177-917b-4fcc-a5ee-aa74a171b0d6";
 
     window.history.replaceState(
       {},
@@ -974,7 +973,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
     expect(screen.getByText("scopeId")).toBeTruthy();
-    expect(screen.getByText("scope-wi...tadata")).toBeTruthy();
+    expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
   });
 
   it("falls back to workflowName when Team display name is unavailable and the workflow display name is only the workflow id", async () => {
