@@ -144,12 +144,17 @@ public sealed class AevatarInvocationToolSourceTests
         payload.SessionId.Should().Be("call-gagent");
         payload.ScopeId.Should().Be("scope-1");
         payload.Headers["x-test"].Should().Be("yes");
-        payload.Headers[LLMRequestMetadataKeys.ScopeId].Should().Be("scope-1");
+        payload.Headers.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        payload.Metadata["x-test"].Should().Be("yes");
+        ShouldNotCarryTrustedCallerValues(payload.Headers);
+        ShouldNotCarryTrustedCallerValues(payload.Metadata);
         payload.InputParts.Should().ContainSingle();
         payload.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
         payload.InputParts[0].Text.Should().Be("typed part");
         payload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
         payload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        payload.LlmControl.NyxIdAccessToken.Should().Be("access-token");
+        payload.LlmControl.ModelOverride.Should().Be("model-1");
 
         var result = Read(output);
         result.GetProperty("run_id").GetString().Should().Be("call-gagent");
@@ -210,8 +215,13 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
-        ShouldCarryTrustedCallerValues(payload.Headers);
-        ShouldCarryTrustedCallerValues(payload.Metadata);
+        ShouldNotCarryTrustedCallerValues(payload.Headers);
+        ShouldNotCarryTrustedCallerValues(payload.Metadata);
+        payload.ScopeId.Should().Be("scope-1");
+        payload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        payload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        payload.LlmControl.NyxIdAccessToken.Should().Be("access-token");
+        payload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
     [Fact]
@@ -694,6 +704,28 @@ public sealed class AevatarInvocationToolSourceTests
         values.Should().Contain(LLMRequestMetadataKeys.SenderNyxIdAccessToken, "sender-token");
         values.Should().Contain(LLMRequestMetadataKeys.ScopeId, "scope-1");
         values.Should().Contain("scope_id", "scope-1");
+    }
+
+    private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
+    {
+        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        metadata.Should().NotBeNull();
+        var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.CallId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.OwnerSubject);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.ResponseId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.ConnectedServicesContext);
+        values.Should().NotContainKey("scope_id");
+        values.Should().NotContainKey("external");
     }
 
     private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>
