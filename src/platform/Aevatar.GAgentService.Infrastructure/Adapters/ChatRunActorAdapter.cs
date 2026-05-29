@@ -15,6 +15,9 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
+    // Refactor (iter1334/cluster-1334-chatrun-result-json-boundary-quarantine):
+    // Old pattern: boundary ToolExecutionResultJson was written into ChatRun commands as generic ResultJson.
+    // New principle: adapter quarantines it into internal_result_json before actor persistence.
     public ChatRunActorAdapter(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort)
@@ -63,7 +66,7 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             ToolCallId = NormalizeRequired(request.ToolCall.Id, nameof(request.ToolCall.Id)),
             ToolName = NormalizeRequired(request.ToolCall.Name, nameof(request.ToolCall.Name)),
             Arguments = ParseStruct(request.ArgumentsJson),
-            ResultJson = request.ToolExecutionResultJson ?? string.Empty,
+            InternalResultJson = request.ToolExecutionResultJson ?? string.Empty,
             RunId = target.RunId,
             TargetKind = ResolveTargetKind(request.ToolCall.Name),
             TargetId = ResolveTargetId(target),

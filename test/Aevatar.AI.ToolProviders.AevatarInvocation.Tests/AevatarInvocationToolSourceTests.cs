@@ -306,8 +306,8 @@ public sealed class AevatarInvocationToolSourceTests
         harness.TeamInvocation.Request.Identity.ServiceId.Should().Be("service-1");
         harness.TeamInvocation.Request.EndpointId.Should().Be("entry");
         harness.TeamInvocation.Request.Input.Prompt.Should().Be("go");
-        harness.TeamInvocation.Request.Input.Headers.Should().Contain("scope_id", "scope-1");
         harness.TeamInvocation.Request.Input.Headers.Should().Contain("h", "v");
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
         harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
 
         var result = Read(output);
@@ -373,7 +373,7 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.TeamResolver.LastScopeId.Should().Be("scope-1");
         harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("scope-1");
-        harness.TeamInvocation.Request.Input.Headers.Should().Contain("scope_id", "scope-1");
+        harness.TeamInvocation.Request.Input.Headers.Should().BeEmpty();
     }
 
     [Fact]
@@ -424,7 +424,8 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        ShouldCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
+        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
     }
 
     [Fact]

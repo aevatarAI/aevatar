@@ -217,7 +217,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
                     RunId = observed.RunId,
                     CallerToolCallId = SubmittedToolCalls.Single().ToolCall.Id,
                     ToolName = SubmittedToolCalls.Single().ToolCall.Name,
-                    ResultJson = observed.ResultJson,
+                    InternalResultJson = observed.InternalResultJson,
                     LlmRound = SubmittedToolCalls.Single().LlmRound,
                     Status = observed.Status,
                     ServiceId = observed.ServiceId,

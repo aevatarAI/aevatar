@@ -181,7 +181,7 @@ public sealed class AevatarInvocationDispatcher
                 scope.Value!.ScopeId,
                 request.TeamId.Trim(),
                 ct);
-            var invocation = BuildStaticInvocationRequest(resolution, request, scope.Value!);
+            var invocation = BuildStaticInvocationRequest(resolution, request);
             return wait == InvocationWaitMode.Complete
                 ? await InvokeTeamToCompletionAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct)
                 : await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
@@ -569,10 +569,9 @@ public sealed class AevatarInvocationDispatcher
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,
-        InvokeTeamToolRequest request,
-        InvocationCallerScope scope)
+        InvokeTeamToolRequest request)
     {
-        var headers = BuildLegacyMetadata(scope, request.Payload.Headers);
+        var headers = BuildPayloadHeaders(request.Payload.Headers);
         var identity = new ServiceIdentity
         {
             TenantId = resolution.ScopeId,

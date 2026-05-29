@@ -108,6 +108,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            StudioWorkflowDraftMemberEnsureMaterializer>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
 
         // ── Document metadata providers (for index creation in Elasticsearch) ──
