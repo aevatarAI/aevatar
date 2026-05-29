@@ -46,12 +46,25 @@ while true; do
       # mark seen FIRST(防 spawn 失败后无限重派)
       tmp=$(mktemp)
       jq --arg n "$issue" --arg ts "$ts" '. + {($n): $ts}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
-      # Materialize triage codex prompt(每 issue 一份)
+      # Materialize triage codex prompt — use envsubst since template has ${ISSUE_NUMBER}
+      # placeholders. Previous sed approach only replaced literal #560 and left
+      # ${ISSUE_NUMBER} unresolved → validate_prompt rejected → spawn-codex exited
+      # silently → daemon marked seen but nothing actually ran.
+      # Per Auric 2026-05-29 "daemon 是在运行么? daemon没问题么?": bug discovered when
+      # 22 issues sat labeled but no TRIAGE_DONE markers appeared.
       prompt_file="$REPO_ROOT/.refactor-loop/prompts/triage-issue-${issue}.md"
-      # Refactor (#1172): envsubst first so ${ISSUE_NUMBER}/${AUTHOR} placeholders don't fail spawn-codex placeholder guard
-      ISSUE_NUMBER="$issue" AUTHOR="$author" envsubst < "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+      # Refactor (#1172): envsubst first so ${ISSUE_NUMBER}/${AUTHOR} placeholders don't fail spawn-codex placeholder guard.
+      # Keep legacy literal replacements for older template text while validating the final prompt.
+      if ! ISSUE_NUMBER="$issue" AUTHOR="$author" envsubst < "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
           | sed "s/#560/#${issue}/g; s/issue 560/issue ${issue}/g; s/Author: loning/Author: ${author}/g" \
-          > "$prompt_file" 2>/dev/null || cp "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" "$prompt_file"
+          > "$prompt_file" 2>/dev/null; then
+        log "FATAL: failed to materialize prompt for issue #$issue — skipping spawn"
+        continue
+      fi
+      if grep -qE '\$\{ISSUE_NUMBER\}|\$\{AUTHOR\}' "$prompt_file"; then
+        log "FATAL: prompt for issue #$issue still has unresolved placeholders — skipping spawn"
+        continue
+      fi
       # Spawn triage codex(nohup disown — daemon 自己派,不需 harness 跟踪;codex 自己 update GitHub)
       log_file="$REPO_ROOT/.refactor-loop/logs/triage-issue-${issue}.log"
       ISSUE_NUMBER="$issue" nohup bash "$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh" \
