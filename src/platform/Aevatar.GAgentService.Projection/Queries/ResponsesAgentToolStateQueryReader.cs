@@ -60,16 +60,6 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 todo.SourceResponseId,
                 todo.CreatedAt,
                 todo.UpdatedAt)).ToArray(),
-            document.Tasks.Select(static task => new ResponsesTaskTraceSnapshot(
-                task.TaskId,
-                task.SourceResponseId,
-                task.ChildActorId,
-                task.Description,
-                task.Status,
-                ResponsesJsonValues.ToBoundaryJson(task.Arguments),
-                ResponsesJsonValues.ToBoundaryJson(task.Result),
-                task.CreatedAt,
-                task.UpdatedAt)).ToArray(),
             document.WebTraces.Select(static trace => new ResponsesWebTraceSnapshot(
                 trace.TraceId,
                 trace.SourceResponseId,
