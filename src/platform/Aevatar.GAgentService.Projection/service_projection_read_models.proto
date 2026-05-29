@@ -281,6 +281,13 @@ message LlmSessionTokenUsageReadModel {
 // --- ResponsesAgentToolStateCurrentStateReadModel ---
 
 message ResponsesAgentToolStateCurrentStateReadModel {
+  // Refactor (issue1183/first-slice):
+  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
+  //                readmodel surface 无 consumer,占用 proto field number。
+  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
+  //                  structural/delete), proto field number reserved 防重新占用。
+  reserved 10;
+  reserved "task_trace_entries";
   string id = 1;
   string actor_id = 2;
   int64 state_version = 3;
@@ -290,7 +297,6 @@ message ResponsesAgentToolStateCurrentStateReadModel {
   google.protobuf.Timestamp created_at_utc_value = 7;
   google.protobuf.Timestamp updated_at_utc_value = 8;
   repeated ResponsesTodoItemReadModel todo_item_entries = 9;
-  repeated ResponsesTaskTraceReadModel task_trace_entries = 10;
   repeated ResponsesWebTraceReadModel web_trace_entries = 11;
   repeated ResponsesWebCacheEntryReadModel web_cache_entry_entries = 12;
 }
@@ -302,18 +308,6 @@ message ResponsesTodoItemReadModel {
   string source_response_id = 4;
   google.protobuf.Timestamp created_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
-}
-
-message ResponsesTaskTraceReadModel {
-  string task_id = 1;
-  string source_response_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  string status = 5;
-  google.protobuf.Value arguments = 6;
-  google.protobuf.Value result = 7;
-  google.protobuf.Timestamp created_at_utc_value = 8;
-  google.protobuf.Timestamp updated_at_utc_value = 9;
 }
 
 message ResponsesWebTraceReadModel {

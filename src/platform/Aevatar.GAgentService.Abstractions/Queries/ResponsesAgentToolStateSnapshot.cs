@@ -8,7 +8,6 @@ public sealed record ResponsesAgentToolStateSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<ResponsesTodoItemSnapshot> Todos,
-    IReadOnlyList<ResponsesTaskTraceSnapshot> Tasks,
     IReadOnlyList<ResponsesWebTraceSnapshot> WebTraces,
     IReadOnlyList<ResponsesWebCacheEntrySnapshot> WebCacheEntries);
 
@@ -17,17 +16,6 @@ public sealed record ResponsesTodoItemSnapshot(
     string Content,
     string Status,
     string SourceResponseId,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
-
-public sealed record ResponsesTaskTraceSnapshot(
-    string TaskId,
-    string SourceResponseId,
-    string ChildActorId,
-    string Description,
-    string Status,
-    string ArgumentsJson,
-    string ResultJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
