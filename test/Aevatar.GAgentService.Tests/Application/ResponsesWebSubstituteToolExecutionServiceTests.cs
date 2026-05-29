@@ -38,6 +38,35 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldCanonicalizeFetchAliasBeforeCacheIdentity()
+    {
+        var state = new RecordingResponsesAgentToolStatePort();
+        var cacheKey = state.SeedWebCache(
+            "WebFetch",
+            "https://example.com/docs",
+            """{"url":"https://example.com/docs","content":"cached"}""");
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
+
+        var result = await service.ExecuteAsync(CreateRequest(
+            "web_fetch",
+            """{"url":"http://example.com/docs"}"""));
+
+        result.TypedCached.Fetch.Content.Should().Be("cached");
+        backend.FetchCalls.Should().BeEmpty();
+        state.WebCacheLookups.Should().ContainSingle(x =>
+            x.ToolName == "WebFetch" &&
+            x.CacheKey == cacheKey);
+        state.WebTraces.Should().ContainSingle();
+        state.WebTraces[0].Trace.ToolName.Should().Be("WebFetch");
+        state.WebTraces[0].Trace.CacheKey.Should().Be(cacheKey);
+        ResponsesWebSubstituteToolExecutionService
+            .ComputeCacheKey("web_fetch", "https://example.com/docs")
+            .Should()
+            .Be(cacheKey);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldFetchWithoutForwardingNyxIdTokenAndRecordTrace()
     {
         var state = new RecordingResponsesAgentToolStatePort();
@@ -106,6 +135,36 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         state.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
         state.WebTraces[0].Trace.Result.Search.Results[0].Title.Should().Be("fresh");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldCanonicalizeSearchAliasBeforeCacheIdentity()
+    {
+        var state = new RecordingResponsesAgentToolStatePort();
+        var cacheKey = state.SeedWebCache(
+            "WebSearch",
+            "aevatar docs\n3",
+            """{"results":[{"title":"cached","url":"https://example.com/cached","snippet":"snippet"}]}""");
+        var backend = new RecordingResponsesWebSubstituteBackend();
+        var service = CreateService(state, backend);
+
+        var result = await service.ExecuteAsync(CreateRequest(
+            "web_search",
+            """{"query":" aevatar docs ","max_results":3}""",
+            token: "secret-token"));
+
+        result.TypedCached.Search.Results.Should().ContainSingle(x => x.Title == "cached");
+        backend.SearchCalls.Should().BeEmpty();
+        state.WebCacheLookups.Should().ContainSingle(x =>
+            x.ToolName == "WebSearch" &&
+            x.CacheKey == cacheKey);
+        state.WebTraces.Should().ContainSingle();
+        state.WebTraces[0].Trace.ToolName.Should().Be("WebSearch");
+        state.WebTraces[0].Trace.CacheKey.Should().Be(cacheKey);
+        ResponsesWebSubstituteToolExecutionService
+            .ComputeCacheKey("web_search", "aevatar docs\n3")
+            .Should()
+            .Be(cacheKey);
     }
 
     [Fact]
@@ -266,6 +325,8 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
 
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, ResponsesWebTraceInput Trace)> WebTraces { get; } = [];
 
+        public List<(string ScopeId, string OwnerSubject, string ToolName, string CacheKey)> WebCacheLookups { get; } = [];
+
         public string SeedWebCache(string toolName, string value, string resultJson)
         {
             var cacheKey = ResponsesWebSubstituteToolExecutionService.ComputeCacheKey(toolName, value);
@@ -318,6 +379,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             string cacheKey,
             CancellationToken ct = default)
         {
+            WebCacheLookups.Add((scopeId, ownerSubject, toolName, cacheKey));
             _webCache.TryGetValue((toolName, cacheKey), out var entry);
             return Task.FromResult(entry);
         }
