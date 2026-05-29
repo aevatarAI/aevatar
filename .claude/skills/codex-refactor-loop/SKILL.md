@@ -1962,7 +1962,8 @@ Concretely, this means:
 3. **CI 红 PR**(`gh pr checks` bucket=fail):立即拉 fail log + 派 fix codex(per "CI 监控即时推进")
 4. **stuck label 3h+ issue**(`auto-loop-stuck` / `🆘 human:卡死` / `👤 human:需-maintainer-决策`):派 fresh reflector(per "Stuck issue 3h 超时" 节)
 5. **未处理 / 长期未动 open issue**(>3h 未 update,non-bot):batch `auto-loop-triage` label,daemon spawn triage codex
-6. **active Phase 9 issue 等 judge / r+1 solver**:派下一步 codex
+6a. **`🔍 phase:design-solving` issue 但 0 solver log**(从未派出 r1 三 solver)→ **每 issue 派 3 solver**(每 issue 占 3 codex slot)— **强制最高级 Phase 9 优先级**(per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?")。Auric 已纠正过两次:script 当 audit 是"floor 填底"时,会跨过此条 → 22+ design-solving issue 静默积压。修法:wakeup-check.sh Step F2 检测此状态,HARD GATE 优先级表把"design-solving 无 solver"压在 audit 之前。
+6b. **active Phase 9 issue 等 judge / r+1 solver**:三 solver 全 EXIT=0 但无 judge log → 派 judge;judge converge → 派 r+1 三 solver;judge consensus → 派 implement
 7. **Phase 10 advisory review**(eligible open PR 池,非 auto-loop)
 8. **Phase 11 triage**(eligible open issue 池,5-10 oldest 一批 label)
 9. **下一 iter audit**(若 1-8 全部 actionable 为空 + 上一 iter audit `AUDIT_DONE` + 对应 N+1 audit log 不存在)— **仅 backfill**
@@ -1972,13 +1973,14 @@ Concretely, this means:
 13. **docs sync codex** / **CI guard completeness codex** — 同上,issue 池清后才允许
 
 **反面禁止**:
-- ❌ floor < 5 直接派 audit 而不先扫 implementing/reviewing 积压 → 头号违规(2026-05-29 事故:连续派 audit 200-257 共 50+ 次,期间 20+ implement issue IMPLEMENT_DONE 漏处理)
+- ❌ floor < 5 直接派 audit 而不先扫 implementing/reviewing/design-solving 积压 → 头号违规(2026-05-29 事故:audit always-available 让 22+ design-solving issue 0 solver 静默积压)
 - ❌ 看到 `🛠️ phase:implementing` label 假设有 codex 在跑,不查 log marker → 必须 `tail -5 .refactor-loop/logs/implement-issue<N>.log` 找 `EXIT=` / `IMPLEMENT_DONE:`
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先按 1-8 顺序填到 5 才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 N+1 audit 的理由 — 但反之"audit 是 backfill"才是规则:audit 与 cluster impl 独立但 audit **优先级 9 在 issue/PR 推进之后**
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
 - ❌ 所有 5 slot 都派 audit → 单一职责堆积,违反 audit-is-backfill 原则
 - ❌ **open issue 池有 untouched / stale issue 时派 skill self-audit**(per Auric 2026-05-29 "skill 不优先")→ issue 池清后才允许 skill 自审
+- ❌ **`🔍 phase:design-solving` issue 0 solver log 时派 audit**(per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计? 改skills跟脚本, 彻底避免这个问题, 先处理积压的issues")— 每个 design-solving issue 进入 Phase 9 链路的前提是先派 r1 三 solver。0 solver = backlog 静默积压。wakeup-check.sh Step F2 必须先检测,HARD GATE 优先级表 P6a 优先于 audit P9
 
 **强制 sweep 顺序**(每 wakeup):
 ```bash
@@ -2764,22 +2766,32 @@ Controller 每 wakeup 第一动作:
 
 throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正常 floor 5,绝对底线 throttle 3**。Stop 状态(`.refactor-loop/.auto-stopped` 存在)是唯一允许 0 codex 的合法情况。
 
-**派什么填底线**(优先级,从前往后选,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计"):
+**派什么填底线**(优先级,从前往后选,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计" + "一堆issues没完成, 为什么发新审计? 改skills跟脚本, 彻底避免这个问题, 先处理积压的issues"):
 1. **当前 fix loop / hotfix 在跑** → 自然满足(等待 task-notification 即可)
 2. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 但未开 PR / 未切 reviewer)→ controller 接 IMPLEMENT_DONE marker:commit/push/open PR + 派 Phase 8 reviewer × 3
 3. **stale `👀 phase:reviewing` PR**(REVIEW_DONE × 3 但未推进)→ 按 verdict 表派 fix r+1 / auto-merge
 4. **CI 红的 PR fix codex 还没派** → 立即派(per SKILL "CI 监控即时推进")
-5. **triaged design issue 池有 phase9-auto-solve 但未派 r1 solver** → 拿一个派 3 个 r1 solver
-6. **active Phase 9 issue 等 judge** → 派 judge
-7. **stuck label 3h+ issue** → 派 reflector(per "Stuck issue 3h 超时")
-8. **未处理 open issue >3h** → 加 `auto-loop-triage` label,daemon 接
-9. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex)
-10. **Phase 10 advisory review** → 扫 eligible 非 auto-loop open PR 派 3 reviewer
-11. **Phase 11 issue intake** → label `auto-loop-triage` 给 eligible 非 auto-loop open issue
-12. **审计 backlog(backfill only)**:**1-11 全空**才允许派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在)
-13. **next-next iter audit(backfill only)**:同 12
+5. **`🔍 phase:design-solving` issue 但 0 solver log**(从未派出 r1 三 solver)→ **每 issue 派 3 solver**(占 3 slot)。这是 head-of-line backlog,必须先清才能派 audit
+6. **active Phase 9 issue 等 judge**(3 solver EXIT=0 但无 judge log)→ 派 judge
+7. **active Phase 9 issue 等 r+1 solver**(judge converge marker)→ 派 r+1 三 solver
+8. **stuck label 3h+ issue** → 派 reflector(per "Stuck issue 3h 超时")
+9. **未处理 open issue >3h** → 加 `auto-loop-triage` label,daemon 接
+10. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex)
+11. **Phase 10 advisory review** → 扫 eligible 非 auto-loop open PR 派 3 reviewer
+12. **Phase 11 issue intake** → label `auto-loop-triage` 给 eligible 非 auto-loop open issue
+13. **审计 backlog(backfill only)**:**1-12 全空**才允许派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在)
+14. **next-next iter audit(backfill only)**:同 13
 
-**铁律**:audit 是 **backfill**,不是默认。任何 wakeup 派 audit 之前 controller **必须** verify 1-11 全空(无 stale implementing/reviewing/CI-red/stuck-3h/untouched-3h)。violate = 2026-05-29 头号 bug(连续派 audit 200-257 共 50+ 次,期间 20+ implementing issue 漏处理 IMPLEMENT_DONE)。
+**铁律**:audit 是 **backfill**,不是默认。任何 wakeup 派 audit 之前 controller **必须** verify 1-12 全空(无 stale implementing/reviewing/CI-red/0-solver-design-solving/stuck-3h/untouched-3h)。violate 已发生两次:
+- 2026-05-29 首次:audit 200-257 共 50+ 次,期间 20+ implementing issue 漏处理 IMPLEMENT_DONE
+- 2026-05-29 第二次:audit always-available 让 22+ design-solving issue 0 solver 静默积压
+两次 root cause 一致:**审计不是 actionable backlog 的对立面,是它的副产品**——audit 产 design issue,design issue 必须先派 solver 才推进。
+
+**强制执行机制**(per Auric 2026-05-29 "改skills跟脚本, 彻底避免这个问题"):
+1. `wakeup-check.sh` Step F2:扫 `🔍 phase:design-solving` 无 r1 solver log 的 issue,每个 issue 占 3 slot,推荐 ACTION
+2. `wakeup-check.sh` Step G:仅 A-F 全空(`G_BUSY == 0`)才推荐 audit
+3. HARD GATE queue:audit 仅在 `G_BUSY == 0` 且 `QUEUE_REMAINING > 0` 时允许 take
+4. controller wakeup 必须先 run wakeup-check.sh,按 RECOMMENDATION 顺序派,**禁止**自决"audit 也算 backlog 推进"
 
 **自检脚本**(每 wakeup 第一动作之后):
 ```bash
