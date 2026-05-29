@@ -169,16 +169,23 @@ disown
 **铁律**:每次 `gh pr merge` 成功后,controller **必须**手动 `gh issue close <linked-issue>` + label transition `🎉 phase:merged`,不依赖 GitHub auto-close。
 
 ```bash
-# 标准 merge 流程(必须 chain issue close)
-gh pr merge $PR --squash --delete-branch
-ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
-if [ -n "$ISSUE" ]; then
-  gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
-  gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --add-label "🎉 phase:merged"
+# 标准 merge 流程(必须 chain issue close 且 verify merge 成功)
+# 2026-05-30 修复:merge 失败仍 close issue 是严重 bug;必须 verify $? == 0
+if gh pr merge $PR --squash --delete-branch 2>&1; then
+  ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
+  if [ -n "$ISSUE" ]; then
+    gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
+    gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --remove-label "👀 phase:reviewing" --add-label "🎉 phase:merged"
+  fi
+else
+  echo "MERGE_FAILED:$PR — 保留 issue open,可能 conflict / CI 红 / 重新打开。controller 必须查 PR mss + dispatch conflict-resolve 或 fix"
+  # 不允许直接 close issue
 fi
 ```
 
-事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。每次 wakeup sweep 见 `🚀 phase:pr-open` label 但关联 PR 已 merged → 必须立即补 close。
+事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。
+
+事故记录(2026-05-30):batch merge 5 个 PR 时 4 个有 merge conflict(`GraphQL: Pull Request has merge conflicts`)但 controller **未 verify exit code** → 直接 close 关联 4 个 issue(#1247/#1226/#1207/#1200)→ 错误关闭 in-flight 工作。必须用 `if gh pr merge ...; then ... fi` 包,merge 失败时**保留** issue + label `🚀 phase:pr-open`,**禁止** close。
 
 ### Controller helper 库:`.claude/skills/codex-refactor-loop/scripts/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
 
