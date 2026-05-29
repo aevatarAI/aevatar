@@ -23,6 +23,25 @@ public sealed class ChannelRuntimeSourceRegressionTests
             "no-op lease abstraction deleted per Phase 8 r1 reject");
     }
 
+    [Fact]
+    public void Startup_projection_activation_must_not_reintroduce_delay_backed_retry_loop()
+    {
+        foreach (var relativeFile in new[]
+                 {
+                     "agents/Aevatar.GAgents.Channel.Runtime/ChannelBotRegistrationStartupService.cs",
+                     "agents/Aevatar.GAgents.Device/DeviceRegistrationStartupService.cs",
+                     "agents/Aevatar.GAgents.Scheduled/UserAgentCatalogStartupService.cs",
+                 })
+        {
+            var source = ReadRepositoryFile(relativeFile);
+
+            source.Should().NotContain("await Task." + "Delay(",
+                $"{relativeFile} should dispatch one activation attempt; retry/backoff belongs to actor/runtime scheduling infrastructure");
+            source.Should().NotContain("MaxRetries",
+                $"{relativeFile} should not own projection activation retry state in the hosted service");
+        }
+    }
+
     private static string ReadRepositorySources(params string[] relativeDirectories)
     {
         var repositoryRoot = GetRepositoryRoot();
@@ -40,6 +59,12 @@ public sealed class ChannelRuntimeSourceRegressionTests
         }
 
         return builder.ToString();
+    }
+
+    private static string ReadRepositoryFile(string relativeFile)
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        return File.ReadAllText(Path.Combine(repositoryRoot, relativeFile), Encoding.UTF8);
     }
 
     private static string GetRepositoryRoot()

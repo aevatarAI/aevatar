@@ -8,9 +8,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// at application startup so the query-side read model can catch up through
 /// the committed-state projection activation path after a restart.
 ///
-/// StartAsync awaits the activation with retries so the host does not
-/// accept HTTP requests until the registration projection binder is active.
-/// Request paths must not activate or prime this projection themselves.
+/// StartAsync dispatches one activation attempt. Retry/backoff belongs to
+/// actor/runtime scheduling infrastructure, and request paths must not
+/// activate or prime this projection themselves.
 /// </summary>
 internal sealed class ChannelBotRegistrationStartupService : IHostedService
 {
@@ -18,8 +18,7 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=manual projection refresh surface, new=host startup projection activation
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=operator-triggered rebuild, new=activation-only startup warm-up
-    private const int MaxRetries = 5;
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
+    // Refactor (iter165/cluster-001): Old pattern: startup owned a Task.Delay retry loop for projection activation. New principle: startup dispatches one bootstrap activation attempt; retry/backoff belongs to actor/runtime scheduling infrastructure, not this hosted service.
 
     private readonly ChannelBotRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly ILogger<ChannelBotRegistrationStartupService> _logger;
@@ -34,40 +33,22 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
 
     public async Task StartAsync(CancellationToken ct)
     {
-        var delay = InitialDelay;
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        try
         {
-            try
-            {
-                await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
-                _logger.LogInformation(
-                    "Channel bot registration projection scope activated for {ActorId} (attempt {Attempt})",
-                    ChannelBotRegistrationGAgent.WellKnownId, attempt);
-                return;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to activate channel bot registration projection scope (attempt {Attempt}/{MaxRetries})",
-                    attempt, MaxRetries);
-
-                if (attempt < MaxRetries)
-                    await Task.Delay(delay, ct);
-                delay *= 2; // exponential backoff
-            }
+            await _projectionActivator.ActivateWellKnownCatalogAsync(ct);
+            _logger.LogInformation(
+                "Channel bot registration projection scope activated for {ActorId}",
+                ChannelBotRegistrationGAgent.WellKnownId);
         }
-
-        // All retries exhausted — let the host start in degraded mode.
-        // Registrations may appear missing until the projection binder is
-        // activated by a later host restart or operator intervention.
-        _logger.LogError(
-            "Channel bot registration projection activation failed after {MaxRetries} attempts — " +
-            "registrations may not be visible until activation is re-triggered",
-            MaxRetries);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Channel bot registration projection activation failed; registrations may not be visible until activation is re-triggered");
+        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
