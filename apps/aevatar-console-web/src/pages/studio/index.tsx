@@ -4319,6 +4319,7 @@ const StudioPage: React.FC = () => {
     let rootYaml = draftYaml.trim();
     let rootDocument: StudioWorkflowDocument | null | undefined =
       activeWorkflowDocument;
+    let rootRuntimeYamlReady = false;
 
     if (pendingStepDraft) {
       const currentStepId = pendingStepDraft.stepId.trim();
@@ -4358,7 +4359,8 @@ const StudioPage: React.FC = () => {
       });
 
       rootYaml = serialized.yaml.trim();
-      rootDocument = serialized.document;
+      rootDocument = result.document;
+      rootRuntimeYamlReady = true;
     }
 
     if (!rootYaml) {
@@ -4376,11 +4378,13 @@ const StudioPage: React.FC = () => {
       workflowName: string;
       yaml: string;
       document: StudioWorkflowDocument | null | undefined;
+      runtimeYamlReady?: boolean;
     }> = [
       {
         workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
         yaml: rootYaml,
         document: rootDocument,
+        runtimeYamlReady: rootRuntimeYamlReady,
       },
     ];
 
@@ -4398,11 +4402,26 @@ const StudioPage: React.FC = () => {
       if (normalizedWorkflowName) {
         seen.add(normalizedWorkflowName);
       }
-      const normalizedCurrent = await normalizeWorkflowYamlForRuntime(
-        current.yaml,
-        current.document,
-        availableWorkflowNames,
-      );
+      const normalizedCurrent = current.runtimeYamlReady
+        ? {
+            yaml: current.yaml,
+            document:
+              cloneStudioWorkflowDocument(current.document) ??
+              cloneStudioWorkflowDocument(
+                (
+                  await studioApi.parseYaml({
+                    yaml: current.yaml,
+                    availableWorkflowNames,
+                    availableStepTypes,
+                  })
+                ).document as StudioWorkflowDocument | null,
+              ),
+          }
+        : await normalizeWorkflowYamlForRuntime(
+            current.yaml,
+            current.document,
+            availableWorkflowNames,
+          );
       bundle.push(normalizedCurrent.yaml);
 
       for (const targetWorkflow of readWorkflowCallTargets(normalizedCurrent.document)) {

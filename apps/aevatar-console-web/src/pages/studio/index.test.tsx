@@ -7017,6 +7017,7 @@ describe("StudioPage", () => {
         expect.any(Function)
       );
     });
+    (studioApi.serializeYaml as jest.Mock).mockClear();
 
     const workflowYamls = await mockLastWorkflowBuildPanelProps.buildWorkflowYamls({
       stepId: "draft_step",
@@ -7040,6 +7041,21 @@ describe("StudioPage", () => {
     expect(workflowYamls).toEqual([
       expect.stringContaining("prompt_prefix: Translate the input to English."),
     ]);
+    expect(studioApi.serializeYaml).toHaveBeenCalledTimes(1);
+    expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              id: "draft_step",
+              parameters: expect.objectContaining({
+                prompt_prefix: "Translate the input to English.",
+              }),
+            }),
+          ]),
+        }),
+      })
+    );
   });
 
   it("shows the published template graph in the Studio editor", async () => {
