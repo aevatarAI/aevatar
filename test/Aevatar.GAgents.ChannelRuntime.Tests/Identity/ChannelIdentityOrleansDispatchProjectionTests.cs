@@ -21,143 +21,130 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
     public async Task CommitBindingDispatch_ShouldReplayCommittedEventToChannelIdentityReadModel()
     {
         // Refactor (iter290/cluster517-first): Old: channel identity tests covered handler bodies and in-process dispatch only. New: Orleans dispatch + replay covers committed-state projection.
-        var observer = new ObservingExternalIdentityBindingWriter();
-        using var host = await StartSiloHostAsync(observer);
-        var subject = new ExternalSubjectRef
-        {
-            Platform = "lark",
-            Tenant = "tenant-issue1313",
-            ExternalUserId = $"user-{Guid.NewGuid():N}",
-        };
-        var actorId = subject.ToActorId();
+        using var scenario = await StartOrleansProjectionScenarioAsync("tenant-issue1313");
 
-        var dispatch = host.Services.GetRequiredService<
-            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
-
-        var result = await dispatch.DispatchAsync(new CommitBindingCommand
+        var result = await scenario.CommitDispatch.DispatchAsync(new CommitBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             BindingId = "bnd-issue1313-first",
         });
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().NotBeNull();
-        result.Receipt!.ActorId.Should().Be(actorId);
+        result.Receipt!.ActorId.Should().Be(scenario.ActorId);
 
-        var projected = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        var projected = await scenario.Observer.WaitForUpsertAsync(scenario.ActorId, TestTimeout);
 
-        projected.Id.Should().Be(actorId);
-        projected.ActorId.Should().Be(actorId);
+        projected.Id.Should().Be(scenario.ActorId);
+        projected.ActorId.Should().Be(scenario.ActorId);
         projected.BindingId.Should().Be("bnd-issue1313-first");
         projected.IsActive.Should().BeTrue();
-        projected.ExternalSubject.Should().BeEquivalentTo(subject);
+        projected.ExternalSubject.Should().BeEquivalentTo(scenario.Subject);
         projected.StateVersion.Should().Be(1);
         projected.LastEventId.Should().NotBeNullOrWhiteSpace();
 
-        var reader = host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
-        var stored = await reader.GetAsync(actorId);
+        var reader = scenario.Host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
+        var stored = await reader.GetAsync(scenario.ActorId);
         stored.Should().BeEquivalentTo(projected);
     }
 
     [Fact]
     public async Task RevokeBindingDispatch_ShouldDeleteProjectionAndQueryReturnsNull()
     {
-        var observer = new ObservingExternalIdentityBindingWriter();
-        using var host = await StartSiloHostAsync(observer);
-        var subject = new ExternalSubjectRef
-        {
-            Platform = "lark",
-            Tenant = "tenant-issue1343-revoke",
-            ExternalUserId = $"user-{Guid.NewGuid():N}",
-        };
-        var actorId = subject.ToActorId();
+        // Refactor (iter290/cluster517-first): Old: revoke tests stopped at actor/in-process helpers. New: Orleans dispatch must publish a committed delete into the same projection/query path.
+        using var scenario = await StartOrleansProjectionScenarioAsync("tenant-issue1343-revoke");
 
-        var commitDispatch = host.Services.GetRequiredService<
-            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
-        var revokeDispatch = host.Services.GetRequiredService<
-            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
-
-        var commitResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        var commitResult = await scenario.CommitDispatch.DispatchAsync(new CommitBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             BindingId = "bnd-issue1343-revoke",
         });
 
         commitResult.Succeeded.Should().BeTrue();
-        var committed = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        var committed = await scenario.Observer.WaitForUpsertAsync(scenario.ActorId, TestTimeout);
         committed.BindingId.Should().Be("bnd-issue1343-revoke");
 
-        var revokeResult = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        var revokeResult = await scenario.RevokeDispatch.DispatchAsync(new RevokeBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             Reason = "user_unbind",
         });
 
         revokeResult.Succeeded.Should().BeTrue();
-        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+        await scenario.Observer.WaitForDeleteAsync(scenario.ActorId, TestTimeout);
 
-        var reader = host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
-        var stored = await reader.GetAsync(actorId);
+        var reader = scenario.Host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
+        var stored = await reader.GetAsync(scenario.ActorId);
         stored.Should().BeNull();
 
-        var query = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
-        var resolved = await query.ResolveAsync(subject);
+        var query = scenario.Host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
+        var resolved = await query.ResolveAsync(scenario.Subject);
         resolved.Should().BeNull();
     }
 
     [Fact]
     public async Task DuplicateCommitDispatch_ShouldKeepFirstBindingAndNotProduceSecondEffectiveUpsert()
     {
-        var observer = new ObservingExternalIdentityBindingWriter();
-        using var host = await StartSiloHostAsync(observer);
-        var subject = new ExternalSubjectRef
-        {
-            Platform = "lark",
-            Tenant = "tenant-issue1343-duplicate",
-            ExternalUserId = $"user-{Guid.NewGuid():N}",
-        };
-        var actorId = subject.ToActorId();
+        // Refactor (iter290/cluster517-first): Old: duplicate commit coverage did not prove Orleans dispatch leaves projection at the first committed binding. New: an observed revoke barrier verifies no second effective upsert was applied.
+        using var scenario = await StartOrleansProjectionScenarioAsync("tenant-issue1343-duplicate");
 
-        var commitDispatch = host.Services.GetRequiredService<
-            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
-        var revokeDispatch = host.Services.GetRequiredService<
-            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
-
-        var firstResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        var firstResult = await scenario.CommitDispatch.DispatchAsync(new CommitBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             BindingId = "bnd-issue1343-first",
         });
 
         firstResult.Succeeded.Should().BeTrue();
-        var firstProjection = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        var firstProjection = await scenario.Observer.WaitForUpsertAsync(scenario.ActorId, TestTimeout);
         firstProjection.BindingId.Should().Be("bnd-issue1343-first");
         firstProjection.StateVersion.Should().Be(1);
 
-        var duplicateResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        var duplicateResult = await scenario.CommitDispatch.DispatchAsync(new CommitBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             BindingId = "bnd-issue1343-second",
         });
 
         duplicateResult.Succeeded.Should().BeTrue();
 
-        var revokeResult = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        var revokeResult = await scenario.RevokeDispatch.DispatchAsync(new RevokeBindingCommand
         {
-            ExternalSubject = subject,
+            ExternalSubject = scenario.Subject,
             Reason = "duplicate-test-barrier",
         });
 
         revokeResult.Succeeded.Should().BeTrue();
-        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+        await scenario.Observer.WaitForDeleteAsync(scenario.ActorId, TestTimeout);
 
-        var upserts = observer.GetAppliedUpserts(actorId);
+        var upserts = scenario.Observer.GetAppliedUpserts(scenario.ActorId);
         upserts.Should().ContainSingle();
         upserts[0].BindingId.Should().Be("bnd-issue1343-first");
         upserts[0].StateVersion.Should().Be(1);
     }
 
     private static TimeSpan TestTimeout => TimeSpan.FromSeconds(20);
+
+    private static async Task<OrleansProjectionScenario> StartOrleansProjectionScenarioAsync(string tenant)
+    {
+        var observer = new ObservingExternalIdentityBindingWriter();
+        var host = await StartSiloHostAsync(observer);
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = tenant,
+            ExternalUserId = $"user-{Guid.NewGuid():N}",
+        };
+
+        return new OrleansProjectionScenario(
+            host,
+            observer,
+            subject,
+            subject.ToActorId(),
+            host.Services.GetRequiredService<
+                ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>(),
+            host.Services.GetRequiredService<
+                ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>());
+    }
 
     private static Task<IHost> StartSiloHostAsync(ObservingExternalIdentityBindingWriter observer) =>
         SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
@@ -182,6 +169,18 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             })
             .Build());
 
+    private sealed record OrleansProjectionScenario(
+        IHost Host,
+        ObservingExternalIdentityBindingWriter Observer,
+        ExternalSubjectRef Subject,
+        string ActorId,
+        ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> CommitDispatch,
+        ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> RevokeDispatch)
+        : IDisposable
+    {
+        public void Dispose() => Host.Dispose();
+    }
+
     internal sealed class ObservingExternalIdentityBindingWriter
     {
         private readonly object _gate = new();
@@ -191,6 +190,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public void ObserveUpsert(ExternalIdentityBindingDocument document)
         {
+            // Refactor (iter290/cluster517-first): Old: tests waited only for the first projection write. New: duplicate coverage records every applied upsert without becoming a production read model.
             TaskCompletionSource<ExternalIdentityBindingDocument> completion;
             lock (_gate)
             {
@@ -215,6 +215,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public void ObserveDelete(string id)
         {
+            // Refactor (iter290/cluster517-first): Old: revoke coverage had no deterministic projection delete signal. New: the test observer exposes the applied delete as a TaskCompletionSource barrier.
             TaskCompletionSource<string> completion;
             lock (_gate)
             {
@@ -231,6 +232,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public Task<ExternalIdentityBindingDocument> WaitForUpsertAsync(string id, TimeSpan timeout)
         {
+            // Refactor (iter290/cluster517-first): Old: tests relied on direct handler completion. New: Orleans projection facts wait for observed committed-state materialization.
             TaskCompletionSource<ExternalIdentityBindingDocument> completion;
             lock (_gate)
             {
@@ -247,6 +249,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public Task<string> WaitForDeleteAsync(string id, TimeSpan timeout)
         {
+            // Refactor (iter290/cluster517-first): Old: revoke/delete assertions could race the asynchronous projector. New: the test waits for the writer-applied delete event, not a pacing delay.
             TaskCompletionSource<string> completion;
             lock (_gate)
             {
@@ -263,6 +266,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public IReadOnlyList<ExternalIdentityBindingDocument> GetAppliedUpserts(string id)
         {
+            // Refactor (iter290/cluster517-first): Old: duplicate commit tests could only inspect final storage. New: applied upsert history proves no second effective projection write occurred.
             lock (_gate)
             {
                 return _appliedUpsertsById.TryGetValue(id, out var upserts)
@@ -289,6 +293,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
         {
+            // Refactor (iter290/cluster517-first): Old: decorated writer observed only upserts. New: it also observes applied deletes so revoke tests stay event-driven.
             var result = await inner.DeleteAsync(id, ct);
             if (result.IsApplied)
                 observer.ObserveDelete(id);
