@@ -136,6 +136,143 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task CreateStepExecutor_ShouldMatchChatStreamRequestIdentityAndFinalRoundToolRules()
+    {
+        var provider = new RecordingStepProvider();
+        var tool = new CapturingTool();
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var baseToolContext = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext("scope-base", "owner-base", "resp-base"),
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["safe"] = "tool-context",
+            },
+        };
+        var runtime = CreateRuntime(
+            provider,
+            tools,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [ChatMessage.System("system")],
+                RequestId = "base-request",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [LLMRequestMetadataKeys.ScopeId] = "strip-me",
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = "strip-token",
+                    ["safe"] = "base",
+                },
+                CallerContext = new LLMRequestCallerContext(
+                    "scope-1",
+                    "owner-1",
+                    "response-1",
+                    new LLMRequestCallerCredentials("typed-bearer")),
+                ToolContext = baseToolContext,
+                Tools = [tool],
+            });
+        var executor = runtime.CreateStepExecutor();
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.CallId] = "strip-call",
+            [LLMRequestMetadataKeys.ModelOverride] = "strip-model",
+            ["safe"] = "override",
+        };
+        var llmControl = LLMControlContext.Empty with
+        {
+            ModelOverride = "model-a",
+            NyxIdRoutePreference = "route-a",
+            MaxToolRoundsOverride = 1,
+        };
+
+        var stepRequest = executor.BuildLlmStepRequest(
+            [ChatMessage.User("hello")],
+            "req-123",
+            metadata,
+            toolContext: null,
+            llmControl,
+            round: 0,
+            finalNoTools: false);
+
+        stepRequest.RequestId.Should().Be("req-123");
+        stepRequest.CallerContext.Should().BeEquivalentTo(new LLMRequestCallerContext(
+            "scope-1",
+            "owner-1",
+            "response-1",
+            new LLMRequestCallerCredentials("typed-bearer")));
+        stepRequest.Metadata.Should().BeEquivalentTo(new Dictionary<string, string> { ["safe"] = "override" });
+        stepRequest.ToolContext.Should().NotBeNull();
+        stepRequest.ToolContext!.Request.RequestId.Should().Be("req-123");
+        stepRequest.ToolContext.Request.CallId.Should().Be("req-123");
+        stepRequest.ToolContext.Routing.ModelOverride.Should().Be("model-a");
+        stepRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        stepRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
+
+        var chunks = new List<LLMStreamChunk>();
+        var stepResult = await executor.ExecuteLlmStepAsync(
+            executor.ResolveProvider(),
+            stepRequest,
+            (chunk, _) =>
+            {
+                chunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        stepResult.Content.Should().Be("answer");
+        stepResult.FinishReason.Should().Be("stop");
+        chunks.Should().ContainSingle(chunk => chunk.DeltaContent == "answer");
+        provider.Requests.Should().ContainSingle();
+        provider.Requests[0].Should().BeSameAs(stepRequest);
+
+        var finalRequest = executor.BuildLlmStepRequest(
+            [ChatMessage.User("hello"), ChatMessage.Assistant("partial")],
+            "req-123",
+            metadata,
+            toolContext: null,
+            llmControl,
+            round: 1,
+            finalNoTools: true);
+
+        finalRequest.Tools.Should().BeNull();
+        finalRequest.ToolContext!.Request.CallId.Should().Be("req-123:final");
+
+        var runtimeChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in runtime.ChatStreamAsync(
+                           [ContentPart.TextPart("hello")],
+                           maxToolRounds: 1,
+                           requestId: "req-123",
+                           llmControl,
+                           toolContext: null,
+                           metadata,
+                           CancellationToken.None))
+        {
+            runtimeChunks.Add(chunk);
+        }
+
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].RequestId.Should().Be(stepRequest.RequestId);
+        provider.Requests[1].Metadata.Should().BeEquivalentTo(stepRequest.Metadata);
+        provider.Requests[1].CallerContext.Should().BeEquivalentTo(stepRequest.CallerContext);
+        provider.Requests[1].ToolContext.Should().BeEquivalentTo(stepRequest.ToolContext);
+        provider.Requests[1].Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
+        runtimeChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "answer");
+
+        var toolResults = await executor.ExecuteToolStepAsync(
+            [new ToolCall { Id = "tool-1", Name = "capture", ArgumentsJson = """{"x":1}""" }],
+            metadata,
+            stepRequest.ToolContext,
+            CancellationToken.None);
+
+        toolResults.Should().ContainSingle();
+        toolResults[0].CallId.Should().Be("tool-1");
+        toolResults[0].Result.Should().Contain("tool-ok");
+        tool.CapturedContext.Should().NotBeNull();
+        tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
+        tool.CapturedContext.Request.RequestId.Should().Be("req-123");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenStreamReturnsToolCall_ShouldExecuteToolAndContinueWithFollowUpRound()
     {
         var provider = new QueuedStreamingProvider(
@@ -820,6 +957,36 @@ public sealed class ChatRuntimeStreamingBufferTests
                 yield return chunk;
                 await Task.Yield();
             }
+        }
+    }
+
+    private sealed class RecordingStepProvider : ILLMProvider
+    {
+        public string Name => "recording-step";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk { DeltaContent = "answer" };
+            await Task.Yield();
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+        }
+    }
+
+    private sealed class CapturingTool : IAgentTool
+    {
+        public string Name => "capture";
+        public string Description => "capture context";
+        public string ParametersSchema => "{}";
+        public AgentToolExecutionContext? CapturedContext { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            CapturedContext = AgentToolRequestContext.Current;
+            return Task.FromResult("""{"result":"tool-ok"}""");
         }
     }
 

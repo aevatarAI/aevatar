@@ -10,12 +10,12 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
-    // Refactor (iter47/issue-878-actor-turn-inline-timeouts):
-    //   Old pattern: ConversationGAgent created CancellationTokenSource around CardKit calls inside actor turn and continued business branches synchronously.
-    //   New principle: Card operations are typed continuation events (correlationId+sequence+card id); stateless executor runs CardKit outside actor turn; self-timeout events handle deadlines; actor turn reconciles stale keys serially per correlation.
     // Refactor (iter20/cluster-004):
     //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
     //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+    // Refactor (iter107/cluster-1-channel-business-io-process-queue):
+    //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+    //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
     /// <summary>
     /// Per-turn phase of the Lark CardKit streaming pipeline. Distinct from
     /// <see cref="NyxRelayStreamingPhase"/> (which models channel-relay edit-message
@@ -392,23 +392,29 @@ public sealed partial class ConversationGAgent
             ct: ct);
     }
 
-    private void StartLarkCardCreateOperation(
+    private Task StartLarkCardCreateOperationAsync(
         LlmReplyCardStreamChunkEvent evt,
         string correlationId,
         string streamingElementId,
         long sequence,
-        long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        long generation)
     {
-        var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardCreateOperationAsync(
-            runner,
-            evt.Clone(),
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Create, sequence, generation);
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-create",
             correlationId,
-            streamingElementId,
-            sequence,
             generation,
-            runtimeContext));
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Create,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = evt.Clone(),
+                StreamingElementId = streamingElementId,
+            },
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardCreateOperationAsync(
@@ -418,7 +424,8 @@ public sealed partial class ConversationGAgent
         string streamingElementId,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -427,7 +434,7 @@ public sealed partial class ConversationGAgent
                     chunk,
                     streamingElementId,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -463,24 +470,32 @@ public sealed partial class ConversationGAgent
             .ConfigureAwait(false);
     }
 
-    private void StartLarkCardStreamOperation(
+    private Task StartLarkCardStreamOperationAsync(
         LlmReplyCardStreamChunkEvent evt,
         string correlationId,
         LarkCardStreamingState state,
         long sequence,
-        long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        long generation)
     {
-        var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardStreamOperationAsync(
-            runner,
-            evt.Clone(),
+        var cardId = state.CardId ?? string.Empty;
+        var streamingElementId = state.StreamingElementId;
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Stream, sequence, generation);
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-stream",
             correlationId,
-            state.CardId ?? string.Empty,
-            state.StreamingElementId,
-            sequence,
             generation,
-            runtimeContext));
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Stream,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Chunk = evt.Clone(),
+                CardId = cardId,
+                StreamingElementId = streamingElementId,
+            },
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardStreamOperationAsync(
@@ -491,7 +506,8 @@ public sealed partial class ConversationGAgent
         string streamingElementId,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -502,7 +518,7 @@ public sealed partial class ConversationGAgent
                     streamingElementId,
                     sequence,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -542,7 +558,7 @@ public sealed partial class ConversationGAgent
             .ConfigureAwait(false);
     }
 
-    private void StartLarkCardFinalizeOperation(
+    private Task StartLarkCardFinalizeOperationAsync(
         ChatActivity activityForToken,
         string correlationId,
         string commandId,
@@ -550,24 +566,34 @@ public sealed partial class ConversationGAgent
         string finalText,
         bool finalDiffers,
         long sequence,
-        long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        long generation)
     {
-        var runner = ResolveCardRunner();
-        _ = Task.Run(() => ExecuteLarkCardFinalizeOperationAsync(
-            runner,
-            activityForToken.Clone(),
+        var cardId = state.CardId ?? string.Empty;
+        var cardMessageId = state.CardMessageId ?? string.Empty;
+        var streamingElementId = state.StreamingElementId;
+        var lastFlushedText = state.LastFlushedText;
+        var workItemId = BuildLarkCardOperationId(correlationId, LarkCardOperationPhase.Finalize, sequence, generation);
+        return PublishReplyOperationStepAsync(
+            workItemId,
+            "lark-card-finalize",
             correlationId,
-            commandId,
-            state.CardId ?? string.Empty,
-            state.CardMessageId ?? string.Empty,
-            state.StreamingElementId,
-            finalText,
-            state.LastFlushedText,
-            finalDiffers,
-            sequence,
             generation,
-            runtimeContext));
+            ReplyOperationStepEvent.PayloadOneofCase.LarkCard,
+            new LarkCardOperationStepPayload
+            {
+                Operation = LarkCardOperationPhase.Finalize,
+                Sequence = sequence,
+                OperationGeneration = generation,
+                Activity = activityForToken.Clone(),
+                CommandId = commandId,
+                FinalText = finalText,
+                LastFlushedText = lastFlushedText,
+                CardId = cardId,
+                CardMessageId = cardMessageId,
+                StreamingElementId = streamingElementId,
+                FinalDiffers = finalDiffers,
+            },
+            CancellationToken.None);
     }
 
     private async Task ExecuteLarkCardFinalizeOperationAsync(
@@ -583,7 +609,8 @@ public sealed partial class ConversationGAgent
         bool finalDiffers,
         long sequence,
         long generation,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         LarkCardOperationCompletedEvent signal;
         try
@@ -596,7 +623,7 @@ public sealed partial class ConversationGAgent
                     finalDiffers,
                     sequence,
                     runtimeContext,
-                    CancellationToken.None)
+                    ct)
                 .ConfigureAwait(false);
             signal = new LarkCardOperationCompletedEvent
             {
@@ -640,6 +667,79 @@ public sealed partial class ConversationGAgent
 
         await DispatchLarkCardContinuationAsync(signal, correlationId, CancellationToken.None)
             .ConfigureAwait(false);
+    }
+
+    private async Task ExecuteLarkCardOperationStepAsync(
+        ReplyOperationStepEvent evt,
+        LarkCardOperationStepPayload step)
+    {
+        var correlationId = evt.CorrelationId;
+        var state = GetOrInitLarkCardStreamingState(correlationId);
+        if (!MatchesLarkCardInFlight(
+                state,
+                step.Operation,
+                step.Sequence,
+                step.OperationGeneration,
+                NormalizeOptional(step.CardId)))
+        {
+            return;
+        }
+
+        var runtimeContext = step.Operation == LarkCardOperationPhase.Finalize
+            ? BuildNyxRelayRuntimeContext(
+                correlationId,
+                step.Activity,
+                string.Empty,
+                0)
+            : BuildNyxRelayRuntimeContext(
+                step.Chunk?.CorrelationId,
+                step.Chunk?.Activity,
+                step.Chunk?.ReplyToken,
+                step.Chunk?.ReplyTokenExpiresAtUnixMs ?? 0);
+
+        switch (step.Operation)
+        {
+            case LarkCardOperationPhase.Create:
+                await ExecuteLarkCardCreateOperationAsync(
+                    ResolveCardRunner(),
+                    step.Chunk?.Clone() ?? new LlmReplyCardStreamChunkEvent(),
+                    correlationId,
+                    step.StreamingElementId,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+            case LarkCardOperationPhase.Stream:
+                await ExecuteLarkCardStreamOperationAsync(
+                    ResolveCardRunner(),
+                    step.Chunk?.Clone() ?? new LlmReplyCardStreamChunkEvent(),
+                    correlationId,
+                    step.CardId,
+                    step.StreamingElementId,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+            case LarkCardOperationPhase.Finalize:
+                await ExecuteLarkCardFinalizeOperationAsync(
+                    ResolveCardRunner(),
+                    step.Activity?.Clone() ?? new ChatActivity(),
+                    correlationId,
+                    step.CommandId,
+                    step.CardId,
+                    step.CardMessageId,
+                    step.StreamingElementId,
+                    step.FinalText,
+                    step.LastFlushedText,
+                    step.FinalDiffers,
+                    step.Sequence,
+                    step.OperationGeneration,
+                    runtimeContext,
+                    CancellationToken.None);
+                return;
+        }
     }
 
     private static LarkCardOperationRawResult ToRawResult(ConversationCardCreateResult result) =>
@@ -739,11 +839,6 @@ public sealed partial class ConversationGAgent
         if (ShouldSkipLarkCardStreamingForUnavailable(state, LarkCardStreamingGuardSource.AcceptInterimChunk))
             return true;
 
-        var runtimeContext = BuildNyxRelayRuntimeContext(
-            evt.CorrelationId,
-            evt.Activity,
-            evt.ReplyToken,
-            evt.ReplyTokenExpiresAtUnixMs);
         if (state.Phase is LarkCardStreamingPhase.Idle)
         {
             var generation = NextLarkCardOperationGeneration(state);
@@ -770,7 +865,7 @@ public sealed partial class ConversationGAgent
                 finalText: null,
                 lastFlushedText: null,
                 CancellationToken.None);
-            StartLarkCardCreateOperation(evt, correlationId, state.StreamingElementId, 1, generation, runtimeContext);
+            await StartLarkCardCreateOperationAsync(evt, correlationId, state.StreamingElementId, 1, generation);
             return true;
         }
 
@@ -807,7 +902,7 @@ public sealed partial class ConversationGAgent
             finalText: null,
             lastFlushedText: state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardStreamOperation(evt, correlationId, state, nextSequence, streamGeneration, runtimeContext);
+        await StartLarkCardStreamOperationAsync(evt, correlationId, state, nextSequence, streamGeneration);
         return true;
     }
 
@@ -863,11 +958,6 @@ public sealed partial class ConversationGAgent
         var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
             && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
 
-        var runtimeContext = BuildNyxRelayRuntimeContext(
-            evt.CorrelationId,
-            evt.Activity,
-            evt.ReplyToken,
-            evt.ReplyTokenExpiresAtUnixMs);
         var nextSequence = state.Sequence + 1;
         var activityForToken = referenceActivity ?? evt.Activity ?? new ChatActivity();
 
@@ -896,7 +986,7 @@ public sealed partial class ConversationGAgent
             finalText,
             state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardFinalizeOperation(
+        await StartLarkCardFinalizeOperationAsync(
             activityForToken,
             correlationId,
             commandId,
@@ -904,8 +994,7 @@ public sealed partial class ConversationGAgent
             finalText,
             finalDiffers,
             nextSequence,
-            generation,
-            runtimeContext);
+            generation);
         return true;
     }
 
@@ -1313,11 +1402,6 @@ public sealed partial class ConversationGAgent
             var finalText = state.PendingFinalizeText;
             var commandId = state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId);
             var activity = sourceChunk?.Activity ?? new ChatActivity();
-            var runtimeContext = BuildNyxRelayRuntimeContext(
-                correlationId,
-                activity,
-                sourceChunk?.ReplyToken ?? string.Empty,
-                sourceChunk?.ReplyTokenExpiresAtUnixMs ?? 0);
             var nextSequence = state.Sequence + 1;
             var generation = NextLarkCardOperationGeneration(state);
             var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
@@ -1344,7 +1428,7 @@ public sealed partial class ConversationGAgent
                 finalText,
                 state.LastFlushedText,
                 CancellationToken.None);
-            StartLarkCardFinalizeOperation(
+            await StartLarkCardFinalizeOperationAsync(
                 activity,
                 correlationId,
                 commandId,
@@ -1352,8 +1436,7 @@ public sealed partial class ConversationGAgent
                 finalText,
                 finalDiffers,
                 nextSequence,
-                generation,
-                runtimeContext);
+                generation);
             return;
         }
 
@@ -1362,11 +1445,6 @@ public sealed partial class ConversationGAgent
 
         var nextChunk = sourceChunk.Clone();
         nextChunk.AccumulatedText = state.PendingAccumulatedText;
-        var streamContext = BuildNyxRelayRuntimeContext(
-            nextChunk.CorrelationId,
-            nextChunk.Activity,
-            nextChunk.ReplyToken,
-            nextChunk.ReplyTokenExpiresAtUnixMs);
         var streamSequence = state.Sequence + 1;
         var streamGeneration = NextLarkCardOperationGeneration(state);
         await TransitionLarkCardStreamingPhaseAsync(
@@ -1391,7 +1469,7 @@ public sealed partial class ConversationGAgent
             finalText: null,
             lastFlushedText: state.LastFlushedText,
             CancellationToken.None);
-        StartLarkCardStreamOperation(nextChunk, correlationId, state, streamSequence, streamGeneration, streamContext);
+        await StartLarkCardStreamOperationAsync(nextChunk, correlationId, state, streamSequence, streamGeneration);
     }
 
     /// <summary>
@@ -1427,7 +1505,8 @@ public sealed partial class ConversationGAgent
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = correlationId,
-            RunId = correlationId,
+            RunId = NormalizeOptional(State.PendingLlmReplyRequests.FirstOrDefault(request =>
+                string.Equals(request.CorrelationId, correlationId, StringComparison.Ordinal))?.RunId) ?? string.Empty,
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"lark-card-stream:{cardMessageId}",
         };

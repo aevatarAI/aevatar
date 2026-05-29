@@ -14,4 +14,5 @@ public sealed record VoicePresenceCapabilitySnapshot(
     int PcmSampleRateHz,
     string? ActiveSessionId,
     DateTimeOffset? LeaseExpiresAt,
-    VoiceRemoteAudioSupport RemoteAudioSupport);
+    VoiceRemoteAudioSupport RemoteAudioSupport,
+    string? ActiveTransportLeaseId = null);

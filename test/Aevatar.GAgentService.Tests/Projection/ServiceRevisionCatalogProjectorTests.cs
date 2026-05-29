@@ -66,6 +66,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         readModel.Revisions[0].Status.Should().Be(ServiceRevisionStatus.Prepared.ToString());
         readModel.Revisions[0].ArtifactHash.Should().Be("hash-1");
         readModel.Revisions[0].Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        readModel.Revisions[0].PreparedArtifact.Should().NotBeNull();
+        readModel.Revisions[0].PreparedArtifact.RevisionId.Should().Be("r1");
     }
 
     [Fact]
@@ -369,12 +371,33 @@ public sealed class ServiceRevisionCatalogProjectorTests
         DateTimeOffset? retiredAt = null,
         IReadOnlyList<ServiceEndpointDescriptor>? endpoints = null)
     {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = spec.Identity?.Clone(),
+            RevisionId = spec.RevisionId,
+            ImplementationKind = spec.ImplementationKind,
+            ArtifactHash = artifactHash,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                StaticPlan = new StaticServiceDeploymentPlan
+                {
+                    AgentKind = spec.StaticSpec?.AgentKind ?? string.Empty,
+                    PreferredActorId = spec.StaticSpec?.PreferredActorId ?? string.Empty,
+                },
+            },
+        };
+        if (endpoints != null)
+            artifact.Endpoints.Add(endpoints.Select(x => x.Clone()));
+
         var record = new ServiceRevisionRecordState
         {
             Spec = spec.Clone(),
             Status = status,
             ArtifactHash = artifactHash,
             FailureReason = failureReason,
+            PreparedArtifact = status is ServiceRevisionStatus.Prepared or ServiceRevisionStatus.Published
+                ? artifact
+                : null,
         };
         if (createdAt.HasValue)
             record.CreatedAt = Timestamp.FromDateTimeOffset(createdAt.Value);

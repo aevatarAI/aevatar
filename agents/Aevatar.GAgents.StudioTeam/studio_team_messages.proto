@@ -20,7 +20,8 @@ enum StudioTeamLifecycleStage {
 //   studio-team:{scopeId}:{teamId}
 //
 // member_ids is the persisted roster (set semantics) — mutated only via
-// idempotent set operations on committed StudioMemberReassignedEvent.
+// idempotent set operations on committed StudioMemberReassignedEvent
+// delivered by the durable committed-state materialization path.
 // member_count is a derived projection of member_ids.size() and is written
 // alongside on each StudioTeamMemberRosterChangedEvent commit.
 message StudioTeamState {

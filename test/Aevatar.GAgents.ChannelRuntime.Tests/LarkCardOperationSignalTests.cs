@@ -258,11 +258,11 @@ public sealed class LarkCardOperationSignalTests
         var agent = new ConversationGAgent
         {
             Services = services,
-            EventPublisher = new NoopEventPublisher(),
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
+        agent.EventPublisher = new SelfHandlingEventPublisher(agent);
         agent.ActivateAsync().GetAwaiter().GetResult();
         return agent;
     }
@@ -544,7 +544,7 @@ public sealed class LarkCardOperationSignalTests
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NoopEventPublisher : IEventPublisher
+    private sealed class SelfHandlingEventPublisher(ConversationGAgent agent) : IEventPublisher
     {
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -562,6 +562,8 @@ public sealed class LarkCardOperationSignalTests
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
-            Task.CompletedTask;
+            string.Equals(targetActorId, agent.Id, StringComparison.Ordinal)
+                ? agent.HandleEventAsync(Envelope(targetActorId, evt))
+                : Task.CompletedTask;
     }
 }

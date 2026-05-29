@@ -9,14 +9,14 @@ namespace Aevatar.GAgentService.Core.Services;
 public sealed class DefaultServiceServingTargetResolver : IServiceServingTargetResolver
 {
     private readonly IServiceDeploymentCatalogQueryReader _deploymentQueryReader;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
 
     public DefaultServiceServingTargetResolver(
         IServiceDeploymentCatalogQueryReader deploymentQueryReader,
-        IServiceRevisionArtifactStore artifactStore)
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
     {
         _deploymentQueryReader = deploymentQueryReader ?? throw new ArgumentNullException(nameof(deploymentQueryReader));
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
     }
 
     public async Task<IReadOnlyList<ServiceServingTargetSpec>> ResolveTargetsAsync(
@@ -37,6 +37,7 @@ public sealed class DefaultServiceServingTargetResolver : IServiceServingTargetR
         var serviceKey = ServiceKeys.Build(identity);
         var deployments = await _deploymentQueryReader.GetAsync(identity, ct)
             ?? throw new InvalidOperationException($"Deployments for '{serviceKey}' were not found.");
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct);
         var deploymentByRevision = deployments.Deployments
             .Where(x => string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
             .GroupBy(x => x.RevisionId, StringComparer.Ordinal)
@@ -45,28 +46,27 @@ public sealed class DefaultServiceServingTargetResolver : IServiceServingTargetR
         var resolved = new List<ServiceServingTargetSpec>();
         foreach (var target in requestedTargets)
         {
-            resolved.Add(await ResolveTargetAsync(serviceKey, target, deploymentByRevision, ct));
+            resolved.Add(ResolveTarget(identity, target, deploymentByRevision, revisionCatalog));
         }
 
         return resolved;
     }
 
-    private async Task<ServiceServingTargetSpec> ResolveTargetAsync(
-        string serviceKey,
+    private static ServiceServingTargetSpec ResolveTarget(
+        ServiceIdentity identity,
         ServiceServingTargetSpec target,
         IReadOnlyDictionary<string, ServiceDeploymentSnapshot> deploymentByRevision,
-        CancellationToken ct)
+        ServiceRevisionCatalogSnapshot? revisionCatalog)
     {
         ArgumentNullException.ThrowIfNull(target);
+        var serviceKey = ServiceKeys.Build(identity);
         if (!deploymentByRevision.TryGetValue(target.RevisionId, out var deployment))
         {
             throw new InvalidOperationException(
                 $"Active deployment for '{serviceKey}' revision '{target.RevisionId}' was not found.");
         }
 
-        var artifact = await _artifactStore.GetAsync(serviceKey, target.RevisionId, ct)
-            ?? throw new InvalidOperationException(
-                $"Prepared artifact for '{serviceKey}' revision '{target.RevisionId}' was not found.");
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(identity, target.RevisionId);
 
         var resolved = CloneTarget(target);
         resolved.DeploymentId = deployment.DeploymentId;

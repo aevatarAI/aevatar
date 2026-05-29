@@ -15,23 +15,49 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
     //                `http.authorization` string key.
     //   New principle: authorization writes update the typed connector section
     //                  of WorkflowExecutionRuntimeContext.
-    public static void SetAuthorization(
+    public static Task SetAuthorizationAsync(
         IWorkflowExecutionStateHost stateHost,
-        string? authorization)
+        string? authorization,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.Connector.Authorization =
-            string.IsNullOrWhiteSpace(authorization) ? null : authorization.Trim();
+        if (string.IsNullOrWhiteSpace(authorization))
+        {
+            return stateHost.UpdateExecutionContextAsync(
+                new WorkflowRunExecutionContextDelta
+                {
+                    ClearConnector = true,
+                },
+                ct);
+        }
+
+        return stateHost.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
+            {
+                ClearConnector = true,
+                Connector = new WorkflowRunConnectorExecutionContextDelta
+                {
+                    HttpAuthorization = authorization.Trim(),
+                },
+            },
+            ct);
     }
 
     // Refactor (iter16/cluster-031):
     //   Old pattern: clearing authorization removed a value from the generic
     //                execution item bag by string key.
     //   New principle: clearing authorization nulls the typed connector field.
-    public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
+    public static Task RemoveAuthorizationAsync(
+        IWorkflowExecutionStateHost stateHost,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.Connector.Authorization = null;
+        return stateHost.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
+            {
+                ClearConnector = true,
+            },
+            ct);
     }
 
     // Refactor (iter16/cluster-031):
@@ -45,14 +71,6 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
     {
         ArgumentNullException.ThrowIfNull(ctx);
 
-        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor &&
-            !string.IsNullOrWhiteSpace(runtimeAccessor.RuntimeContext.Connector.Authorization))
-        {
-            authorization = runtimeAccessor.RuntimeContext.Connector.Authorization.Trim();
-            return true;
-        }
-
-        authorization = string.Empty;
-        return false;
+        return WorkflowRunExecutionContextStateAccess.TryGetConnectorAuthorization(ctx, out authorization);
     }
 }

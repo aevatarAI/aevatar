@@ -39,12 +39,71 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
         Encoding.UTF8.GetString(persistedBytes).Should().NotContain("runtime-user-access-token-secret");
     }
 
+    [Fact]
+    public async Task HandleNyxRelayTextOperationTimeoutFiredAsync_FinalCompletion_PersistsDeliveredRunIdFromPendingRequest()
+    {
+        await using var callbackHarness = await RuntimeCallbackSchedulerGrainTestHarness.StartAsync();
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent("conv-nyx-final-timeout-run-id", callbackHarness.Scheduler, store);
+        var chunk = CreateStreamChunk();
+
+        agent.State.PendingLlmReplyRequests.Add(new NeedsLlmReplyEvent
+        {
+            CorrelationId = chunk.CorrelationId,
+            RunId = "run-stream-final-timeout",
+            TargetActorId = agent.Id,
+            RegistrationId = chunk.RegistrationId,
+            Activity = chunk.Activity.Clone(),
+            RequestedAtUnixMs = 10,
+        });
+        agent.State.ActiveReplyLifecycles.Add(new ConversationReplyLifecycleState
+        {
+            CorrelationId = chunk.CorrelationId,
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            PlatformMessageId = "relay-msg-1",
+            LastFlushedText = "partial text",
+            EditCount = 1,
+            NyxRelayInFlightOperation = NyxRelayTextOperationKind.Final,
+            NyxRelayInFlightSequence = 2,
+            NyxRelayOperationGeneration = 3,
+        });
+
+        await agent.HandleNyxRelayTextOperationTimeoutFiredAsync(new NyxRelayTextOperationTimeoutFiredEvent
+        {
+            CorrelationId = chunk.CorrelationId,
+            Operation = NyxRelayTextOperationKind.Final,
+            Sequence = 2,
+            OperationGeneration = 3,
+            Chunk = chunk.Clone(),
+            CurrentPlatformMessageId = "relay-msg-1",
+            CommandId = "llm-reply:corr-timeout-token",
+            FinalText = "final text",
+            LastFlushedText = "partial text",
+            EditCount = 1,
+            FiredAtUnixMs = 30,
+        });
+
+        var delivered = (await store.GetEventsAsync(agent.Id))
+            .Select(e => e.EventData)
+            .Where(e => e.Is(LlmReplyDeliveredEvent.Descriptor))
+            .Select(e => e.Unpack<LlmReplyDeliveredEvent>())
+            .OfType<LlmReplyDeliveredEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        delivered.RunId.Should().Be("run-stream-final-timeout");
+        agent.State.LastReplyDelivery.RunId.Should().Be("run-stream-final-timeout");
+    }
+
     private static ConversationGAgent CreateAgent(
         string id,
-        IActorRuntimeCallbackScheduler scheduler)
+        IActorRuntimeCallbackScheduler scheduler,
+        IEventStore? store = null)
     {
+        var eventStore = store ?? new InMemoryEventStore();
         var services = new ServiceCollection()
-            .AddSingleton<IEventStore, InMemoryEventStore>()
+            .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
             .AddSingleton(scheduler)
             .AddSingleton<IConversationTurnRunner, SucceedingTurnRunner>()
@@ -55,7 +114,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
         var agent = new ConversationGAgent
         {
             Services = services,
-            EventPublisher = new NoopEventPublisher(),
+            EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
@@ -195,7 +254,7 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 
-    private sealed class NoopEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher
     {
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -284,4 +343,5 @@ public sealed class NyxRelayTextOperationTimeoutPayloadTests
             return Task.FromResult((long)(before - stream.Count));
         }
     }
+
 }

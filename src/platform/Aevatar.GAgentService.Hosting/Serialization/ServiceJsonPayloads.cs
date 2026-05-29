@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -26,22 +28,24 @@ internal static class ServiceJsonPayloads
     }
 
     public static async Task<Any> PackJsonAsync(
-        IServiceRevisionArtifactStore artifactStore,
-        string serviceKey,
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
+        ServiceIdentity identity,
         string revisionId,
         string typeUrl,
         string payloadJson,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(artifactStore);
+        ArgumentNullException.ThrowIfNull(revisionCatalogQueryReader);
+        ArgumentNullException.ThrowIfNull(identity);
         if (string.IsNullOrWhiteSpace(typeUrl))
             throw new InvalidOperationException("payloadTypeUrl is required.");
         if (string.IsNullOrWhiteSpace(revisionId))
             throw new InvalidOperationException(
                 "payloadJson requires a revisionId; provide one explicitly or activate a serving revision.");
 
-        var artifact = await artifactStore.GetAsync(serviceKey, revisionId, ct);
-        if (artifact == null || artifact.ProtocolDescriptorSet.IsEmpty)
+        var revisionCatalog = await revisionCatalogQueryReader.GetAsync(identity, ct);
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(identity, revisionId);
+        if (artifact.ProtocolDescriptorSet.IsEmpty)
             throw new InvalidOperationException(
                 $"payloadTypeUrl '{typeUrl}' could not be resolved: revision '{revisionId}' has no protocol descriptor set.");
 

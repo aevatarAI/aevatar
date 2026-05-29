@@ -20,6 +20,7 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
+    // Refactor (iter112/cluster-3): Old pattern: Host adapters populated Application mirror fields beside typed source. New principle: Host keeps wire aliases but normalizes them once into typed WorkflowChatSource.
     // Refactor (iter15/cluster-029):
     //   Old pattern: normalized context carried metadata-derived scope conflict state.
     //   New principle: scope is owned by the typed field; metadata only carries open extension entries.
@@ -32,6 +33,7 @@ internal static class ChatRunRequestNormalizer
         WorkflowCapabilitiesDocument? capabilities = null,
         IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
+        // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         ArgumentNullException.ThrowIfNull(input);
 
         var normalizedInputParts = NormalizeInputParts(input.InputParts);
@@ -62,14 +64,11 @@ internal static class ChatRunRequestNormalizer
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: normalizedPrompt,
-                WorkflowName: string.IsNullOrWhiteSpace(source.WorkflowName) ? null : source.WorkflowName,
-                ActorId: NormalizeAgentId(source.ActorId),
+                Source: source,
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
-                WorkflowYamls: source.WorkflowYamls,
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
-                Source: source,
                 LlmControl: NormalizeLlmControl(input.LlmControl)));
     }
 

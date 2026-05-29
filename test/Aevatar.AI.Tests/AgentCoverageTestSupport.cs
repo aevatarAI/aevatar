@@ -81,6 +81,7 @@ internal static class AgentCoverageTestSupport
 internal sealed class TestRecordingEventPublisher : IEventPublisher
 {
     public List<IMessage> Published { get; } = [];
+    public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
@@ -106,8 +107,11 @@ internal sealed class TestRecordingEventPublisher : IEventPublisher
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = targetActorId;
-        return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+        _ = ct;
+        _ = sourceEnvelope;
+        _ = options;
+        Sent.Add((targetActorId, evt));
+        return Task.CompletedTask;
     }
 
     public Task PublishCommittedStateEventAsync(

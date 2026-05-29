@@ -55,6 +55,12 @@ public sealed class ResponsesToolChoiceHintPlan
 
     public bool IsEmpty => string.IsNullOrWhiteSpace(ToolName);
 
+    public string PrefilledArgumentsJson() =>
+        new JsonObject(PrefilledArguments
+                .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone()))
+                .ToArray())
+            .ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+
     public ToolCall Apply(ToolCall call)
     {
         ArgumentNullException.ThrowIfNull(call);

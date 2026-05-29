@@ -8,13 +8,13 @@ namespace Aevatar.Bootstrap.Connectors;
 
 /// <summary>
 /// In-process Telegram user-account connector built on MTProto.
-/// Supports /sendMessage and /getUpdates (Bot API compatible response shape).
+/// Supports outbound /sendMessage and login checks only.
 /// </summary>
+// Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+//   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+//   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
 public sealed class TelegramUserConnector : IConnector
 {
-    private const int MaxPollTimeoutSeconds = 25;
-    private const int DefaultPollSleepMs = 200;
-    private const int MaxBufferedUpdates = 4000;
     private readonly int _apiId;
     private readonly string _apiHash;
     private readonly string _phoneNumber;
@@ -30,9 +30,6 @@ public sealed class TelegramUserConnector : IConnector
     private readonly int _defaultTimeoutMs;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _initGate = new(1, 1);
-    private readonly object _updatesGate = new();
-    private readonly List<TelegramInboundUpdate> _updates = [];
-    private long _nextUpdateId = 1;
     private WTelegram.Client? _client;
     private WTelegram.UpdateManager? _manager;
 
@@ -73,7 +70,9 @@ public sealed class TelegramUserConnector : IConnector
         _systemLangCode = systemLangCode?.Trim() ?? string.Empty;
         _langCode = langCode?.Trim() ?? string.Empty;
         _allowedOperations = new HashSet<string>(
-            (allowedOperations ?? ["/sendMessage", "/getUpdates", "/ensureLogin"]).Select(NormalizeOperation),
+            (allowedOperations ?? ["/sendMessage", "/ensureLogin"])
+                .Select(NormalizeOperation)
+                .Where(operation => !string.Equals(operation, "/getUpdates", StringComparison.OrdinalIgnoreCase)),
             StringComparer.OrdinalIgnoreCase);
         _defaultTimeoutMs = Math.Clamp(timeoutMs, 100, 300_000);
         _logger = logger;
@@ -85,6 +84,9 @@ public sealed class TelegramUserConnector : IConnector
     public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
         var operation = NormalizeOperation(request.Operation);
+        if (string.Equals(operation, "/getUpdates", StringComparison.OrdinalIgnoreCase))
+            return ExecuteGetUpdatesDeleted();
+
         if (!string.Equals(operation, "/ensureLogin", StringComparison.OrdinalIgnoreCase) &&
             !_allowedOperations.Contains(operation))
         {
@@ -113,7 +115,6 @@ public sealed class TelegramUserConnector : IConnector
         {
             "/ensureLogin" => ExecuteEnsureLogin(),
             "/sendMessage" => await ExecuteSendMessageAsync(request, timeoutCts.Token),
-            "/getUpdates" => await ExecuteGetUpdatesAsync(request, timeoutCts.Token),
             _ => Fail($"telegram_user unsupported operation '{operation}'"),
         };
     }
@@ -152,8 +153,8 @@ public sealed class TelegramUserConnector : IConnector
             try
             {
                 newClient = new WTelegram.Client(key => GetConfigValue(key, runtimeLogin));
-                var manager = newClient.WithUpdateManager(HandleUpdateAsync);
                 var me = await newClient.LoginUserIfNeeded();
+                var manager = newClient.WithUpdateManager(_ => Task.CompletedTask);
 
                 // Prime known users/chats with access hashes for future sendMessage resolutions.
                 var dialogs = await newClient.Messages_GetAllDialogs();
@@ -218,7 +219,7 @@ public sealed class TelegramUserConnector : IConnector
             ["result"] = new Dictionary<string, object?>
             {
                 ["message_id"] = sent.id,
-                    ["date"] = ToUnixSeconds(sent.date),
+                ["date"] = ToUnixSeconds(sent.date),
                 ["text"] = sent.message ?? text,
                 ["chat"] = new Dictionary<string, object?>
                 {
@@ -234,143 +235,11 @@ public sealed class TelegramUserConnector : IConnector
         });
     }
 
-    private async Task<ConnectorResponse> ExecuteGetUpdatesAsync(ConnectorRequest request, CancellationToken ct)
-    {
-        var getUpdates = ReadGetUpdatesPayload(request.Payload);
-        var offset = Math.Max(0, getUpdates.Offset);
-        var timeoutSeconds = Math.Clamp(getUpdates.TimeoutSeconds, 0, MaxPollTimeoutSeconds);
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(timeoutSeconds);
-
-        List<TelegramInboundUpdate> batch;
-        while (true)
-        {
-            batch = SnapshotUpdates(offset);
-            if (batch.Count > 0 || DateTimeOffset.UtcNow >= deadline)
-                break;
-
-            var remaining = deadline - DateTimeOffset.UtcNow;
-            var sleepMs = (int)Math.Clamp(remaining.TotalMilliseconds, 1, DefaultPollSleepMs);
-            await Task.Delay(sleepMs, ct);
-        }
-
-        var output = JsonSerializer.Serialize(new Dictionary<string, object?>
-        {
-            ["ok"] = true,
-            ["result"] = batch.Select(ToBotApiUpdate).ToList(),
-        });
-
-        return Ok(output, new Dictionary<string, string>
-        {
-            ["connector.telegram_user.operation"] = "/getUpdates",
-            ["connector.telegram_user.offset"] = offset.ToString(CultureInfo.InvariantCulture),
-            ["connector.telegram_user.count"] = batch.Count.ToString(CultureInfo.InvariantCulture),
-        });
-    }
-
-    private async Task HandleUpdateAsync(Update update)
-    {
-        try
-        {
-            switch (update)
-            {
-                case UpdateNewMessage unm:
-                    EnqueueUpdate(unm.message);
-                    break;
-                case UpdateEditMessage uem:
-                    EnqueueUpdate(uem.message);
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "telegram_user failed to process update callback");
-        }
-
-        await Task.CompletedTask;
-    }
-
-    private void EnqueueUpdate(MessageBase messageBase)
-    {
-        if (messageBase is not Message msg)
-            return;
-        if (string.IsNullOrWhiteSpace(msg.message))
-            return;
-        if (msg.Peer == null)
-            return;
-
-        var botStyleChatId = ToBotStyleChatId(msg.Peer);
-        if (string.IsNullOrWhiteSpace(botStyleChatId))
-            return;
-
-        var fromPeer = msg.From ?? msg.Peer;
-        var update = new TelegramInboundUpdate(
-            UpdateId: Interlocked.Increment(ref _nextUpdateId),
-            MessageId: msg.id,
-            DateUnix: ToUnixSeconds(msg.date),
-            ChatId: botStyleChatId,
-            FromUserId: ToPlainPeerId(fromPeer),
-            FromUsername: ResolveUsername(fromPeer),
-            Content: msg.message ?? string.Empty);
-
-        lock (_updatesGate)
-        {
-            _updates.Add(update);
-            if (_updates.Count > MaxBufferedUpdates)
-            {
-                var removeCount = _updates.Count - MaxBufferedUpdates;
-                _updates.RemoveRange(0, removeCount);
-            }
-        }
-    }
-
-    private List<TelegramInboundUpdate> SnapshotUpdates(long offset)
-    {
-        lock (_updatesGate)
-        {
-            return _updates
-                .Where(x => x.UpdateId >= offset)
-                .OrderBy(x => x.UpdateId)
-                .Take(200)
-                .ToList();
-        }
-    }
-
-    private object ToBotApiUpdate(TelegramInboundUpdate update)
-    {
-        return new Dictionary<string, object?>
-        {
-            ["update_id"] = update.UpdateId,
-            ["message"] = new Dictionary<string, object?>
-            {
-                ["message_id"] = update.MessageId,
-                ["date"] = update.DateUnix,
-                ["chat"] = new Dictionary<string, object?>
-                {
-                    ["id"] = ParseNumberOrKeepString(update.ChatId),
-                },
-                ["from"] = new Dictionary<string, object?>
-                {
-                    ["id"] = ParseNumberOrKeepString(update.FromUserId),
-                    ["username"] = update.FromUsername,
-                },
-                ["text"] = update.Content,
-            },
-        };
-    }
-
-    private string ResolveUsername(Peer peer)
-    {
-        var manager = _manager;
-        if (manager == null)
-            return string.Empty;
-
-        return manager.UserOrChat(peer) switch
-        {
-            User user => user.username ?? string.Empty,
-            Channel channel => channel.username ?? string.Empty,
-            _ => string.Empty,
-        };
-    }
+    // Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+    //   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+    //   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
+    private static ConnectorResponse ExecuteGetUpdatesDeleted() =>
+        Fail("telegram_user /getUpdates was removed. Route inbound Telegram through NyxID Channel Bot Relay (/api/webhooks/nyxid-relay); this connector only keeps outbound /sendMessage and /ensureLogin.");
 
     private async Task RefreshKnownPeersAsync()
     {
@@ -556,29 +425,6 @@ public sealed class TelegramUserConnector : IConnector
         }
     }
 
-    private static GetUpdatesPayload ReadGetUpdatesPayload(string payload)
-    {
-        if (string.IsNullOrWhiteSpace(payload))
-            return new GetUpdatesPayload();
-
-        try
-        {
-            using var doc = JsonDocument.Parse(payload);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return new GetUpdatesPayload();
-
-            return new GetUpdatesPayload
-            {
-                Offset = ReadJsonInt64(doc.RootElement, "offset"),
-                TimeoutSeconds = (int)Math.Clamp(ReadJsonInt64(doc.RootElement, "timeout"), 0, MaxPollTimeoutSeconds),
-            };
-        }
-        catch
-        {
-            return new GetUpdatesPayload();
-        }
-    }
-
     private void EnsureSessionDirectory()
     {
         if (string.IsNullOrWhiteSpace(_sessionPath))
@@ -587,28 +433,6 @@ public sealed class TelegramUserConnector : IConnector
         var directory = Path.GetDirectoryName(_sessionPath);
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
-    }
-
-    private static string ToBotStyleChatId(Peer peer)
-    {
-        return peer switch
-        {
-            PeerChannel channel => (-1_000_000_000_000L - channel.channel_id).ToString(CultureInfo.InvariantCulture),
-            PeerChat chat => (-chat.chat_id).ToString(CultureInfo.InvariantCulture),
-            PeerUser user => user.user_id.ToString(CultureInfo.InvariantCulture),
-            _ => string.Empty,
-        };
-    }
-
-    private static string ToPlainPeerId(Peer peer)
-    {
-        return peer switch
-        {
-            PeerChannel channel => channel.channel_id.ToString(CultureInfo.InvariantCulture),
-            PeerChat chat => chat.chat_id.ToString(CultureInfo.InvariantCulture),
-            PeerUser user => user.user_id.ToString(CultureInfo.InvariantCulture),
-            _ => string.Empty,
-        };
     }
 
     private static string NormalizeOperation(string operation)
@@ -639,28 +463,6 @@ public sealed class TelegramUserConnector : IConnector
             JsonValueKind.Number => value.GetRawText(),
             _ => string.Empty,
         };
-    }
-
-    private static long ReadJsonInt64(JsonElement obj, string key)
-    {
-        if (!obj.TryGetProperty(key, out var value))
-            return 0;
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
-            return number;
-        if (value.ValueKind == JsonValueKind.String &&
-            long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number))
-        {
-            return number;
-        }
-
-        return 0;
-    }
-
-    private static object ParseNumberOrKeepString(string value)
-    {
-        if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
-            return number;
-        return value;
     }
 
     private static long ToUnixSeconds(DateTime dateTime)
@@ -741,18 +543,4 @@ public sealed class TelegramUserConnector : IConnector
         public string ParseMode { get; init; } = string.Empty;
     }
 
-    private sealed record GetUpdatesPayload
-    {
-        public long Offset { get; init; }
-        public int TimeoutSeconds { get; init; }
-    }
-
-    private sealed record TelegramInboundUpdate(
-        long UpdateId,
-        int MessageId,
-        long DateUnix,
-        string ChatId,
-        string FromUserId,
-        string FromUsername,
-        string Content);
 }

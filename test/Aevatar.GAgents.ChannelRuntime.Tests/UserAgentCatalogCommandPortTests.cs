@@ -207,7 +207,7 @@ public sealed class UserAgentCatalogCommandPortTests
             Activation = activation;
 
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+                .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
             Port = new UserAgentCatalogCommandPort(
                 Runtime,

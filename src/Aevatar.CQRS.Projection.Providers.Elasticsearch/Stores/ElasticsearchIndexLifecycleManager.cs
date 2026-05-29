@@ -14,11 +14,10 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 ///
 /// 1. Alias exists and points at <c>{alias}-v{fingerprint}</c> matching the
 ///    augmented metadata fingerprint → no-op.
-/// 2. Alias exists but points at a different physical → blue-green
-///    migrate: create new physical with expected mapping, reindex from old
-///    to new, atomically swap the alias (remove + add in one
-///    <c>_aliases</c> call). The old physical is left in place for the
-///    rollback window; background cleanup retires it after grace.
+/// 2. Alias exists but points at a different physical → fail loud. The
+///    alias+fingerprint lifecycle is the only schema-drift authority, so
+///    projection must refuse to write instead of repairing drift through a
+///    query-time or projection-turn mapping reader.
 /// 3. No alias exists but a bare index with the alias name does — this is a
 ///    pre-aliased prod index from before the lifecycle landed. Create the
 ///    new physical with expected mapping, reindex from the bare index, then
@@ -96,8 +95,14 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
                 return;
 
-            await MigrateAcrossPhysicalsAsync(aliasName, currentAliasTarget, expectedPhysical, metadata, ct);
-            return;
+            // Refactor (iter98/cluster-743): Old pattern: fingerprint drift triggered
+            // an in-place lifecycle migration and reindex. New principle: alias +
+            // fingerprint is the sole schema-drift truth source; a mismatched
+            // physical means configuration drift and projection refuses to proceed.
+            throw new InvalidOperationException(
+                $"Elasticsearch projection index schema drift detected for alias '{aliasName}'. " +
+                $"Current physical '{currentAliasTarget}' does not match expected physical '{expectedPhysical}'. " +
+                "Rebuild or repoint the projection index lifecycle explicitly before accepting projection writes.");
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);
@@ -192,28 +197,6 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         _logger.LogInformation(
             "Projection index lifecycle: wrapped bare index into aliased physical alias={Alias} physical={Physical}",
             aliasName, newPhysical);
-    }
-
-    private async Task MigrateAcrossPhysicalsAsync(
-        string aliasName,
-        string oldPhysical,
-        string newPhysical,
-        DocumentIndexMetadata metadata,
-        CancellationToken ct)
-    {
-        await CreatePhysicalAsync(newPhysical, metadata, ct);
-        await ReindexAsync(sourceIndex: oldPhysical, destIndex: newPhysical, ct);
-        await ExecuteAliasActionsAsync(
-            new object[]
-            {
-                new Dictionary<string, object?> { ["remove"] = new Dictionary<string, object?> { ["index"] = oldPhysical, ["alias"] = aliasName } },
-                new Dictionary<string, object?> { ["add"] = new Dictionary<string, object?> { ["index"] = newPhysical, ["alias"] = aliasName } },
-            },
-            description: $"migrate alias '{aliasName}' from '{oldPhysical}' to '{newPhysical}'",
-            ct);
-        _logger.LogInformation(
-            "Projection index lifecycle: migrated alias across physicals alias={Alias} from={From} to={To}",
-            aliasName, oldPhysical, newPhysical);
     }
 
     private async Task CreatePhysicalAsync(string physical, DocumentIndexMetadata metadata, CancellationToken ct)

@@ -10,7 +10,7 @@
 #     `<ISO8601> new-triage-issue <issue> <author>`
 #   - state 存 .refactor-loop/triage-monitor-state.json(seen issue id)
 # - 不自己派 codex(controller 责任)
-# - 启动: nohup bash tools/refactor-loop/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown
+# - 启动: nohup bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown
 #
 # ⟦AI:AUTO-LOOP⟧
 

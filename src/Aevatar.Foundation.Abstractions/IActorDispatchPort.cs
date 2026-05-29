@@ -64,6 +64,7 @@ internal sealed record DispatchAdmissionFollowUp(
 /// <summary>
 /// Actor envelope dispatch contract.
 /// </summary>
+// Refactor (iter149/issue1132): Old pattern: handled-dispatch side contract implied actor-turn completion.  New principle: IActorDispatchPort exposes accepted-only runtime/inbox admission.
 public interface IActorDispatchPort
 {
     /// <summary>
