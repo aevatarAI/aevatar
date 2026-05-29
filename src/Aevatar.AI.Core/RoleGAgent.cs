@@ -127,14 +127,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
                 RoleName, pending.ToolName, pending.RequestId);
 
-            // Restore scrubbed typed context so tool execution can read stable
-            // AgentToolRequestContext accessors without durable request bearer.
+            // Refactor (iter163/cluster-001-first):
+            //   Old pattern: pending approval state stored stable tool/caller context in map<string,string> metadata
+            //                and rehydrated via AgentToolExecutionContextMapper.FromMetadata.
+            //   New principle: typed tool_context sub-message stores stable context;
+            //                  metadata bag only carries open annotations and legacy fallback.
             try
             {
                 // Refactor (issue1253-first):
                 //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
                 //   New principle: Use typed pending.ToolContext first, with metadata only for old persisted state fallback.
-                var pendingToolContext = ResolvePendingApprovalToolContext(pending);
+                var pendingToolContext = ResolvePendingToolContext(pending);
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     // Execute the yielded tool call
@@ -431,11 +434,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ToolCallId = toolCallId,
                     ArgumentsJson = args,
                     IsDestructive = true,
+                    ToolContext = ResolveToolContext(request, requestId, toolCallId).ToPayload(),
                 };
-                // Refactor (issue1253-first):
-                //   Old pattern: Pending approval persisted stable context in metadata.
-                //   New principle: Persist typed durable-safe context and keep metadata as open annotations only.
-                pending.ToolContext = CreateDurablePendingApprovalToolContext(request);
                 foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
                     pending.Metadata[kv.Key] = kv.Value;
 
@@ -551,35 +551,49 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyDictionary<string, string>? metadata) =>
         AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
 
-    private static AgentToolExecutionContext ResolvePendingApprovalToolContext(PendingToolApprovalState pending)
+    private static AgentToolExecutionContext ResolveToolContext(
+        ChatRequestEvent request,
+        string requestId,
+        string toolCallId)
     {
-        var context = pending.ToolContext != null
-            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
-            : AgentToolExecutionContextMapper.FromMetadata(
-                pending.Metadata.Count > 0
-                    ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
-                    : null);
+        var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        if (context == AgentToolExecutionContext.Empty && request.Metadata.Count > 0)
+        {
+            context = AgentToolExecutionContextMapper.FromMetadata(
+                new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal));
+        }
 
+        context = LLMControlContextMapper.FromPayload(request.LlmControl).ToToolContext(context);
+        context = context with
+        {
+            Request = new AgentToolRequestIdentity(
+                NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
+                NormalizeToolContextValue(toolCallId) ?? context.Request.CallId),
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+        };
+
+        return context;
+    }
+
+    private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
+    {
+        if (pending.ToolContext != null)
+            return AgentToolExecutionContextMapper.FromPayload(pending.ToolContext) with
+            {
+                Credentials = AgentToolCredentials.Empty,
+            };
+
+        if (pending.Metadata.Count == 0)
+            return AgentToolExecutionContext.Empty;
+
+        var context = AgentToolExecutionContextMapper.FromMetadata(
+            new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal));
         return context with { Credentials = AgentToolCredentials.Empty };
     }
 
-    private static AgentToolExecutionContextPayload CreateDurablePendingApprovalToolContext(ChatRequestEvent request)
-    {
-        var baseContext = request.ToolContext != null
-            ? AgentToolExecutionContextMapper.FromPayload(request.ToolContext)
-            : AgentToolExecutionContextMapper.FromMetadata(request.Metadata);
-        var context = LLMControlContextMapper.FromPayload(request.LlmControl)
-            .ToToolContext(baseContext);
-
-        context = context with
-        {
-            Credentials = AgentToolCredentials.Empty,
-            ExternalMetadata = ScrubPendingApprovalMetadata(request.Metadata),
-        };
-
-        return context.ToPayload();
-    }
-
+    private static string? NormalizeToolContextValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     // ─── Pending approval state transitions ───
 
     private static RoleGAgentState ApplyPendingApproval(
