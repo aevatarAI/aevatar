@@ -759,10 +759,11 @@ public class RuntimeCallbackEventizationTests
 
         var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
         ctx.Published.Clear();
-        var responseEnvelope = Wrap(new ChatResponseEvent
+        var responseEnvelope = Wrap(new WorkflowRoleReplyRecordedEvent
         {
             SessionId = chatRequest.SessionId,
             Content = "ok",
+            RoleActorId = "role-worker",
         });
 
         await FluentActions

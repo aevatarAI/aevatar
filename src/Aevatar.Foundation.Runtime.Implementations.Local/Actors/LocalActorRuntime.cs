@@ -229,6 +229,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 parent.RemoveChild(id);
 
             await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
+            await _streams.GetStream(id).RemoveRelayAsync(parentId, ct);
             await actor.UnsubscribeFromParentAsync();
         }
 
@@ -239,6 +240,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 await child.UnsubscribeFromParentAsync();
 
             await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(id, ct);
         }
 
         using var activity = AevatarActivitySource.StartAgentDeactivate(
@@ -295,6 +297,9 @@ public sealed class LocalActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
+        await _streams.GetStream(childId).UpsertRelayAsync(
+            StreamForwardingRules.CreateCommittedFactsObserverBinding(childId, parentId),
+            ct);
 
         using var activity = AevatarActivitySource.StartAgentLink(parentId, childId);
         AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
@@ -316,6 +321,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 parent.RemoveChild(childId);
 
             await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(parentId, ct);
         }
 
         await child.UnsubscribeFromParentAsync();

@@ -31,6 +31,27 @@ public class StreamForwardingRulesTests
     }
 
     [Fact]
+    public void CreateCommittedFactsObserverBinding_ShouldMatchCommittedObserverPublicationsOnly()
+    {
+        var binding = StreamForwardingRules.CreateCommittedFactsObserverBinding("child", "parent");
+        binding.SourceStreamId.Should().Be("child");
+        binding.TargetStreamId.Should().Be("parent");
+        binding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
+
+        var committed = new EventEnvelope
+        {
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("child", ObserverAudience.CommittedFacts),
+        };
+        var topology = new EventEnvelope
+        {
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("child", TopologyAudience.Children),
+        };
+
+        StreamForwardingRules.Matches(binding, committed).Should().BeTrue();
+        StreamForwardingRules.Matches(binding, topology).Should().BeFalse();
+    }
+
+    [Fact]
     public void Matches_WhenTypeFilterConfigured_ShouldMatchByTypeUrl()
     {
         var envelope = new EventEnvelope
