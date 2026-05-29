@@ -130,6 +130,37 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     }
 
     [Fact]
+    public void ToBoundaryJson_FreshWebSearchResult_EmitsResultFieldsJson()
+    {
+        var result = new ResponsesWebSubstituteToolExecutionResult
+        {
+            TypedSearch = new ResponsesWebSearchToolOutput
+            {
+                Results =
+                {
+                    new ResponsesWebSearchResultItem
+                    {
+                        Title = "fresh",
+                        Url = "https://example.com/fresh",
+                        Snippet = "fresh snippet",
+                    },
+                },
+            },
+        };
+
+        using var document = ParseBoundaryJson(result);
+        var root = document.RootElement;
+
+        root.TryGetProperty("results", out var results).Should().BeTrue();
+        results.ValueKind.Should().Be(JsonValueKind.Array);
+        results.GetArrayLength().Should().Be(1);
+        var item = results[0];
+        item.GetProperty("title").GetString().Should().Be("fresh");
+        item.GetProperty("url").GetString().Should().Be("https://example.com/fresh");
+        item.GetProperty("snippet").GetString().Should().Be("fresh snippet");
+    }
+
+    [Fact]
     public void ToBoundaryJson_EmptyProtobufValues_EmitsValidNullableJson()
     {
         var emptyOneof = ResponsesWebSubstituteToolJson.ToBoundaryJson(
