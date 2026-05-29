@@ -28,7 +28,8 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             bootstrap,
-            CreateCommandDispatch(dispatch));
+            CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -52,7 +53,8 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -70,7 +72,8 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
         var envelope = WrapCommitted(NewDraftSaved("workflow-1", "Workflow One"), version: 4, eventId: "evt-4");
 
         await materializer.ProjectAsync(NewContext(), envelope);
@@ -88,7 +91,8 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -109,7 +113,8 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
         var dispatch = new RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             bootstrap,
-            CreateCommandDispatch(dispatch));
+            CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
