@@ -63,16 +63,28 @@ gh issue view <N> --json comments --jq '
 - **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
 - **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
 
-### Wakeup 第一动作:`bash .claude/skills/codex-refactor-loop/scripts/peek.sh`(强制)
+### Wakeup 第一动作:`bash .claude/skills/codex-refactor-loop/scripts/wakeup-check.sh`(强制,per Auric 2026-05-29 "增加一个脚本,每次唤醒的时候机械的调用该脚本,检查各 daemon,同时按照顺序获取任务,无任务时推荐跑审计任务给 AI")
 
-减少人工 grep / parse 错误。一眼看全:
-- 活跃 codex 数(harness-tracked 和 detached 都算)
-- 最近 60 min 完成 codex marker + 推荐下一步(按 SKILL route table)
-- Open auto-loop PR 的 CI + state
-- Monitor zero_streak 当前 / max
-- Open auto-loop issue + phase label
+**单一入口**取代旧 `peek.sh`(保留向后兼容但不是必跑)。一次性输出:
 
-输出格式稳定,易于直接判断派什么。
+1. **DAEMON HEALTH**:5 daemon liveness;0 → 报 `ACTION: restart` 命令
+2. **FLOOR**:`active=N (audit=X impl=Y fix=Z review=W phase9=V other=...)`
+3. **STEP 0 MILESTONE**:扫 `milestone:*` label,p0 优先,列 issue 集合 → ACTION
+4. **STEP A STALE IMPLEMENTING**:扫 `🛠️ phase:implementing` issue,IMPLEMENT_DONE marker + 无开 PR → ACTION: controller commit+push+open PR
+5. **STEP B STALE REVIEWING**:扫 `auto-loop` PR,REVIEW_DONE × 3 + reject → ACTION fix r+1;all-approve + CI 绿 → ACTION merge
+6. **STEP C CI RED PR**:bucket=fail → ACTION fix codex
+7. **STEP D STUCK 3h+ issue**:`🆘 / 👤 / auto-loop-stuck` label + 最近真人评论 ≥ 3h + 无 in-flight reflector → ACTION reflector
+8. **STEP E UNTOUCHED 3h+ open issue**(非已 phase / 非 bot)→ ACTION label `auto-loop-triage`(cap 5/wakeup)
+9. **STEP F PHASE 9 等 judge / 等 next round**(3 solver done + 无 judge log)→ ACTION judge
+10. **STEP G AUDIT BACKFILL** **仅 A-F 全空**才推荐 audit-iter-${NEXT_ITER}
+11. **RECOMMENDATION**:总结按优先级排好,floor=N 还差 (5-N) 个,顺序列表 P0..P9
+
+**机械化使用**:controller wakeup 跑一次脚本 → 直接读 `ACTION:` 行 + `RECOMMENDATION` 段 → 派 codex / 加 label / merge PR。**不允许**绕过 wakeup-check.sh 直接派 audit / 直接判断"没事可做"。
+
+**反面禁止**:
+- ❌ wakeup 不跑 wakeup-check.sh 直接按 in-memory state 派 codex
+- ❌ 读到 `Step A-F has N actionable items` 仍派 audit
+- ❌ 见 RECOMMENDATION 推荐 P1 (implementing) 但去做 P9 (audit)
 
 ### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的" + 2026-05-21 "没有并行 codex 就有问题")
 
