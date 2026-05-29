@@ -11,7 +11,9 @@ internal static class WorkflowSuspensionRequestSupport
         var deliveryTargetId = WorkflowParameterValueParser.GetOptionalString(
             request.Parameters,
             "delivery_target_id",
-            "deliveryTargetId");
+            "deliveryTargetId",
+            "delivery_agent_id",
+            "deliveryAgentId");
         return string.IsNullOrWhiteSpace(deliveryTargetId)
             ? null
             : deliveryTargetId.Trim();
