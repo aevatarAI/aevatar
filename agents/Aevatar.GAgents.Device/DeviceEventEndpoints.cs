@@ -179,7 +179,7 @@ public static class DeviceEventEndpoints
         using var doc = JsonDocument.Parse(bodyBytes);
         var root = doc.RootElement;
 
-        // content.text contains the raw device event JSON (same in both old and new format)
+        // content.text contains the raw device event JSON at the adapter boundary.
         var contentText = root.GetProperty("content").GetProperty("text").GetString()
                           ?? throw new JsonException("content.text is required");
 
@@ -192,7 +192,9 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Parse the inner device event JSON from content.text
+        // Refactor (iter162-cluster-001 #1255-first):
+        //   Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        //   New principle: terminate JSON here and map known events to typed Protobuf payloads.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
 
@@ -201,15 +203,75 @@ public static class DeviceEventEndpoints
         var eventType = inner.TryGetProperty("event_type", out var et) ? et.GetString() ?? string.Empty : string.Empty;
         var timestamp = inner.TryGetProperty("timestamp", out var ts) ? ts.GetString() ?? string.Empty : string.Empty;
 
-        return new DeviceInbound
+        var inbound = new DeviceInbound
         {
             EventId = eventId,
             Source = source,
             EventType = eventType,
             Timestamp = timestamp,
-            PayloadJson = contentText,
             DeviceId = senderId,
         };
+
+        ApplyKnownPayload(inbound, inner);
+        return inbound;
+    }
+
+    private static void ApplyKnownPayload(DeviceInbound inbound, JsonElement inner)
+    {
+        switch (inbound.EventType)
+        {
+            case "temperature_change":
+                inbound.Sensor = new SensorDeviceInboundPayload
+                {
+                    Temperature = GetOptionalDouble(inner, "temperature"),
+                    Humidity = GetOptionalDouble(inner, "humidity"),
+                    LightLevel = GetOptionalDouble(inner, "light_level"),
+                    MotionDetected = GetOptionalBoolean(inner, "motion"),
+                };
+                break;
+            case "person_detected":
+            case "scene_summary":
+                inbound.Camera = new CameraDeviceInboundPayload
+                {
+                    SceneDescription = GetOptionalString(inner, "description"),
+                };
+                break;
+            case "motion_detected":
+                inbound.Motion = new MotionDeviceInboundPayload
+                {
+                    Detected = GetOptionalBoolean(inner, "motion", defaultValue: true),
+                };
+                break;
+            case "speech_detected":
+                inbound.Speech = new SpeechDeviceInboundPayload
+                {
+                    Text = GetOptionalString(inner, "text"),
+                };
+                break;
+            default:
+                throw new JsonException($"Unsupported device event_type '{inbound.EventType}'");
+        }
+    }
+
+    private static string GetOptionalString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static double GetOptionalDouble(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetDouble()
+            : 0;
+    }
+
+    private static bool GetOptionalBoolean(JsonElement root, string propertyName, bool defaultValue = false)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetBoolean()
+            : defaultValue;
     }
 
     // ─── Registration CRUD ───
