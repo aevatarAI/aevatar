@@ -125,6 +125,31 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine(
             "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
+        // Refactor (iter161/cluster-triage-ornn-skill-workflow-tool-signal #1259-first):
+        //   Old pattern: Runnable workflow YAML attachments were rendered only as generic Associated Files, leaving aevatar_start_workflow handoff implicit.
+        //   New principle: Render an explicit handoff section before generic files, preserving workflow_id and workflow_yamls as single-semantics tool fields.
+        if (skill.Workflows.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## aevatar_start_workflow Handoff");
+            sb.AppendLine();
+            sb.AppendLine("Call `aevatar_start_workflow` with this inline workflow bundle before treating workflow YAMLs as ordinary reference files.");
+
+            foreach (var workflow in skill.Workflows)
+            {
+                var payload = new
+                {
+                    workflow_id = workflow.WorkflowId,
+                    workflow_yamls = workflow.WorkflowYamls,
+                };
+
+                sb.AppendLine();
+                sb.AppendLine("```json");
+                sb.AppendLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+                sb.AppendLine("```");
+            }
+        }
+
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })
         {

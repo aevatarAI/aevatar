@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { Grid } from "antd";
 import React from "react";
 import {
   loadDraftRunPayload,
@@ -299,6 +300,7 @@ describe("RunsPage", () => {
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -357,6 +359,25 @@ describe("RunsPage", () => {
     expect(container.textContent).toContain("Run setup");
     expect(container.textContent).toContain("Conversation");
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("stacks the chat setup and conversation panes on compact screens", async () => {
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: true,
+      sm: true,
+      md: false,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("runs-chat-layout")).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr)",
+      overflowY: "auto",
+    });
+    expect(screen.getByPlaceholderText("Describe the task to run.")).toBeTruthy();
   });
 
   it("navigates back to the team advanced tab from the runs console", async () => {
